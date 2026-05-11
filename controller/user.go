@@ -1,0 +1,669 @@
+package controller
+
+import (
+	"daof-ai-hub/database"
+	"daof-ai-hub/proxy"
+	"encoding/json"
+	"fmt"
+	"log"
+	"math"
+	"strconv"
+	"strings"
+	"time"
+
+	"github.com/gofiber/fiber/v2"
+	"gorm.io/gorm"
+)
+
+// MaxAdminQuotaUSD admin 直改用户额度的上限：1e9 USD（实际业务远不会到这个量级，
+// 但有限上限可防 admin 误填 1e308 导致整个 quota 字段被科学记数污染财务汇总）。
+//
+// fix MAJOR M23-A6（codex 第二十三轮）：标准 JSON 不接 NaN/Inf，但接 1e308 这种超大有限数。
+// 业务上 admin 改额度通常 ≤ $10000，10亿美元已远超合理范围，作为保护性上限。
+const MaxAdminQuotaUSD = 1e9
+
+// validateAdminQuotaInput 校验 admin 输入的 quota / amount 值。
+//
+//   - NaN / Inf → 拒绝
+//   - |v| > MaxAdminQuotaUSD → 拒绝（防误填超大数污染汇总）
+//
+// 不在此校验是否 ≥ 0 —— 部分场景允许负数（如 set quota=-10 用于客服补偿），由调用方决定语义。
+func validateAdminQuotaInput(v float64) error {
+	if math.IsNaN(v) || math.IsInf(v, 0) {
+		return fmt.Errorf("额度必须为有限数（NaN/Inf 非法）")
+	}
+	if math.Abs(v) > MaxAdminQuotaUSD {
+		return fmt.Errorf("额度绝对值超过上限 %v USD，请检查输入", MaxAdminQuotaUSD)
+	}
+	return nil
+}
+
+func GetUsers(c *fiber.Ctx) error {
+	searchQuery := strings.TrimSpace(c.Query("search", ""))
+	sortBy := c.Query("sort", "id_desc")
+
+	// fix Major M2（claude security 第十五轮）：原实现无分页 + search 无长度限制
+	// → admin 大用户量平台一次查询全表 OOM；恶意 search="%aaa…(10000 字符)…aaa%" 触发
+	// 全表扫描 + WAL 单写者锁竞争。对照 AdminListSubscriptions 已有 ≥2 ≤64 字符校验。
+	if len(searchQuery) > 64 {
+		return c.Status(400).JSON(fiber.Map{"success": false, "message": "search 不能超过 64 字符", "message_code": "ERR_SEARCH_TOO_LONG"})
+	}
+	if searchQuery != "" && len(searchQuery) < 2 {
+		return c.Status(400).JSON(fiber.Map{"success": false, "message": "search 至少 2 字符", "message_code": "ERR_SEARCH_TOO_SHORT"})
+	}
+	page, _ := strconv.Atoi(c.Query("page", "1"))
+	if page < 1 {
+		page = 1
+	}
+	pageSize, _ := strconv.Atoi(c.Query("page_size", "50"))
+	if pageSize < 1 || pageSize > 200 {
+		pageSize = 50
+	}
+
+	db := database.DB.Model(&database.User{})
+
+	if searchQuery != "" {
+		// 模糊匹配：Username，Phone 或者 GithubID
+		// 转义 LIKE 通配符 + ESCAPE 子句（codex 第十六轮）：SQLite/Postgres LIKE 默认不识别 \ 转义，
+		// 必须显式 ESCAPE '\\' 才能让 \% 匹配字面 %。
+		escaped := strings.NewReplacer("\\", "\\\\", "%", "\\%", "_", "\\_").Replace(searchQuery)
+		searchParam := "%" + escaped + "%"
+		db = db.Where(
+			"username LIKE ? ESCAPE '\\' OR phone LIKE ? ESCAPE '\\' OR github_id LIKE ? ESCAPE '\\'",
+			searchParam, searchParam, searchParam,
+		)
+	}
+
+	switch sortBy {
+	case "id_asc":
+		db = db.Order("id asc")
+	case "id_desc":
+		db = db.Order("id desc")
+	case "quota_desc":
+		db = db.Order("quota desc")
+	case "quota_asc":
+		db = db.Order("quota asc")
+	case "status_desc":
+		db = db.Order("status desc") // 2在前(封禁)
+	case "status_asc":
+		db = db.Order("status asc") // 1在前(活跃)
+	default:
+		db = db.Order("id desc")
+	}
+
+	var total int64
+	if err := db.Count(&total).Error; err != nil {
+		log.Printf("[USERS-LIST] count failed: %v", err)
+		return c.Status(500).JSON(fiber.Map{"success": false, "message_code": "ERR_DB_QUERY"})
+	}
+
+	var users []database.User
+	if err := db.Offset((page - 1) * pageSize).Limit(pageSize).Find(&users).Error; err != nil {
+		return c.Status(500).JSON(fiber.Map{"success": false, "message": "获取数据失败", "message_code": "ERR_FETCH_DATA_MATRIX"})
+	}
+	// PasswordHash 永远不应外传。
+	for i := range users {
+		users[i].PasswordHash = ""
+	}
+	return c.JSON(fiber.Map{
+		"success": true,
+		"data":    users,
+		"meta":    fiber.Map{"page": page, "page_size": pageSize, "total": total},
+	})
+}
+
+// 用户增量操作 Payload
+//
+// 前端传 Quota 是 USD float，后端入业务前转 micro_usd。
+type UserPayload struct {
+	Username  string  `json:"username"`
+	Quota     float64 `json:"quota"` // USD float（人友好）
+	Status    int     `json:"status"`
+	BanReason string  `json:"ban_reason"`
+}
+
+func UpdateUser(c *fiber.Ctx) error {
+	id := c.Params("id")
+	var req UserPayload
+	if err := c.BodyParser(&req); err != nil {
+		return c.Status(400).JSON(fiber.Map{"success": false, "message": "数据解析异常", "message_code": "ERR_PARSE_EXCEPTION"})
+	}
+	// fix MAJOR M23-A6（codex 第二十三轮）：admin 改额度必须 finite + 上限校验。
+	// 即使标准 JSON 不接受 NaN，超大有限数（1e308）仍可进入 quota 污染财务汇总。
+	if err := validateAdminQuotaInput(req.Quota); err != nil {
+		return c.Status(400).JSON(fiber.Map{"success": false, "message": err.Error(), "message_code": "ERR_INVALID_QUOTA"})
+	}
+	// 校验通过后转 micro_usd 入业务
+	reqQuotaMicro, ok := database.USDToMicro(req.Quota)
+	if !ok {
+		return c.Status(400).JSON(fiber.Map{"success": false, "message": "quota 非法", "message_code": "ERR_INVALID_QUOTA"})
+	}
+
+	var user database.User
+	if err := database.DB.First(&user, id).Error; err != nil {
+		return c.Status(404).JSON(fiber.Map{"success": false, "message": "未找到相关记录", "message_code": "ERR_NODE_GONE"})
+	}
+
+	// status: 封禁
+	if req.Status != 1 && user.Role == "admin" {
+		var adminCount int64
+		database.DB.Model(&database.User{}).Where("role = ? AND status = 1", "admin").Count(&adminCount)
+		if adminCount <= 1 {
+			return c.Status(403).JSON(fiber.Map{"success": false, "message": "操作遭拒：无法封禁唯一的系统管理员", "message_code": "ERR_SUICIDE_PROTECTION_SEAL"})
+		}
+	}
+
+	var changes []map[string]interface{}
+	if user.Username != req.Username {
+		changes = append(changes, map[string]interface{}{"type": "USERNAME", "target": req.Username, "old": user.Username, "new": req.Username})
+	}
+	if user.Quota != reqQuotaMicro {
+		// audit 日志字段：old/new 用 USD float（前端 formatCurrency 直接消费）；
+		// 同时附加 *_micro 用于精确审计回溯
+		changes = append(changes, map[string]interface{}{
+			"type":      "QUOTA",
+			"target":    req.Username,
+			"old":       database.MicroToUSD(user.Quota),
+			"new":       database.MicroToUSD(reqQuotaMicro),
+			"old_micro": user.Quota,
+			"new_micro": reqQuotaMicro,
+		})
+	}
+	if user.Status != req.Status {
+		changes = append(changes, map[string]interface{}{"type": "STATUS", "target": req.Username, "old": user.Status, "new": req.Status})
+		if req.Status == 2 {
+			changes = append(changes, map[string]interface{}{"type": "BAN_REASON", "target": req.Username, "old": "", "new": req.BanReason})
+		}
+	} else if user.BanReason != req.BanReason {
+		changes = append(changes, map[string]interface{}{"type": "BAN_REASON", "target": req.Username, "old": user.BanReason, "new": req.BanReason})
+	}
+
+	changelog := "[]"
+	if len(changes) > 0 {
+		b, _ := json.Marshal(changes)
+		changelog = string(b)
+	}
+
+	// fix CRITICAL C2（codex+claude 第十五轮）：UpdateUser 改 quota 时必须同时写 BillingEntry。
+	// fix CRITICAL C19-1（codex 第十九轮）：原实现 delta = req.Quota - user.Quota（user.Quota 是
+	// 事务**外**快照）→ 如果 admin 编辑期间 user 并发充值/扣费，事务内 quota 已变化但 delta 仍按
+	// admin 看到的旧值计算，账单与 quota 漂移。修复：事务内 lockUserForUpdate + 重读 before。
+	op := loadAdminUser(c)
+	adminID := uint(0)
+	if op != nil {
+		adminID = op.ID
+	}
+	txErr := database.DB.Transaction(func(tx *gorm.DB) error {
+		// 锁 user 行 + 事务内重读 before（与购买/退款路径用同一锁路径）
+		if err := lockUserForUpdate(tx, user.ID); err != nil {
+			return fmt.Errorf("lock user: %w", err)
+		}
+		var before database.User
+		if err := tx.Select("id, quota").First(&before, user.ID).Error; err != nil {
+			return fmt.Errorf("read before: %w", err)
+		}
+		if err := tx.Model(&user).Updates(map[string]interface{}{
+			"username":   req.Username,
+			"quota":      reqQuotaMicro,
+			"status":     req.Status,
+			"ban_reason": req.BanReason,
+		}).Error; err != nil {
+			return fmt.Errorf("update user: %w", err)
+		}
+		// 用事务内 before 判断是否真改了 quota（admin 看到的旧值与 DB 实际可能不同）
+		if before.Quota != reqQuotaMicro {
+			if err := database.WriteBillingEntry(tx, database.BillingEntryInput{
+				UserID:          user.ID,
+				EntryType:       database.BillingTypeAdminAdjust,
+				AmountUSD:       reqQuotaMicro - before.Quota,
+				BalanceAfterUSD: reqQuotaMicro,
+				RelatedType:     "operation_log",
+				RelatedID:       0,
+				Description:     fmt.Sprintf("管理员调整额度 · admin#%d · %s", adminID, changelog),
+			}); err != nil {
+				return fmt.Errorf("write billing: %w", err)
+			}
+		}
+		// fix Major（codex 第十五轮）：审计入事务，并填真实 admin id（旧实现 operatorID=0 + tx 外）
+		// 这把"用户更新 + 账单 + 审计"绑成同一原子单元；任一失败一起回滚，admin 必可追溯。
+		if err := LogOperationByTx(tx, adminID, user.ID, "admin", "UPDATE", c.IP(), changelog); err != nil {
+			return fmt.Errorf("write audit: %w", err)
+		}
+		return nil
+	})
+	if txErr != nil {
+		log.Printf("[USER-UPDATE] tx failed user=%d: %v", user.ID, txErr)
+		return c.Status(500).JSON(fiber.Map{"success": false, "message": "数据更新失败，存在冲突", "message_code": "ERR_UPDATE_CONFLICT"})
+	}
+
+	// ZERO-TRUST 防御：无论状态改成什么，都强力同步到高速内存里，瞬间实现封号！
+	proxy.SyncCacheConfig()
+	// 双保险：被封禁时精准淘汰该 token，防 SyncCacheConfig 万一 DB 查询失败时
+	// AuthCache 仍保留旧 entry —— EvictUserToken 直接从 map 删除即可。
+	if req.Status == 2 && user.Token != "" {
+		proxy.EvictUserToken(user.Token)
+	}
+
+	// 封禁通知（仅在状态变成 2=banned 时触发；同日 dedup 防 admin 反复改 ban_reason 重发）
+	if req.Status == 2 && user.Status != 2 {
+		title := readSysConfigCached("notif_security_ban_title", "您的账户已被限制")
+		bodyTpl := readSysConfigCached("notif_security_ban_body", "原因：{reason}。如有疑问请联系客服。")
+		reason := req.BanReason
+		if reason == "" {
+			reason = "未提供"
+		}
+		body := strings.ReplaceAll(bodyTpl, "{reason}", reason)
+		dedupKey := fmt.Sprintf("ban:%d:%s", user.ID, time.Now().Format("2006-01-02"))
+		// security 类强制送达（不被偏好屏蔽）
+		proxy.Dispatch(user.ID, "security", "error", title, body, "", "",
+			"user", user.ID, &dedupKey)
+	}
+
+	return c.JSON(fiber.Map{"success": true, "message": "更新操作已成功保存", "message_code": "SUCCESS_SYNC_UPDATE"})
+}
+
+// GetSelfData 路由必须挂 UserGuard，user 由中间件注入 Locals。
+//
+// API 边界单位约定：quota 是 USD float（前端友好）。内部存储为 int64 micro_usd，
+// 这里在 JSON 序列化时通过 database.MicroToUSD 转回 USD float。
+func GetSelfData(c *fiber.Ctx) error {
+	user, err := getCurrentUser(c)
+	if err != nil {
+		return c.Status(401).JSON(fiber.Map{"success": false, "message_code": err.Error()})
+	}
+	if user.Status == 2 {
+		return c.Status(403).JSON(fiber.Map{"success": false, "message_code": "ERR_BANNED", "ban_reason": user.BanReason})
+	}
+	return c.JSON(fiber.Map{
+		"success": true,
+		"data": map[string]interface{}{
+			"id":       user.ID,
+			"username": user.Username,
+			"role":     user.Role,
+			"quota":    database.MicroToUSD(user.Quota),
+			"status":   user.Status,
+			"token":    user.Token,
+		},
+	})
+}
+
+// BulkQuotaPayload 是批量调整额度的请求体
+//
+// API 边界单位：Amount 是 USD float（前端友好），handler 内转 micro_usd 入业务。
+type BulkQuotaPayload struct {
+	UserIDs []uint  `json:"user_ids"`
+	Mode    string  `json:"mode"`   // "add" / "sub" / "set"
+	Amount  float64 `json:"amount"` // 美金（USD float）
+}
+
+// BulkAdjustQuota 批量调整额度。
+// 安全约束：不允许调整 admin（避免误操作）；金额永远 clamp 到 >= 0。
+func BulkAdjustQuota(c *fiber.Ctx) error {
+	var req BulkQuotaPayload
+	if err := c.BodyParser(&req); err != nil {
+		return c.Status(400).JSON(fiber.Map{"success": false, "message": "数据解析异常", "message_code": "ERR_PARSE_EXCEPTION"})
+	}
+	if len(req.UserIDs) == 0 {
+		return c.Status(400).JSON(fiber.Map{"success": false, "message": "未选择任何用户", "message_code": "ERR_EMPTY_SELECTION"})
+	}
+	if req.Mode != "add" && req.Mode != "sub" && req.Mode != "set" {
+		return c.Status(400).JSON(fiber.Map{"success": false, "message": "无效的调整模式", "message_code": "ERR_INVALID_MODE"})
+	}
+	// fix MAJOR M23-A6（codex 第二十三轮）：批量调整金额必须 finite + 上限校验
+	if err := validateAdminQuotaInput(req.Amount); err != nil {
+		return c.Status(400).JSON(fiber.Map{"success": false, "message": err.Error(), "message_code": "ERR_INVALID_QUOTA"})
+	}
+	if req.Amount < 0 {
+		return c.Status(400).JSON(fiber.Map{"success": false, "message": "金额不能为负", "message_code": "ERR_NEGATIVE_AMOUNT"})
+	}
+	// 转 micro_usd 入业务（DB 列单位）
+	amountMicro, ok := database.USDToMicro(req.Amount)
+	if !ok {
+		return c.Status(400).JSON(fiber.Map{"success": false, "message": "金额非法", "message_code": "ERR_INVALID_QUOTA"})
+	}
+
+	// 去重 user_ids（防止 admin 误传重复 ID 让计数虚高）
+	idSet := make(map[uint]struct{}, len(req.UserIDs))
+	uniqIDs := make([]uint, 0, len(req.UserIDs))
+	for _, id := range req.UserIDs {
+		if _, ok := idSet[id]; !ok {
+			idSet[id] = struct{}{}
+			uniqIDs = append(uniqIDs, id)
+		}
+	}
+
+	var users []database.User
+	if err := database.DB.Where("id IN ? AND role = ?", uniqIDs, "user").Find(&users).Error; err != nil {
+		return c.Status(500).JSON(fiber.Map{"success": false, "message": "用户读取失败", "message_code": "ERR_READ_USERS"})
+	}
+
+	// fix CRITICAL C2（codex+claude 第十五轮）：每用户的 quota 更新 + 审计 + 账单
+	// 必须在同一事务内，否则任何一步失败都会让 BillingEntry 与 user.quota 不一致。
+	// 之前实现：UPDATE → SELECT → LogOperation 三步独立，**完全不写 BillingEntry** →
+	// 账单事实表与真实 quota 漂移。修复：每用户一笔事务，事务内写 admin_adjust 账单条目。
+	//
+	// fix Minor Phase 4-codex（第二十四轮）：原"单 user 失败 log + continue + 最终 success=true"
+	// 让 admin 看到"成功"但部分 user 未生效。改为收集失败 user_ids + reason，
+	// 任一失败返回 207 Multi-Status（HTTP 标准的 partial success），让前端能区分。
+	op := loadAdminUser(c)
+	updated := 0
+	type bulkFailure struct {
+		UserID   uint   `json:"user_id"`
+		Username string `json:"username"`
+		Reason   string `json:"reason"`
+	}
+	failures := make([]bulkFailure, 0)
+	for _, u := range users {
+		err := database.DB.Transaction(func(tx *gorm.DB) error {
+			// fix CRITICAL C19-1（codex 第十九轮）：lockUserForUpdate + 事务内重读 before。
+			// 之前 delta = after - u.Quota（u.Quota 来自事务外 Find），与并发充值/扣费交错时
+			// before 可能已变化但仍按旧值算 delta，账单与 quota 漂移。
+			if err := lockUserForUpdate(tx, u.ID); err != nil {
+				return fmt.Errorf("lock user: %w", err)
+			}
+			var before database.User
+			if err := tx.Select("id, quota").First(&before, u.ID).Error; err != nil {
+				return fmt.Errorf("read before: %w", err)
+			}
+
+			// 用 SQL 表达式原子更新，避免"读-改-写"的 race 让并发额度操作互相覆盖。
+			// SQLite 的 MAX 只能做聚合，所以用 CASE 表达"clamp 到 0"。
+			// fix MAJOR M22-A1 Phase 1：amountMicro 单位 micro_usd（与 quota 列一致）
+			var expr interface{}
+			switch req.Mode {
+			case "add":
+				expr = gorm.Expr("CASE WHEN quota + ? < 0 THEN 0 ELSE quota + ? END", amountMicro, amountMicro)
+			case "sub":
+				expr = gorm.Expr("CASE WHEN quota - ? < 0 THEN 0 ELSE quota - ? END", amountMicro, amountMicro)
+			case "set":
+				expr = amountMicro
+			}
+			if err := tx.Model(&database.User{}).Where("id = ?", u.ID).UpdateColumn("quota", expr).Error; err != nil {
+				return fmt.Errorf("update quota: %w", err)
+			}
+
+			// 重新读最新 quota（DB 真值，不依赖应用层算）
+			var after database.User
+			if err := tx.Select("quota").First(&after, u.ID).Error; err != nil {
+				return fmt.Errorf("re-select: %w", err)
+			}
+
+			// 写 BillingEntry(admin_adjust)：delta = after - before（都是事务内值，原子一致）
+			delta := after.Quota - before.Quota
+			adminID := uint(0)
+			if op != nil {
+				adminID = op.ID
+			}
+			desc := fmt.Sprintf("管理员批量%s · admin#%d", req.Mode, adminID)
+			if err := database.WriteBillingEntry(tx, database.BillingEntryInput{
+				UserID:          u.ID,
+				EntryType:       database.BillingTypeAdminAdjust,
+				AmountUSD:       delta,
+				BalanceAfterUSD: after.Quota,
+				RelatedType:     "operation_log",
+				RelatedID:       0,
+				Description:     desc,
+			}); err != nil {
+				return fmt.Errorf("write billing: %w", err)
+			}
+
+			// audit 日志字段：old/new/amount/delta 用 USD float（前端 formatCurrency 消费）；
+			// 同时附加 *_micro 用于精确审计回溯
+			change, _ := json.Marshal([]map[string]interface{}{
+				{
+					"type":         "BULK_QUOTA",
+					"target":       u.Username,
+					"mode":         req.Mode,
+					"old":          database.MicroToUSD(before.Quota),
+					"new":          database.MicroToUSD(after.Quota),
+					"amount":       req.Amount,
+					"delta":        database.MicroToUSD(delta),
+					"old_micro":    before.Quota,
+					"new_micro":    after.Quota,
+					"amount_micro": amountMicro,
+					"delta_micro":  delta,
+				},
+			})
+			return LogOperationByTx(tx, adminID, u.ID, "admin", "BULK_QUOTA", c.IP(), string(change))
+		})
+		if err != nil {
+			log.Printf("[BULK-QUOTA] user=%d failed: %v (collected as partial failure)", u.ID, err)
+			failures = append(failures, bulkFailure{
+				UserID:   u.ID,
+				Username: u.Username,
+				Reason:   err.Error(),
+			})
+			continue
+		}
+		updated++
+	}
+
+	proxy.SyncCacheConfig()
+
+	// fix Minor Phase 4-codex：任一失败 → 207 Multi-Status；全成功 → 200。
+	// 前端可读 failures 数组定位失败 user，提示 admin 处理。
+	status := 200
+	msgCode := "SUCCESS_BULK_QUOTA"
+	if len(failures) > 0 {
+		if updated == 0 {
+			status = 500 // 全失败 → 500 提示严重故障
+			msgCode = "ERR_BULK_QUOTA_ALL_FAILED"
+		} else {
+			status = 207 // 部分成功 → Multi-Status
+			msgCode = "PARTIAL_BULK_QUOTA"
+		}
+	}
+	return c.Status(status).JSON(fiber.Map{
+		"success":      len(failures) == 0,
+		"updated":      updated,
+		"failed":       len(failures),
+		"failures":     failures,
+		"message":      "批量额度调整完成",
+		"message_code": msgCode,
+	})
+}
+
+// BulkDeletePayload 是批量删除的请求体
+type BulkDeletePayload struct {
+	UserIDs []uint `json:"user_ids"`
+}
+
+// BulkDeleteUsers 批量物理删除用户（含其 access_token）。
+// 安全约束：admin 不可被批量删除（即便 ID 出现在请求里也会跳过）。
+// 删除前清理 access_tokens 防止外键悬挂。
+func BulkDeleteUsers(c *fiber.Ctx) error {
+	var req BulkDeletePayload
+	if err := c.BodyParser(&req); err != nil {
+		return c.Status(400).JSON(fiber.Map{"success": false, "message": "数据解析异常", "message_code": "ERR_PARSE_EXCEPTION"})
+	}
+	if len(req.UserIDs) == 0 {
+		return c.Status(400).JSON(fiber.Map{"success": false, "message": "未选择任何用户", "message_code": "ERR_EMPTY_SELECTION"})
+	}
+
+	var users []database.User
+	if err := database.DB.Where("id IN ? AND role = ?", req.UserIDs, "user").Find(&users).Error; err != nil {
+		return c.Status(500).JSON(fiber.Map{"success": false, "message": "用户读取失败", "message_code": "ERR_READ_USERS"})
+	}
+
+	op := loadAdminUser(c)
+	adminID := uint(0)
+	if op != nil {
+		adminID = op.ID
+	}
+	deleted := 0
+	for _, u := range users {
+		// fix CRITICAL C-B2（codex 第二十一轮）：批量删除也走"软删除 + PII 匿名化"，与 DeleteUser 对齐。
+		// BillingEntry 保留以维护 append-only；token / apilog 等子表继续物理清。
+		// fix Major（codex 第十五轮）：审计入事务 + 填真实 admin id，与单删路径对齐
+		change, _ := json.Marshal([]map[string]interface{}{
+			{"type": "BULK_HARD_DELETE", "target": u.Username, "user_id": u.ID, "github_id": u.GithubID},
+		})
+		err := database.DB.Transaction(func(tx *gorm.DB) error {
+			if err := purgeUserDependents(tx, u.ID); err != nil {
+				return err
+			}
+			anonName := fmt.Sprintf("deleted_%d_%d", u.ID, time.Now().UnixMilli())
+			if err := tx.Model(&database.User{}).Where("id = ?", u.ID).Updates(map[string]any{
+				"username":      anonName,
+				"phone":         nil,
+				"github_id":     nil,
+				"password_hash": "",
+				"token":         "",
+				"status":        2,
+				"ban_reason":    "bulk deleted by admin",
+			}).Error; err != nil {
+				return fmt.Errorf("anonymize user: %w", err)
+			}
+			if err := tx.Delete(&database.User{}, u.ID).Error; err != nil {
+				return fmt.Errorf("soft delete user: %w", err)
+			}
+			return LogOperationByTx(tx, adminID, u.ID, "admin", "BULK_HARD_DELETE", c.IP(), string(change))
+		})
+		if err != nil {
+			continue
+		}
+		// fix Minor Mi22-4（codex 第二十二轮）：每个删除成功的用户都要清订阅缓存
+		proxy.InvalidateUserSubscriptionCache(u.ID)
+		deleted++
+	}
+
+	proxy.SyncCacheConfig()
+
+	return c.JSON(fiber.Map{
+		"success":      true,
+		"deleted":      deleted,
+		"skipped":      len(req.UserIDs) - deleted,
+		"message":      "批量删除完成（已物理抹除）",
+		"message_code": "SUCCESS_BULK_DELETE",
+	})
+}
+
+func DeleteUser(c *fiber.Ctx) error {
+	id := c.Params("id")
+	var user database.User
+	if err := database.DB.First(&user, id).Error; err != nil {
+		return c.Status(404).JSON(fiber.Map{"success": false, "message": "未找到相关记录或已被删除", "message_code": "ERR_NOT_FOUND"})
+	}
+
+	if user.Role == "admin" {
+		var adminCount int64
+		database.DB.Model(&database.User{}).Where("role = ?", "admin").Count(&adminCount)
+		if adminCount <= 1 {
+			return c.Status(403).JSON(fiber.Map{"success": false, "message": "操作拦截：不可删除系统唯一的管理员", "message_code": "ERR_ADMIN_REQUIRED"})
+		}
+	}
+
+	// fix CRITICAL C-B2（codex 第二十一轮）：原实现 tx.Unscoped().Delete(&user) 物理删 user 行
+	// + 同时物理删 BillingEntry——破坏了账单事实表的 append-only 不变量（gorm:"<-:create"
+	// 只防 Update，不防 Delete）。
+	//
+	// 改为"软删除 + PII 匿名化"：
+	//   1. user 行保留（GORM DeletedAt 标记），id 不被 autoincrement 重用 → BillingEntry 不变孤儿
+	//   2. PII 字段（Username/Phone/GithubID/PasswordHash/Token）匿名化，不再可读
+	//   3. 子表中 token / apilog / notification / topup 等继续物理删（这些不是事实表）
+	//   4. **BillingEntry 不删**——账单事实永远保留，与 append-only 不变量对齐
+	op := loadAdminUser(c)
+	adminID := uint(0)
+	if op != nil {
+		adminID = op.ID
+	}
+	delData := []map[string]interface{}{{"type": "DELETE", "target": user.Username}}
+	delBytes, _ := json.Marshal(delData)
+	if err := database.DB.Transaction(func(tx *gorm.DB) error {
+		if err := purgeUserDependents(tx, user.ID); err != nil {
+			return err
+		}
+		// PII 匿名化：username 加随机后缀防 unique 冲突（同名再注册时）；
+		// phone/github_id 设空，passwd/token 清零
+		anonName := fmt.Sprintf("deleted_%d_%d", user.ID, time.Now().UnixMilli())
+		if err := tx.Model(&database.User{}).Where("id = ?", user.ID).Updates(map[string]any{
+			"username":      anonName,
+			"phone":         nil,
+			"github_id":     nil,
+			"password_hash": "",
+			"token":         "",
+			"status":        2, // banned 状态防重新激活
+			"ban_reason":    "deleted by admin",
+		}).Error; err != nil {
+			return fmt.Errorf("anonymize user: %w", err)
+		}
+		// GORM 软删除：DeletedAt 字段被设置，常规 Find / First 查询自动过滤
+		if err := tx.Delete(&user).Error; err != nil {
+			return fmt.Errorf("soft delete user: %w", err)
+		}
+		// fix Major（codex 第十五轮）：审计入事务 + 真实 admin id
+		return LogOperationByTx(tx, adminID, user.ID, "admin", "DELETE", c.IP(), string(delBytes))
+	}); err != nil {
+		return c.Status(500).JSON(fiber.Map{"success": false, "message": "删除失败", "message_code": "ERR_DB_TRANSACTION"})
+	}
+
+	proxy.SyncCacheConfig()
+	// fix Minor Mi22-4（codex 第二十二轮）：删除事务成功后，主动清该用户的订阅缓存。
+	// SyncCacheConfig 不动 SubscriptionCache，短窗口内在途请求仍可拿到旧订阅快照 →
+	// stream/billing 路径继续按已删用户的旧订阅做扣费决策，造成 silent 错误扣费。
+	proxy.InvalidateUserSubscriptionCache(user.ID)
+
+	return c.JSON(fiber.Map{"success": true, "message": "数据已彻底删除", "message_code": "APP.DELETE_SUCCESS"})
+}
+
+// purgeUserDependents 在给定事务内清掉用户的所有衍生记录。
+// 调用方必须随后再 Delete user 主表自身。
+//
+// 包含：
+//   - access_tokens（API 凭证）
+//   - api_logs（请求审计 — 注意：合规场景下可能需要保留，但 admin 主动删用户的语义就是"彻底"清除）
+//   - operation_logs（操作审计）
+//   - notifications（站内通知）
+//   - user_subscriptions + subscription_usages（订阅 + 用量）
+func purgeUserDependents(tx *gorm.DB, userID uint) error {
+	if err := tx.Unscoped().Where("user_id = ?", userID).Delete(&database.AccessToken{}).Error; err != nil {
+		return err
+	}
+	if err := tx.Unscoped().Where("user_id = ?", userID).Delete(&database.ApiLog{}).Error; err != nil {
+		return err
+	}
+	// OperationLog 列名是 target_user_id 而非 user_id
+	if err := tx.Unscoped().Where("target_user_id = ?", userID).Delete(&database.OperationLog{}).Error; err != nil {
+		return err
+	}
+	// 先删 broadcast_targets（外键于 notifications），再删 notifications
+	// fix Minor（codex 第五轮）：原实现漏掉广播目标关联表，硬删除用户后会留下孤儿引用
+	if err := tx.Unscoped().
+		Where("notification_id IN (SELECT id FROM notifications WHERE user_id = ?)", userID).
+		Delete(&database.NotificationBroadcastTarget{}).Error; err != nil {
+		return err
+	}
+	if err := tx.Unscoped().Where("user_id = ?", userID).Delete(&database.Notification{}).Error; err != nil {
+		return err
+	}
+	// 订阅 → usage 走 subscription_id 关联，需先用子查询定位再删
+	if err := tx.Unscoped().
+		Where("subscription_id IN (SELECT id FROM user_subscriptions WHERE user_id = ?)", userID).
+		Delete(&database.SubscriptionUsage{}).Error; err != nil {
+		return err
+	}
+	if err := tx.Unscoped().Where("user_id = ?", userID).Delete(&database.UserSubscription{}).Error; err != nil {
+		return err
+	}
+	if err := tx.Unscoped().Where("user_id = ?", userID).Delete(&database.TopupOrder{}).Error; err != nil {
+		return err
+	}
+	// fix CRITICAL C-B2（codex 第二十一轮）：BillingEntry **不删**——保留账单事实表的 append-only 语义。
+	// 之前的修复物理删账单是为了防"user.id 重用导致新用户继承账单"——但现在 user 改为软删除（DeletedAt
+	// 标记），id 不会被 autoincrement 重用，所以账单孤儿风险消除。
+	//   - 任何 admin 报表 / 对账工具仍能看到该 user.ID 的历史账单
+	//   - 用户 PII 已匿名化（外层 DeleteUser 函数处理），账单关联到匿名 user 行不泄漏隐私
+	// (intentionally do not delete BillingEntry)
+	if err := tx.Unscoped().Where("user_id = ?", userID).Delete(&database.NotificationPreference{}).Error; err != nil {
+		return err
+	}
+	if err := tx.Unscoped().
+		Where("ticket_id IN (SELECT id FROM tickets WHERE user_id = ?)", userID).
+		Delete(&database.TicketMessage{}).Error; err != nil {
+		return err
+	}
+	if err := tx.Unscoped().Where("user_id = ?", userID).Delete(&database.Ticket{}).Error; err != nil {
+		return err
+	}
+	return nil
+}

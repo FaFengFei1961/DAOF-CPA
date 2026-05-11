@@ -1,0 +1,156 @@
+package database
+
+import (
+	"time"
+
+	"gorm.io/gorm"
+)
+
+// User 代表核心的用户实体，集成 Oauth 与手机双重绑定体系
+//
+// fix MAJOR M22-2（codex 第二十二轮）：原 GithubID/Phone 标 `uniqueIndex` 让普通 unique
+// 索引仍生效——空字符串两个用户都写 "" 后第二个 INSERT 撞约束。partial unique index
+// 在 sqlite.go 加了，但**额外**索引而非替换 GORM 的，普通约束仍在。
+// 修复：去掉 GORM uniqueIndex，让 sqlite.go 的 partial unique（WHERE x <> ''）成为唯一约束。
+type User struct {
+	ID           uint   `gorm:"primaryKey" json:"id"`
+	GithubID     string `gorm:"index;default:null" json:"github_id"` // 唯一性由 sqlite.go partial unique index 保证
+	Phone        string `gorm:"index;default:null" json:"phone"`     // 唯一性由 sqlite.go partial unique index 保证
+	Username     string `gorm:"uniqueIndex;not null" json:"username"`
+	PasswordHash string `json:"-"` // 作为管理员的特有降神凭证
+	// fix MEDIUM M19-5（codex 第十九轮）：注册路径 registerMu 临界区里要做 COUNT(*) WHERE role='user'
+	// 检查注册总数上限——表大了之后 SQLite/PG 都会做全表 scan，单次几十毫秒。`index` 让该 COUNT
+	// 走 index-only 扫描或至少减少 IO。BulkAdjustQuota 也按 role='user' 过滤，同样受益。
+	Role         string `gorm:"index;default:'user'" json:"role"`  // 'admin' 或 'user'
+	Token        string `gorm:"uniqueIndex;not null" json:"token"` // 直通代理鉴权令牌，如 sk-daof-xxx
+	// fix MAJOR M22-A1（codex 第二十三轮）：所有金额字段统一为 int64 micro_usd（USD * 1e6）。
+	// 原因：float64 在长尾累加（千万级 API 调用 × 微小 cost）下出现累加误差，账目对不上；
+	// int64 全程整数运算杜绝浮点漂移。前端展示时除以 1e6 显示 USD。
+	Quota        int64  `gorm:"default:0" json:"quota"` // 余额（micro_usd, USD * 1e6）
+	Status       int    `gorm:"default:1" json:"status"` // 1: 正常, 2: 封禁
+	BanReason    string `gorm:"type:text;default:null" json:"ban_reason"`
+	RegIP        string `gorm:"index" json:"reg_ip"`             // 原始探测 IP (防刷核查用)
+	RegRiskScore int    `gorm:"default:0" json:"reg_risk_score"` // 风控热度判定打分
+
+	// 余额消费控制（参照 Claude Extra usage 三段消费模型）：
+	// 订阅 → 增量包 → 余额（user.Quota）。前两段用尽且 BalanceConsumeEnabled=true 才走余额扣费。
+	BalanceConsumeEnabled       bool       `gorm:"default:false" json:"balance_consume_enabled"`
+	BalanceConsumeLimitUSD      int64      `gorm:"default:0" json:"balance_consume_limit_usd"`            // micro_usd, 0=不限
+	BalanceConsumeWindowSeconds int        `gorm:"default:2592000" json:"balance_consume_window_seconds"` // 默认 30 天
+	BalanceConsumeWindowStartAt *time.Time `json:"balance_consume_window_start_at"`
+	BalanceConsumedInWindow     int64      `gorm:"default:0" json:"balance_consumed_in_window"` // micro_usd
+
+	CreatedAt time.Time      `json:"created_at"`
+	UpdatedAt time.Time      `json:"updated_at"`
+	DeletedAt gorm.DeletedAt `gorm:"index" json:"-"`
+}
+
+// fix MAJOR M-B9（codex 第二十一轮）：GithubID / Phone 标记 uniqueIndex+default:null，
+// 但 Go string 零值是 ""，任何 Save(&user) 写空串后第二个 INSERT 会撞 unique。
+// 兜底方案见 sqlite.go：手工建 partial unique index 排除空串，让多个 ""（视为未绑定）共存。
+// schema 长期应改 *string，当前先用 DB 层 partial index 防御。
+
+// Channel 代表底层的请求上游通道
+type Channel struct {
+	ID        uint           `gorm:"primaryKey" json:"id"`
+	Type      string         `gorm:"index;not null" json:"type"` // e.g., 'openai', 'anthropic', 'gemini'
+	Name      string         `gorm:"index;not null" json:"name"` // 渠道备注名称，e.g. "官方 Azure", "第三方中转站"
+	Key       string         `gorm:"not null" json:"key"`
+	BaseURL   string         `json:"base_url"`                              // 自定义上游网关代理地址
+	ProxyURL  string         `gorm:"default:null" json:"proxy_url"`         // 自定义 HTTP/SOCKS 代理跳板
+	Headers   string         `gorm:"type:text;default:null" json:"headers"` // 附加的自定义 JSON 头部
+	Weight    int            `gorm:"default:1" json:"weight"`               // 并发路由负载权重
+	Status    int            `gorm:"default:1" json:"status"`               // 1: 启用, 2: 禁用
+	CreatedAt time.Time      `json:"created_at"`
+	UpdatedAt time.Time      `json:"updated_at"`
+	DeletedAt gorm.DeletedAt `gorm:"index" json:"-"`
+}
+
+// ChannelModel 绑定渠道对某一个特定模型的单价和权重配置
+type ChannelModel struct {
+	ID                    uint           `gorm:"primaryKey" json:"id"`
+	ChannelID             uint           `gorm:"index;not null" json:"channel_id"` // 所属渠道
+	ModelID               string         `gorm:"index;not null" json:"model_id"`   // e.g., "gpt-4o"
+	DisplayName           string         `json:"display_name"`
+	InputPrice            float64        `gorm:"default:0" json:"input_price"`
+	OutputPrice           float64        `gorm:"default:0" json:"output_price"`
+	CachedInputPrice      float64        `gorm:"default:0" json:"cached_input_price"`
+	ContextPriceThreshold int            `gorm:"default:0" json:"context_price_threshold"`
+	HighInputPrice        float64        `gorm:"default:0" json:"high_input_price"`
+	HighOutputPrice       float64        `gorm:"default:0" json:"high_output_price"`
+	MaxContextLength      int            `gorm:"default:0" json:"max_context_length"`
+	Weight                int            `gorm:"default:1" json:"weight"` // 同模型多渠道的路由比重
+	Status                int            `gorm:"default:1" json:"status"` // 针对当前渠道的此模型一键封锁
+
+	// 风控配置（per channel + per model 粒度）
+	//
+	// fix CRITICAL R23（codex 第二十三轮）：御三家中 OpenAI 最易因 jailbreak 封号；Claude 自带强拒答 +
+	// CLIProxyAPI cloaking 兜底；Gemini 有 safety filter。所以风控要按"渠道+模型"精确配置，
+	// 而不是全局一刀切。同 modelName 多候选时 LookupModerationPolicy 取最严策略防御。
+	//
+	// ModerationLevel 取值：
+	//   "off"        - 完全不审（适合 Claude/Gemini cloaked 路径）
+	//   "keyword"    - 仅本地关键字快扫（<1ms，拦 Kiro/DAN 模板）
+	//   "moderation" - 仅 OpenAI Moderation API（智能分类，50-100ms）
+	//   "strict"     - 关键字 + Moderation 双层（推荐 GPT 直连官方时用）
+	ModerationLevel string `gorm:"size:16;default:'off'" json:"moderation_level"`
+
+	// ModerationFailMode Moderation API 不可达时的策略
+	//   "open"   - 放行（cloaked 路径——CLIProxyAPI 兜底）
+	//   "closed" - 拒绝（直连官方时——审核失败时不能让违规 prompt 直达上游）
+	ModerationFailMode string `gorm:"size:8;default:'open'" json:"moderation_fail_mode"`
+
+	CreatedAt time.Time      `json:"created_at"`
+	UpdatedAt time.Time      `json:"updated_at"`
+	DeletedAt gorm.DeletedAt `gorm:"index" json:"-"` // 软删除：与 Channel 的 DeletedAt 配对，channel.go DeleteChannel 时一并 Delete
+}
+
+// SysConfig 存储全息网关的底层鉴权机密，如 Github Oauth / 阿里云信息等
+type SysConfig struct {
+	Key   string `gorm:"primaryKey" json:"key"`
+	Value string `gorm:"not null" json:"value"` // 该字段在代码层进入数据库前会被 AES 强加密
+}
+
+// AccessToken 是独立于 User 主账号外的纯 API 调用凭证，支持一对多
+type AccessToken struct {
+	ID         uint           `gorm:"primaryKey" json:"id"`
+	UserID     uint           `gorm:"index;not null" json:"user_id"`
+	Name       string         `json:"name"`
+	Key        string         `gorm:"uniqueIndex;not null" json:"key"`  // e.g. "sk-daof-xxxx"
+	UsedQuota  int64          `gorm:"default:0" json:"used_quota"`      // 累计消耗（micro_usd, USD * 1e6）
+	QuotaLimit int64          `gorm:"default:0" json:"quota_limit"`     // 令牌限额（micro_usd），0 表示无限制
+	ExpiredAt  *time.Time     `json:"expired_at"`                       // 令牌过期时间，null 表示无限期
+	Status     int            `gorm:"default:1" json:"status"`          // 1: 启用, 2: 禁用
+	CreatedAt  time.Time      `json:"created_at"`
+	UpdatedAt  time.Time      `json:"updated_at"`
+	DeletedAt  gorm.DeletedAt `gorm:"index" json:"-"`
+}
+
+// ApiLog 记录每一条流过系统的对话指纹
+type ApiLog struct {
+	ID               uint      `gorm:"primaryKey" json:"id"`
+	UserID           uint      `gorm:"index;not null" json:"user_id"`
+	TokenName        string    `json:"token_name"`
+	ModelName        string    `gorm:"index" json:"model_name"`
+	PromptTokens     int       `json:"prompt_tokens"`
+	CompletionTokens int       `json:"completion_tokens"`
+	CachedTokens     int       `json:"cached_tokens"`
+	ReasoningTokens  int       `json:"reasoning_tokens"`
+	Cost             int64     `json:"cost"`                               // 单次调用成本（micro_usd, USD * 1e6）
+	Latency          int64     `gorm:"default:0" json:"latency"`           // ms延迟 (Parity)
+	Status           int       `gorm:"default:200" json:"status"`          // 状态码或结果记录 (Parity)
+	IPAddress        string    `gorm:"index;default:''" json:"ip_address"` // 请求来源IP (Parity)
+	CreatedAt        time.Time `gorm:"index" json:"created_at"`
+}
+
+// OperationLog 追踪并记录所有涉及风险的用户干预操作
+type OperationLog struct {
+	ID           uint      `gorm:"primaryKey" json:"id"`
+	TargetUserID uint      `gorm:"index;not null" json:"target_user_id"` // 被操作的用户
+	OperatorID   uint      `gorm:"index;default:0" json:"operator_id"`   // 发起操作的用户，0表示System
+	OperatorRole string    `json:"operator_role"`                        // "admin", "system", "user"
+	ActionType   string    `gorm:"index;not null" json:"action_type"`    // e.g. "BAN", "UPDATE_QUOTA", "DELETE", "FORCE_CREATE"
+	IPAddress    string    `json:"ip_address"`
+	Details      string    `gorm:"type:text" json:"details"` // JSON-encoded string or plain text detail
+	CreatedAt    time.Time `gorm:"index" json:"created_at"`
+}

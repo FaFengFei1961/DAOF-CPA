@@ -1,0 +1,74 @@
+# ─── 敏感凭证 / 数据 ─────────────────────────────────
+# AES 主密钥：丢失=所有加密配置废掉；泄露=伪加密。绝不可入库。
+daof.key
+*.key
+
+# SQLite 数据库（主库 + 历史遗留）
+*.db
+*.db-shm
+*.db-wal
+
+# ─── 编译产物 ────────────────────────────────────────
+*.exe
+/main.exe
+/main_only.exe
+/daof-ai-hub.exe
+/engine.exe
+/test.exe
+/test_build.exe
+/tmp_test.exe
+
+# Go 构建/缓存
+/bin/
+
+# ─── 测试覆盖率输出 ──────────────────────────────────
+cov
+cov.out
+cov.txt
+cover
+coverage
+coverage.out
+coverage_proxy
+coverage.html
+ctrl_cov.txt
+proxy_cov.txt
+total_cov.txt
+*.cov.out
+*.coverage
+
+# ─── 临时/调试残留 ──────────────────────────────────
+out.txt
+temp.txt
+test-stream.json
+test.json
+.FullName
+scratch/
+
+# 与 main.go 冲突的临时调试文件（"package main" 重复声明会让 `go build .` 失败）
+test-ip.go
+test-ip2.go
+test-ip3.go
+
+# ─── 前端 ───────────────────────────────────────────
+ui/node_modules/
+ui/.vite/
+ui/dist/
+*.log
+
+# ─── 编辑器 ─────────────────────────────────────────
+.vscode/
+.idea/
+*.swp
+.DS_Store
+
+# ─── 本地 Agent 配置 ───────────────────────────────
+.claude/*.local.json
+
+# ─── 不进版本库的 admin 操作产物 ─────────────────────
+*.zip
+*.tar.gz
+
+# ─── 本机启动脚本（含本地路径，按需各人不同） ─────────
+start.ps1
+start.local.ps1
+start.local.sh

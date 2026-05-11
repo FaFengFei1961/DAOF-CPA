@@ -1,0 +1,496 @@
+@import "tailwindcss";
+
+/*
+ * 设计系统：Microsoft Fluent 2 / Microsoft Store 风格
+ *
+ * 参考：
+ *  - https://fluent2.microsoft.design/ — Fluent 2 设计语言
+ *  - Microsoft Store / Settings (Win11) — 视觉基准
+ *
+ * 关键特征：
+ *  - 字体：Segoe UI Variable（Win11 默认），fallback 到 Segoe UI / system-ui
+ *  - 圆角：xs=2 / sm=4 / md=8 / lg=12 / xl=16（Fluent corner radius scale）
+ *  - 表面：Mica 风格深色（极轻微的色相） + 半透明 acrylic 卡片
+ *  - 强调色：accent (主题色，由 ThemeContext 的 seed 派生 MD3)
+ *  - 交互：hover reveal（浅亮一层，~6% 不透明），active 时 scale(0.98)
+ *  - 阴影：仅在 elevated 卡（modal / popover）使用，平面卡用边框分层
+ */
+
+@theme {
+  --color-primary: var(--color-primary);
+  --color-on-primary: var(--color-on-primary);
+  --color-primary-container: var(--color-primary-container);
+  --color-on-primary-container: var(--color-on-primary-container);
+
+  --color-surface: var(--color-surface);
+  --color-on-surface: var(--color-on-surface);
+  --color-surface-container: var(--color-surface-container);
+  --color-surface-container-high: var(--color-surface-container-high);
+
+  --color-surface-variant: var(--color-surface-variant);
+  --color-on-surface-variant: var(--color-on-surface-variant);
+
+  --color-outline: var(--color-outline);
+  --color-outline-variant: var(--color-outline-variant);
+
+  --color-error: var(--color-error);
+  --color-on-error: var(--color-on-error);
+
+  /*
+   * Fluent 2 / Win11 圆角规则（Microsoft Learn 官方）：
+   *   - 4px：所有页内常规控件（Button、CheckBox、TextBox、ListView、ChipBar）
+   *   - 8px：所有顶级容器（卡片、Flyout、Dialog、TeachingTip）
+   *   - 0px：贴合边缘 / 窗口最大化时的边角
+   * 不存在 12px / 16px / 24px 圆角！我之前用 lg=12 xl=16 是错的。
+   */
+  /*
+   * Tailwind v4：@theme 块里以 --radius-{name} 命名的变量
+   * 自动注册为 rounded-{name} 工具类（rounded-control / rounded-overlay）。
+   */
+  --radius-control: 4px;
+  --radius-overlay: 8px;
+
+  /*
+   * Fluent v9 spacing scale（基于 4px 网格）。组件间距应取自这套，不要用任意值。
+   */
+  --space-xxs: 2px;
+  --space-xs: 4px;
+  --space-s-nudge: 6px;
+  --space-s: 8px;
+  --space-m-nudge: 10px;
+  --space-m: 12px;
+  --space-l: 16px;
+  --space-xl: 20px;
+  --space-xxl: 24px;
+  --space-xxxl: 32px;
+
+  /*
+   * Fluent v9 typography ramp（实测值，与 Win11 Settings/Store 一致）
+   */
+  --font-caption2: 10px;
+  --font-caption1: 12px;
+  --font-body1: 14px;
+  --font-body2: 16px;
+  --font-subtitle2: 16px;
+  --font-subtitle1: 20px;
+  --font-title3: 24px;
+  --font-title2: 28px;
+  --font-title1: 32px;
+  --font-large-title: 40px;
+  --font-display: 68px;
+
+  --font-sans: "Segoe UI Variable Display", "Segoe UI Variable", "Segoe UI", -apple-system, system-ui, sans-serif;
+}
+
+@layer base {
+  :root {
+    /* Fallback MD3 Light Theme before JS initialization */
+    --color-surface: #fdfcff;
+    --color-surface-container: #f3edf7;
+    --color-on-surface: #1a1c1e;
+    --color-primary: #0061a4;
+    --color-on-primary: #ffffff;
+    --color-primary-container: #d1e4ff;
+    --color-on-primary-container: #001d36;
+    --color-surface-variant: #dfe2eb;
+    --color-on-surface-variant: #43474e;
+    --color-outline: #73777f;
+    --color-outline-variant: #c3c6cf;
+    --color-error: #ba1a1a;
+    --color-on-error: #ffffff;
+  }
+
+  .dark {
+    /* Fallback MD3 Dark Theme — 接近 Win11 Mica 深色基调 (#202020) */
+    --color-surface: #1a1c1e;
+    --color-surface-container: #1e1e20;
+    --color-on-surface: #e2e2e6;
+    --color-primary: #94ccff;
+    --color-on-primary: #00335a;
+    --color-primary-container: #00497f;
+    --color-on-primary-container: #d1e4ff;
+    --color-surface-variant: #43474e;
+    --color-on-surface-variant: #c3c6cf;
+    --color-outline: #8d9199;
+    --color-outline-variant: #43474e;
+    --color-error: #ffb4ab;
+    --color-on-error: #690005;
+  }
+
+  body {
+    background-color: var(--color-surface);
+    color: var(--color-on-surface);
+    font-family: var(--font-sans);
+    font-size: var(--font-body1);
+    /* Fluent 推荐字重渐变：UI 默认 400，标题 600，键值 mono */
+    font-feature-settings: "ss01", "cv11";
+    overflow-x: hidden;
+    overflow-y: scroll;
+    -webkit-font-smoothing: antialiased;
+    -moz-osx-font-smoothing: grayscale;
+    transition: background-color 0.2s ease, color 0.2s ease;
+    /*
+     * Mica 装饰渐变：模拟 Win11 桌面壁纸透出 acrylic 卡片的微弱色相变化。
+     * 浅色 / 深色模式各自的 fixed 渐变层，给 acrylic 一个真正"透出底色"的对象。
+     * 性能：fixed 不重绘，scroll 时仅 transform 移动，对 60fps 无影响。
+     */
+    background-image:
+      radial-gradient(ellipse 80% 50% at 0% 0%, color-mix(in srgb, var(--color-primary) 6%, transparent) 0%, transparent 60%),
+      radial-gradient(ellipse 60% 40% at 100% 100%, color-mix(in srgb, var(--color-primary) 5%, transparent) 0%, transparent 60%);
+    background-attachment: fixed;
+  }
+  .dark body {
+    background-image:
+      radial-gradient(ellipse 80% 50% at 0% 0%, color-mix(in srgb, var(--color-primary) 12%, transparent) 0%, transparent 60%),
+      radial-gradient(ellipse 60% 40% at 100% 100%, color-mix(in srgb, var(--color-primary) 8%, transparent) 0%, transparent 60%),
+      radial-gradient(ellipse 50% 30% at 50% 100%, color-mix(in srgb, var(--color-primary) 4%, transparent) 0%, transparent 60%);
+    background-attachment: fixed;
+  }
+
+  /* Fluent 焦点环：所有可交互元素统一 2px primary outline */
+  :focus-visible {
+    outline: 2px solid var(--color-primary);
+    outline-offset: 2px;
+    border-radius: var(--radius-control);
+  }
+}
+
+/*
+ * Fluent 卡片（fl-card）— 平面卡，用边框分层而非阴影。
+ * Acrylic 半透明只在 dark 模式生效，浅色模式保持纯色避免混浊。
+ */
+/*
+ * fl-card — 小卡片（应用行 / 列表项 / 普通信息卡）
+ * Microsoft Store 实测：小卡只用 hover 上浮 + 阴影，**不带 reveal 光晕**。
+ */
+.fl-card {
+  position: relative;
+  border: 1px solid var(--color-outline-variant);
+  background-color: var(--color-surface-container);
+  border-radius: var(--radius-overlay);
+  transition: background-color 0.18s ease,
+              border-color 0.18s ease,
+              transform 0.18s cubic-bezier(0.16, 1, 0.3, 1),
+              box-shadow 0.18s cubic-bezier(0.16, 1, 0.3, 1);
+}
+.fl-card:hover {
+  background-color: var(--color-surface-container-high);
+  border-color: var(--color-outline);
+  transform: translateY(-2px);
+  box-shadow:
+    0 8px 16px -4px rgba(0, 0, 0, 0.1),
+    0 4px 8px -2px rgba(0, 0, 0, 0.06);
+}
+.dark .fl-card:hover {
+  box-shadow:
+    0 12px 24px -6px rgba(0, 0, 0, 0.4),
+    0 4px 10px -2px rgba(0, 0, 0, 0.25);
+}
+
+/*
+ * fl-hero — Hero 大卡（MS Store 主页风格）
+ *
+ * Microsoft Store 实测行为（图 2/3/4 切换截图）：
+ *   - 大卡**不上浮**（位置不变）
+ *   - 鼠标在卡内移动时，**边框出现一段亮光跟随鼠标位置**（蜡烛照亮边缘）
+ *   - 卡内可见一团淡淡的跟随柔光
+ *   - 鼠标离开后，光晕消失，卡仍然在原位
+ *
+ * --mx / --my 由 src/fluent-reveal.js 实时更新（rAF 节流）。
+ */
+.fl-hero {
+  position: relative;
+  isolation: isolate;
+  border-radius: var(--radius-overlay);
+  border: 1px solid rgba(255, 255, 255, 0.06);
+  overflow: hidden;
+  background:
+    radial-gradient(120% 100% at 100% 0%, var(--hero-bg-2, #4c1d95) 0%, transparent 60%),
+    radial-gradient(120% 100% at 0% 100%, var(--hero-bg-3, #1e1b4b) 0%, transparent 70%),
+    var(--hero-bg-1, #2a1a4f);
+  color: white;
+  /* 顶部 1px 高光线（Mica 反射），无 hover transform */
+  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.18);
+}
+
+/*
+ * 边框 reveal — 跟随鼠标位置的"蜡烛光"
+ * 关键：不靠 :hover 切换 opacity，而是让光晕始终存在但中心点跟随鼠标。
+ * 鼠标在卡内 → 光晕看得见；鼠标离开 → --mx/--my 不再更新，但保留最后位置
+ *   → 用 isolation: isolate + transition opacity 让"离开淡出"。
+ *   方案：::before/::after opacity 受 :hover 控制，但 background 的 radial-gradient
+ *   位置完全由 --mx/--my 决定，所以在 hover 期间一直跟手。
+ */
+.fl-hero::before {
+  content: "";
+  position: absolute;
+  inset: 0;
+  border-radius: inherit;
+  padding: 1.5px;
+  background: radial-gradient(
+    240px circle at var(--mx, 50%) var(--my, 50%),
+    rgba(255, 255, 255, 0.85),
+    rgba(255, 255, 255, 0.25) 35%,
+    transparent 65%
+  );
+  -webkit-mask:
+    linear-gradient(#000 0 0) content-box,
+    linear-gradient(#000 0 0);
+  -webkit-mask-composite: xor;
+  mask:
+    linear-gradient(#000 0 0) content-box,
+    linear-gradient(#000 0 0);
+  mask-composite: exclude;
+  opacity: 0;
+  transition: opacity 0.25s ease;
+  pointer-events: none;
+  z-index: 3;
+}
+.fl-hero:hover::before { opacity: 1; }
+
+.fl-hero::after {
+  content: "";
+  position: absolute;
+  inset: 0;
+  border-radius: inherit;
+  background: radial-gradient(
+    420px circle at var(--mx, 50%) var(--my, 50%),
+    rgba(255, 255, 255, 0.10),
+    rgba(255, 255, 255, 0.04) 35%,
+    transparent 65%
+  );
+  opacity: 0;
+  transition: opacity 0.3s ease;
+  pointer-events: none;
+  z-index: 1;
+}
+.fl-hero:hover::after { opacity: 1; }
+
+.fl-hero > * {
+  position: relative;
+  z-index: 4;
+}
+.fl-hero .fl-hero-text-secondary {
+  color: rgba(255, 255, 255, 0.75);
+}
+
+/*
+ * fl-reveal — 通用 Reveal Highlight 工具类（鼠标跟随光晕，不上浮）
+ *
+ * 用法：任何元素加上 .fl-reveal 即可获得跟随鼠标的边框光。
+ * 与 .fl-hero 同样行为，但用在浅色卡片上时光强降低（避免刺眼）。
+ * --mx / --my 由 src/fluent-reveal.js 实时更新。
+ */
+.fl-reveal {
+  position: relative;
+  isolation: isolate;
+}
+.fl-reveal::before {
+  content: "";
+  position: absolute;
+  inset: 0;
+  border-radius: inherit;
+  padding: 1px;
+  background: radial-gradient(
+    200px circle at var(--mx, 50%) var(--my, 50%),
+    rgba(255, 255, 255, 0.55),
+    rgba(255, 255, 255, 0.15) 35%,
+    transparent 65%
+  );
+  -webkit-mask:
+    linear-gradient(#000 0 0) content-box,
+    linear-gradient(#000 0 0);
+  -webkit-mask-composite: xor;
+  mask:
+    linear-gradient(#000 0 0) content-box,
+    linear-gradient(#000 0 0);
+  mask-composite: exclude;
+  opacity: 0;
+  transition: opacity 0.2s ease;
+  pointer-events: none;
+  z-index: 2;
+}
+.fl-reveal:hover::before { opacity: 1; }
+
+/*
+ * Fluent Button - 按 prominent / standard / subtle 三档（与 Fluent 文档一致）
+ * 直接用 class 应用，避免每个按钮重复 Tailwind 一长串
+ */
+/*
+ * fl-btn — Fluent Button 标准实现
+ * 高度 32px，圆角 4px（Win11 spec），padding 6/14
+ */
+.fl-btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: var(--space-s);
+  padding: 6px 14px;
+  height: 32px;
+  font-size: var(--font-body1);
+  font-weight: 600;
+  border-radius: var(--radius-control);
+  border: 1px solid transparent;
+  cursor: pointer;
+  transition: background-color 0.1s ease, border-color 0.1s ease;
+  user-select: none;
+  white-space: nowrap;
+}
+.fl-btn:focus-visible {
+  outline: 2px solid var(--color-primary);
+  outline-offset: 2px;
+}
+.fl-btn:active {
+  transform: scale(0.98);
+}
+.fl-btn:disabled {
+  opacity: 0.4;
+  cursor: not-allowed;
+}
+
+.fl-btn-prominent {
+  background-color: var(--color-primary);
+  color: var(--color-on-primary);
+}
+.fl-btn-prominent:hover:not(:disabled) {
+  filter: brightness(1.1);
+}
+
+.fl-btn-standard {
+  background-color: var(--color-surface-container-high);
+  color: var(--color-on-surface);
+  border-color: var(--color-outline-variant);
+}
+.fl-btn-standard:hover:not(:disabled) {
+  background-color: var(--color-surface-variant);
+}
+
+.fl-btn-subtle {
+  background-color: transparent;
+  color: var(--color-on-surface);
+}
+.fl-btn-subtle:hover:not(:disabled) {
+  background-color: var(--color-surface-container);
+}
+
+/*
+ * fl-mica — Mica 材质区块（页面级容器 / 大面板）
+ * Win11 实测：Mica 是"窗口级 chrome"，磨砂带壁纸色相，比 Acrylic 模糊更弱。
+ * 用法：包裹整个页面或大区域（Settings 主区、Dashboard 容器）。
+ */
+.fl-mica {
+  background-color: color-mix(in srgb, var(--color-surface) 70%, transparent);
+  backdrop-filter: blur(40px) saturate(140%);
+  -webkit-backdrop-filter: blur(40px) saturate(140%);
+}
+.dark .fl-mica {
+  background-color: color-mix(in srgb, var(--color-surface) 60%, transparent);
+}
+
+/*
+ * fl-acrylic — Acrylic 材质（Flyout / 浮层 / 副面板）
+ * Win11 实测：Acrylic 模糊更强（噪点 + 高斯），用于"短暂可见"的层级（Sidebar 浮层、Command Bar、Tooltip）。
+ */
+.fl-acrylic {
+  background-color: color-mix(in srgb, var(--color-surface-container) 75%, transparent);
+  backdrop-filter: blur(60px) saturate(160%);
+  -webkit-backdrop-filter: blur(60px) saturate(160%);
+  border: 1px solid color-mix(in srgb, var(--color-outline-variant) 60%, transparent);
+}
+.dark .fl-acrylic {
+  background-color: color-mix(in srgb, var(--color-surface-container) 65%, transparent);
+}
+
+/*
+ * fl-section-header — 全站统一的区块标题（"热门模型 →" 模式）
+ * 用 button 包裹时点击跳详情；纯展示用 div。
+ */
+.fl-section-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  margin-bottom: var(--space-l);
+}
+.fl-section-title {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  font-size: var(--font-subtitle1);
+  font-weight: 600;
+  letter-spacing: -0.01em;
+  color: var(--color-on-surface);
+  background: none;
+  border: none;
+  padding: 4px 6px;
+  margin-left: -6px;
+  border-radius: var(--radius-control);
+  cursor: pointer;
+  transition: color 0.15s ease, background-color 0.15s ease;
+}
+.fl-section-title:hover {
+  color: var(--color-primary);
+  background-color: color-mix(in srgb, var(--color-on-surface) 4%, transparent);
+}
+.fl-section-title svg {
+  opacity: 0.6;
+  transition: transform 0.18s cubic-bezier(0.16, 1, 0.3, 1), opacity 0.15s;
+}
+.fl-section-title:hover svg {
+  opacity: 1;
+  transform: translateX(2px);
+}
+
+/* Scrollbar — Fluent 风格细滚动条 */
+::-webkit-scrollbar {
+  width: 8px;
+  height: 8px;
+}
+::-webkit-scrollbar-track {
+  background: transparent;
+}
+::-webkit-scrollbar-thumb {
+  background: var(--color-outline-variant);
+  border-radius: var(--radius-control);
+  border: 2px solid transparent;
+  background-clip: content-box;
+}
+::-webkit-scrollbar-thumb:hover {
+  background: var(--color-outline);
+  background-clip: content-box;
+}
+
+/* 隐藏滚动条但保留滚动能力（导航条等使用） */
+.no-scrollbar::-webkit-scrollbar { display: none; }
+.no-scrollbar { scrollbar-width: none; }
+
+/*
+ * fl-scroll-chat — 聊天 / 长内容区域的强可视滚动条。
+ * 默认全局滚动条是 8px 隐性的，对长聊天列表辨识度差；
+ * 这里给消息容器一个更宽（10px）+ 更高对比的拇指条。
+ * 同时保持深浅模式自适应。
+ */
+.fl-scroll-chat::-webkit-scrollbar {
+  width: 10px;
+  height: 10px;
+}
+.fl-scroll-chat::-webkit-scrollbar-track {
+  background: color-mix(in srgb, var(--color-on-surface) 4%, transparent);
+  border-radius: 5px;
+  margin: 4px 0;
+}
+.fl-scroll-chat::-webkit-scrollbar-thumb {
+  background: color-mix(in srgb, var(--color-on-surface) 25%, transparent);
+  border-radius: 5px;
+  border: 2px solid transparent;
+  background-clip: content-box;
+  min-height: 32px;
+}
+.fl-scroll-chat::-webkit-scrollbar-thumb:hover {
+  background: color-mix(in srgb, var(--color-on-surface) 45%, transparent);
+  background-clip: content-box;
+}
+/* Firefox */
+.fl-scroll-chat {
+  scrollbar-width: thin;
+  scrollbar-color: color-mix(in srgb, var(--color-on-surface) 25%, transparent) transparent;
+}
