@@ -11,6 +11,7 @@ import (
 	"strconv"
 	"strings"
 	"time"
+	"unicode"
 
 	"daof-ai-hub/database"
 	"daof-ai-hub/proxy"
@@ -26,20 +27,16 @@ var errStackLimitExceeded = errors.New("subscription stack limit exceeded")
 // errInsufficientBalance 由购买套餐事务内条件 UPDATE 失败抛出（并发竞态）
 var errInsufficientBalance = errors.New("insufficient balance at commit (concurrent purchase race)")
 
-// fix CRITICAL Phase 4-codex（第二十四轮）：购买路径金额累加溢出 sentinels
-var (
-	errPriceOverflow = errors.New("price * qty overflow int64")
-	errBonusOverflow = errors.New("bonus accumulator overflow int64")
-)
+// errPriceOverflow 是购买路径金额累加溢出 sentinel。
+var errPriceOverflow = errors.New("price * qty overflow int64")
 
 // fix CRITICAL R23+3-C3（codex 第四轮）：事务内重读 package 后的校验失败 sentinel
 var (
-	errPackageGoneInTx      = errors.New("package vanished during transaction (admin deleted)")
-	errPackageDisabledInTx  = errors.New("package disabled during transaction (admin disabled)")
-	errPackageNotPublicInTx = errors.New("package not public during transaction (admin made private)")
-	errPackageInvariantInTx = errors.New("package invariant violated during transaction (bonus > price)")
+	errPackageGoneInTx           = errors.New("package vanished during transaction (admin deleted)")
+	errPackageDisabledInTx       = errors.New("package disabled during transaction (admin disabled)")
+	errPackageNotPublicInTx      = errors.New("package not public during transaction (admin made private)")
+	errPackageInvalidNumericInTx = errors.New("package numeric invariant violated during transaction")
 	// fix Minor Mi-1（codex 第二十一轮）：BillingPeriodSeconds 上限校验失败专用 sentinel，
-	// 不再复用 errPackageInvariantInTx 让 admin 误以为是 bonus/price 问题。
 	errPackagePeriodInvalidInTx = errors.New("package billing_period_seconds out of range during transaction")
 )
 
@@ -81,6 +78,11 @@ func lockUserForUpdate(tx *gorm.DB, userID uint) error {
 // fix Minor（自审第十三轮）：原 sentinel 名为 errSubAlreadyCanceled 仅描述 cancel 场景，
 // 但被 AdminRefundSubscription 复用于 paused/refunded 拒绝 → 名字误导后续维护者。
 var errSubStateMachineMiss = errors.New("subscription state machine guard rejected: status not in expected set")
+
+var (
+	errRevokeGrantNotGranted = errors.New("subscription is not admin-granted")
+	errRevokeGrantBadStatus  = errors.New("granted subscription status cannot be revoked")
+)
 
 type purchasePayload struct {
 	PackageID uint `json:"package_id"`
@@ -173,10 +175,9 @@ func PurchasePackage(c *fiber.Ctx) error {
 }
 
 func purchaseAsInstant(c *fiber.Ctx, user *database.User, pkg *database.Package, qty int, couponID uint) error {
-	// SEC-M3 防御深度：消费时再次校验 bonus<=price，防止 admin 直改 DB / 未来新增 endpoint 漏校
-	if pkg.BonusBalanceUSD > pkg.PriceAmount {
-		log.Printf("[SUB] BLOCKED package %d invariant violated: bonus=%d > price=%d (micro_usd)", pkg.ID, pkg.BonusBalanceUSD, pkg.PriceAmount)
-		return c.Status(500).JSON(fiber.Map{"success": false, "message_code": "ERR_PACKAGE_INVALID_BONUS"})
+	if pkg.PriceAmount < 0 {
+		log.Printf("[SUB] BLOCKED package %d invalid price=%d (micro_usd)", pkg.ID, pkg.PriceAmount)
+		return c.Status(500).JSON(fiber.Map{"success": false, "message_code": "ERR_PACKAGE_INVALID_NUMERIC"})
 	}
 
 	// 事务外乐观估价：仅用于"用户余额是否够付原价"的快速友好检查。
@@ -185,27 +186,19 @@ func purchaseAsInstant(c *fiber.Ctx, user *database.User, pkg *database.Package,
 	// 否则免费券用户余额=0 时会被这里 402 拒绝，根本进不了事务内的 lockAndApplyCoupon。
 	// 事务内有 quota >= netDeduct 条件 UPDATE 兜底，并发安全 + 真值由 DB 决定。
 	//
-	// fix CRITICAL Phase 4-codex（第二十四轮）：price * qty / bonus * qty 必须 checked，
+	// fix CRITICAL Phase 4-codex（第二十四轮）：price * qty 必须 checked，
 	// 防 admin 设极端套餐价 + 大 qty 导致 int64 溢出回绕成负值穿透余额检查。
 	if couponID == 0 {
 		totalPriceMicro, ok := database.CheckedMulInt64(pkg.PriceAmount, int64(qty))
 		if !ok {
 			return c.Status(400).JSON(fiber.Map{"success": false, "message_code": "ERR_PRICE_OVERFLOW"})
 		}
-		bonusTotalMicro, ok := database.CheckedMulInt64(pkg.BonusBalanceUSD, int64(qty))
-		if !ok {
-			return c.Status(400).JSON(fiber.Map{"success": false, "message_code": "ERR_BONUS_OVERFLOW"})
-		}
-		requiredAtLeastMicro := totalPriceMicro - bonusTotalMicro
-		if requiredAtLeastMicro < 0 {
-			requiredAtLeastMicro = 0
-		}
-		if user.Quota < requiredAtLeastMicro {
+		if user.Quota < totalPriceMicro {
 			return c.Status(402).JSON(fiber.Map{
 				"success":      false,
 				"message":      "余额不足",
 				"message_code": "ERR_INSUFFICIENT_BALANCE",
-				"required":     database.MicroToUSD(requiredAtLeastMicro),
+				"required":     database.MicroToUSD(totalPriceMicro),
 				"current":      database.MicroToUSD(user.Quota),
 			})
 		}
@@ -237,12 +230,12 @@ func purchaseAsInstant(c *fiber.Ctx, user *database.User, pkg *database.Package,
 		if !freshPkg.Public {
 			return errPackageNotPublicInTx
 		}
-		if freshPkg.BonusBalanceUSD > freshPkg.PriceAmount {
-			return errPackageInvariantInTx
+		if freshPkg.PriceAmount < 0 {
+			return errPackageInvalidNumericInTx
 		}
 		// fix CRITICAL C4（codex 第二十轮）+ Mi-1（第二十一轮）：事务内必须复检 BillingPeriodSeconds 上限，
 		// 防 admin DB 直改超大值后被购买路径放行（time.Duration 整数溢出 → 异常时间戳）。
-		// 拆出独立 sentinel 让前端能区分"bonus>price"与"period 越界"。
+		// 拆出独立 sentinel 让前端能区分"金额异常"与"period 越界"。
 		if freshPkg.BillingPeriodSeconds <= 0 || freshPkg.BillingPeriodSeconds > MaxBillingPeriodSeconds {
 			return errPackagePeriodInvalidInTx
 		}
@@ -298,51 +291,19 @@ func purchaseAsInstant(c *fiber.Ctx, user *database.User, pkg *database.Package,
 			return errPriceOverflow
 		}
 
-		// 原子合并扣款 + bonus，避免分两次 UPDATE
-		//
-		// fix CRITICAL R23+2-C2（codex 全方面审查 第二轮）：
-		// 券价 < bonus 倒贴保护 — 例：$20 套餐 + $5 bonus + 免费券 → netDeduct = 0 - 5 = -5 →
-		// 用户买套餐 + 余额 +5 = 净赚 $5。
-		// 修复：每份的 effectiveBonus = min(perSubPrices[i], pkg.BonusBalanceUSD)，
-		// 即"bonus 不能让单价为负"。聚合所有份得 effectiveTotalBonus。
-		// fix MAJOR R23+3-B2（codex 第四轮）：每份 sub 的 effectiveBonus 单独计算并持久化，
-		// 让账单事实表完整可对账（不再只看聚合 effectiveTotalBonus）。
-		// fix CRITICAL Phase 4-codex（第二十四轮）：bonus 累加 checked
-		perSubBonusMicro := make([]int64, qty)
-		var effectiveTotalBonusMicro int64
-		for i, p := range perSubPricesMicro {
-			b := pkg.BonusBalanceUSD
-			if b > p {
-				b = p // bonus 不能超过该份单价
-			}
-			perSubBonusMicro[i] = b
-			next, addOK := database.CheckedAddInt64(effectiveTotalBonusMicro, b)
-			if !addOK {
-				return errBonusOverflow
-			}
-			effectiveTotalBonusMicro = next
-		}
-		netDeductMicro := totalPriceMicro - effectiveTotalBonusMicro
-		if netDeductMicro > 0 {
+		if totalPriceMicro > 0 {
 			// fix CRITICAL：原实现仅做事务外余额检查，事务内无条件 quota - netDeduct，
 			// 并发两笔购买请求都通过事务外检查后会让余额变负。
 			// 改为条件 UPDATE：WHERE id=? AND quota >= netDeduct，并校验 RowsAffected。
 			res := tx.Model(&database.User{}).
-				Where("id = ? AND quota >= ?", user.ID, netDeductMicro).
-				UpdateColumn("quota", gorm.Expr("quota - ?", netDeductMicro))
+				Where("id = ? AND quota >= ?", user.ID, totalPriceMicro).
+				UpdateColumn("quota", gorm.Expr("quota - ?", totalPriceMicro))
 			if res.Error != nil {
 				return fmt.Errorf("deduct quota: %w", res.Error)
 			}
 			if res.RowsAffected == 0 {
 				// 并发竞态：另一笔购买已扣空余额。返回 sentinel 错误让上层给出 402。
 				return errInsufficientBalance
-			}
-		} else if netDeductMicro < 0 {
-			// bonus > price，净增加余额（不存在并发透支风险）
-			if err := tx.Model(&database.User{}).
-				Where("id = ?", user.ID).
-				UpdateColumn("quota", gorm.Expr("quota + ?", -netDeductMicro)).Error; err != nil {
-				return fmt.Errorf("apply bonus: %w", err)
 			}
 		}
 
@@ -354,7 +315,7 @@ func purchaseAsInstant(c *fiber.Ctx, user *database.User, pkg *database.Package,
 		baseMicro := now.UnixMicro()
 		for i := 0; i < qty; i++ {
 			// fix CRITICAL R23+2-C1：每份 sub 持久化实际成交价（含券折扣，micro_usd）。
-			// 退款时按这个字段算 netCost，而不是 snapshot 的原价 → 不再有"用券价买、按原价退"的套利。
+			// 退款时按这个字段算实际支付价，而不是 snapshot 的原价 → 不再有"用券价买、按原价退"的套利。
 			sub := database.UserSubscription{
 				UserID:                user.ID,
 				PackageID:             pkg.ID,
@@ -365,7 +326,6 @@ func purchaseAsInstant(c *fiber.Ctx, user *database.User, pkg *database.Package,
 				StackIndex:            baseIdx + i,
 				Status:                "active",
 				PurchasedUnitPriceUSD: perSubPricesMicro[i],
-				AppliedBonusUSD:       perSubBonusMicro[i], // R23+3-B2
 			}
 			// 仅第 1 份 sub 关联到券（券只用一次，便于退款反查）
 			if i == 0 && usedCoupon != nil {
@@ -377,26 +337,18 @@ func purchaseAsInstant(c *fiber.Ctx, user *database.User, pkg *database.Package,
 			created = append(created, sub)
 		}
 
-		// 账单流水：购买 + bonus（如果有）
+		// 账单流水：购买
 		// 重读余额作为 BalanceAfterUSD 锚点
 		var freshUser database.User
 		if err := tx.Select("id, quota").First(&freshUser, user.ID).Error; err != nil {
 			return fmt.Errorf("fetch fresh quota: %w", err)
 		}
-		// fix MAJOR R23+3-B1（codex 第四轮）：统一 ledger builder 生成时序账单事件序列。
-		//
-		// 一次购买（qty=N）产出最多 2N 条账单：
-		//   - N 条 purchase_sub/addon（每份 1 条；OccurredAt = now + i*µs）
-		//   - 至多 N 条 bonus_credit（仅 perSubBonus[i] > 0；OccurredAt = now + (qty+i)*µs）
-		// 所有 purchase 严格先于所有 bonus（语义：先扣款后入账 bonus）。
-		// BalanceAfterUSD 沿事件序列严格递进，账单回放与最终余额完全对账。
 		entryType := database.BillingTypePurchaseSub
 		if pkg.ProductType == "addon" {
 			entryType = database.BillingTypePurchaseAddon
 		}
-		// 计算"购买扣款前 + bonus 入账前"的基线余额：freshUser.Quota 是事务内最终值。
-		// totalPriceMicro 是上面已 checked 的累加，复用即可（避免重复 sum）。
-		balRollingMicro := freshUser.Quota - effectiveTotalBonusMicro + totalPriceMicro
+		// 计算购买扣款前的基线余额：freshUser.Quota 是事务内最终值。
+		balRollingMicro := freshUser.Quota + totalPriceMicro
 		// 关联券到第 1 份订阅（在写账单前完成，使描述能引用 used coupon）
 		if usedCoupon != nil && len(created) > 0 {
 			usedCoupon.UsedOnSubID = &created[0].ID
@@ -405,7 +357,6 @@ func purchaseAsInstant(c *fiber.Ctx, user *database.User, pkg *database.Package,
 				return fmt.Errorf("link coupon to sub: %w", err)
 			}
 		}
-		// purchase 行：N 条
 		for i, sub := range created {
 			subID := sub.ID
 			unitPriceMicro := perSubPricesMicro[i]
@@ -427,30 +378,6 @@ func purchaseAsInstant(c *fiber.Ctx, user *database.User, pkg *database.Package,
 				AmountOriginal:   -unitPriceMicro,
 			}); err != nil {
 				return fmt.Errorf("write billing purchase: %w", err)
-			}
-		}
-		// bonus 行：每份单独一条（与 perSubBonus[i] 对齐，便于 sub_id 退款时精确扣减）
-		for i, sub := range created {
-			bMicro := perSubBonusMicro[i]
-			if bMicro <= 0 {
-				continue // 该份没 bonus（如免费券购买的第 1 份）
-			}
-			balRollingMicro += bMicro
-			desc := fmt.Sprintf("「%s」#%d 附赠余额", pkg.Name, sub.StackIndex)
-			if usedCoupon != nil && i == 0 && bMicro < pkg.BonusBalanceUSD {
-				desc += fmt.Sprintf("（券折后封顶 $%s）", database.FormatMicroUSD(bMicro))
-			}
-			if err := database.WriteBillingEntry(tx, database.BillingEntryInput{
-				UserID:          user.ID,
-				OccurredAt:      now.Add(time.Duration(qty+i) * time.Microsecond),
-				EntryType:       database.BillingTypeBonusCredit,
-				AmountUSD:       bMicro,
-				BalanceAfterUSD: balRollingMicro,
-				RelatedType:     "subscription",
-				RelatedID:       sub.ID,
-				Description:     desc,
-			}); err != nil {
-				return fmt.Errorf("write billing bonus: %w", err)
 			}
 		}
 		return nil
@@ -478,13 +405,6 @@ func purchaseAsInstant(c *fiber.Ctx, user *database.User, pkg *database.Package,
 				"message_code": "ERR_PRICE_OVERFLOW",
 			})
 		}
-		if errors.Is(err, errBonusOverflow) {
-			return c.Status(400).JSON(fiber.Map{
-				"success":      false,
-				"message":      "套餐 bonus 累加超出范围",
-				"message_code": "ERR_BONUS_OVERFLOW",
-			})
-		}
 		// fix CRITICAL R23+3-C3：事务内重读 package 发现状态变化 → 让前端刷新重试
 		switch {
 		case errors.Is(err, errPackageGoneInTx):
@@ -496,9 +416,9 @@ func purchaseAsInstant(c *fiber.Ctx, user *database.User, pkg *database.Package,
 		case errors.Is(err, errPackageNotPublicInTx):
 			return c.Status(409).JSON(fiber.Map{"success": false, "message_code": "ERR_PACKAGE_NOT_PUBLIC",
 				"message": "套餐已被管理员下架，请刷新页面"})
-		case errors.Is(err, errPackageInvariantInTx):
-			return c.Status(500).JSON(fiber.Map{"success": false, "message_code": "ERR_PACKAGE_INVALID_BONUS",
-				"message": "套餐配置异常（bonus > price），请联系客服"})
+		case errors.Is(err, errPackageInvalidNumericInTx):
+			return c.Status(500).JSON(fiber.Map{"success": false, "message_code": "ERR_PACKAGE_INVALID_NUMERIC",
+				"message": "套餐金额数据损坏，请联系客服"})
 		case errors.Is(err, errPackagePeriodInvalidInTx):
 			// fix Minor Mi-1（codex 第二十一轮）：period 越界专用错误码
 			log.Printf("[PURCHASE] BLOCKED package %d invalid billing_period_seconds in fresh tx", pkg.ID)
@@ -528,10 +448,13 @@ func MySubscriptions(c *fiber.Ctx) error {
 		return c.Status(500).JSON(fiber.Map{"success": false, "message_code": "ERR_DB_QUERY"})
 	}
 
+	type userSubscriptionWire database.UserSubscription
 	type subItem struct {
-		database.UserSubscription
-		Usage       []database.SubscriptionUsage `json:"usage"`
-		PackageName string                       `json:"package_name"`
+		*userSubscriptionWire
+		PurchasedUnitPriceUSD float64                      `json:"purchased_unit_price_usd"`
+		Usage                 []database.SubscriptionUsage `json:"usage"`
+		UsageSummary          []subscriptionUsageSummary   `json:"usage_summary"`
+		PackageName           string                       `json:"package_name"`
 	}
 	if len(subs) == 0 {
 		return c.JSON(fiber.Map{"success": true, "data": []subItem{}})
@@ -574,13 +497,142 @@ func MySubscriptions(c *fiber.Ctx) error {
 
 	out := make([]subItem, 0, len(subs))
 	for _, s := range subs {
+		packageName := strings.TrimSpace(pkgNameByID[s.PackageID])
+		if packageName == "" {
+			packageName = readPackageNameFromSnapshot(s.PackageSnapshot)
+		}
+		wireSub := userSubscriptionWire(s)
 		out = append(out, subItem{
-			UserSubscription: s,
-			Usage:            usageBySubID[s.ID],
-			PackageName:      pkgNameByID[s.PackageID],
+			userSubscriptionWire:  &wireSub,
+			PurchasedUnitPriceUSD: database.MicroToUSD(s.PurchasedUnitPriceUSD),
+			Usage:                 usageBySubID[s.ID],
+			UsageSummary:          buildSubscriptionUsageSummary(s.PackageSnapshot, usageBySubID[s.ID]),
+			PackageName:           packageName,
 		})
 	}
 	return c.JSON(fiber.Map{"success": true, "data": out})
+}
+
+type subscriptionUsageSummary struct {
+	PlanID        uint       `json:"plan_id"`
+	PlanName      string     `json:"plan_name"`
+	Unit          string     `json:"unit"`
+	ModelBucket   string     `json:"model_bucket"`
+	WindowSeconds int        `json:"window_seconds"`
+	WindowStartAt *time.Time `json:"window_start_at,omitempty"`
+	WindowEndAt   *time.Time `json:"window_end_at,omitempty"`
+	Consumed      float64    `json:"consumed"`
+	Limit         float64    `json:"limit"`
+	Remaining     float64    `json:"remaining"`
+	UsagePct      float64    `json:"usage_pct"`
+	RequestCount  int64      `json:"request_count"`
+	IsUnlimited   bool       `json:"is_unlimited"`
+}
+
+func buildSubscriptionUsageSummary(snapshotJSON string, usages []database.SubscriptionUsage) []subscriptionUsageSummary {
+	type planSnap struct {
+		ID                 uint    `json:"id"`
+		Name               string  `json:"name"`
+		ModelMatch         string  `json:"model_match"`
+		LimitUnit          string  `json:"limit_unit"`
+		LimitValue         float64 `json:"limit_value"`
+		WindowSeconds      int     `json:"window_seconds"`
+		ExtraConfig        string  `json:"extra_config"`
+		QuantityMultiplier float64 `json:"quantity_multiplier"`
+	}
+	var snap struct {
+		Plans []planSnap `json:"plans"`
+	}
+	if err := json.Unmarshal([]byte(snapshotJSON), &snap); err != nil || len(snap.Plans) == 0 {
+		return []subscriptionUsageSummary{}
+	}
+	usageByPlanBucket := make(map[string]database.SubscriptionUsage, len(usages))
+	for _, u := range usages {
+		key := fmt.Sprintf("%d\x00%s", u.QuotaPlanID, u.ModelBucket)
+		usageByPlanBucket[key] = u
+	}
+	out := make([]subscriptionUsageSummary, 0, len(snap.Plans))
+	for _, p := range snap.Plans {
+		bucket := usageBucketFromPlanSnapshot(p.ExtraConfig, p.ModelMatch)
+		key := fmt.Sprintf("%d\x00%s", p.ID, bucket)
+		u, hasUsage := usageByPlanBucket[key]
+		if !hasUsage {
+			for _, candidate := range usages {
+				if candidate.QuotaPlanID == p.ID {
+					u = candidate
+					bucket = candidate.ModelBucket
+					hasUsage = true
+					break
+				}
+			}
+		}
+		mult := p.QuantityMultiplier
+		if mult <= 0 {
+			mult = 1
+		}
+		limit := p.LimitValue * mult
+		consumed := 0.0
+		requestCount := int64(0)
+		var windowStart *time.Time
+		var windowEnd *time.Time
+		if hasUsage {
+			consumed = u.ConsumedValue
+			requestCount = u.RequestCount
+			ws := u.WindowStartAt
+			we := u.WindowEndAt
+			windowStart = &ws
+			windowEnd = &we
+		}
+		remaining := 0.0
+		pct := 0.0
+		unlimited := limit <= 0
+		if unlimited {
+			remaining = 0
+		} else {
+			remaining = limit - consumed
+			if remaining < 0 {
+				remaining = 0
+			}
+			pct = consumed / limit * 100
+			if pct > 100 {
+				pct = 100
+			}
+		}
+		out = append(out, subscriptionUsageSummary{
+			PlanID:        p.ID,
+			PlanName:      p.Name,
+			Unit:          p.LimitUnit,
+			ModelBucket:   bucket,
+			WindowSeconds: p.WindowSeconds,
+			WindowStartAt: windowStart,
+			WindowEndAt:   windowEnd,
+			Consumed:      consumed,
+			Limit:         limit,
+			Remaining:     remaining,
+			UsagePct:      pct,
+			RequestCount:  requestCount,
+			IsUnlimited:   unlimited,
+		})
+	}
+	return out
+}
+
+func usageBucketFromPlanSnapshot(extraConfig, modelMatch string) string {
+	if extraConfig != "" && extraConfig != "{}" {
+		var cfg map[string]any
+		if err := json.Unmarshal([]byte(extraConfig), &cfg); err == nil {
+			for _, key := range []string{"bucket", "model_bucket"} {
+				if v, ok := cfg[key].(string); ok && strings.TrimSpace(v) != "" {
+					return strings.TrimSpace(v)
+				}
+			}
+		}
+	}
+	var patterns []string
+	if err := json.Unmarshal([]byte(modelMatch), &patterns); err == nil && len(patterns) > 0 {
+		return patterns[0]
+	}
+	return "*"
 }
 
 // CancelSubscription 用户**取消**订阅。仅标记 status=canceled，不发生任何资金移动。
@@ -663,6 +715,13 @@ type adminRefundSubscriptionRequest struct {
 	// 不要在退款流程里捆绑——这样审计两边各自清晰，账单 / 券系统解耦。
 }
 
+// adminRevokeGrantedSubscriptionRequest admin 收回赠送订阅 / 增量包的请求体。
+//
+// 收回赠送只撤销权益，不做退款、不改变 user.quota。reason 必填，进入账单描述和审计日志。
+type adminRevokeGrantedSubscriptionRequest struct {
+	Reason string `json:"reason"`
+}
+
 // AdminRefundSubscription POST /api/admin/subscriptions/:id/refund
 //
 // 业务模型：用户通过工单提交退款申请 → admin 协商金额 → 调本接口执行实际退款。
@@ -712,8 +771,7 @@ func AdminRefundSubscription(c *fiber.Ctx) error {
 	}
 	// fix CRITICAL（grant 改造）：admin 赠送的订阅 net_cost = 0，用户没付钱过，
 	// 退款 = 平台白送钱给用户（甚至比购买套利还离谱）。直接拒绝。
-	// admin 想"撤回"赠送应该走另外的"撤销赠送"路径（标记 status=canceled，不动 quota）；
-	// 当前未实现该路径，所以这里简单地 4xx 拒绝。
+	// admin 想"撤回"赠送必须走 AdminRevokeGrantedSubscription（标记 status=revoked，不动 quota）。
 	if sub.IsGranted {
 		return c.Status(400).JSON(fiber.Map{
 			"success":      false,
@@ -721,12 +779,12 @@ func AdminRefundSubscription(c *fiber.Ctx) error {
 			"message_code": "ERR_REFUND_GRANTED_SUB",
 		})
 	}
-	// 防超额：退款不能超过用户**净支出**（实际成交价 - 已发放 bonus）
+	// 防超额：退款不能超过用户实际成交价。
 	//
 	// fix CRITICAL R23+2-C1（codex 全方面审查 第二轮）：
 	// PurchasedUnitPriceUSD 是购买时持久化的实际成交价（含券折扣）。
 	//
-	// 关键：免费券购买（用户用免费券拿到 sub）→ PurchasedUnitPriceUSD == 0 → netCost == 0
+	// 关键：免费券购买（用户用免费券拿到 sub）→ PurchasedUnitPriceUSD == 0
 	//       → 退款上限 0 → admin 不能退款（用户没付钱），符合预期。
 	//
 	// 项目未上线：不再用 snapshot.price_amount 作为兜底——历史快照可能是原价，
@@ -742,23 +800,12 @@ func AdminRefundSubscription(c *fiber.Ctx) error {
 		})
 	}
 	purchasedPriceMicro := sub.PurchasedUnitPriceUSD
-	// fix Major（codex 第十五轮）：退款 netCost 必须从 sub.AppliedBonusUSD 读"实际发放给该份的 bonus"，
-	// 不能从 snapshot 读 BonusBalanceUSD —— snapshot 是套餐**当时**的 bonus 字段，
-	// 而 purchaseAsInstant 实际给用户的是 min(perSubPrice, bonus)（可能因券折扣 < 1 时低于 snapshot.bonus）。
-	// 用 snapshot 会让"券价 < snapshot.bonus"的订阅退款上限算高 → 用户白赚差价。
-	bonusMicro := sub.AppliedBonusUSD
-	netCostMicro := purchasedPriceMicro - bonusMicro
-	if netCostMicro < 0 {
-		netCostMicro = 0
-	}
 	// 容差 1000 micro_usd = $0.001 防 admin 客户端浮点输入误差
-	if refundAmountMicro > netCostMicro+1000 {
+	if refundAmountMicro > purchasedPriceMicro+1000 {
 		return c.Status(400).JSON(fiber.Map{
 			"success": false,
-			"message": fmt.Sprintf("退款金额超过用户净支出 $%s（购买价 $%s - 已赠送 bonus $%s）",
-				database.FormatMicroUSD(netCostMicro),
-				database.FormatMicroUSD(purchasedPriceMicro),
-				database.FormatMicroUSD(bonusMicro)),
+			"message": fmt.Sprintf("退款金额超过用户实际支付金额 $%s",
+				database.FormatMicroUSD(purchasedPriceMicro)),
 			"message_code": "ERR_AMOUNT_EXCEEDS_NET_COST",
 		})
 	}
@@ -878,6 +925,177 @@ func AdminRefundSubscription(c *fiber.Ctx) error {
 	})
 }
 
+// AdminRevokeGrantedSubscription POST /api/admin/subscriptions/:id/revoke-grant
+//
+// 业务模型：管理员赠送出去的是免费权益，不存在退款；如果发错或内测需要回收，
+// 只能走本接口把赠送权益置为 revoked。
+//
+// 状态机：
+//   - active / paused → revoked（终态）
+//   - paid subscription / canceled / expired / refunded / revoked → 拒绝
+//
+// 原子性：
+//   - 事务内锁 user 行，与购买/退款/消费串行化
+//   - 条件 UPDATE 同时检查 is_granted=true + status IN(active, paused)
+//   - 写 0 金额账单和 OperationLog；不触碰 user.quota
+func AdminRevokeGrantedSubscription(c *fiber.Ctx) error {
+	op := loadAdminUser(c)
+	if op == nil {
+		return c.Status(401).JSON(fiber.Map{"success": false, "message_code": "ERR_NO_AUTH"})
+	}
+	id, err := strconv.Atoi(c.Params("id"))
+	if err != nil || id <= 0 {
+		return c.Status(400).JSON(fiber.Map{"success": false, "message_code": "ERR_INVALID_PARAMS"})
+	}
+	var req adminRevokeGrantedSubscriptionRequest
+	if err := c.BodyParser(&req); err != nil {
+		return c.Status(400).JSON(fiber.Map{"success": false, "message_code": "ERR_PARSE_PAYLOAD"})
+	}
+	reason := strings.TrimSpace(req.Reason)
+	if reason == "" {
+		return c.Status(400).JSON(fiber.Map{
+			"success":      false,
+			"message":      "reason 必填（用于审计 / 用户客服查询）",
+			"message_code": "ERR_REASON_REQUIRED",
+		})
+	}
+	if runeLen := len([]rune(reason)); runeLen > grantReasonMaxLen {
+		return c.Status(400).JSON(fiber.Map{
+			"success":      false,
+			"message":      fmt.Sprintf("reason 长度不能超过 %d 字符（当前 %d）", grantReasonMaxLen, runeLen),
+			"message_code": "ERR_REASON_TOO_LONG",
+		})
+	}
+	for _, r := range reason {
+		if unicode.IsControl(r) {
+			return c.Status(400).JSON(fiber.Map{
+				"success":      false,
+				"message":      "reason 不能包含控制字符（换行 / 制表符 / NUL / ESC 等）",
+				"message_code": "ERR_REASON_CTRL_CHAR",
+			})
+		}
+	}
+
+	var sub database.UserSubscription
+	if err := database.DB.First(&sub, id).Error; err != nil {
+		return c.Status(404).JSON(fiber.Map{"success": false, "message_code": "ERR_NOT_FOUND"})
+	}
+	if !sub.IsGranted {
+		return c.Status(400).JSON(fiber.Map{
+			"success":      false,
+			"message":      "只能收回管理员赠送的订阅 / 增量包",
+			"message_code": "ERR_REVOKE_NOT_GRANTED",
+		})
+	}
+	if sub.Status != "active" && sub.Status != "paused" {
+		return c.Status(409).JSON(fiber.Map{
+			"success":      false,
+			"message":      "该赠送权益当前状态不可收回（可能已取消、过期、退款或已收回）",
+			"message_code": "ERR_REVOKE_GRANTED_STATUS",
+		})
+	}
+
+	now := time.Now()
+	pkgName := readPackageNameFromSnapshot(sub.PackageSnapshot)
+	if pkgName == "" {
+		pkgName = fmt.Sprintf("套餐#%d", sub.PackageID)
+	}
+	txErr := database.DB.Transaction(func(tx *gorm.DB) error {
+		if err := lockUserForUpdate(tx, sub.UserID); err != nil {
+			return fmt.Errorf("lock user: %w", err)
+		}
+
+		var lockedSub database.UserSubscription
+		if err := tx.Clauses(clause.Locking{Strength: "UPDATE"}).First(&lockedSub, sub.ID).Error; err != nil {
+			return fmt.Errorf("lock sub: %w", err)
+		}
+		if !lockedSub.IsGranted {
+			return errRevokeGrantNotGranted
+		}
+		if lockedSub.Status != "active" && lockedSub.Status != "paused" {
+			return errRevokeGrantBadStatus
+		}
+		pkgName = readPackageNameFromSnapshot(lockedSub.PackageSnapshot)
+		if pkgName == "" {
+			pkgName = fmt.Sprintf("套餐#%d", lockedSub.PackageID)
+		}
+
+		res := tx.Model(&database.UserSubscription{}).
+			Where("id = ? AND is_granted = ? AND status IN ?", lockedSub.ID, true, []string{"active", "paused"}).
+			Updates(map[string]any{
+				"status":      "revoked",
+				"canceled_at": gorm.Expr("CASE WHEN canceled_at IS NULL THEN ? ELSE canceled_at END", now),
+			})
+		if res.Error != nil {
+			return fmt.Errorf("update granted sub status: %w", res.Error)
+		}
+		if res.RowsAffected == 0 {
+			return errSubStateMachineMiss
+		}
+
+		var freshUser database.User
+		if err := tx.Select("id, quota").First(&freshUser, lockedSub.UserID).Error; err != nil {
+			return fmt.Errorf("fetch fresh quota: %w", err)
+		}
+		if err := database.WriteBillingEntry(tx, database.BillingEntryInput{
+			UserID:          lockedSub.UserID,
+			OccurredAt:      now,
+			EntryType:       database.BillingTypeAdminRevokeGrant,
+			AmountUSD:       0,
+			BalanceAfterUSD: freshUser.Quota,
+			RelatedType:     "subscription",
+			RelatedID:       lockedSub.ID,
+			Description:     fmt.Sprintf("管理员收回赠送「%s」 · admin#%d · %s", pkgName, op.ID, reason),
+		}); err != nil {
+			return fmt.Errorf("write billing revoke grant: %w", err)
+		}
+
+		auditDetails, _ := json.Marshal(map[string]any{
+			"type":         "REVOKE_GRANTED_SUBSCRIPTION",
+			"sub_id":       lockedSub.ID,
+			"user_id":      lockedSub.UserID,
+			"package_id":   lockedSub.PackageID,
+			"package_name": pkgName,
+			"reason":       reason,
+			"prev":         lockedSub.Status,
+		})
+		return LogOperationByTx(tx, op.ID, lockedSub.UserID, "admin", "REVOKE_GRANTED_SUBSCRIPTION", c.IP(), string(auditDetails))
+	})
+
+	if txErr != nil {
+		switch {
+		case errors.Is(txErr, errRevokeGrantNotGranted):
+			return c.Status(400).JSON(fiber.Map{"success": false, "message_code": "ERR_REVOKE_NOT_GRANTED"})
+		case errors.Is(txErr, errRevokeGrantBadStatus), errors.Is(txErr, errSubStateMachineMiss):
+			return c.Status(409).JSON(fiber.Map{"success": false, "message_code": "ERR_REVOKE_GRANTED_STATUS"})
+		default:
+			log.Printf("[SUB-REVOKE-GRANT] tx failed admin=%d sub=%d err=%v", op.ID, sub.ID, txErr)
+			return c.Status(500).JSON(fiber.Map{"success": false, "message_code": "ERR_DB_TRANSACTION"})
+		}
+	}
+
+	proxy.InvalidateUserSubscriptionCache(sub.UserID)
+	proxy.RefreshUserAuth(sub.UserID)
+	dedupKey := fmt.Sprintf("revoke-grant:sub_%d", sub.ID)
+	proxy.Dispatch(
+		sub.UserID,
+		"system",
+		"warning",
+		"赠送权益已收回",
+		fmt.Sprintf("管理员已收回赠送的「%s」。如有疑问，请联系支持。", pkgName),
+		proxy.LinkTickets(),
+		"联系客服",
+		"subscription",
+		sub.ID,
+		&dedupKey,
+	)
+
+	return c.JSON(fiber.Map{
+		"success":      true,
+		"message_code": "SUCCESS_GRANT_REVOKED",
+	})
+}
+
 // adminSubItem 是 admin 订阅总览的扁平化行——含用户身份、套餐名、价格、剩余天数、消费率，
 // 让 admin 在协商退款时一屏看到所有关键信息，不必去 join 多个表。
 //
@@ -896,8 +1114,7 @@ type adminSubItem struct {
 	PackageName       string     `json:"package_name"`        // 从 snapshot 提取（套餐改名/删除后仍准确）
 	ProductType       string     `json:"product_type"`        // subscription | addon
 	PurchasedPriceUSD float64    `json:"purchased_price_usd"` // 从 snapshot 提取购买时价格
-	BonusUSD          float64    `json:"bonus_usd"`           // 从 snapshot 提取购买时赠送
-	Status            string     `json:"status"`              // active | canceled | expired | refunded | paused
+	Status            string     `json:"status"`              // active | canceled | expired | refunded | paused | revoked
 	StartAt           time.Time  `json:"start_at"`
 	EndAt             time.Time  `json:"end_at"`
 	CanceledAt        *time.Time `json:"canceled_at"`
@@ -947,7 +1164,7 @@ func AdminListSubscriptions(c *fiber.Ctx) error {
 	}
 	if v := c.Query("status"); v != "" {
 		switch v {
-		case "active", "expired", "canceled", "refunded", "paused":
+		case "active", "expired", "canceled", "refunded", "paused", "revoked":
 			q = q.Where("status = ?", v)
 		default:
 			return c.Status(400).JSON(fiber.Map{"success": false, "message_code": "ERR_BAD_STATUS"})
@@ -1058,9 +1275,9 @@ func AdminListSubscriptions(c *fiber.Ctx) error {
 			totalSec = 1 // 防 0 除
 		}
 		item.TotalDays = totalSec / secsPerDay
-		// 已 canceled / refunded 的订阅，"剩余"以取消时刻为准；active 才以 now 计
+		// 已 canceled / refunded / revoked 的订阅，"剩余"以终止时刻为准；active 才以 now 计
 		anchor := now
-		if sub.CanceledAt != nil && (sub.Status == "canceled" || sub.Status == "refunded") {
+		if sub.CanceledAt != nil && (sub.Status == "canceled" || sub.Status == "refunded" || sub.Status == "revoked") {
 			anchor = *sub.CanceledAt
 		}
 		remainSec := sub.EndAt.Sub(anchor).Seconds()
@@ -1074,17 +1291,18 @@ func AdminListSubscriptions(c *fiber.Ctx) error {
 			item.UserPhone = maskPhone(u.Phone)
 			item.UserGithubID = u.GithubID
 		}
-		// 从 snapshot 解出 package_name / price / bonus / product_type / plans
+		// 从 snapshot 解出 package_name / product_type / plans
 		var snap struct {
-			PackageName     string  `json:"package_name"`
-			ProductType     string  `json:"product_type"`
-			PriceAmount     float64 `json:"price_amount"`
-			BonusBalanceUSD float64 `json:"bonus_balance_usd"`
-			Plans           []struct {
-				ID         uint    `json:"id"`
-				Name       string  `json:"name"`
-				LimitUnit  string  `json:"limit_unit"`
-				LimitValue float64 `json:"limit_value"`
+			PackageName string `json:"package_name"`
+			ProductType string `json:"product_type"`
+			Plans       []struct {
+				ID                 uint    `json:"id"`
+				Name               string  `json:"name"`
+				LimitUnit          string  `json:"limit_unit"`
+				LimitValue         float64 `json:"limit_value"`
+				WindowSeconds      int     `json:"window_seconds"`
+				ExtraConfig        string  `json:"extra_config"`
+				QuantityMultiplier float64 `json:"quantity_multiplier"`
 			} `json:"plans"`
 		}
 		if err := json.Unmarshal([]byte(sub.PackageSnapshot), &snap); err == nil {
@@ -1099,13 +1317,10 @@ func AdminListSubscriptions(c *fiber.Ctx) error {
 				// 免费券或赠送 sub：实际未付费，建议退款 0
 				item.PurchasedPriceUSD = 0
 			}
-			// fix Major（codex 第十五轮）：BonusUSD 用 sub.AppliedBonusUSD（实际入账值），
-			// snapshot.bonus 是套餐当时的字段而非用户实际拿到的——见 RefundSubscription 同处修复说明。
-			item.BonusUSD = database.MicroToUSD(sub.AppliedBonusUSD)
 		} else {
 			// fix Minor（自审第十三轮）：原 unmarshal 错误完全静默——admin 看到 $0 建议退款
 			// 完全无线索为何。加日志让 admin 能从服务器 log 检索到 snapshot 损坏。
-			log.Printf("[ADMIN-SUBS] sub %d snapshot unmarshal failed: %v (PackageName/Price/Bonus 退化为零值)", sub.ID, err)
+			log.Printf("[ADMIN-SUBS] sub %d snapshot unmarshal failed: %v (PackageName/Price 退化为零值)", sub.ID, err)
 		}
 		// 计算消费率：取所有限额 plan 中 consumed/limit 最大的那个
 		// fix Major（自审第十三轮）：原顺序在 SuggestedRefundUSD 计算后才填 UsageMaxPct，
@@ -1119,15 +1334,22 @@ func AdminListSubscriptions(c *fiber.Ctx) error {
 		maxPct := 0.0
 		usageDetails := make([]map[string]any, 0, len(snap.Plans))
 		for _, p := range snap.Plans {
-			d := map[string]any{
-				"plan_id":  p.ID,
-				"name":     p.Name,
-				"unit":     p.LimitUnit,
-				"limit":    p.LimitValue,
-				"consumed": consumedByPlan[p.ID],
+			mult := p.QuantityMultiplier
+			if mult <= 0 {
+				mult = 1
 			}
-			if p.LimitValue > 0 {
-				pct := consumedByPlan[p.ID] / p.LimitValue * 100
+			effectiveLimit := p.LimitValue * mult
+			d := map[string]any{
+				"plan_id":        p.ID,
+				"name":           p.Name,
+				"unit":           p.LimitUnit,
+				"limit":          effectiveLimit,
+				"window_seconds": p.WindowSeconds,
+				"extra_config":   p.ExtraConfig,
+				"consumed":       consumedByPlan[p.ID],
+			}
+			if effectiveLimit > 0 {
+				pct := consumedByPlan[p.ID] / effectiveLimit * 100
 				if pct > maxPct {
 					maxPct = pct
 				}
@@ -1140,22 +1362,11 @@ func AdminListSubscriptions(c *fiber.Ctx) error {
 			item.UsageDetailsJSON = string(b)
 		}
 
-		// fix CRITICAL（codex + gemini r11 独立印证）：建议退款必须扣除已赠送的 bonus，
-		// 否则攻击者可"买含 bonus 套餐 → 立即取消 → 拿全额退款"白嫖 bonus 净赚。
-		// 攻击场景：套餐 $10 + bonus $5；用户余额 $10。
-		//   购买后：余额 = 10 - 10 + 5 = $5
-		//   立即取消 → 时间剩余 100% → 错误公式建议 $10 退款 → 用户拿到 $15（净赚 $5）
-		// 正确公式：netCost = price - bonus（用户实际净支出），退款上限 = netCost × ratio
-		//
-		// fix Major（codex r11）：addon（增量包）不按时间退款——它是 "1000 messages / 7 days"
-		// 这种 token 包，用户 1 小时耗尽就该 0 退款。订阅(subscription) 才按时间。
+		// fix Major（codex r11）：addon（增量包）不按时间退款——它是"1000 次调用 / 7 days"
+		// 或 token/API 等值额度包，用户 1 小时耗尽就该 0 退款。订阅(subscription) 才按时间。
 		// 增量包：取 min(剩余时间, 剩余 quota) 比例的更小者，防"耗尽即退"。
 		if sub.Status != "refunded" {
-			netCost := item.PurchasedPriceUSD - item.BonusUSD
-			if netCost < 0 {
-				netCost = 0
-			}
-			if netCost > 0 {
+			if item.PurchasedPriceUSD > 0 {
 				ratio := item.TimeRemainingPct / 100.0
 				if item.ProductType == "addon" {
 					// 增量包：取剩余 quota 比例（取所有 limit plan 中"剩余最少"的那个）
@@ -1167,7 +1378,7 @@ func AdminListSubscriptions(c *fiber.Ctx) error {
 						ratio = quotaRemainRatio
 					}
 				}
-				suggested := netCost * ratio
+				suggested := item.PurchasedPriceUSD * ratio
 				item.SuggestedRefundUSD = float64(int(suggested*100)) / 100
 			}
 		}
@@ -1203,11 +1414,12 @@ func buildPackageSnapshotTx(db *gorm.DB, pkg *database.Package) (string, error) 
 		WeightFactor       string  `json:"weight_factor"`
 		Priority           int     `json:"priority"`
 		OverflowStrategy   string  `json:"overflow_strategy"`
+		ExtraConfig        string  `json:"extra_config"`
 		QuantityMultiplier float64 `json:"quantity_multiplier"`
 	}
 	type snap struct {
 		// schema_version 标记当前快照语义；QuantityMultiplier 放大限额。
-		// fix MAJOR M22-A1 Phase 1：PriceAmount/BonusBalanceUSD 单位 micro_usd（int64）。
+		// fix MAJOR M22-A1 Phase 1：PriceAmount 单位 micro_usd（int64）。
 		SchemaVersion        int        `json:"schema_version"`
 		PackageID            uint       `json:"package_id"`
 		PackageName          string     `json:"package_name"`
@@ -1215,7 +1427,6 @@ func buildPackageSnapshotTx(db *gorm.DB, pkg *database.Package) (string, error) 
 		PriceAmount          int64      `json:"price_amount"`
 		PriceCurrency        string     `json:"price_currency"`
 		BillingPeriodSeconds int        `json:"billing_period_seconds"`
-		BonusBalanceUSD      int64      `json:"bonus_balance_usd"`
 		Plans                []planSnap `json:"plans"`
 	}
 	productType := pkg.ProductType
@@ -1230,7 +1441,6 @@ func buildPackageSnapshotTx(db *gorm.DB, pkg *database.Package) (string, error) 
 		PriceAmount:          pkg.PriceAmount,
 		PriceCurrency:        pkg.PriceCurrency,
 		BillingPeriodSeconds: pkg.BillingPeriodSeconds,
-		BonusBalanceUSD:      pkg.BonusBalanceUSD,
 	}
 	var pps []database.PackagePlan
 	if err := db.Where("package_id = ?", pkg.ID).Order("sort_order asc").Find(&pps).Error; err != nil {
@@ -1279,6 +1489,7 @@ func buildPackageSnapshotTx(db *gorm.DB, pkg *database.Package) (string, error) 
 			LimitUnit: plan.LimitUnit, LimitValue: plan.LimitValue,
 			WindowSeconds: plan.WindowSeconds, WeightFactor: plan.WeightFactor,
 			Priority: plan.Priority, OverflowStrategy: plan.OverflowStrategy,
+			ExtraConfig:        plan.ExtraConfig,
 			QuantityMultiplier: pp.QuantityMultiplier,
 		})
 	}

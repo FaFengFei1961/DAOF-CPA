@@ -15,8 +15,9 @@
 // 写入时机（共 7 处插桩，均在事务内）：
 //
 //	YifutNotify (paid)              → topup
-//	purchaseAsInstant (success)     → purchase_sub | purchase_addon (+ bonus_credit if bonus>0)
-//	AdminGrantSubscription          → admin_grant_sub | admin_grant_addon (AmountUSD=0; +bonus_credit if apply_bonus)
+//	purchaseAsInstant (success)     → purchase_sub | purchase_addon
+//	AdminGrantSubscription          → admin_grant_sub | admin_grant_addon (AmountUSD=0)
+//	AdminRevokeGrantedSubscription  → admin_revoke_grant (AmountUSD=0)
 //	AdminRefundSubscription         → refund_sub
 //	AdminRefundTopup                → refund_topup (+ admin_adjust if reclaim_quota=false 仍写一行 0 USD 解释)
 //	stream.go deductQuotaAtomic     → api_consume_balance
@@ -74,12 +75,13 @@ const (
 	BillingTypeTopup             = "topup"               // 充值入账
 	BillingTypePurchaseSub       = "purchase_sub"        // 购买周期套餐
 	BillingTypePurchaseAddon     = "purchase_addon"      // 购买增量包
-	BillingTypeBonusCredit       = "bonus_credit"        // 套餐附赠 USD
+	BillingTypeBonusCredit       = "bonus_credit"        // 注册 / 邀请等奖励余额
 	BillingTypeRefundSub         = "refund_sub"          // 订阅退款
 	BillingTypeRefundTopup       = "refund_topup"        // 充值退款（reclaim_quota=true 时 AmountUSD<0）
 	BillingTypeAdminAdjust       = "admin_adjust"        // 管理员手动调整
 	BillingTypeAdminGrantSub     = "admin_grant_sub"     // 管理员赠送订阅（AmountUSD=0，不动钱）
 	BillingTypeAdminGrantAddon   = "admin_grant_addon"   // 管理员赠送增量包（AmountUSD=0，不动钱）
+	BillingTypeAdminRevokeGrant  = "admin_revoke_grant"  // 管理员收回赠送（AmountUSD=0，不动钱）
 	BillingTypeApiConsumeBalance = "api_consume_balance" // API 扣余额（quota-）
 	BillingTypeApiUsageSub       = "api_usage_sub"       // API 扣订阅额度（不动 quota）
 	BillingTypeApiUsageAddon     = "api_usage_addon"     // API 扣增量包额度（不动 quota）
@@ -115,6 +117,7 @@ func IsKnownBillingType(t string) bool {
 	case BillingTypeTopup, BillingTypePurchaseSub, BillingTypePurchaseAddon,
 		BillingTypeBonusCredit, BillingTypeRefundSub, BillingTypeRefundTopup,
 		BillingTypeAdminAdjust, BillingTypeAdminGrantSub, BillingTypeAdminGrantAddon,
+		BillingTypeAdminRevokeGrant,
 		BillingTypeApiConsumeBalance,
 		BillingTypeApiUsageSub, BillingTypeApiUsageAddon,
 		BillingTypeApiUsagePendingReconcile:
@@ -136,11 +139,13 @@ func IsApiUsageType(t string) bool {
 //   - api_usage_sub / api_usage_addon：扣订阅额度（不动 user.quota）
 //   - api_usage_pending_reconcile：commit 阶段订阅 DB 加载失败时的待对账标记，AmountUSD 必须 0
 //   - admin_grant_sub / admin_grant_addon：管理员赠送订阅，AmountUSD 必须 0
+//   - admin_revoke_grant：管理员收回赠送订阅，AmountUSD 必须 0
 func IsZeroAmountBillingType(t string) bool {
 	switch t {
 	case BillingTypeApiUsageSub, BillingTypeApiUsageAddon,
 		BillingTypeApiUsagePendingReconcile,
-		BillingTypeAdminGrantSub, BillingTypeAdminGrantAddon:
+		BillingTypeAdminGrantSub, BillingTypeAdminGrantAddon,
+		BillingTypeAdminRevokeGrant:
 		return true
 	}
 	return false

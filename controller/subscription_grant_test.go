@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"strings"
 	"testing"
+	"time"
 
 	"daof-ai-hub/database"
 	"daof-ai-hub/middleware"
@@ -21,19 +22,20 @@ func newAdminGrantTestApp(admin *database.User) *fiber.App {
 	})
 	app.Use(middleware.AdminGuard)
 	app.Post("/admin/sub/grant", AdminGrantSubscription)
+	app.Post("/admin/sub/:id/revoke-grant", AdminRevokeGrantedSubscription)
 	return app
 }
 
 // TestGrant_Success 基本 happy path：admin 给用户赠送 1 份订阅。
 //   - 用户得到 1 条 active sub，IsGranted=true，GrantReason 正确
-//   - 用户余额不变（apply_bonus=false）
+//   - 用户余额不变
 //   - 写入 1 条 admin_grant_sub 账单（AmountUSD=0）
 //   - 写入 1 条 OperationLog
 func TestGrant_Success(t *testing.T) {
 	setupSubTestDB(t)
 	admin := seedAdminUser(t)
 	user := seedTestUser(t, 0.0) // 余额 0
-	pkg := seedPackage(t)        // 价格 9.9，bonus=0
+	pkg := seedPackage(t)        // 价格 9.9
 	app := newAdminGrantTestApp(admin)
 
 	code, resp := doJSON(t, app, "POST", "/admin/sub/grant", map[string]any{
@@ -91,38 +93,33 @@ func TestGrant_Success(t *testing.T) {
 	}
 }
 
-// TestGrant_ApplyBonus 带 bonus 的赠送：bonus 进 quota，写 bonus_credit 账单。
-func TestGrant_ApplyBonus(t *testing.T) {
+// TestGrant_QuantityDoesNotCreditBalance 多份赠送只创建订阅和 0 金额账单，不给 user.Quota 入账。
+func TestGrant_QuantityDoesNotCreditBalance(t *testing.T) {
 	setupSubTestDB(t)
 	admin := seedAdminUser(t)
 	user := seedTestUser(t, 1)
-	pkg := seedPackage(t, func(p *database.Package) {
-		p.BonusBalanceUSD = 5 * database.MicroPerUSD // 5 USD bonus
-	})
+	pkg := seedPackage(t)
 	app := newAdminGrantTestApp(admin)
 
 	code, resp := doJSON(t, app, "POST", "/admin/sub/grant", map[string]any{
-		"user_id":     user.ID,
-		"package_id":  pkg.ID,
-		"quantity":    2,
-		"reason":      "活动赠送",
-		"apply_bonus": true,
+		"user_id":    user.ID,
+		"package_id": pkg.ID,
+		"quantity":   2,
+		"reason":     "活动赠送",
 	})
 	if code != 200 {
 		t.Fatalf("expected 200, got %d body=%v", code, resp)
 	}
 
-	// 2 份订阅 + 2 * 5 = 10 USD bonus 进 user.quota
 	var fresh database.User
 	database.DB.First(&fresh, user.ID)
-	wantMicro := int64(1*database.MicroPerUSD) + 2*5*database.MicroPerUSD
+	wantMicro := int64(1 * database.MicroPerUSD)
 	if fresh.Quota != wantMicro {
-		t.Errorf("balance=%d, want %d", fresh.Quota, wantMicro)
+		t.Errorf("balance=%d, want unchanged %d", fresh.Quota, wantMicro)
 	}
 
-	// 2 条 grant（每份订阅一条）+ 1 条聚合 bonus_credit（多份赠送只写一条避免 BalanceAfterUSD 抖动）
+	// 2 条 grant（每份订阅一条），没有 bonus_credit。
 	var grantCount, bonusCount int64
-	var bonusEntry database.BillingEntry
 	database.DB.Model(&database.BillingEntry{}).
 		Where("user_id = ? AND entry_type = ?", user.ID, database.BillingTypeAdminGrantSub).
 		Count(&grantCount)
@@ -132,14 +129,30 @@ func TestGrant_ApplyBonus(t *testing.T) {
 	if grantCount != 2 {
 		t.Errorf("admin_grant_sub count=%d, want 2", grantCount)
 	}
-	if bonusCount != 1 {
-		t.Errorf("bonus_credit count=%d, want 1 (aggregated)", bonusCount)
+	if bonusCount != 0 {
+		t.Errorf("bonus_credit count=%d, want 0", bonusCount)
 	}
-	// 聚合 bonus 金额必须等于 bonus * qty = 5 * 2 = 10 USD = 10_000_000 micro_usd
-	database.DB.Where("user_id = ? AND entry_type = ?",
-		user.ID, database.BillingTypeBonusCredit).First(&bonusEntry)
-	if bonusEntry.AmountUSD != 10*database.MicroPerUSD {
-		t.Errorf("aggregated bonus AmountUSD=%d, want 10*MicroPerUSD", bonusEntry.AmountUSD)
+}
+
+func TestGrant_RejectDeprecatedApplyBonus(t *testing.T) {
+	setupSubTestDB(t)
+	admin := seedAdminUser(t)
+	user := seedTestUser(t, 1)
+	pkg := seedPackage(t)
+	app := newAdminGrantTestApp(admin)
+
+	code, resp := doJSON(t, app, "POST", "/admin/sub/grant", map[string]any{
+		"user_id":     user.ID,
+		"package_id":  pkg.ID,
+		"quantity":    1,
+		"reason":      "旧字段拒绝测试",
+		"apply_bonus": false,
+	})
+	if code != 400 {
+		t.Fatalf("expected 400 for deprecated apply_bonus, got %d body=%v", code, resp)
+	}
+	if resp["message_code"] != "ERR_DEPRECATED_FIELD" {
+		t.Errorf("expected ERR_DEPRECATED_FIELD, got %v", resp["message_code"])
 	}
 }
 
@@ -389,6 +402,128 @@ func TestGrant_ThenRefund_Rejected(t *testing.T) {
 	}
 }
 
+// TestGrant_ThenRevoke_Success 赠送权益可以被 admin 收回；收回只改订阅状态，
+// 不退款、不改变 user.Quota，并留下 0 金额账单 + 审计日志。
+func TestGrant_ThenRevoke_Success(t *testing.T) {
+	setupSubTestDB(t)
+	admin := seedAdminUser(t)
+	user := seedTestUser(t, 12.34)
+	pkg := seedPackage(t)
+	app := newAdminGrantTestApp(admin)
+
+	code, resp := doJSON(t, app, "POST", "/admin/sub/grant", map[string]any{
+		"user_id":    user.ID,
+		"package_id": pkg.ID,
+		"reason":     "内测补发",
+	})
+	if code != 200 {
+		t.Fatalf("grant failed: %d body=%v", code, resp)
+	}
+
+	var sub database.UserSubscription
+	if err := database.DB.Where("user_id = ?", user.ID).First(&sub).Error; err != nil {
+		t.Fatalf("load granted sub: %v", err)
+	}
+
+	code, resp = doJSON(t, app, "POST", "/admin/sub/"+itoaUint(sub.ID)+"/revoke-grant", map[string]any{
+		"reason": "发放错误，收回",
+	})
+	if code != 200 {
+		t.Fatalf("expected revoke 200, got %d body=%v", code, resp)
+	}
+	if resp["message_code"] != "SUCCESS_GRANT_REVOKED" {
+		t.Errorf("expected SUCCESS_GRANT_REVOKED, got %v", resp["message_code"])
+	}
+
+	var freshSub database.UserSubscription
+	database.DB.First(&freshSub, sub.ID)
+	if freshSub.Status != "revoked" {
+		t.Errorf("status=%q, want revoked", freshSub.Status)
+	}
+	if !freshSub.IsGranted {
+		t.Errorf("IsGranted=false after revoke, want true for audit trace")
+	}
+	if freshSub.CanceledAt == nil {
+		t.Errorf("CanceledAt nil, want revoke timestamp")
+	}
+
+	var freshUser database.User
+	database.DB.First(&freshUser, user.ID)
+	wantQuota, _ := database.USDToMicro(12.34)
+	if freshUser.Quota != wantQuota {
+		t.Errorf("quota=%d, want unchanged %d", freshUser.Quota, wantQuota)
+	}
+
+	var revokeEntry database.BillingEntry
+	if err := database.DB.Where("user_id = ? AND entry_type = ?", user.ID, database.BillingTypeAdminRevokeGrant).
+		First(&revokeEntry).Error; err != nil {
+		t.Fatalf("missing admin_revoke_grant billing entry: %v", err)
+	}
+	if revokeEntry.AmountUSD != 0 || revokeEntry.BalanceAfterUSD != wantQuota {
+		t.Errorf("billing amount/balance=%d/%d, want 0/%d", revokeEntry.AmountUSD, revokeEntry.BalanceAfterUSD, wantQuota)
+	}
+
+	var logs []database.OperationLog
+	database.DB.Where("target_user_id = ? AND action_type = ?", user.ID, "REVOKE_GRANTED_SUBSCRIPTION").Find(&logs)
+	if len(logs) != 1 {
+		t.Fatalf("got %d revoke audit logs, want 1", len(logs))
+	}
+	var details map[string]any
+	if err := json.Unmarshal([]byte(logs[0].Details), &details); err != nil {
+		t.Fatalf("revoke details not valid json: %v\n%s", err, logs[0].Details)
+	}
+	if details["reason"] != "发放错误，收回" {
+		t.Errorf("reason=%v, want 发放错误，收回", details["reason"])
+	}
+}
+
+// TestRevokeGrant_PaidSubscriptionRejected 收回入口只能用于 IsGranted=true 的记录；
+// 付费订阅必须继续走退款/取消状态机，避免 admin 绕过退款审计。
+func TestRevokeGrant_PaidSubscriptionRejected(t *testing.T) {
+	setupSubTestDB(t)
+	admin := seedAdminUser(t)
+	user := seedTestUser(t, 0)
+	pkg := seedPackage(t)
+	app := newAdminGrantTestApp(admin)
+
+	sub := database.UserSubscription{
+		UserID:                user.ID,
+		PackageID:             pkg.ID,
+		PackageSnapshot:       `{"package_name":"paid","product_type":"subscription"}`,
+		StartAt:               time.Now(),
+		EndAt:                 time.Now().Add(24 * time.Hour),
+		Status:                "active",
+		PurchasedUnitPriceUSD: pkg.PriceAmount,
+		IsGranted:             false,
+	}
+	if err := database.DB.Create(&sub).Error; err != nil {
+		t.Fatalf("seed paid sub: %v", err)
+	}
+
+	code, resp := doJSON(t, app, "POST", "/admin/sub/"+itoaUint(sub.ID)+"/revoke-grant", map[string]any{
+		"reason": "误操作测试",
+	})
+	if code != 400 {
+		t.Fatalf("expected 400, got %d body=%v", code, resp)
+	}
+	if resp["message_code"] != "ERR_REVOKE_NOT_GRANTED" {
+		t.Errorf("expected ERR_REVOKE_NOT_GRANTED, got %v", resp["message_code"])
+	}
+
+	var freshSub database.UserSubscription
+	database.DB.First(&freshSub, sub.ID)
+	if freshSub.Status != "active" {
+		t.Errorf("status changed to %q, want active", freshSub.Status)
+	}
+	var count int64
+	database.DB.Model(&database.BillingEntry{}).
+		Where("user_id = ? AND entry_type = ?", user.ID, database.BillingTypeAdminRevokeGrant).
+		Count(&count)
+	if count != 0 {
+		t.Errorf("admin_revoke_grant billing count=%d, want 0", count)
+	}
+}
+
 // TestGrant_NonAdminUnauthorized 未认证（无 admin cookie）拒绝。
 // 这覆盖 loadAdminUser==nil 的路径。
 func TestGrant_NonAdminUnauthorized(t *testing.T) {
@@ -479,52 +614,26 @@ func TestGrant_RejectControlChars_Unicode(t *testing.T) {
 }
 
 // TestGrant_PackageInvalidNumeric 第二十轮加固：pkg 数值 invariant 损坏（DB 直改）后赠送路径拒绝。
-// 用 BonusBalanceUSD 设负值触发 isFinite || < 0 检查（避开 bonus>price 路径）。
 func TestGrant_PackageInvalidNumeric(t *testing.T) {
 	setupSubTestDB(t)
 	admin := seedAdminUser(t)
 	user := seedTestUser(t, 0.0)
-	pkg := seedPackage(t) // PriceAmount=9.9 BonusBalanceUSD=0
-	// 模拟 admin 误操作 / DB 损坏让 pkg.BonusBalanceUSD 变负（10.0 - bonus_overflow 路径触发）
+	pkg := seedPackage(t) // PriceAmount=9.9
+	// 模拟 admin 误操作 / DB 损坏让 price_amount 变负
 	database.DB.Model(&database.Package{}).Where("id = ?", pkg.ID).
-		UpdateColumn("bonus_balance_usd", -5.0)
+		UpdateColumn("price_amount", -5*database.MicroPerUSD)
 	app := newAdminGrantTestApp(admin)
 
 	code, resp := doJSON(t, app, "POST", "/admin/sub/grant", map[string]any{
 		"user_id":    user.ID,
 		"package_id": pkg.ID,
-		"reason":     "测试负 bonus 防御",
+		"reason":     "测试负价格防御",
 	})
 	if code != 500 {
 		t.Errorf("expected 500, got %d", code)
 	}
 	if resp["message_code"] != "ERR_PACKAGE_INVALID_NUMERIC" {
 		t.Errorf("expected ERR_PACKAGE_INVALID_NUMERIC, got %v", resp["message_code"])
-	}
-}
-
-// TestGrant_BonusInvariantViolation pkg.bonus > pkg.price 时即使有 admin 也拒绝赠送（防"白送"）。
-func TestGrant_BonusInvariantViolation(t *testing.T) {
-	setupSubTestDB(t)
-	admin := seedAdminUser(t)
-	user := seedTestUser(t, 0)
-	pkg := seedPackage(t)
-	// 把 bonus 改成 > price：模拟 admin 误配 / DB 直改（micro_usd 单位）
-	// price=9_900_000 ($9.90)，把 bonus 设到 100 USD = 100_000_000 micro_usd（远超 price）
-	database.DB.Model(&database.Package{}).Where("id = ?", pkg.ID).
-		UpdateColumn("bonus_balance_usd", int64(100*database.MicroPerUSD))
-	app := newAdminGrantTestApp(admin)
-
-	code, resp := doJSON(t, app, "POST", "/admin/sub/grant", map[string]any{
-		"user_id":    user.ID,
-		"package_id": pkg.ID,
-		"reason":     "bonus 超额测试",
-	})
-	if code != 500 {
-		t.Errorf("expected 500, got %d", code)
-	}
-	if resp["message_code"] != "ERR_PACKAGE_INVALID_BONUS" {
-		t.Errorf("expected ERR_PACKAGE_INVALID_BONUS, got %v", resp["message_code"])
 	}
 }
 

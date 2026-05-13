@@ -11,6 +11,12 @@ const TARGET_MODES = ['all', 'package', 'user_ids'];
 const AdminNotificationManagement = () => {
   const { t } = useTranslation();
   const confirm = useConfirm();
+  const severityLabel = useCallback((severity) => (
+    t(`NOTIF.ADMIN.SEVERITY_${String(severity || 'info').toUpperCase()}`, severity || 'info')
+  ), [t]);
+  const targetModeLabel = useCallback((mode) => (
+    t(`NOTIF.ADMIN.TARGET_${String(mode || 'all').toUpperCase()}`, mode || 'all')
+  ), [t]);
 
   // form state
   const [form, setForm] = useState({
@@ -201,7 +207,11 @@ const AdminNotificationManagement = () => {
               onChange={e => setForm({ ...form, severity: e.target.value })}
               className="w-full h-10 bg-surface-container border border-outline rounded-lg px-3 text-sm text-on-surface focus:border-primary outline-none"
             >
-              {SEVERITY_OPTIONS.map(s => <option key={s} value={s}>{s}</option>)}
+              {SEVERITY_OPTIONS.map(s => (
+                <option key={s} value={s}>
+                  {severityLabel(s)}
+                </option>
+              ))}
             </select>
           </div>
           <div className="space-y-1.5">
@@ -216,7 +226,7 @@ const AdminNotificationManagement = () => {
             >
               {TARGET_MODES.map(m => (
                 <option key={m} value={m}>
-                  {t(`NOTIF.ADMIN.TARGET_${m.toUpperCase()}`)}
+                  {targetModeLabel(m)}
                 </option>
               ))}
             </select>
@@ -347,10 +357,10 @@ const AdminNotificationManagement = () => {
                     <td className="px-3 py-2 max-w-xs truncate" title={b.title}>{b.title}</td>
                     <td className="px-3 py-2">
                       <span className={`text-xs px-2 py-0.5 rounded ${severityClass(b.severity)}`}>
-                        {b.severity}
+                        {severityLabel(b.severity)}
                       </span>
                     </td>
-                    <td className="px-3 py-2 text-xs text-on-surface-variant">{b.target_mode}</td>
+                    <td className="px-3 py-2 text-xs text-on-surface-variant">{targetModeLabel(b.target_mode)}</td>
                     <td className="px-3 py-2 text-right font-mono">{b.recipient_count}</td>
                     <td className="px-3 py-2 text-right font-mono">
                       {(b.read_rate * 100).toFixed(0)}%

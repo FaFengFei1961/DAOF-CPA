@@ -3,7 +3,8 @@ import { useTranslation } from 'react-i18next';
 import { Wallet, Edit3 } from 'lucide-react';
 import toast from 'react-hot-toast';
 import { useConfirm } from '../context/ConfirmContext';
-import { authFetch, isLoggedIn } from '../utils/authFetch';
+import { authFetch, isLoggedIn, readAuthState } from '../utils/authFetch';
+import { isPageCacheFresh, readPageCache, writePageCache } from '../utils/pageCache';
 
 // 单位换算（与后端 60s ~ 365d 范围对齐）
 const UNITS = [
@@ -27,28 +28,44 @@ function decomposeSeconds(total) {
 
 const MIN_WINDOW_SEC = 60;
 const MAX_WINDOW_SEC = 365 * 86400;
+const BALANCE_PREF_CACHE_TTL_MS = 30000;
+const getBalancePrefCacheKey = () => {
+  const { isAdmin, userToken } = readAuthState();
+  return `balance-pref:${isAdmin ? 'admin' : userToken || 'guest'}`;
+};
 
 // 用户余额消费控制（参照 Claude Extra usage 面板）
 // 三段消费：订阅 → 增量包 → 余额（默认关闭，需在此开启 + 限额）
 const BalanceConsumePreferences = () => {
   const { t } = useTranslation();
   const confirm = useConfirm();
-  const [data, setData] = useState(null);
-  const [loading, setLoading] = useState(true);
+  const cacheKey = React.useMemo(getBalancePrefCacheKey, []);
+  const [data, setData] = useState(() => readPageCache(cacheKey));
+  const [loading, setLoading] = useState(() => !readPageCache(cacheKey));
   const [saving, setSaving] = useState(false);
 
-  const load = useCallback(async () => {
+  const load = useCallback(async ({ force = false } = {}) => {
     if (!isLoggedIn()) {
       setLoading(false);
       return;
     }
-    setLoading(true);
+    const cached = readPageCache(cacheKey);
+    if (cached) {
+      setData(cached);
+      setLoading(false);
+      if (!force && isPageCacheFresh(cacheKey, BALANCE_PREF_CACHE_TTL_MS)) return;
+    } else {
+      setLoading(true);
+    }
     try {
       const json = await authFetch('/api/balance-consume/preference');
-      if (json.success && json.data) setData(json.data);
+      if (json.success && json.data) {
+        writePageCache(cacheKey, json.data);
+        setData(json.data);
+      }
     } catch { /* 静默 */ }
     finally { setLoading(false); }
-  }, []);
+  }, [cacheKey]);
 
   useEffect(() => { load(); }, [load]);
 
@@ -60,7 +77,10 @@ const BalanceConsumePreferences = () => {
         body: patch,
       });
       if (json.success) {
-        if (json.data) setData(json.data);
+        if (json.data) {
+          writePageCache(cacheKey, json.data);
+          setData(json.data);
+        }
         toast.success(t('BALANCE_CONSUME.SAVE_OK', '已保存'));
         // 余额可能因窗口重置变化，触发顶栏刷新
         window.dispatchEvent(new CustomEvent('user-profile-refresh'));

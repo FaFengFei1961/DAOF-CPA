@@ -24,10 +24,13 @@ type QuotaPlan struct {
 	// ModelMatch 匹配规则，JSON 数组：["claude-sonnet-*", "claude-haiku-*"]
 	ModelMatch string `gorm:"type:text;not null;default:'[]'" json:"model_match"`
 
-	// LimitUnit 计量单位（admin 自由配置字符串）：
-	//   messages | input_tokens | output_tokens | total_tokens
-	//   weighted_tokens | usd_equivalent | 任意自定义
-	LimitUnit  string  `gorm:"index;not null;default:'messages'" json:"limit_unit"`
+	// LimitUnit 计量单位：
+	//   api_cost_usd  = 按本次请求真实 API 等值成本扣减（主订阅池）
+	//   request_count = 按调用次数扣减（图像/任务类模型可用）
+	//   input_tokens | output_tokens | total_tokens | weighted_tokens
+	//
+	// 未知单位在引擎侧 fail-closed，不再当成 1 次调用兜底。
+	LimitUnit  string  `gorm:"index;not null;default:'request_count'" json:"limit_unit"`
 	LimitValue float64 `gorm:"not null;default:0" json:"limit_value"`
 
 	WindowSeconds int `gorm:"not null;default:0" json:"window_seconds"` // 0 = 套餐周期内累计
@@ -99,9 +102,6 @@ type Package struct {
 	MaxActivePerUser  int    `gorm:"default:5" json:"max_active_per_user"`     // 0 = 无限
 	PurchaseWhenOwned string `gorm:"default:'ask'" json:"purchase_when_owned"` // stack | extend | ask
 
-	// BonusBalanceUSD 套餐购买时附赠的 USD（micro_usd, USD * 1e6）
-	BonusBalanceUSD int64 `gorm:"default:0" json:"bonus_balance_usd"`
-
 	Public    bool  `gorm:"default:false" json:"public"`
 	SortOrder int   `gorm:"default:0" json:"sort_order"`
 	Enabled   *bool `gorm:"default:true" json:"enabled"`
@@ -161,7 +161,7 @@ type UserSubscription struct {
 
 	ParentSubscriptionID *uint `json:"parent_subscription_id"`
 
-	Status string `gorm:"index;default:'active'" json:"status"` // active | expired | canceled | refunded | paused
+	Status string `gorm:"index;default:'active'" json:"status"` // active | expired | canceled | refunded | paused | revoked
 
 	AutoRenew bool `gorm:"default:false" json:"auto_renew"`
 
@@ -180,13 +180,6 @@ type UserSubscription struct {
 	// 现在持久化实际成交价，退款只读这个字段，不再有歧义。
 	// IsGranted=true 的赠送 sub 此值为 0（退款路径已强制 netCost=0）。
 	PurchasedUnitPriceUSD int64 `gorm:"default:0" json:"purchased_unit_price_usd"`
-
-	// AppliedBonusUSD 该份订阅实际入账的 bonus（micro_usd, fix MAJOR R23+3-B2，codex 第四轮）。
-	//
-	// 单份订阅可能因为"券价 < pkg.BonusBalanceUSD" 被 effectiveBonus = min(price, bonus) 封顶。
-	// 之前未持久化，多份+券+bonus 复杂场景下退款决策只能从 snapshot 猜，admin 看不到真实入账。
-	// 现在每份 sub 都持久化"当时实际入账了多少 bonus"——退款时按此精确扣减。
-	AppliedBonusUSD int64 `gorm:"default:0" json:"applied_bonus_usd"`
 
 	// AppliedCouponID 购买时使用的券 ID（0 = 没用券）。
 	//

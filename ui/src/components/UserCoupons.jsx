@@ -1,7 +1,8 @@
 import React, { useEffect, useState } from 'react';
 import { useTranslation } from 'react-i18next';
 import { Ticket, Check, X, Clock } from 'lucide-react';
-import { authFetch } from '../utils/authFetch';
+import { authFetch, readAuthState } from '../utils/authFetch';
+import { isPageCacheFresh, readPageCache, writePageCache } from '../utils/pageCache';
 import toast from 'react-hot-toast';
 
 /**
@@ -10,24 +11,44 @@ import toast from 'react-hot-toast';
  * 后端返回带 effective_status 字段（available + 未过期 / used / expired / revoked），
  * 前端按 effective_status 分组展示。
  */
+const USER_COUPONS_CACHE_TTL_MS = 30000;
+const getUserCouponsCacheKey = () => {
+  const { isAdmin, userToken } = readAuthState();
+  return `user-coupons:${isAdmin ? 'admin' : userToken || 'guest'}`;
+};
+
 const UserCoupons = () => {
   const { t } = useTranslation();
-  const [list, setList] = useState([]);
-  const [loading, setLoading] = useState(true);
+  const cacheKey = React.useMemo(getUserCouponsCacheKey, []);
+  const [list, setList] = useState(() => readPageCache(cacheKey) || []);
+  const [loading, setLoading] = useState(() => !readPageCache(cacheKey));
 
   useEffect(() => {
     let alive = true;
-    setLoading(true);
+    const cached = readPageCache(cacheKey);
+    if (cached) {
+      setList(cached);
+      setLoading(false);
+      if (isPageCacheFresh(cacheKey, USER_COUPONS_CACHE_TTL_MS)) {
+        return () => { alive = false; };
+      }
+    } else {
+      setLoading(true);
+    }
     authFetch('/api/coupons/my')
       .then((j) => {
         if (!alive) return;
-        if (j?.success) setList(j.data || []);
+        if (j?.success) {
+          const next = j.data || [];
+          writePageCache(cacheKey, next);
+          setList(next);
+        }
         else toast.error(j?.message || t('COUPON.LOAD_FAIL', '加载失败'));
       })
       .catch(() => alive && toast.error(t('API.ERR_NETWORK', '网络异常')))
       .finally(() => alive && setLoading(false));
     return () => { alive = false; };
-  }, [t]);
+  }, [cacheKey, t]);
 
   if (loading) {
     return <div className="text-on-surface-variant text-sm py-8 text-center">{t('COUPON.LOADING', '加载中...')}</div>;

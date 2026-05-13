@@ -48,7 +48,6 @@ func TestValidatePackagePayload(t *testing.T) {
 		mod  func(*database.Package)
 	}{
 		{"negative price", func(p *database.Package) { p.PriceAmount = -1 }},
-		{"negative bonus", func(p *database.Package) { p.BonusBalanceUSD = -1 }},
 		{"zero billing period", func(p *database.Package) { p.BillingPeriodSeconds = 0 }},
 		{"negative billing period", func(p *database.Package) { p.BillingPeriodSeconds = -1 }},
 		{"negative max active", func(p *database.Package) { p.MaxActivePerUser = -1 }},
@@ -80,11 +79,10 @@ func TestCreatePackage_HappyPath(t *testing.T) {
 	app := newPkgAdminTestApp(admin)
 
 	code, resp := doJSON(t, app, "POST", "/admin/packages", map[string]any{
-		"name":                  "Pro Plan",
-		"price_amount":          9.9,
+		"name":                   "Pro Plan",
+		"price_amount":           9.9,
 		"billing_period_seconds": 2592000,
-		"max_active_per_user":   5,
-		"bonus_balance_usd":     2.0,
+		"max_active_per_user":    5,
 	})
 	if code != 200 {
 		t.Fatalf("expected 200 got %d body=%v", code, resp)
@@ -110,7 +108,7 @@ func TestCreatePackage_ValidationRejects(t *testing.T) {
 		{"missing name", map[string]any{"price_amount": 10, "billing_period_seconds": 86400}},
 		{"negative price", map[string]any{"name": "x", "price_amount": -1, "billing_period_seconds": 86400}},
 		{"zero period", map[string]any{"name": "x", "price_amount": 10, "billing_period_seconds": 0}},
-		{"bonus > price", map[string]any{"name": "x", "price_amount": 5, "billing_period_seconds": 86400, "bonus_balance_usd": 10}},
+		{"deprecated bonus field", map[string]any{"name": "x", "price_amount": 10, "billing_period_seconds": 86400, "bonus_balance_usd": 0}},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
@@ -163,10 +161,9 @@ func TestUpdatePackage_HappyPath(t *testing.T) {
 
 	pkg := seedPackage(t)
 	code, resp := doJSON(t, app, "PUT", "/admin/packages/"+itoaUint(pkg.ID), map[string]any{
-		"name":                  "Renamed",
-		"price_amount":          19.9,
+		"name":                   "Renamed",
+		"price_amount":           19.9,
 		"billing_period_seconds": 2592000,
-		"bonus_balance_usd":     5.0,
 	})
 	if code != 200 {
 		t.Fatalf("expected 200 got %d body=%v", code, resp)
@@ -174,26 +171,6 @@ func TestUpdatePackage_HappyPath(t *testing.T) {
 	data, _ := resp["data"].(map[string]any)
 	if data["name"] != "Renamed" {
 		t.Errorf("name not updated: %v", data["name"])
-	}
-}
-
-func TestUpdatePackage_BonusExceedsPrice(t *testing.T) {
-	setupSubTestDB(t)
-	admin := seedAdminUser(t)
-	app := newPkgAdminTestApp(admin)
-
-	pkg := seedPackage(t)
-	code, resp := doJSON(t, app, "PUT", "/admin/packages/"+itoaUint(pkg.ID), map[string]any{
-		"name":                  "x",
-		"price_amount":          5.0,
-		"billing_period_seconds": 86400,
-		"bonus_balance_usd":     10.0,
-	})
-	if code != 400 {
-		t.Errorf("expected 400 (bonus>price) got %d body=%v", code, resp)
-	}
-	if resp["message_code"] != "ERR_PACKAGE_INVALID_BONUS" {
-		t.Errorf("expected ERR_PACKAGE_INVALID_BONUS got %v", resp["message_code"])
 	}
 }
 
@@ -316,8 +293,21 @@ func TestListPackagesAdmin_WithData(t *testing.T) {
 	admin := seedAdminUser(t)
 	app := newPkgAdminTestApp(admin)
 
-	seedPackage(t)
+	first := seedPackage(t)
 	seedPackage(t, func(p *database.Package) { p.Name = "Second" })
+	if err := database.DB.Create(&database.UserSubscription{
+		UserID:                admin.ID,
+		PackageID:             first.ID,
+		Status:                "active",
+		IsGranted:             true,
+		StartAt:               time.Now(),
+		EndAt:                 time.Now().Add(30 * 24 * time.Hour),
+		PackageSnapshot:       `{"package_name":"TestPro"}`,
+		ConsumptionOrder:      time.Now().UnixMicro(),
+		PurchasedUnitPriceUSD: 0,
+	}).Error; err != nil {
+		t.Fatalf("seed granted subscription: %v", err)
+	}
 
 	code, resp := doJSON(t, app, "GET", "/admin/packages", nil)
 	if code != 200 {
@@ -326,6 +316,23 @@ func TestListPackagesAdmin_WithData(t *testing.T) {
 	data, _ := resp["data"].([]any)
 	if len(data) != 2 {
 		t.Errorf("expected 2 packages got %d", len(data))
+	}
+	var got map[string]any
+	for _, raw := range data {
+		row, _ := raw.(map[string]any)
+		if row["id"] == float64(first.ID) {
+			got = row
+			break
+		}
+	}
+	if got == nil {
+		t.Fatalf("seeded package not found in response: %v", data)
+	}
+	if got["plan_count"] != float64(1) {
+		t.Fatalf("plan_count=%v want 1; row=%v", got["plan_count"], got)
+	}
+	if got["active_subs_count"] != float64(1) {
+		t.Fatalf("active_subs_count=%v want 1; row=%v", got["active_subs_count"], got)
 	}
 }
 

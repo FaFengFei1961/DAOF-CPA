@@ -11,7 +11,7 @@ import (
 // fix MAJOR M22-2（codex 第二十二轮）：原 GithubID/Phone 标 `uniqueIndex` 让普通 unique
 // 索引仍生效——空字符串两个用户都写 "" 后第二个 INSERT 撞约束。partial unique index
 // 在 sqlite.go 加了，但**额外**索引而非替换 GORM 的，普通约束仍在。
-// 修复：去掉 GORM uniqueIndex，让 sqlite.go 的 partial unique（WHERE x <> ''）成为唯一约束。
+// 修复：去掉 GORM uniqueIndex，让 sqlite.go 的 partial unique（WHERE x <> ”）成为唯一约束。
 type User struct {
 	ID           uint   `gorm:"primaryKey" json:"id"`
 	GithubID     string `gorm:"index;default:null" json:"github_id"` // 唯一性由 sqlite.go partial unique index 保证
@@ -21,12 +21,12 @@ type User struct {
 	// fix MEDIUM M19-5（codex 第十九轮）：注册路径 registerMu 临界区里要做 COUNT(*) WHERE role='user'
 	// 检查注册总数上限——表大了之后 SQLite/PG 都会做全表 scan，单次几十毫秒。`index` 让该 COUNT
 	// 走 index-only 扫描或至少减少 IO。BulkAdjustQuota 也按 role='user' 过滤，同样受益。
-	Role         string `gorm:"index;default:'user'" json:"role"`  // 'admin' 或 'user'
-	Token        string `gorm:"uniqueIndex;not null" json:"token"` // 直通代理鉴权令牌，如 sk-daof-xxx
+	Role  string `gorm:"index;default:'user'" json:"role"`  // 'admin' 或 'user'
+	Token string `gorm:"uniqueIndex;not null" json:"token"` // 直通代理鉴权令牌，如 sk-daof-xxx
 	// fix MAJOR M22-A1（codex 第二十三轮）：所有金额字段统一为 int64 micro_usd（USD * 1e6）。
 	// 原因：float64 在长尾累加（千万级 API 调用 × 微小 cost）下出现累加误差，账目对不上；
 	// int64 全程整数运算杜绝浮点漂移。前端展示时除以 1e6 显示 USD。
-	Quota        int64  `gorm:"default:0" json:"quota"` // 余额（micro_usd, USD * 1e6）
+	Quota        int64  `gorm:"default:0" json:"quota"`  // 余额（micro_usd, USD * 1e6）
 	Status       int    `gorm:"default:1" json:"status"` // 1: 正常, 2: 封禁
 	BanReason    string `gorm:"type:text;default:null" json:"ban_reason"`
 	RegIP        string `gorm:"index" json:"reg_ip"`             // 原始探测 IP (防刷核查用)
@@ -53,7 +53,7 @@ type User struct {
 // Channel 代表底层的请求上游通道
 type Channel struct {
 	ID        uint           `gorm:"primaryKey" json:"id"`
-	Type      string         `gorm:"index;not null" json:"type"` // e.g., 'openai', 'anthropic', 'gemini'
+	Type      string         `gorm:"index;not null" json:"type"` // openai / anthropic / gemini / google-cli / codex / cliproxy
 	Name      string         `gorm:"index;not null" json:"name"` // 渠道备注名称，e.g. "官方 Azure", "第三方中转站"
 	Key       string         `gorm:"not null" json:"key"`
 	BaseURL   string         `json:"base_url"`                              // 自定义上游网关代理地址
@@ -68,19 +68,22 @@ type Channel struct {
 
 // ChannelModel 绑定渠道对某一个特定模型的单价和权重配置
 type ChannelModel struct {
-	ID                    uint           `gorm:"primaryKey" json:"id"`
-	ChannelID             uint           `gorm:"index;not null" json:"channel_id"` // 所属渠道
-	ModelID               string         `gorm:"index;not null" json:"model_id"`   // e.g., "gpt-4o"
-	DisplayName           string         `json:"display_name"`
-	InputPrice            float64        `gorm:"default:0" json:"input_price"`
-	OutputPrice           float64        `gorm:"default:0" json:"output_price"`
-	CachedInputPrice      float64        `gorm:"default:0" json:"cached_input_price"`
-	ContextPriceThreshold int            `gorm:"default:0" json:"context_price_threshold"`
-	HighInputPrice        float64        `gorm:"default:0" json:"high_input_price"`
-	HighOutputPrice       float64        `gorm:"default:0" json:"high_output_price"`
-	MaxContextLength      int            `gorm:"default:0" json:"max_context_length"`
-	Weight                int            `gorm:"default:1" json:"weight"` // 同模型多渠道的路由比重
-	Status                int            `gorm:"default:1" json:"status"` // 针对当前渠道的此模型一键封锁
+	ID                     uint    `gorm:"primaryKey" json:"id"`
+	ChannelID              uint    `gorm:"index;not null" json:"channel_id"` // 所属渠道
+	ModelID                string  `gorm:"index;not null" json:"model_id"`   // e.g., "gpt-4o"
+	DisplayName            string  `json:"display_name"`
+	InputPrice             float64 `gorm:"default:0" json:"input_price"`
+	OutputPrice            float64 `gorm:"default:0" json:"output_price"`
+	CachedInputPrice       float64 `gorm:"default:0" json:"cached_input_price"`
+	CacheWriteInputPrice   float64 `gorm:"default:0" json:"cache_write_input_price"`
+	CacheWrite1hInputPrice float64 `gorm:"column:cache_write_1h_input_price;default:0" json:"cache_write_1h_input_price"`
+	ContextPriceThreshold  int     `gorm:"default:0" json:"context_price_threshold"`
+	HighInputPrice         float64 `gorm:"default:0" json:"high_input_price"`
+	HighCachedInputPrice   float64 `gorm:"default:0" json:"high_cached_input_price"`
+	HighOutputPrice        float64 `gorm:"default:0" json:"high_output_price"`
+	MaxContextLength       int     `gorm:"default:0" json:"max_context_length"`
+	Weight                 int     `gorm:"default:1" json:"weight"` // 同模型多渠道的路由比重
+	Status                 int     `gorm:"default:1" json:"status"` // 针对当前渠道的此模型一键封锁
 
 	// 风控配置（per channel + per model 粒度）
 	//
@@ -91,11 +94,11 @@ type ChannelModel struct {
 	// ModerationLevel 取值：
 	//   "off"        - 完全不审（适合 Claude/Gemini cloaked 路径）
 	//   "keyword"    - 仅本地关键字快扫（<1ms，拦 Kiro/DAN 模板）
-	//   "moderation" - 仅 OpenAI Moderation API（智能分类，50-100ms）
-	//   "strict"     - 关键字 + Moderation 双层（推荐 GPT 直连官方时用）
+	//   "moderation" - 仅智能审核服务（CPA 模型池）
+	//   "strict"     - 关键字 + 智能审核双层（推荐官方高风险模型）
 	ModerationLevel string `gorm:"size:16;default:'off'" json:"moderation_level"`
 
-	// ModerationFailMode Moderation API 不可达时的策略
+	// ModerationFailMode 智能审核服务不可达时的策略
 	//   "open"   - 放行（cloaked 路径——CLIProxyAPI 兜底）
 	//   "closed" - 拒绝（直连官方时——审核失败时不能让违规 prompt 直达上游）
 	ModerationFailMode string `gorm:"size:8;default:'open'" json:"moderation_fail_mode"`
@@ -116,11 +119,11 @@ type AccessToken struct {
 	ID         uint           `gorm:"primaryKey" json:"id"`
 	UserID     uint           `gorm:"index;not null" json:"user_id"`
 	Name       string         `json:"name"`
-	Key        string         `gorm:"uniqueIndex;not null" json:"key"`  // e.g. "sk-daof-xxxx"
-	UsedQuota  int64          `gorm:"default:0" json:"used_quota"`      // 累计消耗（micro_usd, USD * 1e6）
-	QuotaLimit int64          `gorm:"default:0" json:"quota_limit"`     // 令牌限额（micro_usd），0 表示无限制
-	ExpiredAt  *time.Time     `json:"expired_at"`                       // 令牌过期时间，null 表示无限期
-	Status     int            `gorm:"default:1" json:"status"`          // 1: 启用, 2: 禁用
+	Key        string         `gorm:"uniqueIndex;not null" json:"key"` // e.g. "sk-daof-xxxx"
+	UsedQuota  int64          `gorm:"default:0" json:"used_quota"`     // 累计消耗（micro_usd, USD * 1e6）
+	QuotaLimit int64          `gorm:"default:0" json:"quota_limit"`    // 令牌限额（micro_usd），0 表示无限制
+	ExpiredAt  *time.Time     `json:"expired_at"`                      // 令牌过期时间，null 表示无限期
+	Status     int            `gorm:"default:1" json:"status"`         // 1: 启用, 2: 禁用
 	CreatedAt  time.Time      `json:"created_at"`
 	UpdatedAt  time.Time      `json:"updated_at"`
 	DeletedAt  gorm.DeletedAt `gorm:"index" json:"-"`
@@ -128,19 +131,25 @@ type AccessToken struct {
 
 // ApiLog 记录每一条流过系统的对话指纹
 type ApiLog struct {
-	ID               uint      `gorm:"primaryKey" json:"id"`
-	UserID           uint      `gorm:"index;not null" json:"user_id"`
-	TokenName        string    `json:"token_name"`
-	ModelName        string    `gorm:"index" json:"model_name"`
-	PromptTokens     int       `json:"prompt_tokens"`
-	CompletionTokens int       `json:"completion_tokens"`
-	CachedTokens     int       `json:"cached_tokens"`
-	ReasoningTokens  int       `json:"reasoning_tokens"`
-	Cost             int64     `json:"cost"`                               // 单次调用成本（micro_usd, USD * 1e6）
-	Latency          int64     `gorm:"default:0" json:"latency"`           // ms延迟 (Parity)
-	Status           int       `gorm:"default:200" json:"status"`          // 状态码或结果记录 (Parity)
-	IPAddress        string    `gorm:"index;default:''" json:"ip_address"` // 请求来源IP (Parity)
-	CreatedAt        time.Time `gorm:"index" json:"created_at"`
+	ID                 uint      `gorm:"primaryKey" json:"id"`
+	UserID             uint      `gorm:"index;not null" json:"user_id"`
+	TokenName          string    `json:"token_name"`
+	ModelName          string    `gorm:"index" json:"model_name"`
+	PromptTokens       int       `json:"prompt_tokens"`
+	CompletionTokens   int       `json:"completion_tokens"`
+	CachedTokens       int       `json:"cached_tokens"`      // cache read tokens
+	CacheWriteTokens   int       `json:"cache_write_tokens"` // cache creation/write tokens
+	CacheWrite5mTokens int       `gorm:"column:cache_write_5m_tokens" json:"cache_write_5m_tokens"`
+	CacheWrite1hTokens int       `gorm:"column:cache_write_1h_tokens" json:"cache_write_1h_tokens"`
+	ReasoningTokens    int       `json:"reasoning_tokens"`
+	Cost               int64     `json:"cost"`                               // 单次调用成本（micro_usd, USD * 1e6）
+	Latency            int64     `gorm:"default:0" json:"latency"`           // ms延迟 (Parity)
+	Status             int       `gorm:"default:200" json:"status"`          // 状态码或结果记录 (Parity)
+	IPAddress          string    `gorm:"index;default:''" json:"ip_address"` // 请求来源IP (Parity)
+	RequestPath        string    `gorm:"size:160;default:''" json:"request_path"`
+	ErrorType          string    `gorm:"size:64;default:''" json:"error_type"`
+	ErrorMessage       string    `gorm:"size:512;default:''" json:"error_message"`
+	CreatedAt          time.Time `gorm:"index" json:"created_at"`
 }
 
 // OperationLog 追踪并记录所有涉及风险的用户干预操作

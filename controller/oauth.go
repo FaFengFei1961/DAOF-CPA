@@ -14,6 +14,7 @@ import (
 	"strings"
 	"sync"
 	"time"
+	"unicode"
 
 	"daof-ai-hub/database"
 	"daof-ai-hub/proxy"
@@ -241,7 +242,7 @@ func autoGrantSignupCouponTx(tx *gorm.DB, userID uint, via string) error {
 //  2. 不写 BillingEntry → 奖励对账困难，违反账单事实表契约
 //  3. referrer 已有 AuthCache 不刷新 → 余额展示陈旧
 //
-// 修复：单事务包住 referrer + referee 的 quota update + bonus_credit 账单写入；事务成功后刷 AuthCache。
+// 修复：单事务包住 referrer + referee 的 quota update + reward billing 账单写入；事务成功后刷 AuthCache。
 //
 // 单位：referrerBonusMicro / refereeBonusMicro 均为 micro_usd（int64）。
 func applyReferralBonuses(c *fiber.Ctx, newUserID uint, newUsername, refUsername string, referrerBonusMicro, refereeBonusMicro int64) {
@@ -615,7 +616,7 @@ func GithubCallback(c *fiber.Ctx) error {
 		"success":      false,
 		"action":       "require_profile_setup",
 		"tmp_token":    safeTmpToken,
-		"default_name": ghName,
+		"default_name": suggestUsernameFromOAuthName(ghName),
 		"message":      "联合登录完成，请指定本平台内用户名用作唯一标识",
 		"message_code": "ERR_REQUIRE_PROFILE_SETUP",
 	})
@@ -746,6 +747,43 @@ type ProfileSetupRequest struct {
 }
 
 var usernameRegex = regexp.MustCompile(`^[a-zA-Z0-9_\p{Han}]{2,20}$`)
+
+func suggestUsernameFromOAuthName(name string) string {
+	name = strings.TrimSpace(name)
+	out := make([]rune, 0, 20)
+	lastUnderscore := false
+	for _, r := range name {
+		if len(out) >= 20 {
+			break
+		}
+		allowed := r == '_' ||
+			(r >= '0' && r <= '9') ||
+			(r >= 'a' && r <= 'z') ||
+			(r >= 'A' && r <= 'Z') ||
+			unicode.Is(unicode.Han, r)
+		if allowed {
+			out = append(out, r)
+			lastUnderscore = false
+			continue
+		}
+		if !lastUnderscore && len(out) > 0 {
+			out = append(out, '_')
+			lastUnderscore = true
+		}
+	}
+	suggested := strings.Trim(string(out), "_")
+	if suggested == "" {
+		suggested = "user"
+	}
+	if len([]rune(suggested)) < 2 {
+		suggested += "_user"
+	}
+	runes := []rune(suggested)
+	if len(runes) > 20 {
+		suggested = string(runes[:20])
+	}
+	return suggested
+}
 
 // CompleteProfile 处理不需要短信但需要取名的新用户注册
 func CompleteProfile(c *fiber.Ctx) error {

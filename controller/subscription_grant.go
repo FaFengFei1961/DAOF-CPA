@@ -5,9 +5,8 @@
 // 业务模型：
 //   - admin 通过 POST /api/admin/subscriptions/grant 给目标用户免费开通某个产品
 //   - 复用 purchaseAsInstant 的事务骨架（lockUser、stack count 校验、snapshot、stack index）
-//   - **跳过 quota 扣款**：用户未付费，所以 user.Quota 不动；但若 apply_bonus=true 则把
-//     pkg.BonusBalanceUSD 充进 user.Quota（admin 显式授权"连同 bonus 一起送"）
-//   - 账单类型：admin_grant_sub / admin_grant_addon（AmountUSD=0）+ 可选 bonus_credit
+//   - **跳过 quota 扣款**：用户未付费，所以 user.Quota 不动
+//   - 账单类型：admin_grant_sub / admin_grant_addon（AmountUSD=0）
 //   - 赠送的 UserSubscription 被标记 IsGranted=true → AdminRefundSubscription 拒绝退款
 //     （否则平台等于把套餐白送 + 退款双倍亏损）
 //
@@ -25,7 +24,6 @@ import (
 	"errors"
 	"fmt"
 	"log"
-	"math"
 	"strings"
 	"time"
 	"unicode"
@@ -44,9 +42,10 @@ type adminGrantPayload struct {
 	PackageID uint `json:"package_id"`
 	// Quantity *int：nil = 默认 1；显式 0/-N 返回 ERR_INVALID_QUANTITY。
 	// fix MAJOR（codex 第十六轮）：与 PurchasePackage 一致防御深度。
-	Quantity   *int   `json:"quantity"`
-	Reason     string `json:"reason"`      // 必填，进 OperationLog + BillingEntry.Description
-	ApplyBonus bool   `json:"apply_bonus"` // 是否同时把 pkg.BonusBalanceUSD 充进 user.Quota
+	Quantity *int   `json:"quantity"`
+	Reason   string `json:"reason"` // 必填，进 OperationLog + BillingEntry.Description
+	// DeprecatedApplyBonus 显式拒绝旧协议字段，而不是静默忽略。
+	DeprecatedApplyBonus *json.RawMessage `json:"apply_bonus"`
 }
 
 const (
@@ -64,8 +63,6 @@ var (
 	errPackageChanged    = errors.New("package enabled/invariant changed concurrently")
 	// fix CRITICAL C-A1（codex 第二十一轮）：tx 内重读 freshPkg 后 BillingPeriodSeconds 校验失败专用 sentinel
 	errPackageInvalidPeriodInTx = errors.New("package billing_period_seconds out of range in fresh tx")
-	// fix CRITICAL Phase 4-codex（第二十四轮）：tx 内 freshPkg.bonus*qty 溢出
-	errBonusOverflowInTx = errors.New("bonus * qty overflow at tx commit")
 )
 
 // AdminGrantSubscription POST /api/admin/subscriptions/grant
@@ -73,7 +70,6 @@ var (
 // 关键约束：
 //   - admin 不能赠送给自己（避免漏洞放大：万一 token 被盗，攻击者用 admin 身份不停给自己开 VIP）
 //   - 赠送的 UserSubscription 标记 IsGranted=true + GrantReason，refund 路径会拒绝
-//   - 即便 apply_bonus=true，bonus 也走 bonus_credit 账单类型，与购买路径同语义
 //   - reason 必填且 ≤ 500 字（防把日志当 reason 粘进来污染审计字段）
 func AdminGrantSubscription(c *fiber.Ctx) error {
 	op := loadAdminUser(c)
@@ -84,6 +80,13 @@ func AdminGrantSubscription(c *fiber.Ctx) error {
 	var req adminGrantPayload
 	if err := c.BodyParser(&req); err != nil {
 		return c.Status(400).JSON(fiber.Map{"success": false, "message_code": "ERR_PARSE_PAYLOAD"})
+	}
+	if req.DeprecatedApplyBonus != nil {
+		return c.Status(400).JSON(fiber.Map{
+			"success":      false,
+			"message":      "apply_bonus 已移除",
+			"message_code": "ERR_DEPRECATED_FIELD",
+		})
 	}
 	// ─── 输入校验 ──────────────────────────────────────────────
 	if req.UserID == 0 || req.PackageID == 0 {
@@ -189,32 +192,16 @@ func AdminGrantSubscription(c *fiber.Ctx) error {
 			"message_code": "ERR_PACKAGE_DISABLED",
 		})
 	}
-	// SEC-M3 同语义防御：bonus > price 是 schema invariant 违反；即便赠送也拒绝
-	if pkg.BonusBalanceUSD > pkg.PriceAmount {
-		log.Printf("[GRANT] BLOCKED package %d invariant violated: bonus=%d > price=%d (micro_usd)",
-			pkg.ID, pkg.BonusBalanceUSD, pkg.PriceAmount)
-		return c.Status(500).JSON(fiber.Map{
-			"success":      false,
-			"message_code": "ERR_PACKAGE_INVALID_BONUS",
-		})
-	}
 	// fix MAJOR（codex 第二十轮）：边界防御。
 	// fix MAJOR M22-A1 Phase 1：金额已是 int64 micro_usd，整数算术无 NaN/Inf 风险；
-	// 仍保留 < 0 与乘法溢出检查。
-	if pkg.PriceAmount < 0 || pkg.BonusBalanceUSD < 0 {
-		log.Printf("[GRANT] BLOCKED package %d numeric invariant: price=%d bonus=%d", pkg.ID, pkg.PriceAmount, pkg.BonusBalanceUSD)
+	// 仍保留 < 0 检查。
+	if pkg.PriceAmount < 0 {
+		log.Printf("[GRANT] BLOCKED package %d numeric invariant: price=%d", pkg.ID, pkg.PriceAmount)
 		return c.Status(500).JSON(fiber.Map{"success": false, "message_code": "ERR_PACKAGE_INVALID_NUMERIC"})
 	}
 	if pkg.BillingPeriodSeconds <= 0 || int64(pkg.BillingPeriodSeconds) > maxBillingPeriodSec {
 		log.Printf("[GRANT] BLOCKED package %d invalid billing period: %d", pkg.ID, pkg.BillingPeriodSeconds)
 		return c.Status(500).JSON(fiber.Map{"success": false, "message_code": "ERR_PACKAGE_INVALID_PERIOD"})
-	}
-	// int64 乘法溢出检查：bonus * qty 不能超过 MaxInt64
-	if qty > 0 && pkg.BonusBalanceUSD > 0 {
-		if pkg.BonusBalanceUSD > math.MaxInt64/int64(qty) {
-			log.Printf("[GRANT] BLOCKED bonus*qty overflow: bonus=%d qty=%d", pkg.BonusBalanceUSD, qty)
-			return c.Status(400).JSON(fiber.Map{"success": false, "message_code": "ERR_BONUS_OVERFLOW"})
-		}
 	}
 
 	// 事务外快速预检：stack 上限快路径（真正强制在事务内）
@@ -248,7 +235,7 @@ func AdminGrantSubscription(c *fiber.Ctx) error {
 		return c.Status(500).JSON(fiber.Map{"success": false, "message_code": "ERR_BUILD_SNAPSHOT"})
 	}
 
-	// ─── 事务：创建订阅 + 写账单 + 可选 bonus + 审计 ──────────────
+	// ─── 事务：创建订阅 + 写账单 + 审计 ──────────────
 	created := []database.UserSubscription{}
 	now := time.Now()
 	endAt := now.Add(time.Duration(pkg.BillingPeriodSeconds) * time.Second)
@@ -278,8 +265,8 @@ func AdminGrantSubscription(c *fiber.Ctx) error {
 		if !freshPkg.IsEnabled() {
 			return errPackageChanged
 		}
-		// invariant 在事务内再校验一次（防 admin 并发改 bonus/price）
-		if freshPkg.BonusBalanceUSD > freshPkg.PriceAmount {
+		// invariant 在事务内再校验一次（防 admin 并发改 price）
+		if freshPkg.PriceAmount < 0 {
 			return errPackageChanged
 		}
 		// fix CRITICAL C-A1（codex 第二十一轮）：tx 内必须复检 BillingPeriodSeconds 上限，
@@ -321,27 +308,6 @@ func AdminGrantSubscription(c *fiber.Ctx) error {
 			}
 		}
 
-		// 可选：apply_bonus 时把 BonusBalanceUSD * qty 充进 user.Quota（micro_usd）
-		// 与购买路径的 bonus_credit 语义对齐（购买时 bonus 是 price 的一部分；赠送时 bonus 是
-		// admin 显式授权多送一份余额，二者落账类型相同便于汇总）
-		//
-		// fix CRITICAL Phase 4-codex（第二十四轮）：tx 内 freshPkg 重读后必须重新检查 bonus*qty 溢出。
-		// 之前事务外 check 用旧 pkg.BonusBalanceUSD，TOCTOU 下 admin 并发改 bonus 到极大值会绕过。
-		var bonusTotalMicro int64
-		if req.ApplyBonus && pkg.BonusBalanceUSD > 0 {
-			var mulOK bool
-			bonusTotalMicro, mulOK = database.CheckedMulInt64(pkg.BonusBalanceUSD, int64(qty))
-			if !mulOK {
-				log.Printf("[GRANT] BLOCKED bonus*qty overflow at tx commit: bonus=%d qty=%d", pkg.BonusBalanceUSD, qty)
-				return errBonusOverflowInTx
-			}
-			if err := tx.Model(&database.User{}).
-				Where("id = ?", req.UserID).
-				UpdateColumn("quota", gorm.Expr("quota + ?", bonusTotalMicro)).Error; err != nil {
-				return fmt.Errorf("apply bonus: %w", err)
-			}
-		}
-
 		// 分配 stack index + ConsumptionOrder
 		baseIdx, err := getNextStackIndex(tx, req.UserID, pkg.ID)
 		if err != nil {
@@ -372,15 +338,6 @@ func AdminGrantSubscription(c *fiber.Ctx) error {
 		if err := tx.Select("id, quota").First(&freshUser, req.UserID).Error; err != nil {
 			return fmt.Errorf("fetch fresh quota: %w", err)
 		}
-		// fix MAJOR（codex 第十七轮）：账单回放余额一致性。
-		// 旧实现 admin_grant_* 与 bonus_credit 同时间戳 + 同 BalanceAfterUSD（最终值），
-		// 按时间排序回放会出现"先看到 grant 行余额已是 X+bonus，再看到 bonus_credit 入账但余额不变"
-		// 的视觉断层。
-		// 新实现时序：
-		//   1. admin_grant_*  at now + i*µs（i=0..N-1），BalanceAfterUSD = balanceBeforeBonus（赠送事件无金额变动）
-		//   2. bonus_credit   at now + N*µs，          BalanceAfterUSD = freshUser.Quota（最终余额）
-		// 这样按 occurred_at 排序回放：grant 行余额 X → bonus 行余额 X+bonus，与 AmountUSD 一致。
-		balanceBeforeBonusMicro := freshUser.Quota - bonusTotalMicro
 		baseEntryMicro := now.UnixMicro()
 		entryType := database.BillingTypeAdminGrantSub
 		if pkg.ProductType == "addon" {
@@ -394,7 +351,7 @@ func AdminGrantSubscription(c *fiber.Ctx) error {
 				OccurredAt:       grantOccurredAt,
 				EntryType:        entryType,
 				AmountUSD:        0, // 赠送：用户未付费，资金面不动
-				BalanceAfterUSD:  balanceBeforeBonusMicro,
+				BalanceAfterUSD:  freshUser.Quota,
 				RelatedType:      "subscription",
 				RelatedID:        subID,
 				Description:      fmt.Sprintf("管理员赠送「%s」#%d · admin#%d · %s", pkg.Name, sub.StackIndex, op.ID, reason),
@@ -404,25 +361,8 @@ func AdminGrantSubscription(c *fiber.Ctx) error {
 				return fmt.Errorf("write billing grant: %w", err)
 			}
 		}
-		// 聚合 bonus 入账（仅当 apply_bonus=true 且 bonus 总额 > 0）
-		// 时间戳排在所有 admin_grant_* 之后，让 BalanceAfterUSD 时序自洽
-		if bonusTotalMicro > 0 && len(created) > 0 {
-			bonusOccurredAt := time.UnixMicro(baseEntryMicro + int64(len(created)))
-			if err := database.WriteBillingEntry(tx, database.BillingEntryInput{
-				UserID:          req.UserID,
-				OccurredAt:      bonusOccurredAt,
-				EntryType:       database.BillingTypeBonusCredit,
-				AmountUSD:       bonusTotalMicro,
-				BalanceAfterUSD: freshUser.Quota,
-				RelatedType:     "subscription",
-				RelatedID:       created[0].ID,
-				Description:     fmt.Sprintf("「%s」×%d 附赠余额（管理员赠送 · admin#%d）", pkg.Name, len(created), op.ID),
-			}); err != nil {
-				return fmt.Errorf("write billing bonus: %w", err)
-			}
-		}
 
-		// 审计日志：写一条聚合记录（subID 列表 + 是否带 bonus）
+		// 审计日志：写一条聚合记录（subID 列表）
 		// 用 json.Marshal 确保 details 是合法 JSON（slice 不会被 %v 拼成 `[1 2]`），
 		// 后续 admin 面板 / 审计工具能直接解析。
 		subIDs := make([]uint, 0, len(created))
@@ -430,15 +370,12 @@ func AdminGrantSubscription(c *fiber.Ctx) error {
 			subIDs = append(subIDs, s.ID)
 		}
 		auditDetails := []map[string]any{{
-			"type":              "GRANT_SUBSCRIPTION",
-			"package_id":        pkg.ID,
-			"package_name":      pkg.Name,
-			"quantity":          qty,
-			"sub_ids":           subIDs,
-			"apply_bonus":       req.ApplyBonus,
-			"bonus_total":       database.MicroToUSD(bonusTotalMicro), // USD float（人读）
-			"bonus_total_micro": bonusTotalMicro,                       // 精确审计（int64）
-			"reason":            reason,
+			"type":         "GRANT_SUBSCRIPTION",
+			"package_id":   pkg.ID,
+			"package_name": pkg.Name,
+			"quantity":     qty,
+			"sub_ids":      subIDs,
+			"reason":       reason,
 		}}
 		detailsJSON, err := json.Marshal(auditDetails)
 		if err != nil {
@@ -485,14 +422,6 @@ func AdminGrantSubscription(c *fiber.Ctx) error {
 				"success":      false,
 				"message":      "套餐 billing_period_seconds 数据损坏（DB 直改 / 并发越界），赠送已回滚",
 				"message_code": "ERR_PACKAGE_INVALID_PERIOD",
-			})
-		}
-		// fix CRITICAL Phase 4-codex（第二十四轮）：tx 内 bonus*qty 溢出（TOCTOU）
-		if errors.Is(txErr, errBonusOverflowInTx) {
-			return c.Status(400).JSON(fiber.Map{
-				"success":      false,
-				"message":      "套餐 bonus 与数量乘积超出范围（事务内重读 freshPkg 后检测），赠送已回滚",
-				"message_code": "ERR_BONUS_OVERFLOW",
 			})
 		}
 		log.Printf("[GRANT] tx failed admin=%d target=%d pkg=%d err=%v", op.ID, req.UserID, pkg.ID, txErr)

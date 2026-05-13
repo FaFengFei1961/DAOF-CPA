@@ -4,13 +4,12 @@
 // 每个测试都有具体攻击/利用场景标注，确保未来重构不会回退。
 //
 // 不变量清单（按修复轮次倒序，便于追溯）：
-//  1. R11: bonus 套利防御 — suggested + AdminRefund 上限都用 netCost = price - bonus
-//  2. R11: addon 退款公式 — min(time_remain_ratio, quota_remain_ratio)
-//  3. R11: TopupOrder reclaim_quota 防绕过 — 用户有非 refunded 订阅则拒绝
-//  4. R10: AdminRefundSubscription 状态机 — refunded 终态，重复退款 409
-//  5. R10: canceled_at 不被退款时间覆写 — 已 canceled 子保留原始取消时间
-//  6. R9:  purchasedPrice<=0 时拒绝退款（防 snapshot 损坏 + 删除套餐场景任意金额）
-//  7. R10: AdminRefund 金额上限 ERR_AMOUNT_EXCEEDS_NET_COST
+//  1. R11: addon 退款公式 — min(time_remain_ratio, quota_remain_ratio)
+//  2. R11: TopupOrder reclaim_quota 防绕过 — 用户有非 refunded 订阅则拒绝
+//  3. R10: AdminRefundSubscription 状态机 — refunded 终态，重复退款 409
+//  4. R10: canceled_at 不被退款时间覆写 — 已 canceled 子保留原始取消时间
+//  5. R9:  purchasedPrice<=0 时拒绝退款（防 snapshot 损坏 + 删除套餐场景任意金额）
+//  6. R10: AdminRefund 金额上限 ERR_AMOUNT_EXCEEDS_NET_COST
 package controller
 
 import (
@@ -21,98 +20,6 @@ import (
 
 	"github.com/gofiber/fiber/v2"
 )
-
-// ─── R11 CRITICAL: bonus 套利防御 ──────────────────────────────────
-
-// TestSecurity_AdminRefund_BonusGreaterThanPrice 验证：bonus > price 极端配置下
-// netCost 被 clamp 到 0 → 任何正数退款金额都被拒。
-//
-// 这是 bonus 套利防御的边界情况：DB 直改让 bonus > price 时，公式
-// netCost = price - bonus < 0，clamp 到 0 后所有 admin 退款金额 > 0 都被拒。
-// 防御 admin 误以为"退个 0.01 就走" 也被阻止。
-func TestSecurity_AdminRefund_BonusGreaterThanPrice(t *testing.T) {
-	setupSubTestDB(t)
-	admin := seedAdminUser(t)
-	user := seedTestUser(t, 100)
-	app := newAdminTestApp(admin)
-
-	// snapshot bonus > price 是 admin 误配，但 purchaseAsInstant 会 clamp AppliedBonusUSD 到
-	// min(price, snapshot.bonus) → AppliedBonusUSD = 10。退款时读 AppliedBonusUSD（B2-fix
-	// 第十五轮）→ netCost = 10 - 10 = 0 → 任何正数退款被拒。
-	sub := database.UserSubscription{
-		UserID:                user.ID,
-		PackageID:             1,
-		Status:                "active",
-		StartAt:               time.Now(),
-		EndAt:                 time.Now().Add(30 * 24 * time.Hour),
-		PackageSnapshot:       `{"package_id":1,"package_name":"BadPkg","price_amount":10000000,"bonus_balance_usd":12000000}`,
-		PurchasedUnitPriceUSD: 10 * database.MicroPerUSD,
-		AppliedBonusUSD:       10 * database.MicroPerUSD, // 已被 purchase 路径 clamp 到 price
-	}
-	database.DB.Create(&sub)
-
-	code, resp := doJSON(t, app, "POST", "/admin/sub/"+itoaUint(sub.ID)+"/refund", map[string]any{
-		"amount_usd": 0.01, // 任意正数
-		"reason":     "测试 bonus>price clamp",
-	})
-	if code != 400 {
-		t.Errorf("amount > netCost(0) should be 400, got %d body=%v", code, resp)
-	}
-	if resp["message_code"] != "ERR_AMOUNT_EXCEEDS_NET_COST" {
-		t.Errorf("expected ERR_AMOUNT_EXCEEDS_NET_COST, got %v", resp["message_code"])
-	}
-}
-
-// TestSecurity_AdminRefund_BonusArbitrageBlocked 验证：用户购买含 bonus 套餐立即取消后，
-// admin 退款上限是 (price - bonus)，无法退全 price 让用户白嫖 bonus。
-//
-// 攻击场景（codex + gemini r11 独立印证）：
-//
-//	套餐 $10 + bonus $5；用户余额 $10
-//	购买后：余额 = 10 - 10 + 5 = $5
-//	立即取消 → 时间剩余 100% → 错误公式建议 $10 退款 → 用户拿到 $15（净赚 $5 bonus）
-//
-// 修复后：netCost = price - bonus = $5；admin 提交 $10 退款被拒 ERR_AMOUNT_EXCEEDS_NET_COST。
-func TestSecurity_AdminRefund_BonusArbitrageBlocked(t *testing.T) {
-	setupSubTestDB(t)
-	admin := seedAdminUser(t)
-	user := seedTestUser(t, 100)
-	app := newAdminTestApp(admin)
-
-	// 创建一个 active 订阅，AppliedBonusUSD = 5 模拟 purchase 后的实际入账值
-	sub := database.UserSubscription{
-		UserID:                user.ID,
-		PackageID:             1,
-		Status:                "active",
-		StartAt:               time.Now(),
-		EndAt:                 time.Now().Add(30 * 24 * time.Hour),
-		PackageSnapshot:       `{"package_id":1,"package_name":"Pro+Bonus","price_amount":10000000,"bonus_balance_usd":5000000,"product_type":"subscription"}`,
-		PurchasedUnitPriceUSD: 10 * database.MicroPerUSD,
-		AppliedBonusUSD:       5 * database.MicroPerUSD, // B2-fix R15: 退款 netCost = price - AppliedBonusUSD
-	}
-	database.DB.Create(&sub)
-
-	// admin 尝试退 $10（购买价全额）—— 必须被 netCost=$5 上限拒绝
-	code, resp := doJSON(t, app, "POST", "/admin/sub/"+itoaUint(sub.ID)+"/refund", map[string]any{
-		"amount_usd": 10.0,
-		"reason":     "测试 bonus 套利",
-	})
-	if code != 400 {
-		t.Errorf("expected 400 (amount exceeds net cost), got %d body=%v", code, resp)
-	}
-	if resp["message_code"] != "ERR_AMOUNT_EXCEEDS_NET_COST" {
-		t.Errorf("expected ERR_AMOUNT_EXCEEDS_NET_COST, got %v", resp["message_code"])
-	}
-
-	// admin 退 $5（netCost）—— 应该通过
-	code, resp = doJSON(t, app, "POST", "/admin/sub/"+itoaUint(sub.ID)+"/refund", map[string]any{
-		"amount_usd": 5.0,
-		"reason":     "退还净支出",
-	})
-	if code != 200 {
-		t.Fatalf("expected 200 for netCost refund, got %d body=%v", code, resp)
-	}
-}
 
 // ─── R10 CRITICAL: AdminRefund 状态机 ──────────────────────────────
 
@@ -385,32 +292,26 @@ func TestSecurity_Purchase_QuantityCap(t *testing.T) {
 	}
 }
 
-// ─── R7 CRITICAL: 购买余额边界（bonus 净扣） ──────────────────────
+// ─── R7 CRITICAL: 购买余额边界（全额扣款） ──────────────────────
 
-// TestSecurity_Purchase_BonusNetDeductCorrect 验证：bonus 套餐购买扣 netDeduct = price - bonus，
-// 不是简单 price 全扣。
-func TestSecurity_Purchase_BonusNetDeductCorrect(t *testing.T) {
+// TestSecurity_Purchase_RequiresFullPrice 验证：购买套餐必须按实际成交价扣款，
+// 不存在套餐 bonus 抵扣或返现路径。
+func TestSecurity_Purchase_RequiresFullPrice(t *testing.T) {
 	setupSubTestDB(t)
 	user := seedTestUser(t, 5) // 仅 $5 余额
 	pkg := seedPackage(t, func(p *database.Package) {
 		p.PriceAmount = 10 * database.MicroPerUSD
-		p.BonusBalanceUSD = 8 * database.MicroPerUSD // netDeduct = 10 - 8 = 2，$5 余额够
 	})
 	app := newTestApp(user)
 
 	code, resp := doJSON(t, app, "POST", "/purchase", map[string]any{
 		"package_id": pkg.ID, "quantity": 1,
 	})
-	if code != 200 {
-		t.Fatalf("purchase should succeed (netDeduct=2 <= balance 5), got %d body=%v", code, resp)
+	if code != 402 {
+		t.Fatalf("purchase should require full price, got %d body=%v", code, resp)
 	}
-
-	var fresh database.User
-	database.DB.First(&fresh, user.ID)
-	// 余额 = 5 - (10 - 8) = 3 USD = 3_000_000 micro_usd
-	expected := int64(3 * database.MicroPerUSD)
-	if fresh.Quota != expected {
-		t.Errorf("expected quota %d after bonus purchase, got %d", expected, fresh.Quota)
+	if resp["message_code"] != "ERR_INSUFFICIENT_BALANCE" {
+		t.Errorf("expected ERR_INSUFFICIENT_BALANCE, got %v", resp["message_code"])
 	}
 }
 
@@ -421,7 +322,7 @@ func TestSecurity_Purchase_BonusNetDeductCorrect(t *testing.T) {
 //
 // 攻击场景（codex r11）：
 //
-//	用户买 $10 addon（10000 messages / 7 days）→ 1 小时内用完 9000 messages →
+//	用户买 $10 addon（10000 request_count / 7 days）→ 1 小时内用完 9000 request_count →
 //	时间剩余 99% → 错误公式建议 $9.9 退款 → 用户拿走 90% 服务+90% 退款。
 //
 // 修复后：addon 取 min(time=99%, quota=10%) = 10%，suggested = $1.0
@@ -434,8 +335,8 @@ func TestSecurity_AdminList_AddonRefund_UsesQuotaRatio(t *testing.T) {
 
 	// 创建一个 plan + addon 套餐
 	plan := database.QuotaPlan{
-		Name: "addon_messages", DisplayName: "Addon Messages",
-		ModelMatch: `["*"]`, LimitUnit: "messages", LimitValue: 10000,
+		Name: "addon_request_count", DisplayName: "Addon Request Count",
+		ModelMatch: `["*"]`, LimitUnit: "request_count", LimitValue: 10000,
 		Priority: 1, Enabled: boolPtr(true),
 	}
 	database.DB.Create(&plan)
@@ -451,14 +352,14 @@ func TestSecurity_AdminList_AddonRefund_UsesQuotaRatio(t *testing.T) {
 		// snapshot 标记 product_type=addon、price=$10、含 plan 元信息
 		PackageSnapshot: `{
 			"package_id":99,"package_name":"Test Addon","product_type":"addon",
-			"price_amount":10000000,"bonus_balance_usd":0,
-			"plans":[{"id":` + itoaUint(plan.ID) + `,"name":"addon_messages","limit_unit":"messages","limit_value":10000}]
+			"price_amount":10000000,
+			"plans":[{"id":` + itoaUint(plan.ID) + `,"name":"addon_request_count","limit_unit":"request_count","limit_value":10000}]
 		}`,
 		PurchasedUnitPriceUSD: 10 * database.MicroPerUSD, // $10
 	}
 	database.DB.Create(&sub)
 
-	// 模拟用户已用 9000/10000 messages（90% 消耗）
+	// 模拟用户已用 9000/10000 request_count（90% 消耗）
 	usage := database.SubscriptionUsage{
 		SubscriptionID: sub.ID,
 		QuotaPlanID:    plan.ID,
@@ -505,7 +406,7 @@ func TestSecurity_AdminList_AddonRefund_UsesQuotaRatio(t *testing.T) {
 // 普通 subscription 仍按时间比例退款，不读 quota——
 // 防 r13 顺序修复"误把 quota 引入 subscription 路径"。
 //
-// 场景：30 天月套餐 $30，已用 1 天，已消耗 90% messages → suggested 仍按时间 ≈ $29
+// 场景：30 天月套餐 $30，已用 1 天，已消耗 90% request_count → suggested 仍按时间 ≈ $29
 // （取 29/30 ≈ 96.6% × $30 = $28.99，约 $29.0）。
 func TestSecurity_AdminList_SubscriptionRefund_UsesTimeRatio(t *testing.T) {
 	setupSubTestDB(t)
@@ -513,8 +414,8 @@ func TestSecurity_AdminList_SubscriptionRefund_UsesTimeRatio(t *testing.T) {
 	user := seedTestUser(t, 100)
 
 	plan := database.QuotaPlan{
-		Name: "sub_messages", DisplayName: "Sub Messages",
-		ModelMatch: `["*"]`, LimitUnit: "messages", LimitValue: 10000,
+		Name: "sub_request_count", DisplayName: "Sub Request Count",
+		ModelMatch: `["*"]`, LimitUnit: "request_count", LimitValue: 10000,
 		Priority: 1, Enabled: boolPtr(true),
 	}
 	database.DB.Create(&plan)
@@ -529,14 +430,14 @@ func TestSecurity_AdminList_SubscriptionRefund_UsesTimeRatio(t *testing.T) {
 		EndAt:     endAt,
 		PackageSnapshot: `{
 			"package_id":1,"package_name":"Sub","product_type":"subscription",
-			"price_amount":30000000,"bonus_balance_usd":0,
-			"plans":[{"id":` + itoaUint(plan.ID) + `,"name":"sub_messages","limit_unit":"messages","limit_value":10000}]
+			"price_amount":30000000,
+			"plans":[{"id":` + itoaUint(plan.ID) + `,"name":"sub_request_count","limit_unit":"request_count","limit_value":10000}]
 		}`,
 		PurchasedUnitPriceUSD: 30 * database.MicroPerUSD, // $30
 	}
 	database.DB.Create(&sub)
 
-	// 90% messages 已耗
+	// 90% request_count 已耗
 	database.DB.Create(&database.SubscriptionUsage{
 		SubscriptionID: sub.ID, QuotaPlanID: plan.ID, ModelBucket: "*",
 		WindowStartAt: startAt, WindowEndAt: endAt, ConsumedValue: 9000,

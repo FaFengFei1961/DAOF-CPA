@@ -76,14 +76,14 @@ func seedTestUser(t *testing.T, balance float64) *database.User {
 // boolPtr helper（test 内部用，避免 lib 污染）
 func boolPtr(b bool) *bool { return &b }
 
-// seedPackage 创建一个标准套餐：1 个 plan，限 10000 messages，月周期，价格 9.9
+// seedPackage 创建一个标准套餐：1 个 plan，限 10000 request_count，月周期，价格 9.9
 func seedPackage(t *testing.T, opts ...func(*database.Package)) *database.Package {
 	t.Helper()
 	plan := database.QuotaPlan{
-		Name:          "test_plan_messages",
+		Name:          "test_plan_request_count",
 		DisplayName:   "测试 Plan",
 		ModelMatch:    `["*"]`,
-		LimitUnit:     "messages",
+		LimitUnit:     "request_count",
 		LimitValue:    10000,
 		WindowSeconds: 0,
 		Priority:      1,
@@ -99,7 +99,6 @@ func seedPackage(t *testing.T, opts ...func(*database.Package)) *database.Packag
 		BillingPeriodSeconds: 30 * 24 * 3600,
 		Stackable:            boolPtr(true),
 		MaxActivePerUser:     3,
-		BonusBalanceUSD:      0,
 		Public:               true,
 		Enabled:              boolPtr(true),
 	}
@@ -160,8 +159,9 @@ func doJSON(t *testing.T, app *fiber.App, method, path string, body any) (int, m
 // 让 CSRF / status=1 / cookie 鉴权 / locals 注入这条核心安全链路被业务测试触达。
 //
 // 用法：
-//   app := newRealAdminApp(admin)
-//   app.Post("/admin/...", controller.AdminRefundTopup)
+//
+//	app := newRealAdminApp(admin)
+//	app.Post("/admin/...", controller.AdminRefundTopup)
 //
 // 测试请求自动带 Cookie "daof_admin_token=<admin.Token>"，AdminGuard 走真实查询 + 注入 locals。
 // 跨源 / 缺 Origin / 封禁 admin 等阴性用例直接构造 req 不带 Cookie 或换 Origin 验证拒绝。
@@ -210,6 +210,74 @@ func TestIntegration_PurchasePackage_Success(t *testing.T) {
 	wantBalance := int64(100*database.MicroPerUSD) - 9_900_000
 	if fresh.Quota != wantBalance {
 		t.Errorf("balance=%d, want %d", fresh.Quota, wantBalance)
+	}
+}
+
+func TestIntegration_MySubscriptionsIncludesUsageSummary(t *testing.T) {
+	setupSubTestDB(t)
+	user := seedTestUser(t, 100)
+	pkg := seedPackage(t)
+
+	app := newTestApp(user)
+	code, resp := doJSON(t, app, "POST", "/purchase", map[string]any{
+		"package_id": pkg.ID, "quantity": 1,
+	})
+	if code != 200 {
+		t.Fatalf("purchase expected 200, got %d, body=%v", code, resp)
+	}
+
+	var sub database.UserSubscription
+	if err := database.DB.Where("user_id = ?", user.ID).First(&sub).Error; err != nil {
+		t.Fatalf("load subscription: %v", err)
+	}
+	var plan database.QuotaPlan
+	if err := database.DB.First(&plan).Error; err != nil {
+		t.Fatalf("load quota plan: %v", err)
+	}
+	now := time.Now()
+	if err := database.DB.Create(&database.SubscriptionUsage{
+		SubscriptionID: sub.ID,
+		QuotaPlanID:    plan.ID,
+		ModelBucket:    "*",
+		WindowStartAt:  now,
+		WindowEndAt:    now.Add(time.Hour),
+		ConsumedValue:  12.34,
+		RequestCount:   2,
+	}).Error; err != nil {
+		t.Fatalf("seed usage: %v", err)
+	}
+
+	code, resp = doJSON(t, app, "GET", "/my", nil)
+	if code != 200 {
+		t.Fatalf("my subscriptions expected 200, got %d, body=%v", code, resp)
+	}
+	data, ok := resp["data"].([]any)
+	if !ok || len(data) != 1 {
+		t.Fatalf("expected one subscription row, got %#v", resp["data"])
+	}
+	row, ok := data[0].(map[string]any)
+	if !ok {
+		t.Fatalf("subscription row type=%T", data[0])
+	}
+	if row["package_name"] != "TestPro" {
+		t.Fatalf("package_name missing or wrong: %#v", row["package_name"])
+	}
+	if got, _ := row["purchased_unit_price_usd"].(float64); got != 9.9 {
+		t.Fatalf("purchased_unit_price_usd should be USD float 9.9, got %#v", row["purchased_unit_price_usd"])
+	}
+	summaries, ok := row["usage_summary"].([]any)
+	if !ok || len(summaries) != 1 {
+		t.Fatalf("usage_summary should be present with one row, got %#v", row["usage_summary"])
+	}
+	summary, ok := summaries[0].(map[string]any)
+	if !ok {
+		t.Fatalf("usage summary row type=%T", summaries[0])
+	}
+	if got, _ := summary["consumed"].(float64); got < 12.33 || got > 12.35 {
+		t.Fatalf("consumed should include persisted subscription usage, got %#v", summary["consumed"])
+	}
+	if got, _ := summary["request_count"].(float64); got != 2 {
+		t.Fatalf("request_count should include persisted subscription usage, got %#v", summary["request_count"])
 	}
 }
 
@@ -298,24 +366,20 @@ func TestIntegration_PurchasePackage_NotPublic(t *testing.T) {
 	}
 }
 
-func TestIntegration_PurchasePackage_BonusBalance(t *testing.T) {
+func TestIntegration_PurchasePackage_RequiresFullPrice(t *testing.T) {
 	setupSubTestDB(t)
-	user := seedTestUser(t, 100)
-	// 价格 9.9, 赠送 5 USD → 净扣 4.9
-	pkg := seedPackage(t, func(p *database.Package) { p.BonusBalanceUSD = 5 * database.MicroPerUSD })
+	user := seedTestUser(t, 5)
+	pkg := seedPackage(t, func(p *database.Package) { p.PriceAmount = 10 * database.MicroPerUSD })
 	app := newTestApp(user)
 
-	code, _ := doJSON(t, app, "POST", "/purchase", map[string]any{
+	code, resp := doJSON(t, app, "POST", "/purchase", map[string]any{
 		"package_id": pkg.ID, "quantity": 1,
 	})
-	if code != 200 {
-		t.Fatalf("expected 200, got %d", code)
+	if code != 402 {
+		t.Fatalf("expected 402 for full-price requirement, got %d body=%v", code, resp)
 	}
-	var fresh database.User
-	database.DB.First(&fresh, user.ID)
-	want := int64(100*database.MicroPerUSD) - 9_900_000 + 5*database.MicroPerUSD // 净扣 4.9
-	if fresh.Quota != want {
-		t.Errorf("balance after bonus: got %d, want %d", fresh.Quota, want)
+	if resp["message_code"] != "ERR_INSUFFICIENT_BALANCE" {
+		t.Errorf("expected ERR_INSUFFICIENT_BALANCE, got %v", resp["message_code"])
 	}
 }
 
@@ -542,8 +606,7 @@ func TestIntegration_AdminRefund_ExceedsPrice(t *testing.T) {
 	if code != 400 {
 		t.Errorf("expected 400, got %d, body=%v", code, resp)
 	}
-	// r11 修复：错误码从 ERR_AMOUNT_EXCEEDS_PRICE 改为 ERR_AMOUNT_EXCEEDS_NET_COST
-	// 因 bonus 套利防御现按 netCost = price - bonus 限额
+	// 错误码沿用 ERR_AMOUNT_EXCEEDS_NET_COST，语义为超过实际支付金额。
 	if resp["message_code"] != "ERR_AMOUNT_EXCEEDS_NET_COST" {
 		t.Errorf("expected ERR_AMOUNT_EXCEEDS_NET_COST, got %v", resp["message_code"])
 	}
@@ -577,7 +640,7 @@ func TestIntegration_AdminRefund_AlreadyRefunded(t *testing.T) {
 	}
 }
 
-// ─── R23+2 二轮：退款不退券 + 免费券保护 + bonus 倒贴保护 ─────────────
+// ─── R23+2 二轮：退款不退券 + 免费券保护 ─────────────
 
 // fix CRITICAL R23+2-C1：免费券购买（PurchasedUnitPriceUSD=0）退款应被拒绝
 func TestIntegration_AdminRefund_FreeCoupon_RejectZeroPaid(t *testing.T) {
@@ -688,16 +751,14 @@ func TestIntegration_AdminRefund_DoesNotGrantNewCoupon(t *testing.T) {
 	}
 }
 
-// fix CRITICAL R23+2-C2：券价 < bonus 时 bonus 被封顶到券价（不能让 netDeduct 为负）
-func TestIntegration_PurchaseWithCoupon_BonusCappedAtCouponPrice(t *testing.T) {
+func TestIntegration_PurchaseWithFreeCoupon_DoesNotCreditBalance(t *testing.T) {
 	setupSubTestDB(t)
 	user := seedTestUser(t, 100)
 
-	// 套餐价 $20 + bonus $5
+	// 套餐价 $20，免费券实付 $0
 	pkg := database.Package{
-		Name:                 "BonusPkg",
+		Name:                 "CouponPkg",
 		PriceAmount:          20 * database.MicroPerUSD,
-		BonusBalanceUSD:      5 * database.MicroPerUSD,
 		BillingPeriodSeconds: 2592000,
 		Public:               true,
 	}
@@ -729,20 +790,20 @@ func TestIntegration_PurchaseWithCoupon_BonusCappedAtCouponPrice(t *testing.T) {
 		t.Fatalf("purchase should succeed, got %d body=%v", code, resp)
 	}
 
-	// 关键断言：用户余额变化 = 0 - effectiveBonus = 0 - min($5, $0) = 0
-	// 之前的 bug 会让 netDeduct = 0 - 5 = -5（用户多得 $5）
+	// 关键断言：免费券只让实付价为 0，绝不能给用户倒贴余额。
 	var fresh database.User
 	database.DB.First(&fresh, user.ID)
 	deltaBalance := fresh.Quota - quotaBefore
 	if deltaBalance > 1000 { // 容差 1000 micro_usd = $0.001
-		t.Errorf("FREE coupon + bonus 不能给用户倒贴余额：delta=%d micro_usd want 0", deltaBalance)
+		t.Errorf("FREE coupon 不能给用户倒贴余额：delta=%d micro_usd want 0", deltaBalance)
 	}
 
-	// 验证账单：bonus_credit 金额应是 0 而不是 5
-	var bonusEntry database.BillingEntry
-	database.DB.Where("user_id = ? AND entry_type = ?", user.ID, "bonus_credit").First(&bonusEntry)
-	if bonusEntry.AmountUSD > 1000 {
-		t.Errorf("bonus 应被封顶到券价 0，账单 amount=%d micro_usd", bonusEntry.AmountUSD)
+	var bonusCount int64
+	database.DB.Model(&database.BillingEntry{}).
+		Where("user_id = ? AND entry_type = ?", user.ID, database.BillingTypeBonusCredit).
+		Count(&bonusCount)
+	if bonusCount != 0 {
+		t.Errorf("purchase should not write bonus_credit entries, got %d", bonusCount)
 	}
 }
 

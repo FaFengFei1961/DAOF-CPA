@@ -102,12 +102,10 @@ func (p Package) MarshalJSON() ([]byte, error) {
 	type packageAlias Package
 	return json.Marshal(&struct {
 		*packageAlias
-		PriceAmount     float64 `json:"price_amount"`
-		BonusBalanceUSD float64 `json:"bonus_balance_usd"`
+		PriceAmount float64 `json:"price_amount"`
 	}{
-		packageAlias:    (*packageAlias)(&p),
-		PriceAmount:     MicroToUSD(p.PriceAmount),
-		BonusBalanceUSD: MicroToUSD(p.BonusBalanceUSD),
+		packageAlias: (*packageAlias)(&p),
+		PriceAmount:  MicroToUSD(p.PriceAmount),
 	})
 }
 
@@ -118,11 +116,9 @@ func (us UserSubscription) MarshalJSON() ([]byte, error) {
 	return json.Marshal(&struct {
 		*userSubscriptionAlias
 		PurchasedUnitPriceUSD float64 `json:"purchased_unit_price_usd"`
-		AppliedBonusUSD       float64 `json:"applied_bonus_usd"`
 	}{
 		userSubscriptionAlias: (*userSubscriptionAlias)(&us),
 		PurchasedUnitPriceUSD: MicroToUSD(us.PurchasedUnitPriceUSD),
-		AppliedBonusUSD:       MicroToUSD(us.AppliedBonusUSD),
 	})
 }
 

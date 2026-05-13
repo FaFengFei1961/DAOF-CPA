@@ -1,9 +1,10 @@
-import React, { useState, useEffect, useCallback } from 'react';
+import React, { useState, useEffect, useCallback, useMemo } from 'react';
 import { useTranslation } from 'react-i18next';
 import { Wallet, RefreshCw, ExternalLink, Banknote, History } from 'lucide-react';
 import toast from 'react-hot-toast';
 import { QRCodeSVG } from 'qrcode.react';
-import { authFetch } from '../utils/authFetch';
+import { authFetch, readAuthState } from '../utils/authFetch';
+import { isPageCacheFresh, readPageCache, writePageCache } from '../utils/pageCache';
 import { StorePage, StoreHero, StoreSection } from './store/StorePrimitives';
 import Pagination from './common/Pagination';
 import { PAGE_SIZE_HISTORY } from './common/constants';
@@ -17,31 +18,49 @@ const PAY_METHOD_META = {
   paypal:    { i18n: 'PAY_PAYPAL',    color: 'bg-[#003087]', text: 'text-white' },
   douyinpay: { i18n: 'PAY_DOUYINPAY', color: 'bg-black',     text: 'text-white' },
 };
+const TOPUP_CACHE_TTL_MS = 30000;
+const TOPUP_OPTIONS_CACHE_KEY = 'topup:options';
+const getTopupHistoryCacheKey = (page) => {
+  const { isAdmin, userToken } = readAuthState();
+  return `topup:history:${isAdmin ? 'admin' : userToken || 'guest'}:${page}`;
+};
 
 const Topup = ({ isAuthenticated, onNavigate }) => {
   const { t } = useTranslation();
 
-  const [opts, setOpts] = useState(null);
-  const [loadingOpts, setLoadingOpts] = useState(true);
+  const [opts, setOpts] = useState(() => readPageCache(TOPUP_OPTIONS_CACHE_KEY));
+  const [loadingOpts, setLoadingOpts] = useState(() => !readPageCache(TOPUP_OPTIONS_CACHE_KEY));
 
   const [amount, setAmount] = useState('');
   const [payType, setPayType] = useState('');
   const [submitting, setSubmitting] = useState(false);
   const [orderResult, setOrderResult] = useState(null); // {gateway_pay_type, pay_info, ...}
 
-  const [history, setHistory] = useState([]);
-  const [historyLoading, setHistoryLoading] = useState(false);
   // fix MAJOR（gemini 第十六轮）：充值历史改为完整分页（原硬编码 page=1&page_size=20，>20 条永远看不到）
   const [historyPage, setHistoryPage] = useState(1);
-  const [historyTotal, setHistoryTotal] = useState(0);
+  const historyCacheKey = useMemo(() => getTopupHistoryCacheKey(historyPage), [historyPage]);
+  const initialHistoryCache = readPageCache(getTopupHistoryCacheKey(1));
+  const [history, setHistory] = useState(() => initialHistoryCache?.rows || []);
+  const [historyLoading, setHistoryLoading] = useState(false);
+  const [historyTotal, setHistoryTotal] = useState(() => initialHistoryCache?.total || 0);
 
   // 注意：依赖空数组——此函数引用稳定，避免 "切换支付方式 → loadOptions 重新触发拉取" 的 race。
   // 使用函数式 setPayType 在拿到方法列表时只在为空时填默认。
-  const loadOptions = useCallback(async () => {
-    setLoadingOpts(true);
+  const loadOptions = useCallback(async ({ force = false } = {}) => {
+    const cached = readPageCache(TOPUP_OPTIONS_CACHE_KEY);
+    if (cached) {
+      setOpts(cached);
+      const methods = cached.methods || [];
+      setPayType(prev => prev || methods[0] || '');
+      setLoadingOpts(false);
+      if (!force && isPageCacheFresh(TOPUP_OPTIONS_CACHE_KEY, TOPUP_CACHE_TTL_MS)) return;
+    } else {
+      setLoadingOpts(true);
+    }
     try {
       const json = await authFetch('/api/topup/options');
       if (json.success && json.data) {
+        writePageCache(TOPUP_OPTIONS_CACHE_KEY, json.data);
         setOpts(json.data);
         const methods = json.data.methods || [];
         setPayType(prev => prev || methods[0] || '');
@@ -53,21 +72,31 @@ const Topup = ({ isAuthenticated, onNavigate }) => {
     }
   }, []);
 
-  const loadHistory = useCallback(async () => {
+  const loadHistory = useCallback(async ({ force = false } = {}) => {
     if (!isAuthenticated) return;
-    setHistoryLoading(true);
+    const cached = readPageCache(historyCacheKey);
+    if (cached) {
+      setHistory(cached.rows || []);
+      setHistoryTotal(cached.total || 0);
+      setHistoryLoading(false);
+      if (!force && isPageCacheFresh(historyCacheKey, TOPUP_CACHE_TTL_MS)) return;
+    } else {
+      setHistoryLoading(true);
+    }
     try {
       const json = await authFetch(`/api/topup/mine?page=${historyPage}&page_size=${PAGE_SIZE_HISTORY}`);
       if (json.success) {
-        setHistory(json.data || []);
-        setHistoryTotal(json.meta?.total || 0);
+        const next = { rows: json.data || [], total: json.meta?.total || 0 };
+        writePageCache(historyCacheKey, next);
+        setHistory(next.rows);
+        setHistoryTotal(next.total);
       }
     } catch {
       // ignore
     } finally {
       setHistoryLoading(false);
     }
-  }, [isAuthenticated, historyPage]);
+  }, [isAuthenticated, historyCacheKey, historyPage]);
 
   useEffect(() => { loadOptions(); }, [loadOptions]);
   useEffect(() => { loadHistory(); }, [loadHistory]);
@@ -92,10 +121,12 @@ const Topup = ({ isAuthenticated, onNavigate }) => {
         // 轮询固定查第 1 页（最新订单一定在头部），不影响用户翻页查看的状态
         const json = await authFetch(`/api/topup/mine?page=1&page_size=${PAGE_SIZE_HISTORY}`);
         if (json.success && Array.isArray(json.data)) {
+          const latestPageOne = { rows: json.data, total: json.meta?.total || 0 };
+          writePageCache(getTopupHistoryCacheKey(1), latestPageOne);
           // 仅当用户当前在第 1 页时才同步覆盖列表，否则只更新 total
           if (historyPage === 1) {
-            setHistory(json.data);
-            setHistoryTotal(json.meta?.total || 0);
+            setHistory(latestPageOne.rows);
+            setHistoryTotal(latestPageOne.total);
           }
           const order = json.data.find(o => o.out_trade_no === targetOrderNo);
           if (order) {
@@ -155,7 +186,7 @@ const Topup = ({ isAuthenticated, onNavigate }) => {
         if (json.data.pay_info) {
           toast.success(t('TOPUP.GO_PAY_HINT', '订单已创建，请点击下方链接支付'));
         }
-        loadHistory();
+        loadHistory({ force: true });
       } else {
         toast.error(json.message || t('TOPUP.ERR_GATEWAY', '支付通道暂时不可用'));
       }
@@ -380,7 +411,7 @@ const Topup = ({ isAuthenticated, onNavigate }) => {
         title={t('TOPUP.HISTORY_TITLE', '充值记录')}
         right={
           <button
-            onClick={loadHistory}
+            onClick={() => loadHistory({ force: true })}
             className="w-8 h-8 rounded-control flex items-center justify-center text-on-surface-variant hover:bg-on-surface/[0.04]"
             aria-label={t('SYSTEM.REFRESH', '刷新')}
           >

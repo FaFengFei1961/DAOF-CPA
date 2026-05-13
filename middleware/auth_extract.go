@@ -1,7 +1,7 @@
 // Package middleware / auth_extract.go
 //
 // 统一的 admin token 提取逻辑：优先 HttpOnly cookie，回退 Bearer header。
-// 替代 admin_auth.go / factory_reset.go / admin_guard.go 三处重复实现。
+// 替代 admin_auth.go / admin_guard.go 等处重复实现。
 package middleware
 
 import (

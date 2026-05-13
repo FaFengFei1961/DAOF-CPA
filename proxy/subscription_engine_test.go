@@ -56,11 +56,11 @@ func TestMatchModel_GlobPatterns(t *testing.T) {
 
 // ─── computeDelta ────────────────────────────────────────────────
 
-func TestComputeDelta_Messages(t *testing.T) {
-	plan := snapshotPlan{LimitUnit: "messages", QuantityMultiplier: 1.0}
+func TestComputeDelta_RequestCount(t *testing.T) {
+	plan := snapshotPlan{LimitUnit: "request_count", QuantityMultiplier: 1.0}
 	d, unit := computeDelta(plan, EngineRequest{InputTokens: 9999, OutputTokens: 9999})
-	if d != 1.0 || unit != "messages" {
-		t.Errorf("messages: got delta=%v unit=%q, want 1.0/messages", d, unit)
+	if d != 1.0 || unit != "request_count" {
+		t.Errorf("request_count: got delta=%v unit=%q, want 1.0/request_count", d, unit)
 	}
 }
 
@@ -117,34 +117,31 @@ func TestComputeDelta_WeightedTokensWithInOut(t *testing.T) {
 	}
 }
 
-func TestComputeDelta_USDEquivalent(t *testing.T) {
+func TestComputeDelta_APICostUSD(t *testing.T) {
 	plan := snapshotPlan{
-		LimitUnit:          "usd_equivalent",
+		LimitUnit:          "api_cost_usd",
 		QuantityMultiplier: 1.0,
-		// gpt-4o 输入 $2.5/M, 输出 $10/M
-		WeightFactor: `{"gpt-4o": {"input": 2.5, "output": 10.0}}`,
 	}
 	d, _ := computeDelta(plan, EngineRequest{
 		ModelName:    "gpt-4o",
 		InputTokens:  1_000_000,
 		OutputTokens: 100_000,
+		CostMicroUSD: 3_500_000,
 	})
-	want := (1_000_000.0*2.5 + 100_000.0*10.0) / 1_000_000.0 // 3.5 USD
+	want := 3.5
 	if math.Abs(d-want) > 1e-9 {
-		t.Errorf("usd_equivalent: got %v, want %v", d, want)
+		t.Errorf("api_cost_usd: got %v, want %v", d, want)
 	}
 }
 
-func TestComputeDelta_USDEquivalentWithoutWeightReturnsMinusOne(t *testing.T) {
-	// M-5 修复：usd_equivalent 没配权重 → -1，让上层跳过
+func TestComputeDelta_APICostZeroCostIsZero(t *testing.T) {
 	plan := snapshotPlan{
-		LimitUnit:          "usd_equivalent",
+		LimitUnit:          "api_cost_usd",
 		QuantityMultiplier: 1.0,
-		WeightFactor:       "", // 缺权重配置
 	}
 	d, _ := computeDelta(plan, EngineRequest{InputTokens: 100, OutputTokens: 200})
-	if d != -1 {
-		t.Errorf("usd_equivalent without weight: got %v, want -1", d)
+	if d != 0 {
+		t.Errorf("api_cost_usd zero request cost: got %v, want 0", d)
 	}
 }
 
@@ -245,10 +242,15 @@ func TestNormalizeModelBucket(t *testing.T) {
 		{"exact pattern bucket", `["gpt-4o"]`, "gpt-4o", "gpt-4o"},
 		{"no match → use model name", `["other-*"]`, "gpt-4o", "gpt-4o"},
 		{"empty patterns → use model name", `[]`, "gpt-4o", "gpt-4o"},
+		{"extra_config bucket override", `["gpt-*"]`, "gpt-4o", "provider:openai"},
 	}
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
-			got := normalizeModelBucket(snapshotPlan{ModelMatch: tc.matchJSON}, tc.model)
+			plan := snapshotPlan{ModelMatch: tc.matchJSON}
+			if tc.name == "extra_config bucket override" {
+				plan.ExtraConfig = `{"bucket":"provider:openai"}`
+			}
+			got := normalizeModelBucket(plan, tc.model)
 			if got != tc.want {
 				t.Errorf("got %q, want %q", got, tc.want)
 			}

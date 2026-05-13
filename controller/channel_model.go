@@ -108,6 +108,14 @@ func validateChannelModelModeration(cm *database.ChannelModel, ch *database.Chan
 			"moderation_fail_mode 取值非法（允许：open / closed）"
 	}
 
+	// OpenAI/Codex-family 模型一律实装内容审查。这里按 model_id 判定，而不是按
+	// channel.Type 判定：openai 通道类型也承载 DeepSeek/国产/自部署等 OpenAI-compatible
+	// 模型，不能误伤到整个兼容协议族。
+	if database.IsOpenAIModelID(cm.ModelID) {
+		level = database.OpenAIModelModerationLevel
+		failMode = database.OpenAIModelModerationFailMode
+	}
+
 	// fix CRITICAL R23-C3（codex 审查）：官方渠道下"打开了审核但配 fail_mode=open"等同于
 	// 没开审 —— 审核 API 不可达时 prompt 直接透传到官方 key 引发封号。强制策略：
 	//   - level=off → 必须 confirm（与之前一致）
@@ -194,20 +202,32 @@ func GetPublicModels(c *fiber.Ctx) error {
 // GetPublicPricing 开放给前端侧边栏的业务聚合单价探针
 func GetPublicPricing(c *fiber.Ctx) error {
 	type PricingResult struct {
-		ModelID          string  `json:"model_id"`
-		MinInputPrice    float64 `json:"min_input_price"`
-		MinOutputPrice   float64 `json:"min_output_price"`
-		MinCachePrice    float64 `json:"min_cache_price"`
-		ContextThreshold int     `json:"context_threshold"`
-		MinHighInPrice   float64 `json:"min_high_in_price"`
-		MinHighOutPrice  float64 `json:"min_high_out_price"`
-		MaxContextLength int     `json:"max_context_length"`
-		AvailablePaths   int     `json:"available_paths"`
+		ModelID              string  `gorm:"column:model_id" json:"model_id"`
+		MinInputPrice        float64 `gorm:"column:min_input_price" json:"min_input_price"`
+		MinOutputPrice       float64 `gorm:"column:min_output_price" json:"min_output_price"`
+		MinCachePrice        float64 `gorm:"column:min_cache_price" json:"min_cache_price"`
+		MinCacheWritePrice   float64 `gorm:"column:min_cache_write_price" json:"min_cache_write_price"`
+		MinCacheWrite1hPrice float64 `gorm:"column:min_cache_write_1h_price" json:"min_cache_write_1h_price"`
+		ContextThreshold     int     `gorm:"column:context_threshold" json:"context_threshold"`
+		MinHighInPrice       float64 `gorm:"column:min_high_in_price" json:"min_high_in_price"`
+		MinHighCachePrice    float64 `gorm:"column:min_high_cache_price" json:"min_high_cache_price"`
+		MinHighOutPrice      float64 `gorm:"column:min_high_out_price" json:"min_high_out_price"`
+		MaxContextLength     int     `gorm:"column:max_context_length" json:"max_context_length"`
 	}
 
 	var results []PricingResult
 	if err := database.DB.Model(&database.ChannelModel{}).
-		Select("model_id, MIN(input_price) as min_input_price, MIN(output_price) as min_output_price, MIN(cached_input_price) as min_cache_price, MAX(context_price_threshold) as context_threshold, MIN(high_input_price) as min_high_in_price, MIN(high_output_price) as min_high_out_price, MAX(max_context_length) as max_context_length, COUNT(id) as available_paths").
+		Select(`model_id,
+			COALESCE(MIN(NULLIF(input_price, 0)), 0) as min_input_price,
+			COALESCE(MIN(NULLIF(output_price, 0)), 0) as min_output_price,
+			COALESCE(MIN(NULLIF(cached_input_price, 0)), 0) as min_cache_price,
+			COALESCE(MIN(NULLIF(cache_write_input_price, 0)), 0) as min_cache_write_price,
+			COALESCE(MIN(NULLIF(cache_write_1h_input_price, 0)), 0) as min_cache_write_1h_price,
+			MAX(context_price_threshold) as context_threshold,
+			COALESCE(MIN(NULLIF(high_input_price, 0)), 0) as min_high_in_price,
+			COALESCE(MIN(NULLIF(high_cached_input_price, 0)), 0) as min_high_cache_price,
+			COALESCE(MIN(NULLIF(high_output_price, 0)), 0) as min_high_out_price,
+			MAX(max_context_length) as max_context_length`).
 		Where("status = ?", 1).
 		Group("model_id").
 		Scan(&results).Error; err != nil {
@@ -359,8 +379,12 @@ func UpdateChannelModel(c *fiber.Ctx) error {
 	chm.DisplayName = body.DisplayName
 	chm.InputPrice = body.InputPrice
 	chm.OutputPrice = body.OutputPrice
+	chm.CachedInputPrice = body.CachedInputPrice
+	chm.CacheWriteInputPrice = body.CacheWriteInputPrice
+	chm.CacheWrite1hInputPrice = body.CacheWrite1hInputPrice
 	chm.ContextPriceThreshold = body.ContextPriceThreshold
 	chm.HighInputPrice = body.HighInputPrice
+	chm.HighCachedInputPrice = body.HighCachedInputPrice
 	chm.HighOutputPrice = body.HighOutputPrice
 	chm.MaxContextLength = body.MaxContextLength
 	if body.Weight >= 0 {
@@ -591,14 +615,20 @@ func AddChannelModelsBatch(c *fiber.Ctx) error {
 
 	var toInsert []database.ChannelModel
 	for _, m := range payload.Models {
+		level := defaultLevel
+		failMode := defaultFailMode
+		if database.IsOpenAIModelID(m) {
+			level = database.OpenAIModelModerationLevel
+			failMode = database.OpenAIModelModerationFailMode
+		}
 		toInsert = append(toInsert, database.ChannelModel{
 			ChannelID:          uint(channelID),
 			ModelID:            m,
 			DisplayName:        m,
 			Weight:             1,
 			Status:             1,
-			ModerationLevel:    defaultLevel,
-			ModerationFailMode: defaultFailMode,
+			ModerationLevel:    level,
+			ModerationFailMode: failMode,
 		})
 	}
 	modelIDs := make([]string, 0, len(toInsert))

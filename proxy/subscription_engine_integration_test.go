@@ -82,13 +82,13 @@ func TestEngineIntegration_FIFOConsumption(t *testing.T) {
 	setupEngineTestDB(t)
 	userID := uint(1)
 
-	// 两个订阅：sub1 100 messages、sub2 200 messages
+	// 两个订阅：sub1 100 request_count、sub2 200 request_count
 	snap1 := makeSnapshot([]map[string]any{{
-		"id": 1, "model_match": `["*"]`, "limit_unit": "messages", "limit_value": 100.0,
+		"id": 1, "model_match": `["*"]`, "limit_unit": "request_count", "limit_value": 100.0,
 		"window_seconds": 0, "priority": 1,
 	}})
 	snap2 := makeSnapshot([]map[string]any{{
-		"id": 2, "model_match": `["*"]`, "limit_unit": "messages", "limit_value": 200.0,
+		"id": 2, "model_match": `["*"]`, "limit_unit": "request_count", "limit_value": 200.0,
 		"window_seconds": 0, "priority": 1,
 	}})
 	sub1 := seedSub(t, userID, snap1, 100)
@@ -125,7 +125,7 @@ func TestEngineIntegration_QuantityMultiplierExpandsLimit(t *testing.T) {
 	userID := uint(10)
 
 	snap := makeSnapshot([]map[string]any{{
-		"id": 100, "model_match": `["*"]`, "limit_unit": "messages", "limit_value": 1.0,
+		"id": 100, "model_match": `["*"]`, "limit_unit": "request_count", "limit_value": 1.0,
 		"quantity_multiplier": 2.0, "window_seconds": 0, "priority": 1,
 	}})
 	sub := seedSub(t, userID, snap, 1)
@@ -148,6 +148,98 @@ func TestEngineIntegration_QuantityMultiplierExpandsLimit(t *testing.T) {
 	}
 }
 
+func TestEngineIntegration_MultiWindowANDRollback(t *testing.T) {
+	setupEngineTestDB(t)
+	userID := uint(11)
+
+	snap := makeSnapshot([]map[string]any{
+		{
+			"id": 110, "model_match": `["gpt-*"]`, "limit_unit": "api_cost_usd", "limit_value": 20.0,
+			"window_seconds": 5 * 3600, "priority": 1, "extra_config": `{"bucket":"provider:openai"}`,
+		},
+		{
+			"id": 111, "model_match": `["gpt-*"]`, "limit_unit": "api_cost_usd", "limit_value": 15.0,
+			"window_seconds": 7 * 86400, "priority": 2, "extra_config": `{"bucket":"provider:openai"}`,
+		},
+	})
+	sub := seedSub(t, userID, snap, 1)
+
+	for i := 0; i < 2; i++ {
+		FlushAllSubscriptionCache()
+		d := Decide(EngineRequest{UserID: userID, ModelName: "gpt-5.4", CostMicroUSD: 6 * database.MicroPerUSD})
+		if !d.Allowed || d.FallbackToBalance || d.SubscriptionID != sub.ID {
+			t.Fatalf("request %d should pass both windows, got %+v", i+1, d)
+		}
+	}
+
+	FlushAllSubscriptionCache()
+	d := Decide(EngineRequest{UserID: userID, ModelName: "gpt-5.4", CostMicroUSD: 6 * database.MicroPerUSD})
+	if !d.Allowed || !d.FallbackToBalance {
+		t.Fatalf("third request should fail weekly window and fallback, got %+v", d)
+	}
+
+	var rows []database.SubscriptionUsage
+	if err := database.DB.Where("subscription_id = ?", sub.ID).Order("quota_plan_id asc").Find(&rows).Error; err != nil {
+		t.Fatalf("load usage: %v", err)
+	}
+	if len(rows) != 2 {
+		t.Fatalf("usage rows=%d, want 2", len(rows))
+	}
+	for _, row := range rows {
+		if row.ConsumedValue != 12 {
+			t.Fatalf("plan %d consumed=%v, want 12 (failed third request must rollback all windows)", row.QuotaPlanID, row.ConsumedValue)
+		}
+		if row.ModelBucket != "provider:openai" {
+			t.Fatalf("bucket=%q, want provider:openai", row.ModelBucket)
+		}
+	}
+}
+
+func TestEngineIntegration_MixedAPICostAndRequestCountANDRollback(t *testing.T) {
+	setupEngineTestDB(t)
+	userID := uint(12)
+
+	snap := makeSnapshot([]map[string]any{
+		{
+			"id": 120, "model_match": `["gpt-image-*"]`, "limit_unit": "api_cost_usd", "limit_value": 10.0,
+			"window_seconds": 7 * 86400, "priority": 1, "extra_config": `{"bucket":"provider:openai"}`,
+		},
+		{
+			"id": 121, "model_match": `["gpt-image-*"]`, "limit_unit": "request_count", "limit_value": 2.0,
+			"window_seconds": 7 * 86400, "priority": 2, "extra_config": `{"bucket":"provider:openai:image"}`,
+		},
+	})
+	sub := seedSub(t, userID, snap, 1)
+
+	for i := 0; i < 2; i++ {
+		FlushAllSubscriptionCache()
+		d := Decide(EngineRequest{UserID: userID, ModelName: "gpt-image-2", CostMicroUSD: 3 * database.MicroPerUSD})
+		if !d.Allowed || d.FallbackToBalance || d.SubscriptionID != sub.ID {
+			t.Fatalf("image request %d should consume both api_cost_usd and request_count plans, got %+v", i+1, d)
+		}
+	}
+
+	FlushAllSubscriptionCache()
+	d := Decide(EngineRequest{UserID: userID, ModelName: "gpt-image-2", CostMicroUSD: 3 * database.MicroPerUSD})
+	if !d.Allowed || !d.FallbackToBalance {
+		t.Fatalf("third image request should hit request_count limit and fallback, got %+v", d)
+	}
+
+	var rows []database.SubscriptionUsage
+	if err := database.DB.Where("subscription_id = ?", sub.ID).Order("quota_plan_id asc").Find(&rows).Error; err != nil {
+		t.Fatalf("load usage: %v", err)
+	}
+	if len(rows) != 2 {
+		t.Fatalf("usage rows=%d, want 2", len(rows))
+	}
+	if rows[0].QuotaPlanID != 120 || rows[0].ConsumedValue != 6 || rows[0].RequestCount != 2 {
+		t.Fatalf("api_cost usage = plan:%d consumed:%v requests:%d, want plan 120 consumed 6 requests 2", rows[0].QuotaPlanID, rows[0].ConsumedValue, rows[0].RequestCount)
+	}
+	if rows[1].QuotaPlanID != 121 || rows[1].ConsumedValue != 2 || rows[1].RequestCount != 2 {
+		t.Fatalf("request_count usage = plan:%d consumed:%v requests:%d, want plan 121 consumed 2 requests 2", rows[1].QuotaPlanID, rows[1].ConsumedValue, rows[1].RequestCount)
+	}
+}
+
 // ─── DB 故障 fail-closed：禁止 fallback 余额（C2 第二十轮 + M-A3 第二十一轮验证） ──
 //
 // 攻击场景：DB 连接抖动 / 表损坏期间，atomicConsume 写库失败。
@@ -163,7 +255,7 @@ func TestEngineIntegration_DBError_FailsClosedNoBalanceFallback(t *testing.T) {
 	SysConfigMutex.Unlock()
 
 	snap := makeSnapshot([]map[string]any{{
-		"id": 70, "model_match": `["*"]`, "limit_unit": "messages", "limit_value": 100.0,
+		"id": 70, "model_match": `["*"]`, "limit_unit": "request_count", "limit_value": 100.0,
 		"window_seconds": 0, "priority": 1,
 	}})
 	seedSub(t, userID, snap, 1)
@@ -205,7 +297,7 @@ func TestEngineIntegration_CacheHit_DBError_FailsClosed(t *testing.T) {
 	SysConfigMutex.Unlock()
 
 	snap := makeSnapshot([]map[string]any{{
-		"id": 90, "model_match": `["*"]`, "limit_unit": "messages", "limit_value": 100.0,
+		"id": 90, "model_match": `["*"]`, "limit_unit": "request_count", "limit_value": 100.0,
 		"window_seconds": 0, "priority": 1,
 	}})
 	seedSub(t, userID, snap, 1)
@@ -277,7 +369,7 @@ func TestEngineIntegration_AllExhausted_FallsBack(t *testing.T) {
 	userID := uint(2)
 
 	snap := makeSnapshot([]map[string]any{{
-		"id": 10, "model_match": `["*"]`, "limit_unit": "messages", "limit_value": 1.0,
+		"id": 10, "model_match": `["*"]`, "limit_unit": "request_count", "limit_value": 1.0,
 		"window_seconds": 0, "priority": 1,
 	}})
 	seedSub(t, userID, snap, 1)
@@ -304,7 +396,7 @@ func TestEngineIntegration_AllExhausted_NoFallback_Blocks(t *testing.T) {
 
 	userID := uint(3)
 	snap := makeSnapshot([]map[string]any{{
-		"id": 20, "model_match": `["*"]`, "limit_unit": "messages", "limit_value": 1.0,
+		"id": 20, "model_match": `["*"]`, "limit_unit": "request_count", "limit_value": 1.0,
 		"priority": 1,
 	}})
 	seedSub(t, userID, snap, 1)
@@ -330,7 +422,7 @@ func TestEngineIntegration_PrecheckDoesNotPersist(t *testing.T) {
 	setupEngineTestDB(t)
 	userID := uint(4)
 	snap := makeSnapshot([]map[string]any{{
-		"id": 30, "model_match": `["*"]`, "limit_unit": "messages", "limit_value": 100.0,
+		"id": 30, "model_match": `["*"]`, "limit_unit": "request_count", "limit_value": 100.0,
 		"priority": 1,
 	}})
 	seedSub(t, userID, snap, 1)
@@ -355,7 +447,7 @@ func TestEngineIntegration_ConcurrentNoOverConsumption(t *testing.T) {
 	userID := uint(5)
 	limit := 50
 	snap := makeSnapshot([]map[string]any{{
-		"id": 40, "model_match": `["*"]`, "limit_unit": "messages",
+		"id": 40, "model_match": `["*"]`, "limit_unit": "request_count",
 		"limit_value": float64(limit), "priority": 1,
 	}})
 	seedSub(t, userID, snap, 1)
@@ -403,11 +495,11 @@ func TestEngineIntegration_OverflowNextSubscription(t *testing.T) {
 
 	// sub1 满 (limit 1, 已经用过), sub2 还有额度
 	snap1 := makeSnapshot([]map[string]any{{
-		"id": 50, "model_match": `["*"]`, "limit_unit": "messages",
+		"id": 50, "model_match": `["*"]`, "limit_unit": "request_count",
 		"limit_value": 1.0, "overflow_strategy": "next_subscription", "priority": 1,
 	}})
 	snap2 := makeSnapshot([]map[string]any{{
-		"id": 51, "model_match": `["*"]`, "limit_unit": "messages",
+		"id": 51, "model_match": `["*"]`, "limit_unit": "request_count",
 		"limit_value": 100.0, "priority": 1,
 	}})
 	sub1 := seedSub(t, userID, snap1, 1)

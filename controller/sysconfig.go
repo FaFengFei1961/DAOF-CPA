@@ -84,9 +84,21 @@ func isSensitiveConfigKey(key string) bool {
 	return false
 }
 
+var clearableEmptyConfigKeys = map[string]bool{
+	// The UI reset button intentionally writes an empty value so the runtime can
+	// generate a fresh HMAC secret.
+	"moderation_cache_secret": true,
+}
+
+func isClearableEmptyConfigKey(key string) bool {
+	return clearableEmptyConfigKeys[key]
+}
+
 const (
 	balanceConsumeDefaultMinWindowSeconds = 60
 	balanceConsumeDefaultMaxWindowSeconds = 365 * 24 * 60 * 60
+	moderationAutobanMinWindowSeconds     = 60
+	moderationAutobanMaxWindowSeconds     = 365 * 24 * 60 * 60
 )
 
 func validateSysConfigPayload(payload map[string]string) (string, string, bool) {
@@ -129,7 +141,89 @@ func validateSysConfigPayload(payload map[string]string) (string, string, bool) 
 		}
 	}
 
+	if raw, ok := payload["moderation_autoban_enabled"]; ok {
+		if !isBoolSysConfigValue(strings.TrimSpace(raw)) {
+			return "ERR_INVALID_PARAMS", "moderation_autoban_enabled 必须是 true/false", false
+		}
+	}
+	for _, key := range []string{
+		"moderation_autoban_keyword_threshold",
+		"moderation_autoban_policy_threshold",
+		"moderation_autoban_risk_rule_threshold",
+		"moderation_autoban_risk_score_threshold",
+		"moderation_autoban_image_threshold",
+		"moderation_autoban_oversize_threshold",
+	} {
+		if raw, ok := payload[key]; ok {
+			n, err := strconv.Atoi(strings.TrimSpace(raw))
+			if err != nil || n < 0 || n > 100 {
+				return "ERR_INVALID_PARAMS", key + " 必须是 0-100 之间的整数，0 表示关闭该类自动封禁", false
+			}
+		}
+	}
+	if raw, ok := payload["moderation_autoban_window_seconds"]; ok {
+		window, err := strconv.ParseInt(strings.TrimSpace(raw), 10, 64)
+		if err != nil || window < moderationAutobanMinWindowSeconds || window > moderationAutobanMaxWindowSeconds {
+			return "ERR_WINDOW_INVALID", "moderation_autoban_window_seconds 必须在 60 秒到 365 天之间", false
+		}
+	}
+	for _, spec := range []struct {
+		key string
+		min int
+		max int
+	}{
+		{"moderation_api_timeout_seconds", 1, 120},
+		{"moderation_max_chars", 1024, 8 * 1024 * 1024},
+		{"moderation_chunk_chars", 1024, 256 * 1024},
+		{"moderation_max_chunks", 1, 128},
+		{"moderation_long_context_min_tokens", 0, 5_000_000},
+		{"moderation_long_context_max_chars", 0, 16 * 1024 * 1024},
+		{"moderation_long_context_max_chunks", 1, 128},
+	} {
+		if raw, ok := payload[spec.key]; ok {
+			n, err := strconv.Atoi(strings.TrimSpace(raw))
+			if err != nil || n < spec.min || n > spec.max {
+				return "ERR_INVALID_PARAMS", fmt.Sprintf("%s 必须是 %d-%d 之间的整数", spec.key, spec.min, spec.max), false
+			}
+		}
+	}
+	if raw, ok := payload["moderation_keyword_ai_max_candidates"]; ok {
+		n, err := strconv.Atoi(strings.TrimSpace(raw))
+		if err != nil || n < 1 || n > 200 {
+			return "ERR_INVALID_PARAMS", "moderation_keyword_ai_max_candidates 必须是 1-200 之间的整数", false
+		}
+	}
+	if raw, ok := payload["moderation_provider"]; ok {
+		switch normalizeModerationProviderForConfig(raw) {
+		case "cliproxy_model":
+		default:
+			return "ERR_INVALID_PARAMS", "moderation_provider 必须是 cliproxy_model", false
+		}
+	}
+	if raw, ok := payload["moderation_cliproxy_model"]; ok {
+		model := strings.TrimSpace(raw)
+		if model != "" && len([]rune(model)) > 128 {
+			return "ERR_INVALID_PARAMS", "moderation_cliproxy_model 过长", false
+		}
+	}
+	if raw, ok := payload["moderation_risk_rules"]; ok {
+		if _, err := proxy.ParseModerationRiskRules(raw); err != nil {
+			return "ERR_INVALID_PARAMS", "moderation_risk_rules JSON 或规则格式不合法: " + err.Error(), false
+		}
+	}
+
 	return "", "", true
+}
+
+func normalizeModerationProviderForConfig(raw string) string {
+	v := strings.ToLower(strings.TrimSpace(raw))
+	v = strings.ReplaceAll(v, "-", "_")
+	switch v {
+	case "", "cliproxy_model", "cliproxy", "cpa_model", "model", "llm", "cpa":
+		return "cliproxy_model"
+	default:
+		return v
+	}
 }
 
 func isBoolSysConfigValue(v string) bool {
@@ -246,25 +340,12 @@ func BatchUpdateSysConfigs(c *fiber.Ctx) error {
 			})
 		}
 	}
-	// fix MAJOR R23-M8（codex 审查）：moderation_openai_endpoint 落库前必须 SSRF 校验，
-	// 否则 admin 可写 file:// / 内网 IP / 云元数据，让 moderation HTTP 客户端
-	// 发出请求时把 moderation_openai_key 当 Bearer 泄露。
-	if rawEp, ok := payload["moderation_openai_endpoint"]; ok && rawEp != "" {
-		if err := proxy.ValidateChannelURL(rawEp); err != nil {
-			return c.Status(400).JSON(fiber.Map{
-				"success":      false,
-				"message":      fmt.Sprintf("moderation_openai_endpoint 不合法: %v", err),
-				"message_code": "ERR_MODERATION_ENDPOINT_UNSAFE",
-			})
-		}
-	}
-
 	failedKeys := []string{}
 	skippedMasked := []string{}
 	updated := 0
 	err := database.DB.Transaction(func(tx *gorm.DB) error {
 		for k, v := range payload {
-			if v == "" && !allowEmpty {
+			if v == "" && !allowEmpty && !isClearableEmptyConfigKey(k) {
 				continue // 默认：空值视为未修改
 			}
 			// fix Major（codex 第五轮）：前端从 masked GET 拿到 "ab********cdef" 类掩码值后，
@@ -310,6 +391,9 @@ func BatchUpdateSysConfigs(c *fiber.Ctx) error {
 	// 和清空 moderation policy / 内容缓存，否则要重启进程才生效。
 	if _, ok := payload["moderation_keywords"]; ok {
 		proxy.InvalidateKeywordFilterCache()
+	}
+	if _, ok := payload["moderation_risk_rules"]; ok {
+		proxy.InvalidateRiskRuleCache()
 	}
 	// 任何 moderation_* 配置变更（key/secret/threshold/endpoint/keywords/...）都让
 	// 内容缓存失效（HMAC policy_version 已含部分字段，但 secret / max_chars 等需要主动清）

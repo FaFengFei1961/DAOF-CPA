@@ -296,6 +296,52 @@ func TestMoreChannelModelMega(t *testing.T) {
 	sendRequest(app, "DELETE", "/api/admin/channel_models/999", nil, "")
 }
 
+func TestGetPublicPricingScansCacheWrite1hAndIgnoresZeroPrices(t *testing.T) {
+	app := initializeMegaTestDB()
+	database.DB.Create(&database.Channel{ID: 1, Name: "pricing", Key: "x", Type: "anthropic"})
+	database.DB.Create(&database.ChannelModel{
+		ChannelID: 1,
+		ModelID:   "claude-opus-4-7",
+		Status:    1,
+	})
+	database.DB.Create(&database.ChannelModel{
+		ChannelID:              1,
+		ModelID:                "claude-opus-4-7",
+		InputPrice:             5,
+		OutputPrice:            25,
+		CachedInputPrice:       0.5,
+		CacheWriteInputPrice:   6.25,
+		CacheWrite1hInputPrice: 10,
+		Status:                 1,
+	})
+
+	resp := sendRequest(app, "GET", "/api/public/pricing", nil, "")
+	if resp.StatusCode != 200 {
+		t.Fatalf("expected 200, got %d", resp.StatusCode)
+	}
+
+	var payload struct {
+		Success bool `json:"success"`
+		Data    []struct {
+			ModelID              string  `json:"model_id"`
+			MinInputPrice        float64 `json:"min_input_price"`
+			MinCachePrice        float64 `json:"min_cache_price"`
+			MinCacheWritePrice   float64 `json:"min_cache_write_price"`
+			MinCacheWrite1hPrice float64 `json:"min_cache_write_1h_price"`
+		} `json:"data"`
+	}
+	if err := json.NewDecoder(resp.Body).Decode(&payload); err != nil {
+		t.Fatalf("decode pricing response: %v", err)
+	}
+	if !payload.Success || len(payload.Data) != 1 {
+		t.Fatalf("unexpected pricing payload: %#v", payload)
+	}
+	row := payload.Data[0]
+	if row.MinInputPrice != 5 || row.MinCachePrice != 0.5 || row.MinCacheWritePrice != 6.25 || row.MinCacheWrite1hPrice != 10 {
+		t.Fatalf("unexpected pricing row: %#v", row)
+	}
+}
+
 // ----------------------
 // Stats / Others
 // ----------------------

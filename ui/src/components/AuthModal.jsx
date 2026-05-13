@@ -4,6 +4,18 @@ import { X, Phone, UserRound, ArrowRight } from 'lucide-react';
 import toast from 'react-hot-toast';
 import { useModalA11y } from '../hooks/useModalA11y';
 
+const validateProfileName = (name) => /^[a-zA-Z0-9_\u4e00-\u9fa5]{2,20}$/.test(String(name || '').trim());
+
+const sanitizeProfileName = (name) => {
+  const cleaned = String(name || '')
+    .trim()
+    .replace(/[^a-zA-Z0-9_\u4e00-\u9fa5]+/g, '_')
+    .replace(/^_+|_+$/g, '')
+    .slice(0, 20);
+  if (cleaned.length >= 2) return cleaned;
+  return `user_${Math.random().toString(36).slice(2, 8)}`.slice(0, 20);
+};
+
 const AuthModal = ({ isOpen, onClose, onLoginSuccess, initialStep = 'github', tmpToken = '', initialLoading = false, defaultName = '' }) => {
   const { t } = useTranslation();
   const [step, setStep] = useState('github'); // 'github' / 'bind' / 'profile'
@@ -35,11 +47,14 @@ const AuthModal = ({ isOpen, onClose, onLoginSuccess, initialStep = 'github', tm
     if (isOpen) {
       setStep(initialStep);
       setLoading(initialLoading);
-      if (initialStep === 'profile') setProfileName(defaultName);
+      if (initialStep === 'profile') {
+        const suggestedName = sanitizeProfileName(defaultName);
+        setProfileName(suggestedName);
+        setProfileError(validateProfileName(suggestedName) ? '' : t('AUTH.PROFILE_NAME_ERROR'));
+      }
     }
-  }, [isOpen, initialStep, initialLoading, defaultName]);
+  }, [isOpen, initialStep, initialLoading, defaultName, t]);
 
-  const validateProfileName = (name) => /^[a-zA-Z0-9_\u4e00-\u9fa5]{2,20}$/.test(name);
   const handleProfileChange = (e) => {
     const val = e.target.value;
     setProfileName(val);
@@ -179,13 +194,18 @@ const AuthModal = ({ isOpen, onClose, onLoginSuccess, initialStep = 'github', tm
 
   const handleCreateProfile = async (e) => {
     e.preventDefault();
-    if (!validateProfileName(profileName)) return;
+    const nextProfileName = profileName.trim();
+    if (!validateProfileName(nextProfileName)) {
+      setProfileError(t('AUTH.PROFILE_NAME_ERROR'));
+      return;
+    }
+    setProfileName(nextProfileName);
     setLoading(true);
     try {
       const res = await fetch('/api/auth/complete-profile', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ tmp_token: tmpToken, username: profileName })
+        body: JSON.stringify({ tmp_token: tmpToken, username: nextProfileName })
       });
       const data = await res.json();
       if (data.success) {

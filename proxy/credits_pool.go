@@ -83,20 +83,6 @@ type CreditEntry struct {
 	Healthy     bool           `json:"healthy"`
 }
 
-// ModelSummary 是按模型聚合后的公开数据，给普通用户看。
-//
-// 严格控制对外字段——只暴露用户真正关心的"模型是否能用 + 剩余多少"，
-// 隐藏一切基础设施细节（凭证总数、健康节点数、最低单点剩余、Providers 组合等），
-// 攻击者无法借此推断号池规模 / 采购策略 / 单点压力分布。
-//
-// admin 监控面板走 GetAdminCreditsPool / SnapshotAdmin（基于 CreditEntry 全量数据），
-// 不复用 ModelSummary，所以这里精简不影响 admin 视图。
-type ModelSummary struct {
-	ModelName       string  `json:"model_name"`
-	AvgRemainingPct float64 `json:"avg_remaining_pct"`
-	Online          bool    `json:"online"` // 至少一个节点健康即 true
-}
-
 // ─── 全局缓存 + 运行状态 ──────────────────────────────────────────────────
 
 var (
@@ -1088,11 +1074,16 @@ func refreshOneAuthCredits(ctx context.Context, af authFileLite) *CreditEntry {
 // 在这里加白名单。
 var providersWithoutNumericWindows = map[string]bool{}
 
-// computeHealthy: 凭证有效（status active）+ 至少一个窗口剩余 > 5%。
-// fix Codex-M3：空窗口不再无条件 healthy=true——上游协议变化导致零解析时
-// 应判 unhealthy，触发 LastError 让 admin 看见，而不是被默默过滤掉。
+// computeHealthy: 额度查询成功 + 至少一个窗口剩余 > 5%。
+// CPA auth-file 的运行态 status 可能滞后（例如列表仍是 error，但 quota API
+// 已经成功返回了窗口数据），因此这里以本次额度查询结果为准；disabled 仍然是硬
+// 不健康。空窗口不再无条件 healthy=true——上游协议变化导致零解析时，应判
+// unhealthy，让 admin 能看到异常而不是被默默过滤掉。
 func computeHealthy(e *CreditEntry) bool {
-	if !strings.EqualFold(e.Status, "active") && e.Status != "" {
+	if strings.EqualFold(e.Status, "disabled") {
+		return false
+	}
+	if e.LastError != "" {
 		return false
 	}
 	if len(e.Windows) == 0 {
@@ -1190,36 +1181,34 @@ func fetchClaudeQuota(ctx context.Context, af authFileLite, entry *CreditEntry) 
 		if !ok {
 			continue
 		}
-		w := CreditWindow{ID: def.ID, Label: def.Label}
-		w.UsedPercent = parseUsedPercent(raw["utilization"])
-		w.RemainingPercent = clampPct(100 - w.UsedPercent)
-		if v, ok := raw["resets_at"].(string); ok {
-			if t, err := time.Parse(time.RFC3339, v); err == nil {
-				w.ResetsAt = t
-			}
-		}
-		entry.Windows = append(entry.Windows, w)
+		entry.Windows = append(entry.Windows, claudeBuildWindow(def, raw))
 	}
 	entry.Models = []string{"claude-opus-4-5", "claude-sonnet-4-5", "claude-haiku-4-5"}
 	return nil
 }
 
-// parseUsedPercent: utilization 字段可能是 0-1（OAuth 形式）或 0-100（百分比形式）。
-// 用范围启发式：> 1.0 视作直接百分比，[0, 1] 视作 0-1 范围乘 100。
-// 边界 1.0 视作直接百分比（更安全：上游极少返回 1.0% 的细粒度小数）。
+func claudeBuildWindow(def claudeWindowDef, raw map[string]any) CreditWindow {
+	w := CreditWindow{ID: def.ID, Label: def.Label}
+	// Anthropic OAuth usage 的 utilization 表示已用百分比。管理页展示的是剩余，
+	// 因此这里保留 used/remaining 两个字段，前端统一展示 remaining_percent。
+	w.UsedPercent = parseUsedPercent(raw["utilization"])
+	w.RemainingPercent = clampPct(100 - w.UsedPercent)
+	if v, ok := raw["resets_at"].(string); ok {
+		if t, err := time.Parse(time.RFC3339, v); err == nil {
+			w.ResetsAt = t
+		}
+	}
+	return w
+}
+
 // parseUsedPercent 兼容两种 utilization 表示：
-//   - 0~1 比例（如 Claude OAuth `utilization: 0.83` 表示 83%）
-//   - 0~100 百分数（如 Codex `used_percent: 83` 表示 83%）
+//   - 0~100 百分数（Anthropic OAuth 实测返回 `2.0` 表示已用 2%）
+//   - 0~1 比例（防御兼容：`0.83` 表示已用 83%）
 //
-// fix Codex-M4：旧逻辑 `if f >= 1.0` 会把 utilization=1.0（即 100%）当成 1% 显示。
-// 修正为 `f <= 1.0 → 乘 100`，即：
+// 规则：
 //   - f ∈ [0, 1]   → 比例形态：1.0 = 100%（满）
 //   - f ∈ (1, 100] → 百分数形态：50 = 50%
 //   - f > 100      → 超限百分数（少见，clampPct 会兜底）
-//
-// 1.0 究竟是"已用 1%"还是"已用 100%"——Anthropic OAuth 的契约确认是后者，
-// 所以这个边界归到比例侧；即便后续遇到罕见的"used 1%（不是比例）"误判，
-// 显示成"100% 已用"也比反过来"满额却显示 1%"安全得多。
 func parseUsedPercent(v any) float64 {
 	f, ok := v.(float64)
 	if !ok {
@@ -1836,93 +1825,6 @@ func SnapshotAdmin() (entries []*CreditEntry, lastFull time.Time) {
 		out = append(out, &ec)
 	}
 	return out, creditsLastFull
-}
-
-// SnapshotByModel 返回按模型聚合的公开数据，给普通用户看，不含 auth_index / providers 列表
-func SnapshotByModel() (summaries []ModelSummary, lastFull time.Time) {
-	// fix Go-H3：先快速复制 cache 引用 + 释放读锁，再做聚合（聚合本身只读不需锁）。
-	// 否则在 100+ 凭证场景下两层嵌套循环持读锁数十毫秒，期间任何 retry 协程
-	// 完成想拿写锁都会被卡住，影响刷新吞吐。
-	creditsMu.RLock()
-	snapshot := make([]*CreditEntry, 0, len(creditsCache))
-	for _, e := range creditsCache {
-		snapshot = append(snapshot, e)
-	}
-	lastFull = creditsLastFull
-	creditsMu.RUnlock()
-
-	type agg struct {
-		entries []*CreditEntry
-	}
-	byModel := map[string]*agg{}
-
-	for _, e := range snapshot {
-		for _, model := range e.Models {
-			a, ok := byModel[model]
-			if !ok {
-				a = &agg{}
-				byModel[model] = a
-			}
-			a.entries = append(a.entries, e)
-		}
-	}
-
-	out := make([]ModelSummary, 0, len(byModel))
-	for model, a := range byModel {
-		s := ModelSummary{ModelName: model}
-		var sumRem float64
-		var cntRem int
-		for _, e := range a.entries {
-			if !e.Healthy {
-				continue
-			}
-			s.Online = true
-			// 选"代表性窗口"作为该凭证的剩余度量——优先选 5h 窗口（用户最关心当下能否使用），
-			// 其次回退到第一个有窗口（按 fetcher 排序，本身已 5h 优先）。
-			// 旧实现用 min(所有窗口) 会被 7 天累积窗口拉低，与用户当下体感不符。
-			rep := pickRepresentativeWindow(e.Windows)
-			if rep < 0 {
-				continue
-			}
-			sumRem += rep
-			cntRem++
-		}
-		if cntRem > 0 {
-			s.AvgRemainingPct = sumRem / float64(cntRem)
-		}
-		out = append(out, s)
-	}
-	// fix Codex-MAJOR：必须 return 锁内已捕获的 lastFull 局部变量，
-	// 不能再读全局 creditsLastFull —— 否则与 refreshAllCreditsSafe 并发写有 data race。
-	return out, lastFull
-}
-
-// pickRepresentativeWindow 从一个 entry 的窗口列表里挑一个"代表性"剩余比例：
-//   - 优先 ID 含 "five-hour" 的窗口（5 小时，最贴近当下使用）
-//   - 否则取第一个窗口（fetchers 已按重要度排序）
-//   - 完全没窗口返回 -1
-func pickRepresentativeWindow(windows []CreditWindow) float64 {
-	if len(windows) == 0 {
-		return -1
-	}
-	for _, w := range windows {
-		if strings.Contains(w.ID, "five-hour") {
-			return w.RemainingPercent
-		}
-	}
-	return windows[0].RemainingPercent
-}
-
-// IsStale 给 controller 用：当前缓存是否已过期。
-// stale 阈值 = 2 倍刷新间隔（首次未完成时不视为 stale）
-func IsStale() bool {
-	creditsMu.RLock()
-	last := creditsLastFull
-	creditsMu.RUnlock()
-	if last.IsZero() {
-		return false
-	}
-	return time.Since(last) > 2*getRefreshIntervalDuration()
 }
 
 // ─── 杂项工具 ────────────────────────────────────────────────────────────

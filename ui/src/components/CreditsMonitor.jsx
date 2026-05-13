@@ -158,14 +158,6 @@ const EntryCard = React.memo(function EntryCard({ entry }) {
       ) : null}
     </div>
   );
-}, (prev, next) => {
-  // 仅当 entry 内容实际变化时才重渲染
-  const a = prev.entry, b = next.entry;
-  return a.auth_id === b.auth_id
-    && a.last_refresh === b.last_refresh
-    && a.healthy === b.healthy
-    && a.last_error === b.last_error
-    && a.retry_count === b.retry_count;
 });
 
 // ─── Provider 分区 ─────────────────────────────────────────────────────

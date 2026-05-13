@@ -46,7 +46,7 @@ export const CurrencyProvider = ({ children }) => {
     };
 
     const formatCurrency = (usdAmount, maxDecimals = 3) => {
-        if (typeof usdAmount !== 'number') return usdAmount;
+        if (typeof usdAmount !== 'number' || !Number.isFinite(usdAmount)) return usdAmount;
         
         if (displayCurrency === 'CNY') {
             const cnyAmount = usdAmount * exchangeRate;
@@ -55,8 +55,17 @@ export const CurrencyProvider = ({ children }) => {
         return `$${Number(usdAmount.toFixed(maxDecimals))}`;
     };
 
+    const formatCurrencyFixed = (usdAmount, decimals = 3) => {
+        if (typeof usdAmount !== 'number' || !Number.isFinite(usdAmount)) return usdAmount;
+
+        if (displayCurrency === 'CNY') {
+            return `￥${(usdAmount * exchangeRate).toFixed(decimals)}`;
+        }
+        return `$${usdAmount.toFixed(decimals)}`;
+    };
+
     return (
-        <CurrencyContext.Provider value={{ exchangeRate, displayCurrency, toggleCurrency, formatCurrency, loading }}>
+        <CurrencyContext.Provider value={{ exchangeRate, displayCurrency, toggleCurrency, formatCurrency, formatCurrencyFixed, loading }}>
             {children}
         </CurrencyContext.Provider>
     );

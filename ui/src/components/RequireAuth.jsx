@@ -3,13 +3,12 @@ import { useTranslation } from 'react-i18next';
 import { Lock, ArrowRight } from 'lucide-react';
 
 /**
- * 鉴权"软"守卫：
+ * 鉴权守卫：
  *  - 已登录：直接渲染 children
- *  - 未登录：在 children 上方放一条 banner 提示"登录后查看完整数据"，
- *           children 自身保持渲染（顶部标题、骨架/空表格），用户能看到原貌。
+ *  - 未登录：只渲染登录提示，不挂载受保护页面
  *
- * 注意：children 内部需要自己感知 isAuthenticated 来决定是否调用 fetch /
- * 显示空态，避免未登录时弹"鉴权失败"toast。本组件只负责视觉提示，不阻断渲染。
+ * 之前的软守卫会把账单、充值、工单等页面继续挂载，导致未登录访问时仍然发起
+ * 受保护 API 请求并刷出 401 噪音。项目未上线，直接收紧为硬阻断。
  */
 const RequireAuth = ({ isAuthenticated, onSignIn, children }) => {
   const { t } = useTranslation();
@@ -35,9 +34,6 @@ const RequireAuth = ({ isAuthenticated, onSignIn, children }) => {
           {t('AUTH_GATE.SIGN_IN', '登录')}
           <ArrowRight size={14} />
         </button>
-      </div>
-      <div inert="" className="opacity-70 pointer-events-none select-none">
-        {children}
       </div>
     </div>
   );

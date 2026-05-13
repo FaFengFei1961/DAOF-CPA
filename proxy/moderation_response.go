@@ -3,15 +3,16 @@
 // 审核命中后向客户端返回**协议感知**的拒绝响应。
 //
 // 设计动机（codex 第二十三轮反馈）：
-//   - **绝不**透传 OpenAI Moderation 的 category / score 给客户端 ——
+//   - **绝不**透传智能审核的 category / score 给客户端 ——
 //     防"反向工程"：测试者把 score 当 fitness function 微调 prompt 反复试，最后绕过审核
 //   - 不同协议的 SDK 对错误结构 schema 严格解析，结构错了客户端会 throw "malformed response"
 //     而非展示给用户友好的拒绝消息（最坏情况：客户端 retry → 把上游配额打爆）
 //
 // 三协议错误信封（参考各家官方 SDK 实测）：
-//   OpenAI:    {error: {message, type, code}}                       (compatible with chat/responses SDK)
-//   Anthropic: {type:"error", error:{type:"permission_error", ...}} (Claude SDK 严格按 type 分发)
-//   Gemini:    {error:{code, message, status:"PERMISSION_DENIED"}}  (Google API 标准 status enum)
+//
+//	OpenAI:    {error: {message, type, code}}                       (compatible with chat/responses SDK)
+//	Anthropic: {type:"error", error:{type:"permission_error", ...}} (Claude SDK 严格按 type 分发)
+//	Gemini:    {error:{code, message, status:"PERMISSION_DENIED"}}  (Google API 标准 status enum)
 //
 // 故意不做：
 //   - 流式（SSE）拒绝：moderation 是请求**前**置审核，还没建立 SSE 连接，
@@ -24,7 +25,7 @@ import (
 
 	"github.com/gofiber/fiber/v2"
 
-	sdktranslator "github.com/router-for-me/CLIProxyAPI/v6/sdk/translator"
+	sdktranslator "github.com/router-for-me/CLIProxyAPI/v7/sdk/translator"
 )
 
 // ModerationRejectReason 拒绝原因 code（不暴露 OpenAI 内部 category）。
@@ -33,9 +34,11 @@ type ModerationRejectReason string
 const (
 	// ModerationReasonKeyword 命中本地关键字快扫
 	ModerationReasonKeyword ModerationRejectReason = "keyword_match"
-	// ModerationReasonPolicy 命中 OpenAI Moderation 智能审核
+	// ModerationReasonRiskRule 命中组合/正则风险规则
+	ModerationReasonRiskRule ModerationRejectReason = "risk_rule_match"
+	// ModerationReasonPolicy 命中智能审核
 	ModerationReasonPolicy ModerationRejectReason = "policy_violation"
-	// ModerationReasonUnavailable Moderation API 不可达且 fail-mode=closed
+	// ModerationReasonUnavailable 智能审核服务不可达且 fail-mode=closed
 	ModerationReasonUnavailable ModerationRejectReason = "moderation_unavailable"
 	// ModerationReasonOversize prompt 超过 max_chars
 	ModerationReasonOversize ModerationRejectReason = "input_too_long"
@@ -46,11 +49,12 @@ const (
 // rejectBySourceFormat 按客户端协议返回审核拒绝响应。
 //
 // 参数：
-//   c          - fiber 请求上下文
-//   srcFormat  - 客户端请求格式（OpenAI / Claude / Gemini）
-//   reason     - 拒绝原因（log/审计用，不直接展示给客户端文案，但 SDK 可读）
-//   message    - 给用户看的本地化文案（zh 或 en，已由调用方根据 Accept-Language 选好）
-//   httpStatus - HTTP 状态码（403=违规拒绝；503=审核服务不可用）
+//
+//	c          - fiber 请求上下文
+//	srcFormat  - 客户端请求格式（OpenAI / Claude / Gemini）
+//	reason     - 拒绝原因（log/审计用，不直接展示给客户端文案，但 SDK 可读）
+//	message    - 给用户看的本地化文案（zh 或 en，已由调用方根据 Accept-Language 选好）
+//	httpStatus - HTTP 状态码（403=违规拒绝；503=审核服务不可用）
 //
 // 注意：不在响应里透传 category / score 数组（防反向工程）。
 func rejectBySourceFormat(
@@ -94,8 +98,9 @@ func rejectBySourceFormat(
 // anthropicErrorType 把 ModerationRejectReason 映射到 Anthropic 错误 type 枚举。
 //
 // Anthropic SDK 解析的合法 type 集合：
-//   invalid_request_error / authentication_error / permission_error / not_found_error /
-//   rate_limit_error / api_error / overloaded_error
+//
+//	invalid_request_error / authentication_error / permission_error / not_found_error /
+//	rate_limit_error / api_error / overloaded_error
 //
 // 审核拒绝最贴近 permission_error；不可用映射到 overloaded_error 让客户端走 backoff retry。
 func anthropicErrorType(reason ModerationRejectReason, httpStatus int) string {

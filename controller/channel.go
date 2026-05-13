@@ -98,6 +98,14 @@ func CreateChannel(c *fiber.Ctx) error {
 			"message":      "Channel Type, Name and Key are required",
 		})
 	}
+	body.Type = proxy.NormalizeChannelType(body.Type)
+	if !proxy.IsAllowedChannelType(body.Type) {
+		return c.Status(400).JSON(fiber.Map{
+			"success":      false,
+			"message_code": "ERR_CHANNEL_TYPE_INVALID",
+			"message":      "Channel Type is not supported",
+		})
+	}
 
 	// fix Major SSRF：BaseURL/ProxyURL 必须 http(s) 且非云元数据/链路本地段
 	if err := proxy.ValidateChannelURL(body.BaseURL); err != nil {
@@ -165,7 +173,15 @@ func UpdateChannel(c *fiber.Ctx) error {
 
 	// 应用更新字段
 	if body.Type != "" {
-		ch.Type = body.Type
+		nextType := proxy.NormalizeChannelType(body.Type)
+		if !proxy.IsAllowedChannelType(nextType) {
+			return c.Status(400).JSON(fiber.Map{
+				"success":      false,
+				"message_code": "ERR_CHANNEL_TYPE_INVALID",
+				"message":      "Channel Type is not supported",
+			})
+		}
+		ch.Type = nextType
 	}
 	if body.Name != "" {
 		ch.Name = body.Name

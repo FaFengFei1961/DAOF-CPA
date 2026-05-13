@@ -4,6 +4,7 @@
 package controller
 
 import (
+	"encoding/json"
 	"errors"
 	"fmt"
 	"log"
@@ -24,6 +25,8 @@ import (
 // NaN/Inf/超大值（1e308）落库后让订阅引擎计算 effectiveLimit/effectiveDelta 时溢出，
 // 破坏额度守恒。修复：必须 finite + (0, 100] 范围内，非法直接 400 而非静默 fallback。
 const MaxQuantityMultiplier = 100.0
+
+var errDeprecatedRequestField = errors.New("deprecated request field")
 
 // validatePlanMultipliers 校验 plan_multipliers 与 plan_ids 一一对应的合法性。
 // 缺失（len 不足）视为 1.0 默认；显式传值必须 finite + 0 < v ≤ 100。
@@ -55,18 +58,15 @@ const MaxBillingPeriodSeconds = 5 * 366 * 86400
 
 // validatePackagePayload 套餐字段边界校验。任何字段非法即拒绝写入。
 //
-// fix Minor（codex 第五轮）：原 CreatePackage 只校验 bonus<=price，未挡住
+// fix Minor（codex 第五轮）：原 CreatePackage 未挡住
 // 负数价格、零/负 billing 周期、负叠加上限等。这些值落库后会被购买路径放行，
 // 形成 "免费套餐 / 立即过期 / 无叠加上限" 的非法状态。
 //
-// fix MAJOR M22-A1 Phase 1：PriceAmount/BonusBalanceUSD 已是 int64 micro_usd，
+// fix MAJOR M22-A1 Phase 1：PriceAmount 已是 int64 micro_usd，
 // NaN/Inf 在反序列化前由前端 JSON 解析挡掉，这里只做范围校验。
 func validatePackagePayload(p *database.Package) error {
 	if p.PriceAmount < 0 {
 		return fmt.Errorf("price_amount 不能为负数")
-	}
-	if p.BonusBalanceUSD < 0 {
-		return fmt.Errorf("bonus_balance_usd 必须 ≥ 0")
 	}
 	if p.BillingPeriodSeconds <= 0 {
 		return fmt.Errorf("billing_period_seconds 必须为正整数")
@@ -87,13 +87,61 @@ func validatePackagePayload(p *database.Package) error {
 
 // packageWithPlans 是返回给前端的扩展结构，含 plans 列表
 type packageWithPlans struct {
-	database.Package
+	packageResponse
 	Plans []packagePlanItem `json:"plans"`
 }
 
 type packagePlanItem struct {
 	database.PackagePlan
 	Plan database.QuotaPlan `json:"plan"`
+}
+
+type packageResponse struct {
+	ID                   uint      `json:"id"`
+	Name                 string    `json:"name"`
+	Description          string    `json:"description"`
+	ProductType          string    `json:"product_type"`
+	IconKey              string    `json:"icon_key"`
+	BadgeColor           string    `json:"badge_color"`
+	Gradient             string    `json:"gradient"`
+	HighlightTag         string    `json:"highlight_tag"`
+	PriceAmount          float64   `json:"price_amount"`
+	PriceCurrency        string    `json:"price_currency"`
+	BillingPeriodSeconds int       `json:"billing_period_seconds"`
+	Stackable            *bool     `json:"stackable"`
+	MaxActivePerUser     int       `json:"max_active_per_user"`
+	PurchaseWhenOwned    string    `json:"purchase_when_owned"`
+	Public               bool      `json:"public"`
+	SortOrder            int       `json:"sort_order"`
+	Enabled              *bool     `json:"enabled"`
+	ExtraConfig          string    `json:"extra_config"`
+	CreatedAt            time.Time `json:"created_at"`
+	UpdatedAt            time.Time `json:"updated_at"`
+}
+
+func packageResponseFrom(p database.Package) packageResponse {
+	return packageResponse{
+		ID:                   p.ID,
+		Name:                 p.Name,
+		Description:          p.Description,
+		ProductType:          p.ProductType,
+		IconKey:              p.IconKey,
+		BadgeColor:           p.BadgeColor,
+		Gradient:             p.Gradient,
+		HighlightTag:         p.HighlightTag,
+		PriceAmount:          database.MicroToUSD(p.PriceAmount),
+		PriceCurrency:        p.PriceCurrency,
+		BillingPeriodSeconds: p.BillingPeriodSeconds,
+		Stackable:            p.Stackable,
+		MaxActivePerUser:     p.MaxActivePerUser,
+		PurchaseWhenOwned:    p.PurchaseWhenOwned,
+		Public:               p.Public,
+		SortOrder:            p.SortOrder,
+		Enabled:              p.Enabled,
+		ExtraConfig:          p.ExtraConfig,
+		CreatedAt:            p.CreatedAt,
+		UpdatedAt:            p.UpdatedAt,
+	}
 }
 
 // loadPackageWithPlans 加载套餐 + 关联 plans。一次性 IN 查询避免 N+1。
@@ -105,7 +153,7 @@ func loadPackageWithPlans(pkgID uint) (*packageWithPlans, error) {
 	if err := database.DB.First(&pkg, pkgID).Error; err != nil {
 		return nil, fmt.Errorf("load package: %w", err)
 	}
-	out := &packageWithPlans{Package: pkg, Plans: []packagePlanItem{}}
+	out := &packageWithPlans{packageResponse: packageResponseFrom(pkg), Plans: []packagePlanItem{}}
 	var pps []database.PackagePlan
 	if err := database.DB.Where("package_id = ?", pkgID).Order("sort_order asc, id asc").Find(&pps).Error; err != nil {
 		return nil, fmt.Errorf("load package plans: %w", err)
@@ -144,7 +192,7 @@ func ListPackagesAdmin(c *fiber.Ctx) error {
 		return c.Status(500).JSON(fiber.Map{"success": false, "message_code": "ERR_DB_QUERY"})
 	}
 	type item struct {
-		database.Package
+		packageResponse
 		PlanCount       int   `json:"plan_count"`
 		ActiveSubsCount int64 `json:"active_subs_count"`
 	}
@@ -191,7 +239,11 @@ func ListPackagesAdmin(c *fiber.Ctx) error {
 
 	out := make([]item, 0, len(pkgs))
 	for _, p := range pkgs {
-		out = append(out, item{Package: p, PlanCount: int(planCountMap[p.ID]), ActiveSubsCount: subCountMap[p.ID]})
+		out = append(out, item{
+			packageResponse: packageResponseFrom(p),
+			PlanCount:       int(planCountMap[p.ID]),
+			ActiveSubsCount: subCountMap[p.ID],
+		})
 	}
 	return c.JSON(fiber.Map{"success": true, "data": out})
 }
@@ -222,30 +274,30 @@ type createPackagePayload struct {
 
 // packagePayloadJSON 是 admin 端 JSON 表示（USD float），handler 内转 micro_usd 入业务。
 //
-// fix MAJOR M22-A1 Phase 1：DB schema PriceAmount/BonusBalanceUSD 是 int64 micro_usd，
+// fix MAJOR M22-A1 Phase 1：DB schema PriceAmount 是 int64 micro_usd，
 // 但前端 admin 输入的是人友好的 USD float（如 9.9）。直接 BodyParser 进 createPackagePayload
 // 会因 float→int64 失败。这里在 API 边界做一次转换。
 type packagePayloadJSON struct {
-	Name                 string  `json:"name"`
-	Description          string  `json:"description"`
-	ProductType          string  `json:"product_type"`
-	IconKey              string  `json:"icon_key"`
-	BadgeColor           string  `json:"badge_color"`
-	Gradient             string  `json:"gradient"`
-	HighlightTag         string  `json:"highlight_tag"`
-	PriceAmount          float64 `json:"price_amount"`
-	PriceCurrency        string  `json:"price_currency"`
-	BillingPeriodSeconds int     `json:"billing_period_seconds"`
-	Stackable            *bool   `json:"stackable"`
-	MaxActivePerUser     int     `json:"max_active_per_user"`
-	PurchaseWhenOwned    string  `json:"purchase_when_owned"`
-	BonusBalanceUSD      float64 `json:"bonus_balance_usd"`
-	Public               bool    `json:"public"`
-	SortOrder            int     `json:"sort_order"`
-	Enabled              *bool   `json:"enabled"`
-	ExtraConfig          string  `json:"extra_config"`
-	PlanIDs              []uint  `json:"plan_ids"`
-	PlanMultipliers      []float64 `json:"plan_multipliers"`
+	Name                 string           `json:"name"`
+	Description          string           `json:"description"`
+	ProductType          string           `json:"product_type"`
+	IconKey              string           `json:"icon_key"`
+	BadgeColor           string           `json:"badge_color"`
+	Gradient             string           `json:"gradient"`
+	HighlightTag         string           `json:"highlight_tag"`
+	PriceAmount          float64          `json:"price_amount"`
+	PriceCurrency        string           `json:"price_currency"`
+	BillingPeriodSeconds int              `json:"billing_period_seconds"`
+	Stackable            *bool            `json:"stackable"`
+	MaxActivePerUser     int              `json:"max_active_per_user"`
+	PurchaseWhenOwned    string           `json:"purchase_when_owned"`
+	Public               bool             `json:"public"`
+	SortOrder            int              `json:"sort_order"`
+	Enabled              *bool            `json:"enabled"`
+	ExtraConfig          string           `json:"extra_config"`
+	PlanIDs              []uint           `json:"plan_ids"`
+	PlanMultipliers      []float64        `json:"plan_multipliers"`
+	DeprecatedBonus      *json.RawMessage `json:"bonus_balance_usd"`
 }
 
 // parsePackagePayload 解析 admin POST/PUT 套餐 body，把 USD float 转 micro_usd。
@@ -257,19 +309,15 @@ func parsePackagePayload(c *fiber.Ctx) (createPackagePayload, error) {
 	if err := c.BodyParser(&raw); err != nil {
 		return createPackagePayload{}, err
 	}
+	if raw.DeprecatedBonus != nil {
+		return createPackagePayload{}, fmt.Errorf("%w: bonus_balance_usd", errDeprecatedRequestField)
+	}
 	if err := validateAdminQuotaInput(raw.PriceAmount); err != nil {
 		return createPackagePayload{}, fmt.Errorf("price_amount: %w", err)
-	}
-	if err := validateAdminQuotaInput(raw.BonusBalanceUSD); err != nil {
-		return createPackagePayload{}, fmt.Errorf("bonus_balance_usd: %w", err)
 	}
 	priceMicro, ok := database.USDToMicro(raw.PriceAmount)
 	if !ok {
 		return createPackagePayload{}, fmt.Errorf("price_amount overflow")
-	}
-	bonusMicro, ok := database.USDToMicro(raw.BonusBalanceUSD)
-	if !ok {
-		return createPackagePayload{}, fmt.Errorf("bonus_balance_usd overflow")
 	}
 	out := createPackagePayload{
 		Package: database.Package{
@@ -286,7 +334,6 @@ func parsePackagePayload(c *fiber.Ctx) (createPackagePayload, error) {
 			Stackable:            raw.Stackable,
 			MaxActivePerUser:     raw.MaxActivePerUser,
 			PurchaseWhenOwned:    raw.PurchaseWhenOwned,
-			BonusBalanceUSD:      bonusMicro,
 			Public:               raw.Public,
 			SortOrder:            raw.SortOrder,
 			Enabled:              raw.Enabled,
@@ -302,6 +349,13 @@ func parsePackagePayload(c *fiber.Ctx) (createPackagePayload, error) {
 func CreatePackage(c *fiber.Ctx) error {
 	payload, perr := parsePackagePayload(c)
 	if perr != nil {
+		if errors.Is(perr, errDeprecatedRequestField) {
+			return c.Status(400).JSON(fiber.Map{
+				"success":      false,
+				"message":      perr.Error(),
+				"message_code": "ERR_DEPRECATED_FIELD",
+			})
+		}
 		return c.Status(400).JSON(fiber.Map{"success": false, "message_code": "ERR_PARSE_PAYLOAD"})
 	}
 	if payload.Name == "" {
@@ -313,13 +367,6 @@ func CreatePackage(c *fiber.Ctx) error {
 	// fix MAJOR M5（codex 第二十轮）：plan_multipliers 必须 finite + 上限校验，非法 400
 	if err := validatePlanMultipliers(payload.PlanIDs, payload.PlanMultipliers); err != nil {
 		return c.Status(400).JSON(fiber.Map{"success": false, "message": err.Error(), "message_code": "ERR_INVALID_MULTIPLIER"})
-	}
-	if payload.BonusBalanceUSD > payload.PriceAmount {
-		return c.Status(400).JSON(fiber.Map{
-			"success":      false,
-			"message":      "bonus_balance_usd 不能超过 price_amount（避免负价套餐刷余额）",
-			"message_code": "ERR_NEGATIVE_NET_PRICE",
-		})
 	}
 	if payload.ExtraConfig == "" {
 		payload.ExtraConfig = "{}"
@@ -373,13 +420,14 @@ func UpdatePackage(c *fiber.Ctx) error {
 	}
 	payload, perr := parsePackagePayload(c)
 	if perr != nil {
+		if errors.Is(perr, errDeprecatedRequestField) {
+			return c.Status(400).JSON(fiber.Map{
+				"success":      false,
+				"message":      perr.Error(),
+				"message_code": "ERR_DEPRECATED_FIELD",
+			})
+		}
 		return c.Status(400).JSON(fiber.Map{"success": false, "message_code": "ERR_PARSE_PAYLOAD"})
-	}
-	// fix Minor（codex 第四轮）：UpdatePackage 缺 CreatePackage 的 bonus<=price invariant，
-	// 否则可写入 bonus>price 的非法套餐配置（购买路径会被深层防御 500 阻断，但用户体验差）
-	if payload.BonusBalanceUSD > payload.PriceAmount {
-		return c.Status(400).JSON(fiber.Map{"success": false, "message_code": "ERR_PACKAGE_INVALID_BONUS",
-			"message": "bonus_balance_usd 不能大于 price_amount"})
 	}
 	// fix Minor（codex 第五轮）：UpdatePackage 同样校验 price/period/active 上限的边界
 	if err := validatePackagePayload(&payload.Package); err != nil {
@@ -403,7 +451,6 @@ func UpdatePackage(c *fiber.Ctx) error {
 			"billing_period_seconds": payload.BillingPeriodSeconds,
 			"max_active_per_user":    payload.MaxActivePerUser,
 			"purchase_when_owned":    payload.PurchaseWhenOwned,
-			"bonus_balance_usd":      payload.BonusBalanceUSD,
 			"public":                 payload.Public, "sort_order": payload.SortOrder,
 			"extra_config": payload.ExtraConfig,
 		}
@@ -513,7 +560,7 @@ func DeletePackage(c *fiber.Ctx) error {
 // fix MAJOR R23+2-B5（codex 全方面审查）：所有 DB 查询失败统一 fail-closed 返回 500。
 func ListPublicPackages(c *fiber.Ctx) error {
 	type pubItem struct {
-		database.Package
+		packageResponse
 		Plans []packagePlanItem `json:"plans"`
 	}
 
@@ -571,7 +618,7 @@ func ListPublicPackages(c *fiber.Ctx) error {
 				items = append(items, packagePlanItem{PackagePlan: pp, Plan: plan})
 			}
 		}
-		out = append(out, pubItem{Package: p, Plans: items})
+		out = append(out, pubItem{packageResponse: packageResponseFrom(p), Plans: items})
 	}
 	return c.JSON(fiber.Map{"success": true, "data": out})
 }

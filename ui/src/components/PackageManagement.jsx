@@ -13,7 +13,7 @@ const CSV_COLUMNS = [
   'id', 'name', 'description', 'highlight_tag',
   'price_amount', 'price_currency', 'billing_period_seconds',
   'stackable', 'max_active_per_user', 'purchase_when_owned',
-  'bonus_balance_usd', 'public', 'sort_order', 'enabled',
+  'public', 'sort_order', 'enabled',
   'plan_ids', 'plan_multipliers', 'extra_config',
 ];
 
@@ -32,7 +32,6 @@ const parseRow = (r) => ({
   stackable: r.stackable === '1' || r.stackable === 'true' || r.stackable === '是',
   max_active_per_user: parseInt(r.max_active_per_user) || 0,
   purchase_when_owned: r.purchase_when_owned || 'ask',
-  bonus_balance_usd: parseFloat(r.bonus_balance_usd) || 0,
   public: r.public === '1' || r.public === 'true' || r.public === '是',
   sort_order: parseInt(r.sort_order) || 0,
   enabled: r.enabled === '1' || r.enabled === 'true' || r.enabled === '是',
@@ -50,7 +49,6 @@ const EMPTY_PKG = {
   stackable: true,
   max_active_per_user: 5,
   purchase_when_owned: 'ask',
-  bonus_balance_usd: 0,
   public: false,
   sort_order: 0,
   enabled: true,
@@ -203,7 +201,6 @@ const PackageManagement = () => {
         stackable: p.stackable ? '1' : '0',
         max_active_per_user: p.max_active_per_user || 0,
         purchase_when_owned: p.purchase_when_owned || 'ask',
-        bonus_balance_usd: p.bonus_balance_usd || 0,
         public: p.public ? '1' : '0',
         sort_order: p.sort_order || 0,
         enabled: p.enabled ? '1' : '0',
@@ -435,10 +432,6 @@ const PackageManagement = () => {
                       className={inputCls}
                       selectClass={inputCls}
                     />
-                  </Field>
-                  <Field label="赠送 USD 余额" hint="购买时净增到 user.quota">
-                    <input type="number" step="0.01" min="0" className={inputCls} value={editing.bonus_balance_usd}
-                      onChange={e => updateField('bonus_balance_usd', parseFloat(e.target.value) || 0)} />
                   </Field>
                 </div>
               </Section>

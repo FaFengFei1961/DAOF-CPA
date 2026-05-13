@@ -57,44 +57,40 @@ func TestBilling_PurchaseSubWritesEntry(t *testing.T) {
 	}
 }
 
-// TestBilling_PurchaseWithBonusWritesTwoEntries 含 bonus 套餐购买 → 2 行账单（purchase + bonus_credit）
-func TestBilling_PurchaseWithBonusWritesTwoEntries(t *testing.T) {
+// TestBilling_PurchaseQuantityWritesEntryPerSubscription 叠加购买每份写一行 purchase 账单，不写奖励入账。
+func TestBilling_PurchaseQuantityWritesEntryPerSubscription(t *testing.T) {
 	setupSubTestDB(t)
 
 	user := seedTestUser(t, 100)
 	pkg := seedPackage(t, func(p *database.Package) {
 		p.PriceAmount = 10 * database.MicroPerUSD
-		p.BonusBalanceUSD = 3 * database.MicroPerUSD
 	})
 	app := newTestApp(user)
 
 	code, _ := doJSON(t, app, "POST", "/purchase",
-		map[string]any{"package_id": pkg.ID, "quantity": 1})
+		map[string]any{"package_id": pkg.ID, "quantity": 2})
 	if code != 200 {
 		t.Fatalf("purchase: %d", code)
 	}
 
 	rows := listAllBilling(t, user.ID)
 	if len(rows) != 2 {
-		t.Fatalf("expected 2 entries (purchase + bonus_credit), got %d", len(rows))
+		t.Fatalf("expected 2 purchase entries, got %d", len(rows))
 	}
-	var hasPurchase, hasBonus bool
 	for _, r := range rows {
-		switch r.EntryType {
-		case database.BillingTypePurchaseSub:
-			hasPurchase = true
-			if r.AmountUSD != -10*database.MicroPerUSD {
-				t.Errorf("purchase amount = %d, want -10*MicroPerUSD", r.AmountUSD)
-			}
-		case database.BillingTypeBonusCredit:
-			hasBonus = true
-			if r.AmountUSD != 3*database.MicroPerUSD {
-				t.Errorf("bonus amount = %d, want 3*MicroPerUSD", r.AmountUSD)
-			}
+		if r.EntryType != database.BillingTypePurchaseSub {
+			t.Errorf("entry type = %s, want purchase_sub", r.EntryType)
+		}
+		if r.AmountUSD != -10*database.MicroPerUSD {
+			t.Errorf("purchase amount = %d, want -10*MicroPerUSD", r.AmountUSD)
 		}
 	}
-	if !hasPurchase || !hasBonus {
-		t.Errorf("missing entry types: purchase=%v bonus=%v", hasPurchase, hasBonus)
+	var bonusCount int64
+	database.DB.Model(&database.BillingEntry{}).
+		Where("user_id = ? AND entry_type = ?", user.ID, database.BillingTypeBonusCredit).
+		Count(&bonusCount)
+	if bonusCount != 0 {
+		t.Errorf("purchase should not write bonus_credit entries, got %d", bonusCount)
 	}
 }
 

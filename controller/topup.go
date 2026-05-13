@@ -711,7 +711,7 @@ func AdminRefundTopup(c *fiber.Ctx) error {
 	// 手动退款工作流不接入网关退款 API，攻击面更小，账面保持一致。
 	//
 	// 安全保留：reclaim_quota 守卫（防用户有未退订阅时退充值导致白嫖）+
-	// bonus 套利（订阅退款路径）+ csvSanitize 等。
+	// 订阅退款上限 + csvSanitize 等。
 	//
 	// fix CRITICAL NEW-C1（codex 第十八轮）：原 reclaim_quota 守卫在事务**外**执行：
 	// 攻击窗口 — admin 调用退款 → 守卫检查"用户所有订阅都是 refunded"通过 →

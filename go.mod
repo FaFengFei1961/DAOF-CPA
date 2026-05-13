@@ -4,7 +4,7 @@ go 1.26.2
 
 require (
 	github.com/gofiber/fiber/v2 v2.52.12
-	github.com/router-for-me/CLIProxyAPI/v6 v6.9.24
+	github.com/router-for-me/CLIProxyAPI/v7 v7.0.3
 	github.com/tidwall/gjson v1.18.0
 	github.com/tidwall/sjson v1.2.5
 	github.com/valyala/fasthttp v1.70.0
@@ -38,4 +38,4 @@ require (
 	gopkg.in/yaml.v3 v3.0.1 // indirect
 )
 
-replace github.com/router-for-me/CLIProxyAPI/v6 => D:\project\CLIProxyAPI
+replace github.com/router-for-me/CLIProxyAPI/v7 => D:\project\CLIProxyAPI

@@ -40,12 +40,12 @@ func (p ModerationPolicy) NeedsKeyword() bool {
 	return p.Level == "keyword" || p.Level == "strict"
 }
 
-// NeedsModeration 是否需要 OpenAI Moderation API 智能审核。
+// NeedsModeration 是否需要智能审核服务。
 func (p ModerationPolicy) NeedsModeration() bool {
 	return p.Level == "moderation" || p.Level == "strict"
 }
 
-// FailClosed Moderation API 不可达时是否拒绝（true=拒绝 / false=放行）。
+// FailClosed 智能审核服务不可达时是否拒绝（true=拒绝 / false=放行）。
 func (p ModerationPolicy) FailClosed() bool {
 	return p.FailMode == "closed"
 }
@@ -59,7 +59,7 @@ func (p ModerationPolicy) LoadFailed() bool {
 // 策略等级排序（越大越严）：off < keyword < moderation < strict
 //
 // "moderation" vs "strict"：strict = keyword + moderation 双层，等级最高；
-// "moderation" 单跑 OpenAI Moderation 但跳过本地词库，专治智能识别但不在乎模板拦截的场景。
+// "moderation" 单跑智能审核但跳过本地词库，适合需要语义识别但不想启用模板拦截的场景。
 //
 // 注意：moderation 与 strict 严格度不能简单线性比较（一个是 API 智能，一个是双层）。
 // 这里把 strict 排在最高，是因为它包含 moderation 的全部能力 + keyword 的快路径。
@@ -191,10 +191,22 @@ func loadStrictestPolicyFromDB(modelName string) ModerationPolicy {
 	if failClosed {
 		failMode = "closed"
 	}
-	return ModerationPolicy{
+	policy := ModerationPolicy{
 		Level:    rankToLevel(maxRank),
 		FailMode: failMode,
 	}
+	return enforceOpenAIModelModerationPolicy(modelName, policy)
+}
+
+func enforceOpenAIModelModerationPolicy(modelName string, policy ModerationPolicy) ModerationPolicy {
+	if !database.IsOpenAIModelID(modelName) {
+		return policy
+	}
+	if levelRank(policy.Level) < levelRank(database.OpenAIModelModerationLevel) {
+		policy.Level = database.OpenAIModelModerationLevel
+	}
+	policy.FailMode = database.OpenAIModelModerationFailMode
+	return policy
 }
 
 // InvalidateModerationPolicyCache admin 创建/更新/删除 ChannelModel 时调。

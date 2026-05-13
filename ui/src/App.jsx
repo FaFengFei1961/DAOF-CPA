@@ -1,31 +1,42 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, lazy, Suspense } from 'react';
 import Sidebar from './components/Sidebar';
 import TopBar from './components/TopBar';
 import Dashboard from './components/Dashboard';
-import StatisticsDash from './components/StatisticsDash';
 import PricingDash from './components/PricingDash';
 import RequireAuth from './components/RequireAuth';
-import AuthModal from './components/AuthModal';
-import Settings from './components/Settings';
-import AdminSecretLogin from './components/AdminSecretLogin';
-import TokenManager from './components/TokenManager';
-import CreditsPoolCard from './components/CreditsPoolCard';
-import UpgradePage from './components/UpgradePage';
 // "我的产品"已合并进 UpgradePage（产品中心 → 我的 tab），不再单独路由
 // MySubscriptions 仍在 UpgradePage 里以 embedded 形式被渲染
-import NotificationCenter from './components/NotificationCenter';
-import Topup from './components/Topup';
-import TopupResult from './components/TopupResult';
-import Tickets from './components/Tickets';
-import BillsPage from './components/BillsPage';
 import { useTranslation } from 'react-i18next';
 import toast, { Toaster } from 'react-hot-toast';
 import { ConfirmProvider } from './context/ConfirmContext';
 import { logger } from './utils/logger';
 import { Home, KeySquare, Settings as SettingsIcon, BarChart2, CreditCard, Package, Receipt, MessageSquare, MoreHorizontal, X } from 'lucide-react';
 
+const loadStatisticsDash = () => import('./components/StatisticsDash');
+const StatisticsDash = lazy(loadStatisticsDash);
+const loadSettings = () => import('./components/Settings');
+const Settings = lazy(loadSettings);
+const loadTokenManager = () => import('./components/TokenManager');
+const TokenManager = lazy(loadTokenManager);
+const loadUpgradePage = () => import('./components/UpgradePage');
+const UpgradePage = lazy(loadUpgradePage);
+const AuthModal = lazy(() => import('./components/AuthModal'));
+const AdminSecretLogin = lazy(() => import('./components/AdminSecretLogin'));
+const loadTopup = () => import('./components/Topup');
+const Topup = lazy(loadTopup);
+const TopupResult = lazy(() => import('./components/TopupResult'));
+const loadTickets = () => import('./components/Tickets');
+const Tickets = lazy(loadTickets);
+const loadBillsPage = () => import('./components/BillsPage');
+const BillsPage = lazy(loadBillsPage);
+
 function App() {
   const { t } = useTranslation();
+  const loadingFallback = (
+    <div className="min-h-screen bg-surface flex items-center justify-center text-outline">
+      {t('APP.LOADING', '加载中...')}
+    </div>
+  );
   const [isAuthenticated, setIsAuthenticated] = useState(() => !!localStorage.getItem('daof_token'));
   const [authModalConfig, setAuthModalConfig] = useState({ isOpen: false, step: 'github', tmpToken: '', loading: false, defaultName: '' });
   // H-6 修复：currentView 从 URL hash 恢复，刷新不丢失页面（同时支持 admin 直接访问 #settings）
@@ -71,7 +82,31 @@ function App() {
   const [godModeUnlocked, setGodModeUnlocked] = useState(() => localStorage.getItem('daof_admin_unlocked') === '1');
   const [mobileMoreOpen, setMobileMoreOpen] = useState(false);
 
-  const [sysCheckStatus, setSysCheckStatus] = useState({ loading: true, setupNeeded: false });
+  useEffect(() => {
+    if (!isAuthenticated && !godModeUnlocked) return;
+    const preload = () => {
+      void Promise.allSettled([
+        loadStatisticsDash(),
+        loadTokenManager(),
+        loadUpgradePage(),
+        loadTopup(),
+        loadTickets(),
+        loadBillsPage(),
+        loadSettings(),
+      ]);
+    };
+    if (typeof window.requestIdleCallback === 'function') {
+      const idleId = window.requestIdleCallback(preload, { timeout: 1500 });
+      return () => window.cancelIdleCallback?.(idleId);
+    }
+    const timerId = window.setTimeout(preload, 600);
+    return () => window.clearTimeout(timerId);
+  }, [isAuthenticated, godModeUnlocked]);
+
+  const [sysCheckStatus, setSysCheckStatus] = useState(() => ({
+    loading: !!sysParam,
+    setupNeeded: false,
+  }));
   const [banAlert, setBanAlert] = useState({ isOpen: false, message: '' });
   const [globalProfile, setGlobalProfile] = useState(null);
 
@@ -110,15 +145,13 @@ function App() {
                setBanAlert({ isOpen: true, reason: data.ban_reason || (data.message ? data.message.replace("账户被封禁", "").replace("理由：", "").trim() : "") });
            }
         }
-      } catch (e) {
+      } catch {
           // 忽略网络错误，不清空
       }
     };
 
     // 验证 admin cookie：调一个轻量的 admin 接口，由 cookie 自动鉴权
     const verifyAdminCookie = async () => {
-      // 出厂重置进行中：跳过本轮验证，避免轮询触发 401 闪烁
-      if (sessionStorage.getItem('daof_factory_resetting') === '1') return;
       try {
         const res = await fetch('/api/admin/config', { credentials: 'include' });
         if (res.status === 401 || res.status === 403) {
@@ -126,7 +159,7 @@ function App() {
           localStorage.removeItem('daof_admin_unlocked');
           setGodModeUnlocked(false);
         }
-      } catch (e) {
+      } catch {
         // 网络错误，不清空
       }
     };
@@ -168,7 +201,9 @@ function App() {
       // 把"我是哪个推荐人带来的"从 sessionStorage 读出来（landing page 进站时存的）
       const ref = sessionStorage.getItem('daof_ref') || '';
       window.history.replaceState({}, document.title, "/");
-      setAuthModalConfig({ isOpen: true, step: 'github', tmpToken: '', loading: true, defaultName: '' });
+      queueMicrotask(() => {
+        setAuthModalConfig({ isOpen: true, step: 'github', tmpToken: '', loading: true, defaultName: '' });
+      });
 
       fetch('/api/auth/github', {
         method: 'POST',
@@ -209,10 +244,16 @@ function App() {
         setAuthModalConfig({ isOpen: true, step: 'github', tmpToken: '', loading: false, defaultName: '' });
       });
     }
-  }, []);
+  }, [t]);
 
   // 探测系统状态：仅取 setup_required 用于决定是否进入引导态。
   useEffect(() => {
+    // 普通用户入口不应该访问 /api/root/*：该组路由受 LanGuard 保护，外网访问会产生
+    // 正常但刺眼的 403。只有管理员带 ?sys=... 进入引导/登录时才需要探测首次安装态。
+    if (!sysParam) {
+      return;
+    }
+
     const checkSys = async () => {
       try {
         const response = await fetch('/api/root/check-sys', {
@@ -224,7 +265,7 @@ function App() {
           loading: false,
           setupNeeded: !!data.setup_required
         });
-      } catch (e) {
+      } catch {
         setSysCheckStatus({ loading: false, setupNeeded: false });
       }
     };
@@ -250,7 +291,11 @@ function App() {
   // 后端 GodSetup 会自行判定首次安装态，无需前端再确认 sysParam 是否命中。
   if (sysCheckStatus.setupNeeded) {
     if (sysParam && !godModeUnlocked) {
-       return <AdminSecretLogin sysParam={sysParam} setupMode={true} onSuccess={() => setGodModeUnlocked(true)} />;
+       return (
+        <Suspense fallback={loadingFallback}>
+          <AdminSecretLogin sysParam={sysParam} setupMode={true} onSuccess={() => setGodModeUnlocked(true)} />
+        </Suspense>
+       );
     }
     return (
       <div className="min-h-screen bg-surface flex flex-col items-center justify-center text-center p-6">
@@ -264,11 +309,15 @@ function App() {
   // 是否命中真实用户名由后端 GodLogin 校验密码时决定，前端不区分。
   // 外网访客通过 cloudflare 访问时 LanGuard 会在 /api/root/* 层面直接拦截 403。
   if (sysParam && !godModeUnlocked) {
-    return <AdminSecretLogin sysParam={sysParam} setupMode={false} onSuccess={() => {
-      setGodModeUnlocked(true);
-      setIsAuthenticated(true);
-      setCurrentView('settings');
-    }} />;
+    return (
+      <Suspense fallback={loadingFallback}>
+        <AdminSecretLogin sysParam={sysParam} setupMode={false} onSuccess={() => {
+          setGodModeUnlocked(true);
+          setIsAuthenticated(true);
+          setCurrentView('settings');
+        }} />
+      </Suspense>
+    );
   }
 
   return (
@@ -312,7 +361,8 @@ function App() {
           onNavigate={setCurrentView}
         />
         
-        <main id="main-content" tabIndex="-1" className="flex-1 w-full max-w-[1600px] 2xl:max-w-none mx-auto px-3 sm:px-6 lg:px-8 xl:px-10 mt-2 sm:mt-4 focus:outline-none">
+        <main id="main-content" tabIndex="-1" className="flex-1 w-full max-w-[1880px] 2xl:max-w-none mx-auto px-3 sm:px-5 lg:px-6 2xl:px-8 mt-2 sm:mt-4 focus:outline-none">
+          <Suspense fallback={<div className="py-12 text-center text-sm text-on-surface-variant">{t('APP.LOADING', '加载中...')}</div>}>
           {(() => {
             // admin 通过 cookie 鉴权，user 通过 Bearer token；两者任一即视为已登录
             const authed = isAuthenticated || godModeUnlocked;
@@ -370,29 +420,34 @@ function App() {
                 return null;
             }
           })()}
+          </Suspense>
         </main>
       </div>
 
-      <AuthModal 
-        isOpen={authModalConfig.isOpen} 
-        initialStep={authModalConfig.step}
-        tmpToken={authModalConfig.tmpToken}
-        initialLoading={authModalConfig.loading}
-        defaultName={authModalConfig.defaultName}
-        onClose={() => setAuthModalConfig(prev => ({ ...prev, isOpen: false }))} 
-        onLoginSuccess={() => {
-          setAuthModalConfig(prev => ({ ...prev, isOpen: false }));
-          setIsAuthenticated(true);
-          // H-4 修复：变量名不能用 t（遮蔽 useTranslation 的 t）
-          const userToken = localStorage.getItem('daof_token');
-          if (userToken) {
-            fetch('/api/user/me', { headers: { 'Authorization': `Bearer ${userToken}` }})
-              .then(r => r.json())
-              .then(d => { if(d.success) setGlobalProfile(d.data); })
-              .catch(() => { /* network error swallowed; UI stays in current state */ });
-          }
-        }}
-      />
+      {authModalConfig.isOpen && (
+        <Suspense fallback={null}>
+          <AuthModal
+            isOpen={authModalConfig.isOpen}
+            initialStep={authModalConfig.step}
+            tmpToken={authModalConfig.tmpToken}
+            initialLoading={authModalConfig.loading}
+            defaultName={authModalConfig.defaultName}
+            onClose={() => setAuthModalConfig(prev => ({ ...prev, isOpen: false }))}
+            onLoginSuccess={() => {
+              setAuthModalConfig(prev => ({ ...prev, isOpen: false }));
+              setIsAuthenticated(true);
+              // H-4 修复：变量名不能用 t（遮蔽 useTranslation 的 t）
+              const userToken = localStorage.getItem('daof_token');
+              if (userToken) {
+                fetch('/api/user/me', { headers: { 'Authorization': `Bearer ${userToken}` }})
+                  .then(r => r.json())
+                  .then(d => { if(d.success) setGlobalProfile(d.data); })
+                  .catch(() => { /* network error swallowed; UI stays in current state */ });
+              }
+            }}
+          />
+        </Suspense>
+      )}
 
       {/* 封禁拦截全屏弹窗 */}
       {banAlert.isOpen && (

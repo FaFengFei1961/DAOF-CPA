@@ -1,20 +1,32 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useMemo } from 'react';
 import { useTranslation } from 'react-i18next';
 import { User, Copy, CheckCircle2, Lock, ShieldAlert, Key } from 'lucide-react';
 import toast from 'react-hot-toast';
 import { useConfirm } from '../context/ConfirmContext';
-import { authFetch } from '../utils/authFetch';
+import { authFetch, readAuthState } from '../utils/authFetch';
+import { isPageCacheFresh, readPageCache, writePageCache } from '../utils/pageCache';
 import BalanceConsumePreferences from './BalanceConsumePreferences';
+
+const PROFILE_CACHE_TTL_MS = 30000;
+const getProfileCacheKey = () => {
+    const { isAdmin, userToken } = readAuthState();
+    return `profile:${isAdmin ? 'admin' : userToken || 'guest'}`;
+};
 
 const AccountProfile = () => {
     const confirm = useConfirm();
     const { t } = useTranslation();
-    const [profile, setProfile] = useState(null);
-    const [loading, setLoading] = useState(true);
+    const profileCacheKey = useMemo(getProfileCacheKey, []);
+    const cachedProfile = readPageCache(profileCacheKey);
+    const [profile, setProfile] = useState(() => cachedProfile);
+    const [loading, setLoading] = useState(() => !cachedProfile);
     const [copied, setCopied] = useState(false);
 
     // Admin form state
-    const [adminForm, setAdminForm] = useState({ username: '', password: '' });
+    const [adminForm, setAdminForm] = useState(() => ({
+        username: cachedProfile?.role === 'admin' ? cachedProfile.username : '',
+        password: ''
+    }));
     const [updatingAdmin, setUpdatingAdmin] = useState(false);
 
     useEffect(() => {
@@ -24,9 +36,17 @@ const AccountProfile = () => {
             setLoading(false);
             return;
         }
+        const cached = readPageCache(profileCacheKey);
+        if (cached) {
+            setProfile(cached);
+            if (cached.role === 'admin') setAdminForm({ username: cached.username, password: '' });
+            setLoading(false);
+            if (isPageCacheFresh(profileCacheKey, PROFILE_CACHE_TTL_MS)) return;
+        }
         authFetch('/api/user/me')
             .then(data => {
                 if (data.success) {
+                    writePageCache(profileCacheKey, data.data);
                     setProfile(data.data);
                     if (data.data.role === 'admin') {
                         setAdminForm({ username: data.data.username, password: '' });
@@ -37,7 +57,7 @@ const AccountProfile = () => {
                 setLoading(false);
             })
             .catch(() => setLoading(false));
-    }, []);
+    }, [profileCacheKey]);
 
     const handleCopy = () => {
         if(profile && profile.token) {

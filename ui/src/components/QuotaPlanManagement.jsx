@@ -20,7 +20,7 @@ const parseQuotaRow = (r) => ({
   display_name: r.display_name || '',
   description: r.description || '',
   model_match: r.model_match || '[]',
-  limit_unit: r.limit_unit || 'messages',
+  limit_unit: r.limit_unit || 'request_count',
   limit_value: parseFloat(r.limit_value) || 0,
   window_seconds: parseInt(r.window_seconds) || 0,
   weight_factor: r.weight_factor || '{}',
@@ -32,14 +32,14 @@ const parseQuotaRow = (r) => ({
 });
 
 // 配额计划库 admin UI。所有字段都暴露给 admin 自由配置，包括：
-//   - limit_unit: 任意字符串（messages/total_tokens/weighted_tokens/usd_equivalent/...）
+//   - limit_unit: api_cost_usd/request_count/input_tokens/output_tokens/total_tokens/weighted_tokens
 //   - model_match: JSON 数组的 glob 通配
 //   - weight_factor: 灵活 JSON
 //   - overflow_strategy: block/next_subscription/degrade_model/任意自定义
 
 const EMPTY_PLAN = {
   name: '', display_name: '', description: '',
-  model_match: '[]', limit_unit: 'messages', limit_value: 0,
+  model_match: '[]', limit_unit: 'request_count', limit_value: 0,
   window_seconds: 0, weight_factor: '{}',
   auto_sync_from_channel_models: false,
   priority: 100, overflow_strategy: 'block',
@@ -305,9 +305,9 @@ const QuotaPlanManagement = () => {
             </Field>
 
             <div className="grid grid-cols-1 md:grid-cols-3 gap-4 mt-4">
-              <Field label="计量单位 *" hint="messages | total_tokens | weighted_tokens | usd_equivalent | 自定义">
+              <Field label="计量单位 *" hint="api_cost_usd | request_count | input_tokens | output_tokens | total_tokens | weighted_tokens">
                 <input className={inputCls} value={editing.limit_unit}
-                  onChange={e => updateField('limit_unit', e.target.value)} placeholder="messages" />
+                  onChange={e => updateField('limit_unit', e.target.value)} placeholder="api_cost_usd" />
               </Field>
               <Field label="额度值">
                 <input type="number" step="0.0001" className={inputCls} value={editing.limit_value}
@@ -332,7 +332,7 @@ const QuotaPlanManagement = () => {
                 onChange={e => updateField('model_match', e.target.value)} />
             </Field>
 
-            <Field label="权重系数 (JSON)" hint='单值 {"opus-*":5} 或 {"gpt-5":{"input":5,"output":15}}'>
+            <Field label="权重系数 (JSON)" hint='仅 weighted_tokens / token 单位需要；api_cost_usd 直接使用本次请求实价'>
               <textarea className={inputCls + ' font-mono min-h-[80px]'} value={editing.weight_factor}
                 onChange={e => updateField('weight_factor', e.target.value)} />
             </Field>
@@ -363,7 +363,7 @@ const QuotaPlanManagement = () => {
             <label className="flex items-center gap-2 mt-4 text-sm text-on-surface-variant">
               <input type="checkbox" checked={editing.auto_sync_from_channel_models}
                 onChange={e => updateField('auto_sync_from_channel_models', e.target.checked)} />
-              自动从 channel_models 实价同步权重（覆盖 weight_factor）
+              从 channel_models 同步权重（仅 weighted_tokens 使用；api_cost_usd 不需要）
             </label>
 
             </div>{/* 表单滚动区结束 */}

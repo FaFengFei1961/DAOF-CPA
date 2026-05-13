@@ -1,7 +1,8 @@
 import React, { useState, useEffect, useCallback } from 'react';
 import { useTranslation } from 'react-i18next';
 import toast from 'react-hot-toast';
-import { authFetch, isLoggedIn } from '../utils/authFetch';
+import { authFetch, isLoggedIn, readAuthState } from '../utils/authFetch';
+import { isPageCacheFresh, readPageCache, writePageCache } from '../utils/pageCache';
 
 // 用户级通知偏好：3 类可关闭 + 阈值多选。
 // security/system 类强制送达，UI 仅展示提示，不渲染开关。
@@ -18,23 +19,41 @@ const FORCED_CATEGORIES = [
 ];
 
 const THRESHOLD_PRESETS = [70, 80, 90, 100];
+const NOTIF_PREF_CACHE_TTL_MS = 30000;
+const getNotifPrefCacheKey = () => {
+  const { isAdmin, userToken } = readAuthState();
+  return `notification-pref:${isAdmin ? 'admin' : userToken || 'guest'}`;
+};
 
 const NotificationPreferences = () => {
   const { t } = useTranslation();
-  const [enabledCategories, setEnabledCategories] = useState({});
-  const [usageThresholds, setUsageThresholds] = useState([80, 100]);
-  const [loading, setLoading] = useState(true);
+  const cacheKey = React.useMemo(getNotifPrefCacheKey, []);
+  const cached = readPageCache(cacheKey);
+  const [enabledCategories, setEnabledCategories] = useState(() => cached?.enabled_categories || {});
+  const [usageThresholds, setUsageThresholds] = useState(() => (
+    Array.isArray(cached?.usage_thresholds) ? cached.usage_thresholds : [80, 100]
+  ));
+  const [loading, setLoading] = useState(() => !cached);
   const [saving, setSaving] = useState(false);
 
-  const load = useCallback(async () => {
+  const load = useCallback(async ({ force = false } = {}) => {
     if (!isLoggedIn()) {
       setLoading(false);
       return;
     }
-    setLoading(true);
+    const cachedPref = readPageCache(cacheKey);
+    if (cachedPref) {
+      setEnabledCategories(cachedPref.enabled_categories || {});
+      setUsageThresholds(Array.isArray(cachedPref.usage_thresholds) ? cachedPref.usage_thresholds : []);
+      setLoading(false);
+      if (!force && isPageCacheFresh(cacheKey, NOTIF_PREF_CACHE_TTL_MS)) return;
+    } else {
+      setLoading(true);
+    }
     try {
       const json = await authFetch('/api/notifications/preference');
       if (json.success && json.data) {
+        writePageCache(cacheKey, json.data);
         setEnabledCategories(json.data.enabled_categories || {});
         setUsageThresholds(Array.isArray(json.data.usage_thresholds) ? json.data.usage_thresholds : []);
       }
@@ -43,7 +62,7 @@ const NotificationPreferences = () => {
     } finally {
       setLoading(false);
     }
-  }, []);
+  }, [cacheKey]);
 
   useEffect(() => { load(); }, [load]);
 
@@ -75,6 +94,7 @@ const NotificationPreferences = () => {
       if (json.success) {
         toast.success(t('NOTIF.PREF.SAVE_OK', '通知偏好已更新'));
         if (json.data) {
+          writePageCache(cacheKey, json.data);
           setEnabledCategories(json.data.enabled_categories || {});
           setUsageThresholds(Array.isArray(json.data.usage_thresholds) ? json.data.usage_thresholds : []);
         }

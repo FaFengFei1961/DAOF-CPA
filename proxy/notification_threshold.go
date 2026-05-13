@@ -27,7 +27,7 @@ import (
 //	limit          ── plan 的 LimitValue
 //	windowStart    ── 当前用量窗口的起始时间（用作 dedupKey 一部分，新窗口=新 key）
 //
-// limit<=0 视为无限额，直接 return（usd_equivalent 等场景）。
+// limit<=0 视为无限额，直接 return（api_cost_usd 等场景）。
 func MaybeFireUsageWarn(subID, planID, userID uint, bucket string, before, after, limit float64, windowStart time.Time) {
 	if userID == 0 || limit <= 0 || after <= before {
 		return

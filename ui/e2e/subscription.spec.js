@@ -49,16 +49,15 @@ test.describe('Subscription system', () => {
   });
 });
 
-test.describe('Negative net price guard (C-3)', () => {
+test.describe('Package price guard', () => {
   test.skip(!ADMIN_TOKEN, 'ADMIN_TOKEN env var not set');
 
-  test('cannot create package with bonus > price', async ({ page }) => {
+  test('cannot create package with negative price', async ({ page }) => {
     await loginAsAdmin(page);
     const res = await page.request.post('/api/admin/packages', {
       data: {
-        name: 'NegativeTrap',
-        price_amount: 1.0,
-        bonus_balance_usd: 2.0, // 故意大于价格
+        name: 'NegativePriceTrap',
+        price_amount: -1.0,
         billing_period_seconds: 3600,
         public: false,
         enabled: true,
@@ -66,6 +65,6 @@ test.describe('Negative net price guard (C-3)', () => {
     });
     expect(res.status()).toBe(400);
     const json = await res.json();
-    expect(json.message_code).toBe('ERR_NEGATIVE_NET_PRICE');
+    expect(json.message_code).toBe('ERR_INVALID_PACKAGE');
   });
 });

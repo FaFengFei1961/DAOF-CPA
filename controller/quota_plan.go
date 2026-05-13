@@ -4,6 +4,7 @@
 package controller
 
 import (
+	"encoding/json"
 	"log"
 	"math"
 	"strconv"
@@ -19,7 +20,31 @@ func isFinite(v float64) bool {
 	return !math.IsNaN(v) && !math.IsInf(v, 0)
 }
 
-// ListQuotaPlans 返回所有配额计划。支持 ?enabled=1 / ?unit=messages 等过滤。
+var allowedQuotaLimitUnits = map[string]bool{
+	"api_cost_usd":    true,
+	"request_count":   true,
+	"input_tokens":    true,
+	"output_tokens":   true,
+	"total_tokens":    true,
+	"weighted_tokens": true,
+}
+
+func validateQuotaPlanUnit(unit string) bool {
+	return allowedQuotaLimitUnits[unit]
+}
+
+func validateJSONText(v string, fallback string) (string, bool) {
+	if v == "" {
+		v = fallback
+	}
+	var out any
+	if err := json.Unmarshal([]byte(v), &out); err != nil {
+		return v, false
+	}
+	return v, true
+}
+
+// ListQuotaPlans 返回所有配额计划。支持 ?enabled=1 / ?unit=request_count 等过滤。
 func ListQuotaPlans(c *fiber.Ctx) error {
 	q := database.DB.Model(&database.QuotaPlan{}).Order("priority asc, id desc")
 	if v := c.Query("enabled"); v == "1" {
@@ -54,7 +79,7 @@ func GetQuotaPlan(c *fiber.Ctx) error {
 	})
 }
 
-// CreateQuotaPlan 新建配额计划。所有字段都由 admin 自由配置，不做强制 enum 校验。
+// CreateQuotaPlan 新建配额计划。配额单位收紧为明确白名单，避免未知字符串在热路径产生歧义。
 func CreateQuotaPlan(c *fiber.Ctx) error {
 	var p database.QuotaPlan
 	if err := c.BodyParser(&p); err != nil {
@@ -63,6 +88,9 @@ func CreateQuotaPlan(c *fiber.Ctx) error {
 	if p.Name == "" || p.LimitUnit == "" {
 		return c.Status(400).JSON(fiber.Map{"success": false, "message": "name 与 limit_unit 必填", "message_code": "ERR_REQUIRED"})
 	}
+	if !validateQuotaPlanUnit(p.LimitUnit) {
+		return c.Status(400).JSON(fiber.Map{"success": false, "message": "limit_unit 不受支持", "message_code": "ERR_INVALID_LIMIT_UNIT"})
+	}
 	// fix Minor（codex 第五轮）：拒绝异常数值，避免 NaN/Inf/负数渗入引擎逻辑
 	if !isFinite(p.LimitValue) || p.LimitValue < 0 {
 		return c.Status(400).JSON(fiber.Map{"success": false, "message": "limit_value 必须 ≥ 0 且为有限数", "message_code": "ERR_INVALID_LIMIT"})
@@ -70,14 +98,20 @@ func CreateQuotaPlan(c *fiber.Ctx) error {
 	if p.WindowSeconds < 0 {
 		return c.Status(400).JSON(fiber.Map{"success": false, "message": "window_seconds 必须 ≥ 0", "message_code": "ERR_INVALID_WINDOW"})
 	}
-	if p.ModelMatch == "" {
-		p.ModelMatch = "[]"
+	if v, ok := validateJSONText(p.ModelMatch, "[]"); ok {
+		p.ModelMatch = v
+	} else {
+		return c.Status(400).JSON(fiber.Map{"success": false, "message": "model_match 必须是合法 JSON", "message_code": "ERR_INVALID_JSON"})
 	}
-	if p.WeightFactor == "" {
-		p.WeightFactor = "{}"
+	if v, ok := validateJSONText(p.WeightFactor, "{}"); ok {
+		p.WeightFactor = v
+	} else {
+		return c.Status(400).JSON(fiber.Map{"success": false, "message": "weight_factor 必须是合法 JSON", "message_code": "ERR_INVALID_JSON"})
 	}
-	if p.ExtraConfig == "" {
-		p.ExtraConfig = "{}"
+	if v, ok := validateJSONText(p.ExtraConfig, "{}"); ok {
+		p.ExtraConfig = v
+	} else {
+		return c.Status(400).JSON(fiber.Map{"success": false, "message": "extra_config 必须是合法 JSON", "message_code": "ERR_INVALID_JSON"})
 	}
 	// 注：QuotaPlan.Enabled 已改为 `*bool`（自审第十三轮），
 	// admin 显式 `enabled=false` → ptr(false) → 写入 false；不传 → nil → DB default true。
@@ -124,6 +158,23 @@ func UpdateQuotaPlan(c *fiber.Ctx) error {
 		f, fok := v.(float64)
 		if !fok || !isFinite(f) || f < 0 {
 			return c.Status(400).JSON(fiber.Map{"success": false, "message_code": "ERR_INVALID_LIMIT", "message": "limit_value 必须 >= 0 且为有限数"})
+		}
+	}
+	if v, ok := updates["limit_unit"]; ok {
+		unit, uok := v.(string)
+		if !uok || !validateQuotaPlanUnit(unit) {
+			return c.Status(400).JSON(fiber.Map{"success": false, "message_code": "ERR_INVALID_LIMIT_UNIT", "message": "limit_unit 不受支持"})
+		}
+	}
+	for _, key := range []string{"model_match", "weight_factor", "extra_config"} {
+		if v, ok := updates[key]; ok {
+			s, sok := v.(string)
+			if !sok {
+				return c.Status(400).JSON(fiber.Map{"success": false, "message_code": "ERR_INVALID_JSON", "message": key + " 必须是 JSON 字符串"})
+			}
+			if _, valid := validateJSONText(s, "{}"); !valid {
+				return c.Status(400).JSON(fiber.Map{"success": false, "message_code": "ERR_INVALID_JSON", "message": key + " 必须是合法 JSON"})
+			}
 		}
 	}
 	if v, ok := updates["window_seconds"]; ok {

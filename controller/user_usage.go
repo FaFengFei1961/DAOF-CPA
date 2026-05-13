@@ -10,29 +10,31 @@ import (
 	"daof-ai-hub/database"
 
 	"github.com/gofiber/fiber/v2"
+	"gorm.io/gorm"
 )
 
 // UserUsageRow 是聚合后单个用户的使用量统计
 type UserUsageRow struct {
-	UserID          uint             `json:"user_id"`
-	Username        string           `json:"username"`
-	GithubID        string           `json:"github_id"`
-	Phone           string           `json:"phone"`
-	Role            string           `json:"role"`
-	Status          int              `json:"status"`
-	Quota           float64          `json:"quota"`
-	Requests        int64            `json:"requests"`
-	FailedRequests  int64            `json:"failed_requests"`
-	InputTokens     int64            `json:"input_tokens"`
-	OutputTokens    int64            `json:"output_tokens"`
-	ReasoningTokens int64            `json:"reasoning_tokens"`
-	CachedTokens    int64            `json:"cached_tokens"`
-	TotalTokens     int64            `json:"total_tokens"`
-	Cost            float64          `json:"cost"`
-	AvgLatencyMs    float64          `json:"avg_latency_ms"`
-	LastActiveAt    *time.Time       `json:"last_active_at,omitempty"`
-	CreatedAt       time.Time        `json:"created_at"`
-	ModelBreakdown  []ModelBreakdown `json:"model_breakdown,omitempty"`
+	UserID           uint             `json:"user_id"`
+	Username         string           `json:"username"`
+	GithubID         string           `json:"github_id"`
+	Phone            string           `json:"phone"`
+	Role             string           `json:"role"`
+	Status           int              `json:"status"`
+	Quota            float64          `json:"quota"`
+	Requests         int64            `json:"requests"`
+	FailedRequests   int64            `json:"failed_requests"`
+	InputTokens      int64            `json:"input_tokens"`
+	OutputTokens     int64            `json:"output_tokens"`
+	ReasoningTokens  int64            `json:"reasoning_tokens"`
+	CachedTokens     int64            `json:"cached_tokens"`
+	CacheWriteTokens int64            `json:"cache_write_tokens"`
+	TotalTokens      int64            `json:"total_tokens"`
+	Cost             float64          `json:"cost"`
+	AvgLatencyMs     float64          `json:"avg_latency_ms"`
+	LastActiveAt     *time.Time       `json:"last_active_at,omitempty"`
+	CreatedAt        time.Time        `json:"created_at"`
+	ModelBreakdown   []ModelBreakdown `json:"model_breakdown,omitempty"`
 }
 
 // ModelBreakdown 是单个用户在某模型上的子聚合。
@@ -69,26 +71,28 @@ func GetUsersUsage(c *fiber.Ctx) error {
 
 	// 2. 按 user_id 聚合 ApiLog（cost 单位 micro_usd 累加，无浮点误差）
 	type aggRow struct {
-		UserID          uint
-		Requests        int64
-		FailedRequests  int64
-		InputTokens     int64
-		OutputTokens    int64
-		ReasoningTokens int64
-		CachedTokens    int64
-		Cost            int64 // sum(api_logs.cost) 单位 micro_usd
-		TotalLatency    int64
-		LastActiveAt    time.Time
+		UserID           uint
+		Requests         int64
+		FailedRequests   int64
+		InputTokens      int64
+		OutputTokens     int64
+		ReasoningTokens  int64
+		CachedTokens     int64
+		CacheWriteTokens int64
+		Cost             int64 // sum(api_logs.cost) 单位 micro_usd
+		TotalLatency     int64
+		LastActiveAt     string
 	}
 
 	q := database.DB.Model(&database.ApiLog{}).
 		Select(`user_id,
 			COUNT(*) AS requests,
-			SUM(CASE WHEN status >= 400 OR status = 0 THEN 1 ELSE 0 END) AS failed_requests,
+			SUM(CASE WHEN status < 200 OR status >= 300 THEN 1 ELSE 0 END) AS failed_requests,
 			COALESCE(SUM(prompt_tokens), 0) AS input_tokens,
 			COALESCE(SUM(completion_tokens), 0) AS output_tokens,
 			COALESCE(SUM(reasoning_tokens), 0) AS reasoning_tokens,
 			COALESCE(SUM(cached_tokens), 0) AS cached_tokens,
+			COALESCE(SUM(cache_write_tokens), 0) AS cache_write_tokens,
 			COALESCE(SUM(cost), 0) AS cost,
 			COALESCE(SUM(latency), 0) AS total_latency,
 			MAX(created_at) AS last_active_at`).
@@ -118,17 +122,16 @@ func GetUsersUsage(c *fiber.Ctx) error {
 	// 4. 组装输出 + 总览
 	rows := make([]UserUsageRow, 0, len(users))
 	var (
-		totalRequests   int64
-		totalTokens     int64
-		totalCostMicro  int64
-		activeUsers     int
+		totalRequests  int64
+		totalTokens    int64
+		totalCostMicro int64
+		activeUsers    int
 	)
 
 	for _, u := range users {
 		agg := aggMap[u.ID]
 		var lastActive *time.Time
-		if !agg.LastActiveAt.IsZero() {
-			ts := agg.LastActiveAt
+		if ts, ok := parseUsageTime(agg.LastActiveAt); ok {
 			lastActive = &ts
 		}
 		var avgLatency float64
@@ -137,8 +140,8 @@ func GetUsersUsage(c *fiber.Ctx) error {
 			activeUsers++
 		}
 		totalRequests += agg.Requests
-		// 总 Token 不重复计 cached（OpenAI/Claude 的 cached 都是 input 子集）
-		totalTokens += agg.InputTokens + agg.OutputTokens + agg.ReasoningTokens
+		// 总 Token 不重复计 cached/cache_write/reasoning；它们分别是 input/output 子集。
+		totalTokens += agg.InputTokens + agg.OutputTokens
 		totalCostMicro += agg.Cost
 
 		rows = append(rows, UserUsageRow{
@@ -147,22 +150,23 @@ func GetUsersUsage(c *fiber.Ctx) error {
 			GithubID: u.GithubID,
 			// fix Major（自审第六轮）：admin 聚合统计接口不应批量回显未脱敏手机号。
 			// PIPL/GDPR 合规要求 PII 默认最小暴露；admin session 被盗即可批量泄露所有用户手机号。
-			Phone:  maskPhone(u.Phone),
-			Role:   u.Role,
-			Status:          u.Status,
-			Quota:           database.MicroToUSD(u.Quota),
-			Requests:        agg.Requests,
-			FailedRequests:  agg.FailedRequests,
-			InputTokens:     agg.InputTokens,
-			OutputTokens:    agg.OutputTokens,
-			ReasoningTokens: agg.ReasoningTokens,
-			CachedTokens:    agg.CachedTokens,
-			TotalTokens:     agg.InputTokens + agg.OutputTokens + agg.ReasoningTokens,
-			Cost:            database.MicroToUSD(agg.Cost),
-			AvgLatencyMs:    avgLatency,
-			LastActiveAt:    lastActive,
-			CreatedAt:       u.CreatedAt,
-			ModelBreakdown:  modelMap[u.ID],
+			Phone:            maskPhone(u.Phone),
+			Role:             u.Role,
+			Status:           u.Status,
+			Quota:            database.MicroToUSD(u.Quota),
+			Requests:         agg.Requests,
+			FailedRequests:   agg.FailedRequests,
+			InputTokens:      agg.InputTokens,
+			OutputTokens:     agg.OutputTokens,
+			ReasoningTokens:  agg.ReasoningTokens,
+			CachedTokens:     agg.CachedTokens,
+			CacheWriteTokens: agg.CacheWriteTokens,
+			TotalTokens:      agg.InputTokens + agg.OutputTokens,
+			Cost:             database.MicroToUSD(agg.Cost),
+			AvgLatencyMs:     avgLatency,
+			LastActiveAt:     lastActive,
+			CreatedAt:        u.CreatedAt,
+			ModelBreakdown:   modelMap[u.ID],
 		})
 	}
 
@@ -183,6 +187,29 @@ func GetUsersUsage(c *fiber.Ctx) error {
 			"users": rows,
 		},
 	})
+}
+
+func parseUsageTime(raw string) (time.Time, bool) {
+	raw = strings.TrimSpace(raw)
+	if raw == "" {
+		return time.Time{}, false
+	}
+	formats := []string{
+		time.RFC3339Nano,
+		"2006-01-02 15:04:05.999999999-07:00",
+		"2006-01-02 15:04:05.999999999Z07:00",
+		"2006-01-02 15:04:05-07:00",
+		"2006-01-02 15:04:05Z07:00",
+		"2006-01-02 15:04:05.999999999",
+		"2006-01-02 15:04:05",
+	}
+	for _, f := range formats {
+		if ts, err := time.Parse(f, raw); err == nil {
+			return ts, true
+		}
+	}
+	log.Printf("[USERS-USAGE] cannot parse last_active_at=%q", raw)
+	return time.Time{}, false
 }
 
 func resolvePeriodCutoff(period string) time.Time {
@@ -213,7 +240,7 @@ func loadUserModelBreakdown(cutoff time.Time) map[uint][]ModelBreakdown {
 		Select(`user_id,
 			model_name,
 			COUNT(*) AS requests,
-			COALESCE(SUM(prompt_tokens + completion_tokens + reasoning_tokens), 0) AS tokens,
+			COALESCE(SUM(prompt_tokens + completion_tokens), 0) AS tokens,
 			COALESCE(SUM(cost), 0) AS cost`).
 		Group("user_id, model_name")
 	if !cutoff.IsZero() {
@@ -291,17 +318,19 @@ func GetUsersUsageTimeseries(c *fiber.Ctx) error {
 		Completion int64
 		Reasoning  int64
 		Cached     int64
+		CacheWrite int64
 	}
 	q := database.DB.Model(&database.ApiLog{}).
 		Select(`user_id,
 			strftime(?, created_at) AS bucket,
 			COUNT(*) AS requests,
-			COALESCE(SUM(prompt_tokens + completion_tokens + reasoning_tokens), 0) AS tokens,
+			COALESCE(SUM(prompt_tokens + completion_tokens), 0) AS tokens,
 			COALESCE(SUM(cost), 0) AS cost,
 			COALESCE(SUM(prompt_tokens), 0) AS prompt,
 			COALESCE(SUM(completion_tokens), 0) AS completion,
 			COALESCE(SUM(reasoning_tokens), 0) AS reasoning,
-			COALESCE(SUM(cached_tokens), 0) AS cached`, bucketFmt).
+			COALESCE(SUM(cached_tokens), 0) AS cached,
+			COALESCE(SUM(cache_write_tokens), 0) AS cache_write`, bucketFmt).
 		Group("user_id, bucket").
 		Order("bucket ASC")
 	if !cutoff.IsZero() {
@@ -314,14 +343,18 @@ func GetUsersUsageTimeseries(c *fiber.Ctx) error {
 		return nil
 	}
 
-	// 收集所有 buckets
-	bucketSet := map[string]struct{}{}
-	for _, r := range rows {
-		bucketSet[r.Bucket] = struct{}{}
+	// 生成完整 bucket 轴。不能只返回有数据的 bucket，否则 7 天窗口内只有一次调用时，
+	// 前端图表会退化成单个 x 点，所有折线/堆叠点挤在一起。
+	buckets := expectedUsageBuckets(period, time.Now())
+	bucketSet := make(map[string]struct{}, len(buckets)+len(rows))
+	for _, b := range buckets {
+		bucketSet[b] = struct{}{}
 	}
-	buckets := make([]string, 0, len(bucketSet))
-	for b := range bucketSet {
-		buckets = append(buckets, b)
+	for _, r := range rows {
+		if _, ok := bucketSet[r.Bucket]; !ok {
+			buckets = append(buckets, r.Bucket)
+			bucketSet[r.Bucket] = struct{}{}
+		}
 	}
 	sort.Strings(buckets)
 
@@ -390,6 +423,7 @@ func GetUsersUsageTimeseries(c *fiber.Ctx) error {
 		Completion int64 `json:"completion_tokens"`
 		Reasoning  int64 `json:"reasoning_tokens"`
 		Cached     int64 `json:"cached_tokens"`
+		CacheWrite int64 `json:"cache_write_tokens"`
 		// CostUSD 是 JSON 输出字段（USD float），由 finalize 阶段填充
 		CostUSD float64 `json:"cost"`
 	}
@@ -432,6 +466,7 @@ func GetUsersUsageTimeseries(c *fiber.Ctx) error {
 		p.Completion += r.Completion
 		p.Reasoning += r.Reasoning
 		p.Cached += r.Cached
+		p.CacheWrite += r.CacheWrite
 	}
 
 	out := make([]*series, 0, len(seriesMap)+1)
@@ -471,12 +506,38 @@ func GetUsersUsageTimeseries(c *fiber.Ctx) error {
 	})
 }
 
+func expectedUsageBuckets(period string, now time.Time) []string {
+	if period == "all" {
+		return nil
+	}
+	format := "2006-01-02"
+	step := 24 * time.Hour
+	count := 30
+	if period == "24h" || period == "7d" {
+		format = "2006-01-02 15:00"
+		step = time.Hour
+		if period == "24h" {
+			count = 24
+		} else {
+			count = 7 * 24
+		}
+	}
+	buckets := make([]string, 0, count)
+	base := now.UTC().Truncate(step)
+	for i := count - 1; i >= 0; i-- {
+		buckets = append(buckets, base.Add(-time.Duration(i)*step).Format(format))
+	}
+	return buckets
+}
+
 // GetUsersUsageEvents 返回逐条 ApiLog 详情（admin 视角，跨用户）。
 //
 // Query：
 //   - period=24h|7d|30d|all
 //   - user_id=N (可选，过滤特定用户)
 //   - model=xxx (可选)
+//   - status=failed|success|HTTP_STATUS (可选)
+//   - error_type=xxx (可选)
 //   - page=1, page_size=50（最大 200）
 func GetUsersUsageEvents(c *fiber.Ctx) error {
 	period := c.Query("period", "7d")
@@ -501,12 +562,53 @@ func GetUsersUsageEvents(c *fiber.Ctx) error {
 	if model := strings.TrimSpace(c.Query("model")); model != "" {
 		q = q.Where("model_name = ?", model)
 	}
+	if statusFilter := strings.TrimSpace(c.Query("status")); statusFilter != "" {
+		switch strings.ToLower(statusFilter) {
+		case "failed", "error":
+			q = q.Where("status < 200 OR status >= 300")
+		case "success", "ok":
+			q = q.Where("status >= 200 AND status < 300")
+		default:
+			if statusCode, err := strconv.Atoi(statusFilter); err == nil {
+				q = q.Where("status = ?", statusCode)
+			}
+		}
+	}
+	if errorType := strings.TrimSpace(c.Query("error_type")); errorType != "" {
+		q = q.Where("error_type = ?", errorType)
+	}
 
 	// fix MAJOR M22-6（codex 第二十二轮）：events list 加 .Error 检查 → fail-closed
 	var total int64
 	if err := q.Count(&total).Error; err != nil {
 		log.Printf("[USERS-USAGE-EVENTS] count failed: %v", err)
 		return c.Status(500).JSON(fiber.Map{"success": false, "message_code": "ERR_DB_QUERY"})
+	}
+
+	type errorSummaryRow struct {
+		ErrorType   string `json:"error_type"`
+		Status      int    `json:"status"`
+		RequestPath string `json:"request_path"`
+		Count       int64  `json:"count"`
+		LastSeenAt  string `json:"last_seen_at"`
+	}
+	var errorSummary []errorSummaryRow
+	if err := q.Session(&gorm.Session{}).
+		Where("status < 200 OR status >= 300").
+		Select(`CASE
+			WHEN error_type IS NOT NULL AND error_type <> '' THEN error_type
+			ELSE 'http_' || status
+		END AS error_type,
+			status,
+			request_path,
+			COUNT(*) AS count,
+			MAX(created_at) AS last_seen_at`).
+		Group("error_type, status, request_path").
+		Order("count DESC").
+		Limit(10).
+		Scan(&errorSummary).Error; err != nil {
+		log.Printf("[USERS-USAGE-EVENTS] error summary failed: %v", err)
+		errorSummary = nil
 	}
 
 	var logs []database.ApiLog
@@ -548,51 +650,64 @@ func GetUsersUsageEvents(c *fiber.Ctx) error {
 	}
 
 	type eventOut struct {
-		ID               uint    `json:"id"`
-		UserID           uint    `json:"user_id"`
-		Username         string  `json:"username"`
-		TokenName        string  `json:"token_name"`
-		ModelName        string  `json:"model_name"`
-		PromptTokens     int     `json:"prompt_tokens"`
-		CompletionTokens int     `json:"completion_tokens"`
-		ReasoningTokens  int     `json:"reasoning_tokens"`
-		CachedTokens     int     `json:"cached_tokens"`
-		TotalTokens      int     `json:"total_tokens"`
-		Cost             float64 `json:"cost"`
-		Latency          int64   `json:"latency_ms"`
-		Status           int     `json:"status"`
-		IPAddress        string  `json:"ip_address"`
-		CreatedAt        string  `json:"created_at"`
+		ID                 uint    `json:"id"`
+		UserID             uint    `json:"user_id"`
+		Username           string  `json:"username"`
+		TokenName          string  `json:"token_name"`
+		ModelName          string  `json:"model_name"`
+		PromptTokens       int     `json:"prompt_tokens"`
+		CompletionTokens   int     `json:"completion_tokens"`
+		ReasoningTokens    int     `json:"reasoning_tokens"`
+		CachedTokens       int     `json:"cached_tokens"`
+		CacheWriteTokens   int     `json:"cache_write_tokens"`
+		CacheWrite5mTokens int     `json:"cache_write_5m_tokens"`
+		CacheWrite1hTokens int     `json:"cache_write_1h_tokens"`
+		TotalTokens        int     `json:"total_tokens"`
+		Cost               float64 `json:"cost"`
+		Latency            int64   `json:"latency_ms"`
+		Status             int     `json:"status"`
+		IPAddress          string  `json:"ip_address"`
+		RequestPath        string  `json:"request_path"`
+		ErrorType          string  `json:"error_type"`
+		ErrorMessage       string  `json:"error_message"`
+		CreatedAt          string  `json:"created_at"`
 	}
 	out := make([]eventOut, 0, len(logs))
 	for _, l := range logs {
 		out = append(out, eventOut{
-			ID:               l.ID,
-			UserID:           l.UserID,
-			Username:         usernames[l.UserID],
-			TokenName:        l.TokenName,
-			ModelName:        l.ModelName,
-			PromptTokens:     l.PromptTokens,
-			CompletionTokens: l.CompletionTokens,
-			ReasoningTokens:  l.ReasoningTokens,
-			CachedTokens:     l.CachedTokens,
-			TotalTokens:      l.PromptTokens + l.CompletionTokens + l.ReasoningTokens,
-			Cost:             database.MicroToUSD(l.Cost),
-			Latency:          l.Latency,
-			Status:           l.Status,
-			IPAddress:        l.IPAddress,
-			CreatedAt:        l.CreatedAt.Format(time.RFC3339),
+			ID:                 l.ID,
+			UserID:             l.UserID,
+			Username:           usernames[l.UserID],
+			TokenName:          l.TokenName,
+			ModelName:          l.ModelName,
+			PromptTokens:       l.PromptTokens,
+			CompletionTokens:   l.CompletionTokens,
+			ReasoningTokens:    l.ReasoningTokens,
+			CachedTokens:       l.CachedTokens,
+			CacheWriteTokens:   l.CacheWriteTokens,
+			CacheWrite5mTokens: l.CacheWrite5mTokens,
+			CacheWrite1hTokens: l.CacheWrite1hTokens,
+			TotalTokens:        l.PromptTokens + l.CompletionTokens,
+			Cost:               database.MicroToUSD(l.Cost),
+			Latency:            l.Latency,
+			Status:             l.Status,
+			IPAddress:          l.IPAddress,
+			RequestPath:        l.RequestPath,
+			ErrorType:          l.ErrorType,
+			ErrorMessage:       l.ErrorMessage,
+			CreatedAt:          l.CreatedAt.Format(time.RFC3339),
 		})
 	}
 
 	return c.JSON(fiber.Map{
 		"success": true,
 		"data": fiber.Map{
-			"page":       page,
-			"page_size":  pageSize,
-			"total":      total,
-			"total_page": (total + int64(pageSize) - 1) / int64(pageSize),
-			"events":     out,
+			"page":          page,
+			"page_size":     pageSize,
+			"total":         total,
+			"total_page":    (total + int64(pageSize) - 1) / int64(pageSize),
+			"events":        out,
+			"error_summary": errorSummary,
 		},
 	})
 }

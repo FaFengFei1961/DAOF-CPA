@@ -92,8 +92,10 @@ func InitDB() {
 	SeedNotificationDefaults()
 	// 充值系统：写入易付通默认配置
 	SeedTopupDefaults()
-	// 内容审核系统：写入 OpenAI Moderation key / 关键字 / 阈值等全局共享配置
+	// 内容审核系统：写入 CPA 模型池 / 关键字 / 阈值等全局共享配置
 	SeedModerationDefaults()
+	// OpenAI/Codex-family 模型统一强制开启 strict + closed 内容审核。
+	EnforceOpenAIModelModerationDefaults()
 
 	// 业务热点查询的联合索引（GORM tag 不支持多列联合，手动建）
 	//
@@ -211,7 +213,7 @@ func InitDB() {
 		var violatingCount int64
 		DB.Raw(`SELECT COUNT(*) FROM billing_entries
 			WHERE entry_type IN ('api_usage_sub','api_usage_addon','api_usage_pending_reconcile',
-			                     'admin_grant_sub','admin_grant_addon')
+			                     'admin_grant_sub','admin_grant_addon','admin_revoke_grant')
 			  AND amount_usd != 0`).Scan(&violatingCount)
 		if violatingCount > 0 {
 			log.Fatalf("[INVARIANT-VIOLATED] %d billing_entries 行 entry_type 为零金额类型但 amount_usd != 0；"+

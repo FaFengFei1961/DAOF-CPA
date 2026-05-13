@@ -5,6 +5,7 @@
 package database
 
 import (
+	"errors"
 	"fmt"
 	"log"
 
@@ -83,4 +84,167 @@ func SeedSubscriptionDefaults() {
 	if created > 0 {
 		log.Printf("🌱 套餐订阅系统：写入 %d 条默认配置（已存在的未覆盖）", created)
 	}
+	SeedDefaultSubscriptionProducts()
+}
+
+type defaultSubscriptionTier struct {
+	ProviderKey   string
+	ProviderLabel string
+	TierKey       string
+	TierLabel     string
+	PackageName   string
+	Description   string
+	PriceUSD      float64
+	FiveHourUSD   float64
+	SevenDayUSD   float64
+	ModelMatch    string
+	Bucket        string
+	SortOrder     int
+}
+
+func SeedDefaultSubscriptionProducts() {
+	if DB == nil {
+		return
+	}
+	enabled := true
+	stackable := false
+	specs := []defaultSubscriptionTier{
+		{"anthropic", "Claude", "pro", "Pro", "Claude Pro", "全部 Claude 模型可用，按 API 等值额度消耗。", 20, 10, 50, `["claude-*"]`, "provider:anthropic", 10},
+		{"anthropic", "Claude", "max_5x", "Max 5x", "Claude Max 5x", "全部 Claude 模型可用，Pro 的 5 倍爆发与周额度。", 100, 50, 250, `["claude-*"]`, "provider:anthropic", 20},
+		{"anthropic", "Claude", "max_20x", "Max 20x", "Claude Max 20x", "全部 Claude 模型可用，适合高强度 agent / coding 内测。", 200, 200, 1000, `["claude-*"]`, "provider:anthropic", 30},
+
+		{"codex", "Codex", "pro", "Pro", "Codex Pro", "全部 Codex / OpenAI 模型可用，按 API 等值额度消耗。", 20, 10, 50, `["gpt-*","o*","chatgpt-*","codex-*"]`, "provider:codex", 110},
+		{"codex", "Codex", "max_5x", "Max 5x", "Codex Max 5x", "全部 Codex / OpenAI 模型可用，Pro 的 5 倍爆发与周额度。", 100, 50, 250, `["gpt-*","o*","chatgpt-*","codex-*"]`, "provider:codex", 120},
+		{"codex", "Codex", "max_20x", "Max 20x", "Codex Max 20x", "全部 Codex / OpenAI 模型可用，适合高强度 agent / coding 内测。", 200, 200, 1000, `["gpt-*","o*","chatgpt-*","codex-*"]`, "provider:codex", 130},
+
+		{"google", "Gemini", "pro", "Pro", "Gemini Pro", "全部 Gemini 模型可用，按 API 等值额度消耗。", 20, 10, 50, `["gemini-*"]`, "provider:google", 210},
+		{"google", "Gemini", "max", "Max", "Gemini Max", "全部 Gemini 模型可用，更高爆发与周额度。", 100, 50, 250, `["gemini-*"]`, "provider:google", 220},
+		{"google", "Gemini", "ultra", "Ultra", "Gemini Ultra", "全部 Gemini 模型可用，面向重度长上下文内测。", 250, 150, 750, `["gemini-*"]`, "provider:google", 230},
+
+		{"combo", "Combo", "pro", "Pro", "Combo Pro", "Claude + Codex + Gemini 全部模型共享 API 等值额度。", 49, 25, 125, `["claude-*","gpt-*","o*","chatgpt-*","codex-*","gemini-*"]`, "combo:all", 310},
+		{"combo", "Combo", "max_5x", "Max 5x", "Combo Max 5x", "Claude + Codex + Gemini 全部模型共享更高额度。", 199, 125, 625, `["claude-*","gpt-*","o*","chatgpt-*","codex-*","gemini-*"]`, "combo:all", 320},
+		{"combo", "Combo", "max_20x", "Max 20x", "Combo Max 20x", "Claude + Codex + Gemini 全部模型共享旗舰额度。", 499, 400, 2000, `["claude-*","gpt-*","o*","chatgpt-*","codex-*","gemini-*"]`, "combo:all", 330},
+	}
+
+	createdPlans := 0
+	createdPackages := 0
+	err := DB.Transaction(func(tx *gorm.DB) error {
+		for _, spec := range specs {
+			fiveHourPlan, madePlan, err := firstOrCreateDefaultQuotaPlan(tx, spec, "5h", "5 小时滚动额度", spec.FiveHourUSD, 5*3600)
+			if err != nil {
+				return err
+			}
+			if madePlan {
+				createdPlans++
+			}
+			sevenDayPlan, madePlan, err := firstOrCreateDefaultQuotaPlan(tx, spec, "7d", "7 天滚动额度", spec.SevenDayUSD, 7*86400)
+			if err != nil {
+				return err
+			}
+			if madePlan {
+				createdPlans++
+			}
+
+			priceMicro, ok := USDToMicro(spec.PriceUSD)
+			if !ok {
+				return fmt.Errorf("default package price overflow: %s", spec.PackageName)
+			}
+			pkg := Package{}
+			res := tx.Where("name = ?", spec.PackageName).First(&pkg)
+			if res.Error != nil && !errors.Is(res.Error, gorm.ErrRecordNotFound) {
+				return fmt.Errorf("load package %s: %w", spec.PackageName, res.Error)
+			}
+			if res.RowsAffected == 0 {
+				pkg = Package{
+					Name:                 spec.PackageName,
+					Description:          spec.Description,
+					ProductType:          "subscription",
+					IconKey:              spec.ProviderKey,
+					BadgeColor:           "primary",
+					HighlightTag:         spec.TierLabel,
+					PriceAmount:          priceMicro,
+					PriceCurrency:        "USD",
+					BillingPeriodSeconds: 30 * 86400,
+					Stackable:            &stackable,
+					MaxActivePerUser:     1,
+					PurchaseWhenOwned:    "stack",
+					Public:               true,
+					SortOrder:            spec.SortOrder,
+					Enabled:              &enabled,
+					ExtraConfig:          fmt.Sprintf(`{"seed":"subscription_v1","provider":"%s","tier":"%s","api_equivalent":true}`, spec.ProviderKey, spec.TierKey),
+				}
+				if err := tx.Create(&pkg).Error; err != nil {
+					return fmt.Errorf("create package %s: %w", spec.PackageName, err)
+				}
+				createdPackages++
+			}
+			if err := ensureDefaultPackagePlan(tx, pkg.ID, fiveHourPlan.ID, 0); err != nil {
+				return err
+			}
+			if err := ensureDefaultPackagePlan(tx, pkg.ID, sevenDayPlan.ID, 1); err != nil {
+				return err
+			}
+		}
+		return nil
+	})
+	if err != nil {
+		log.Printf("[SUBSCRIPTION-SEED] default products failed: %v", err)
+		return
+	}
+	if createdPlans > 0 || createdPackages > 0 {
+		log.Printf("🌱 默认订阅产品：新增 %d 个配额计划、%d 个套餐", createdPlans, createdPackages)
+	}
+}
+
+func firstOrCreateDefaultQuotaPlan(tx *gorm.DB, spec defaultSubscriptionTier, windowKey, windowLabel string, limitUSD float64, windowSeconds int) (QuotaPlan, bool, error) {
+	name := fmt.Sprintf("sub_%s_%s_%s_api_cost", spec.ProviderKey, spec.TierKey, windowKey)
+	plan := QuotaPlan{}
+	res := tx.Where("name = ?", name).First(&plan)
+	if res.Error != nil && !errors.Is(res.Error, gorm.ErrRecordNotFound) {
+		return plan, false, fmt.Errorf("load quota plan %s: %w", name, res.Error)
+	}
+	if res.RowsAffected > 0 {
+		return plan, false, nil
+	}
+	enabled := true
+	plan = QuotaPlan{
+		Name:             name,
+		DisplayName:      fmt.Sprintf("%s %s · %s", spec.ProviderLabel, spec.TierLabel, windowLabel),
+		Description:      fmt.Sprintf("%s。额度单位为 API 等值美元，不是现金余额。", windowLabel),
+		ModelMatch:       spec.ModelMatch,
+		LimitUnit:        "api_cost_usd",
+		LimitValue:       limitUSD,
+		WindowSeconds:    windowSeconds,
+		WeightFactor:     "{}",
+		Priority:         100,
+		OverflowStrategy: "block",
+		ExtraConfig: fmt.Sprintf(`{"seed":"subscription_v1","bucket":"%s","bucket_label":"%s","window":"%s"}`,
+			spec.Bucket, spec.ProviderLabel, windowKey),
+		Enabled: &enabled,
+	}
+	if err := tx.Create(&plan).Error; err != nil {
+		return plan, false, fmt.Errorf("create quota plan %s: %w", name, err)
+	}
+	return plan, true, nil
+}
+
+func ensureDefaultPackagePlan(tx *gorm.DB, packageID, planID uint, sortOrder int) error {
+	var pp PackagePlan
+	res := tx.Where("package_id = ? AND quota_plan_id = ?", packageID, planID).First(&pp)
+	if res.Error != nil && !errors.Is(res.Error, gorm.ErrRecordNotFound) {
+		return fmt.Errorf("load package_plan pkg=%d plan=%d: %w", packageID, planID, res.Error)
+	}
+	if res.RowsAffected > 0 {
+		return nil
+	}
+	pp = PackagePlan{
+		PackageID:          packageID,
+		QuotaPlanID:        planID,
+		QuantityMultiplier: 1,
+		SortOrder:          sortOrder,
+	}
+	if err := tx.Create(&pp).Error; err != nil {
+		return fmt.Errorf("create package_plan pkg=%d plan=%d: %w", packageID, planID, err)
+	}
+	return nil
 }

@@ -144,6 +144,18 @@ func TestSecurity_IsSensitiveConfigKey_TrueForActualSensitive(t *testing.T) {
 	}
 }
 
+func TestSecurity_ClearableEmptyConfigKeys(t *testing.T) {
+	if !isClearableEmptyConfigKey("moderation_cache_secret") {
+		t.Fatal("moderation_cache_secret reset must be clearable from Settings")
+	}
+	if isClearableEmptyConfigKey("moderation_gemini_auth_index") {
+		t.Fatal("removed Gemini moderation config must not remain clearable")
+	}
+	if isClearableEmptyConfigKey("cliproxy_key") {
+		t.Fatal("real credentials must not become clearable through the Settings full-save path")
+	}
+}
+
 func TestSecurity_ValidateSysConfigPayload_BalanceDefaults(t *testing.T) {
 	setupSubTestDB(t)
 
@@ -174,6 +186,35 @@ func TestSecurity_ValidateSysConfigPayload_BalanceDefaults(t *testing.T) {
 				t.Fatalf("validateSysConfigPayload() code=%q ok=%v, want code=%q ok=%v", code, ok, tc.code, tc.ok)
 			}
 		})
+	}
+}
+
+func TestSecurity_ValidateSysConfigPayload_ModerationRiskRules(t *testing.T) {
+	valid := `[{"id":"env_combo","action":"model_review","any_groups":[[".env"],["send"]]}]`
+	code, _, ok := validateSysConfigPayload(map[string]string{"moderation_risk_rules": valid})
+	if !ok || code != "" {
+		t.Fatalf("valid moderation_risk_rules rejected: code=%q ok=%v", code, ok)
+	}
+
+	invalid := `[{"id":"bad","regex":["("]}]`
+	code, _, ok = validateSysConfigPayload(map[string]string{"moderation_risk_rules": invalid})
+	if ok || code != "ERR_INVALID_PARAMS" {
+		t.Fatalf("invalid moderation_risk_rules accepted: code=%q ok=%v", code, ok)
+	}
+}
+
+func TestSecurity_ValidateSysConfigPayload_ModerationProvider(t *testing.T) {
+	for _, provider := range []string{"cliproxy_model", "cpa-model", "cliproxy", "cpa"} {
+		code, _, ok := validateSysConfigPayload(map[string]string{"moderation_provider": provider})
+		if !ok || code != "" {
+			t.Fatalf("valid moderation_provider %q rejected: code=%q ok=%v", provider, code, ok)
+		}
+	}
+	for _, provider := range []string{"gemini_cpa", "gemini-ai-studio", "openai"} {
+		code, _, ok := validateSysConfigPayload(map[string]string{"moderation_provider": provider})
+		if ok || code != "ERR_INVALID_PARAMS" {
+			t.Fatalf("invalid moderation_provider %q accepted: code=%q ok=%v", provider, code, ok)
+		}
 	}
 }
 

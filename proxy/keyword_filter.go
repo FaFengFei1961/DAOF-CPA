@@ -10,8 +10,8 @@
 //   - 命中**短路返回**首个关键字（不需要列出所有命中 — 拦下即可，详细命中由审计日志记录）
 //
 // 故意不做：
-//   - NFKC normalization（全角/半角差异）—— OpenAI Moderation 兜底
-//   - 同音字 / 形近字（"色情" vs "色!情"）—— 这是无底洞，让 Moderation 处理语义
+//   - NFKC normalization（全角/半角差异）—— 智能审核层兜底
+//   - 同音字 / 形近字（"色情" vs "色!情"）—— 这是无底洞，让智能审核处理语义
 package proxy
 
 import (
@@ -94,4 +94,3 @@ func MatchKeyword(prompt string) string {
 func InvalidateKeywordFilterCache() {
 	LoadKeywordsFromConfig()
 }
-

@@ -34,7 +34,7 @@ type ModerationAuditEvent struct {
 	ActionType   string // "MODERATION_BLOCK_KEYWORD" / "MODERATION_BLOCK_POLICY" / "MODERATION_UNAVAILABLE_CLOSED"
 	Reason       string // 内部原因 code（reject_reason）
 	Keyword      string // 命中的关键字（仅 keyword 路径填）
-	HighestCat   string // OpenAI 命中分类（仅 moderation/strict 路径填）
+	HighestCat   string // 智能审核命中分类（仅 moderation/strict 路径填）
 	HighestScore float64
 	IPAddress    string
 	Details      string // JSON-encoded extra context（不强制；由调用方序列化好传入）
@@ -116,6 +116,7 @@ func writeModerationAuditEvent(evt ModerationAuditEvent) {
 		return
 	}
 	moderationAuditWrittenTotal.Add(1)
+	handleModerationRiskAfterAudit(evt, row.ID)
 }
 
 // EnqueueModerationAudit 业务层入队入口。

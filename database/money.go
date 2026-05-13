@@ -129,7 +129,7 @@ func FormatFen(fen int64) string {
 
 // CheckedMulInt64 安全的 int64 乘法（溢出返回 false）。
 //
-// fix CRITICAL Phase 4-codex：subscription.go 计算 price * qty / bonus * qty 时无溢出守护，
+// fix CRITICAL Phase 4-codex：subscription.go 计算 price * qty 等金额乘法时无溢出守护，
 // admin 设套餐价 1e15 + qty 1e6 → 溢出回绕成负数 → 用户净 deduct 变负 → 加余额白嫖。
 // 用本 helper 在所有金额乘法路径前置 fail-closed 守护。
 func CheckedMulInt64(a, b int64) (int64, bool) {
@@ -150,7 +150,7 @@ func CheckedMulInt64(a, b int64) (int64, bool) {
 
 // CheckedAddInt64 安全的 int64 加法（溢出返回 false）。
 //
-// 用于累加 effectiveTotalBonus / sumInt64 等，避免溢出导致负值绕回。
+// 用于累加金额列表等，避免溢出导致负值绕回。
 func CheckedAddInt64(a, b int64) (int64, bool) {
 	c := a + b
 	// 同号相加可能溢出（异号永不溢出）

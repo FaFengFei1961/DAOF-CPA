@@ -128,10 +128,10 @@ func TestChannelTargetsOfficialHost_TrailingDot(t *testing.T) {
 		base string
 		want bool
 	}{
-		{"https://api.openai.com./v1", true},  // trailing dot → 应识别为官方
-		{"https://API.OpenAI.com.", true},     // trailing dot + 大小写
-		{"https://api.openai.com..", false},   // 双 dot 非法
-		{"https://api.openai.com/v1", true},   // 标准
+		{"https://api.openai.com./v1", true}, // trailing dot → 应识别为官方
+		{"https://API.OpenAI.com.", true},    // trailing dot + 大小写
+		{"https://api.openai.com..", false},  // 双 dot 非法
+		{"https://api.openai.com/v1", true},  // 标准
 	}
 	for _, tc := range cases {
 		ch := database.Channel{Type: "openai", BaseURL: tc.base}
@@ -170,5 +170,23 @@ func TestValidateChannelModelModeration_DefaultsWhenEmpty(t *testing.T) {
 	}
 	if cm.ModerationFailMode != "open" {
 		t.Errorf("expected default open, got %q", cm.ModerationFailMode)
+	}
+}
+
+func TestValidateChannelModelModeration_OpenAIModelForcedStrictClosed(t *testing.T) {
+	thirdParty := &database.Channel{Type: "openai", BaseURL: "https://relay.example.com"}
+	cm := database.ChannelModel{
+		ModelID:            "gpt-5.4-mini",
+		ModerationLevel:    "off",
+		ModerationFailMode: "open",
+	}
+	status, _, _ := validateChannelModelModeration(&cm, thirdParty, true)
+	if status != 0 {
+		t.Fatalf("OpenAI-family model should normalize instead of reject, got %d", status)
+	}
+	if cm.ModerationLevel != database.OpenAIModelModerationLevel || cm.ModerationFailMode != database.OpenAIModelModerationFailMode {
+		t.Fatalf("moderation=%s/%s want %s/%s",
+			cm.ModerationLevel, cm.ModerationFailMode,
+			database.OpenAIModelModerationLevel, database.OpenAIModelModerationFailMode)
 	}
 }

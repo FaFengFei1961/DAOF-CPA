@@ -27,19 +27,21 @@ import (
 	"gorm.io/gorm"
 )
 
-// errSubInactive 哨兵：在 atomicConsume 事务结束前发现订阅已被取消/退款/过期，
+// errSubInactive 哨兵：在 atomicConsumeMany 事务结束前发现订阅已被取消/退款/过期，
 // 用 GORM 事务 return-non-nil-rolls-back 语义把已写入的 usage 行回滚。
 //
-// fix CRITICAL C19-3（codex 第十九轮）：原 atomicConsume 顶部一次性 SELECT 订阅状态后，
+// fix CRITICAL C19-3（codex 第十九轮）：原单窗口扣费顶部一次性 SELECT 订阅状态后，
 // 后续 INSERT/UPDATE usage 行之间订阅可能被另一事务（cancel/refund）改成 cancelled。
 // 此处 return errSubInactive → tx 回滚 → 不写入"过期订阅的脏 usage 行"。
 var errSubInactive = errors.New("subscription became inactive during consume")
+var errPlanLimitExceeded = errors.New("subscription quota plan limit exceeded")
 
 // EngineDecision 是引擎对一次请求的决策结果
 type EngineDecision struct {
 	Allowed           bool
 	SubscriptionID    uint
 	QuotaPlanID       uint
+	QuotaPlanIDs      []uint
 	ConsumedUnit      string
 	ConsumedDelta     float64
 	FallbackToBalance bool
@@ -60,6 +62,9 @@ type EngineRequest struct {
 	ModelName    string
 	InputTokens  int
 	OutputTokens int
+	// CostMicroUSD 是本次请求按当前路由官方/配置价格折算出的 API 等值成本。
+	// api_cost_usd 订阅计划直接使用它；precheck 传悲观估算，commit 传真实成本。
+	CostMicroUSD int64
 	IsPrecheck   bool
 }
 
@@ -150,13 +155,14 @@ func trySharedQuota(cs *CachedSubscription, req EngineRequest) EngineDecision {
 	if len(plans) == 0 {
 		return EngineDecision{Allowed: false, BlockReason: "no_plans"}
 	}
+	specs := make([]consumeSpec, 0, len(plans))
 	for _, plan := range plans {
 		if !matchModel(plan.ModelMatch, req.ModelName) {
 			continue
 		}
 		delta, unit := computeDelta(plan, req)
 		if delta < 0 {
-			continue
+			return EngineDecision{Allowed: false, BlockReason: "invalid_plan_delta", BlockMessage: "订阅额度配置异常，请联系管理员"}
 		}
 		bucket := normalizeModelBucket(plan, req.ModelName)
 		// multiplier 只放大限额，不放大单次消费 delta。
@@ -172,35 +178,55 @@ func trySharedQuota(cs *CachedSubscription, req EngineRequest) EngineDecision {
 				plan.ID, mult, engineMaxMultiplier)
 			mult = engineMaxMultiplier
 		}
-		effectiveDelta := delta
-		effectiveLimit := plan.LimitValue * mult
-		ok, dbErr := atomicConsume(sub.ID, plan.ID, sub.UserID, bucket, effectiveDelta, plan.WindowSeconds, effectiveLimit, req.IsPrecheck)
-		if dbErr != nil {
-			// fix CRITICAL C2（codex 第二十轮）：DB 故障必须 fail-closed，绝不能 fallback 到余额。
-			// NeedsRetry=true + Allowed=false 让 stream.go 返回 503 让客户端重试，
-			// 而不是把扣费默默路由到余额（导致双重计费）。
-			return EngineDecision{
-				Allowed:      false,
-				NeedsRetry:   true,
-				BlockReason:  "subscription_db_error",
-				BlockMessage: "订阅扣费暂时不可用，请稍后重试",
-			}
-		}
-		if ok {
-			return EngineDecision{
-				Allowed:        true,
-				SubscriptionID: sub.ID,
-				QuotaPlanID:    plan.ID,
-				ConsumedUnit:   unit,
-				ConsumedDelta:  effectiveDelta,
-			}
-		}
-		if plan.OverflowStrategy == "next_subscription" {
-			return EngineDecision{Allowed: false, BlockReason: "plan_full_skip_sub"}
-		}
+		specs = append(specs, consumeSpec{
+			PlanID:        plan.ID,
+			Bucket:        bucket,
+			Delta:         delta,
+			Unit:          unit,
+			WindowSeconds: plan.WindowSeconds,
+			LimitValue:    plan.LimitValue * mult,
+		})
 	}
 
-	return EngineDecision{Allowed: false, BlockReason: "no_plan_in_sub_matched"}
+	if len(specs) == 0 {
+		return EngineDecision{Allowed: false, BlockReason: "no_plan_in_sub_matched"}
+	}
+	ok, dbErr := atomicConsumeMany(sub.ID, sub.UserID, specs, req.IsPrecheck)
+	if dbErr != nil {
+		// fix CRITICAL C2（codex 第二十轮）：DB 故障必须 fail-closed，绝不能 fallback 到余额。
+		// NeedsRetry=true + Allowed=false 让 stream.go 返回 503 让客户端重试，
+		// 而不是把扣费默默路由到余额（导致双重计费）。
+		return EngineDecision{
+			Allowed:      false,
+			NeedsRetry:   true,
+			BlockReason:  "subscription_db_error",
+			BlockMessage: "订阅扣费暂时不可用，请稍后重试",
+		}
+	}
+	if !ok {
+		return EngineDecision{Allowed: false, BlockReason: "plan_full_skip_sub"}
+	}
+	planIDs := make([]uint, 0, len(specs))
+	for _, spec := range specs {
+		planIDs = append(planIDs, spec.PlanID)
+	}
+	return EngineDecision{
+		Allowed:        true,
+		SubscriptionID: sub.ID,
+		QuotaPlanID:    specs[0].PlanID,
+		QuotaPlanIDs:   planIDs,
+		ConsumedUnit:   specs[0].Unit,
+		ConsumedDelta:  specs[0].Delta,
+	}
+}
+
+type consumeSpec struct {
+	PlanID        uint
+	Bucket        string
+	Delta         float64
+	Unit          string
+	WindowSeconds int
+	LimitValue    float64
 }
 
 // snapshotPlan 是从 package_snapshot 提取的简化 plan 结构
@@ -213,6 +239,7 @@ type snapshotPlan struct {
 	WeightFactor       string  `json:"weight_factor"`
 	Priority           int     `json:"priority"`
 	OverflowStrategy   string  `json:"overflow_strategy"`
+	ExtraConfig        string  `json:"extra_config"`
 	QuantityMultiplier float64 `json:"quantity_multiplier"`
 }
 
@@ -239,6 +266,7 @@ func extractPlansFromSnapshot(snap map[string]any) []snapshotPlan {
 			WeightFactor:       stringFromAny(m["weight_factor"]),
 			Priority:           intFromAny(m["priority"]),
 			OverflowStrategy:   stringFromAny(m["overflow_strategy"]),
+			ExtraConfig:        stringFromAny(m["extra_config"]),
 			QuantityMultiplier: floatFromAny(m["quantity_multiplier"]),
 		}
 		if plan.QuantityMultiplier <= 0 {
@@ -276,6 +304,21 @@ func matchModel(modelMatchJSON, model string) bool {
 }
 
 func normalizeModelBucket(plan snapshotPlan, model string) string {
+	if plan.ExtraConfig != "" && plan.ExtraConfig != "{}" {
+		var cfg map[string]any
+		if err := json.Unmarshal([]byte(plan.ExtraConfig), &cfg); err != nil {
+			log.Printf("[ENGINE] normalizeModelBucket: invalid plan.ExtraConfig json plan_id=%d err=%v", plan.ID, err)
+		} else {
+			for _, key := range []string{"bucket", "model_bucket"} {
+				if v, ok := cfg[key].(string); ok {
+					v = strings.TrimSpace(v)
+					if v != "" {
+						return v
+					}
+				}
+			}
+		}
+	}
 	var patterns []string
 	// fix LOW（codex 第十九轮）：原 _ = json.Unmarshal 静默失败 → 配置漂移（plan.ModelMatch 损坏）
 	// 时按"无匹配"返回原 model 字符串，规则引擎得不到诊断信息。改为 log 异常，patterns 仍是空切片
@@ -294,14 +337,20 @@ func normalizeModelBucket(plan snapshotPlan, model string) string {
 // computeDelta 计算单次请求的"原始消费 delta"（不含 QuantityMultiplier）。
 //
 // fix CRITICAL C-B3（codex 第二十一轮）：multiplier 作用于"限额"而非"消费"，
-// 这里只算 raw delta；caller 在 atomicConsume 调用前用 effectiveLimit = LimitValue * multiplier。
+// 这里只算 raw delta；caller 在 atomicConsumeMany 调用前用 effectiveLimit = LimitValue * multiplier。
 // 之前做反向 → 倍数套餐反而更快耗尽，业务语义错误。
 func computeDelta(plan snapshotPlan, req EngineRequest) (float64, string) {
 	weightSingle, weightInOut := parseWeightFactor(plan.WeightFactor, req.ModelName)
 
 	switch plan.LimitUnit {
-	case "messages":
-		return 1.0 * weightSingle, "messages"
+	case "request_count":
+		return 1.0 * weightSingle, "request_count"
+	case "api_cost_usd":
+		if req.CostMicroUSD < 0 {
+			log.Printf("[ENGINE] plan %d uses api_cost_usd but request cost is negative", plan.ID)
+			return -1, "api_cost_usd"
+		}
+		return database.MicroToUSD(req.CostMicroUSD), "api_cost_usd"
 	case "input_tokens":
 		return float64(req.InputTokens) * weightSingle, "input_tokens"
 	case "output_tokens":
@@ -314,15 +363,9 @@ func computeDelta(plan snapshotPlan, req EngineRequest) (float64, string) {
 			return d, "weighted_tokens"
 		}
 		return float64(req.InputTokens+req.OutputTokens) * weightSingle, "weighted_tokens"
-	case "usd_equivalent":
-		if weightInOut.HasInOut {
-			d := (float64(req.InputTokens)*weightInOut.Input + float64(req.OutputTokens)*weightInOut.Output) / 1_000_000.0
-			return d, "usd_equivalent"
-		}
-		log.Printf("[ENGINE] plan %d 用 usd_equivalent 但 weight_factor 未配置 input/output 分别价格，跳过", plan.ID)
-		return -1, "usd_equivalent"
 	}
-	return 1.0, plan.LimitUnit
+	log.Printf("[ENGINE] unsupported limit_unit=%q plan_id=%d", plan.LimitUnit, plan.ID)
+	return -1, plan.LimitUnit
 }
 
 type weightInOut struct {
@@ -364,227 +407,191 @@ func parseWeightFactor(weightJSON, model string) (single float64, inout weightIn
 	return
 }
 
-// atomicConsume 用 SQL 原子操作完成"窗口边界判定 + 累加 + 上限检查"。
-//
-// fix CRITICAL C19-3（codex 第十九轮）：完整事务化 + 提交前再校验订阅活性。
-//
-// 之前结构：[读 sub] → [写 usage（数据库.DB）] → 无最终验证。
-// 漏洞：cancel/refund 事务可能在「读 sub」与「写 usage」之间提交，导致 usage 行被写到已退款/取消订阅。
-//
-// 现在结构：
-//   - 整体包在 database.DB.Transaction 里，所有 DB 操作走 tx
-//   - precheck 路径不写库（只读 + 判 sub 活），事务空 commit
-//   - 真扣费路径写完 usage 后用 verifySubStillActive(tx, ...) re-SELECT 订阅状态：
-//     SQLite write tx 是 serializable（其他 writer 不能在我们持锁期间 commit）
-//     PostgreSQL READ COMMITTED tx 内 SELECT 也能看到其他 tx 的 commit
-//     —— tx 内 SELECT 跨方言一致 + 杜绝 SetMaxOpenConns(1) 下的自死锁（M-A2 第二十一轮）
-//     若另一事务已 commit cancel → 返回 errSubInactive → tx 回滚已写的 usage 行
-//   - safeAsync USAGE-WARN 移到事务 commit 之后才触发（避免回滚后还在错误地发"使用率超限"通知）
-//
-// userID 用于扣费成功后异步触发使用率阈值预警（MaybeFireUsageWarn）。
-// precheck 路径不触发预警（只是预检未真扣费）。
-//
-// fix CRITICAL-3（旧）：原代码 precheck 路径跳过订阅状态检查 → 上游会基于"过期订阅"做错误决策。
-// 现在不论 precheck 还是 commit，都先验证订阅 active+未过期。
-// atomicConsume 在事务内尝试扣减额度。返回值语义：
-//
-//	(true, nil)      — 扣费成功
-//	(false, nil)     — 业务拒绝（订阅过期 / 撞上限 / 并发抢占），上层应继续尝试下一条订阅
-//	(false, non-nil) — DB 故障，上层必须 fail-closed，**不允许**fallback 到余额扣费
-//
-// fix CRITICAL C2（codex 第二十轮）：原签名只返回 bool，DB 写失败被折叠为 false →
-// 上层 Decide 把"DB 写失败"和"业务额度不足"同等处理，最终错误 fallback 到余额扣费 ——
-// 用户该减的订阅 quota 没减（事务回滚），却被扣了 USD（balance 路径），双重计费。
-func atomicConsume(subID, planID, userID uint, bucket string, delta float64, windowSec int, limitValue float64, isPrecheck bool) (bool, error) {
-	var (
-		allowed         bool
-		wantWarn        bool
-		warnBefore      float64
-		warnAfter       float64
-		warnWindowStart time.Time
-	)
+type planConsumeWarn struct {
+	PlanID      uint
+	Bucket      string
+	Before      float64
+	After       float64
+	LimitValue  float64
+	WindowStart time.Time
+}
 
+// atomicConsumeMany 将同一订阅内所有匹配的 quota plans 作为 AND 条件处理：
+// 任何一个窗口/单位超额，本次请求整体拒绝且不写入任何 usage。
+//
+// 这正是订阅产品当前需要的"5 小时爆发额度 + 7 天总额度"模型；不再保留旧的
+// "命中第一个 plan 即成功"语义。
+func atomicConsumeMany(subID, userID uint, specs []consumeSpec, isPrecheck bool) (bool, error) {
+	if len(specs) == 0 {
+		return false, nil
+	}
+	warns := make([]planConsumeWarn, 0, len(specs))
 	txErr := database.DB.Transaction(func(tx *gorm.DB) error {
 		var sub database.UserSubscription
 		if err := tx.Select("id, status, end_at").
 			Where("id = ? AND status = ? AND end_at > ?", subID, "active", time.Now()).
 			First(&sub).Error; err != nil {
-			// fix CRITICAL C23-A1（codex 第二十三轮）：必须区分 NotFound 与真实 DB 故障。
-			// 仅 ErrRecordNotFound = 业务"订阅不再 active" → errSubInactive，让上层尝试下一订阅。
-			// 其他错误（DB 连接断 / 表损坏）= 真实故障 → 必须冒泡，让 trySharedQuota 设 NeedsRetry，
-			// 严禁让缓存命中的 DB 故障静默 fallback 到余额扣费（双重计费风险）。
 			if errors.Is(err, gorm.ErrRecordNotFound) {
 				return errSubInactive
 			}
 			return fmt.Errorf("verify sub at consume entry: %w", err)
 		}
-		now := time.Now()
 
-		var usage database.SubscriptionUsage
-		err := tx.Where("subscription_id = ? AND quota_plan_id = ? AND model_bucket = ?",
-			subID, planID, bucket).First(&usage).Error
-
-		if errors.Is(err, gorm.ErrRecordNotFound) {
-			if delta > limitValue && limitValue > 0 {
-				// allowed=false 默认值，空 commit
-				return nil
+		for _, spec := range specs {
+			warn, err := consumePlanInTx(tx, subID, spec, isPrecheck)
+			if err != nil {
+				return err
 			}
-			if isPrecheck {
-				allowed = true
-				return nil
-			}
-			windowEnd := now
-			if windowSec > 0 {
-				windowEnd = now.Add(time.Duration(windowSec) * time.Second)
-			} else {
-				windowEnd = now.Add(365 * 24 * time.Hour)
-			}
-			newRow := database.SubscriptionUsage{
-				SubscriptionID: subID,
-				QuotaPlanID:    planID,
-				ModelBucket:    bucket,
-				WindowStartAt:  now,
-				WindowEndAt:    windowEnd,
-				ConsumedValue:  delta,
-				RequestCount:   1,
-			}
-			if cerr := tx.Create(&newRow).Error; cerr != nil {
-				// G-M2 兜底：PostgreSQL 上并发首插可能撞 unique 约束 → 重读后走 accumulate 路径
-				if existing := (database.SubscriptionUsage{}); tx.
-					Where("subscription_id = ? AND quota_plan_id = ? AND model_bucket = ?", subID, planID, bucket).
-					First(&existing).Error == nil {
-					usage = existing
-					err = nil
-					// fall through to accumulate
-				} else {
-					log.Printf("[ENGINE] usage create failed sub=%d plan=%d bucket=%s err=%v", subID, planID, bucket, cerr)
-					return fmt.Errorf("usage create: %w", cerr)
-				}
-			} else {
-				// 新窗口首扣：before=0
-				if vErr := verifySubStillActive(tx, subID); vErr != nil {
-					return vErr
-				}
-				allowed = true
-				wantWarn = true
-				warnBefore = 0
-				warnAfter = delta
-				warnWindowStart = now
-				return nil
-			}
-		} else if err != nil {
-			log.Printf("[ENGINE] usage query failed sub=%d plan=%d bucket=%s err=%v", subID, planID, bucket, err)
-			return fmt.Errorf("usage query: %w", err)
-		}
-
-		if windowSec > 0 && now.After(usage.WindowEndAt) {
-			if delta > limitValue && limitValue > 0 {
-				return nil
-			}
-			if isPrecheck {
-				allowed = true
-				return nil
-			}
-			newEnd := now.Add(time.Duration(windowSec) * time.Second)
-			// 防止两个并发请求都判定"窗口过期"并各自重置导致计数丢失
-			res := tx.Model(&database.SubscriptionUsage{}).
-				Where("id = ? AND window_end_at = ?", usage.ID, usage.WindowEndAt).
-				Updates(map[string]any{
-					"window_start_at": now,
-					"window_end_at":   newEnd,
-					"consumed_value":  delta,
-					"request_count":   1,
-				})
-			if res.Error != nil {
-				return fmt.Errorf("usage reset: %w", res.Error)
-			}
-			if res.RowsAffected == 0 {
-				// 别的并发请求已重置窗口，重新读取后走 accumulate 路径
-				if rErr := tx.First(&usage, usage.ID).Error; rErr != nil {
-					return fmt.Errorf("re-read usage: %w", rErr)
-				}
-				// fall through 到下面的 accumulate
-			} else {
-				// 窗口重置：before=0（新窗口起点）
-				if vErr := verifySubStillActive(tx, subID); vErr != nil {
-					return vErr
-				}
-				allowed = true
-				wantWarn = true
-				warnBefore = 0
-				warnAfter = delta
-				warnWindowStart = now
-				return nil
+			if warn != nil {
+				warns = append(warns, *warn)
 			}
 		}
-
-		if usage.ConsumedValue+delta > limitValue && limitValue > 0 {
-			return nil
+		if !isPrecheck {
+			if err := verifySubStillActive(tx, subID); err != nil {
+				return err
+			}
 		}
-		if isPrecheck {
-			allowed = true
-			return nil
-		}
-		// fix Major：limitValue==0 表示不限额；原 WHERE consumed_value+delta<=0 在不限额时永远不成立，
-		// 导致 RowsAffected=0 → 无限额套餐反而 100% 拒绝。仅在有限额时才追加上限断言。
-		q := tx.Model(&database.SubscriptionUsage{}).Where("id = ?", usage.ID)
-		if limitValue > 0 {
-			q = q.Where("consumed_value + ? <= ?", delta, limitValue)
-		}
-		res := q.Updates(map[string]any{
-			"consumed_value": gorm.Expr("consumed_value + ?", delta),
-			"request_count":  gorm.Expr("request_count + 1"),
-		})
-		if res.Error != nil {
-			return fmt.Errorf("usage accumulate: %w", res.Error)
-		}
-		if res.RowsAffected == 0 {
-			// 撞上限或并发已扣到上限；不算 tx 失败，allowed 保持 false 即可
-			return nil
-		}
-		// 累加成功：before=usage.ConsumedValue, after=usage.ConsumedValue+delta
-		if vErr := verifySubStillActive(tx, subID); vErr != nil {
-			return vErr
-		}
-		allowed = true
-		wantWarn = true
-		warnBefore = usage.ConsumedValue
-		warnAfter = usage.ConsumedValue + delta
-		warnWindowStart = usage.WindowStartAt
 		return nil
 	})
 
 	if txErr != nil {
-		// errSubInactive 是预期的"竞态拒绝"——订阅已过期/取消/退款，业务语义上等价于"不命中此订阅"。
-		// 上层应继续尝试下一条订阅，不算 DB 故障。
-		if errors.Is(txErr, errSubInactive) {
+		if errors.Is(txErr, errSubInactive) || errors.Is(txErr, errPlanLimitExceeded) {
 			return false, nil
 		}
-		// 其他错误（DB 连接、写冲突、SQL 语法等）= 真实 DB 故障，必须冒泡。
-		// 上层 Decide 据此 fail-closed，绝不允许 fallback 到余额扣费（防双重计费）。
-		log.Printf("[ENGINE] atomicConsume tx failed sub=%d plan=%d bucket=%s err=%v",
-			subID, planID, bucket, txErr)
+		log.Printf("[ENGINE] atomicConsumeMany tx failed sub=%d err=%v", subID, txErr)
 		return false, txErr
 	}
 
-	// 事务已 commit，安全 fire 异步使用率预警（不会因为 rollback 误报）
-	if wantWarn {
-		before := warnBefore
-		after := warnAfter
-		ws := warnWindowStart
+	for _, w := range warns {
+		warn := w
 		safeAsync("USAGE-WARN", func() {
-			MaybeFireUsageWarn(subID, planID, userID, bucket, before, after, limitValue, ws)
+			MaybeFireUsageWarn(subID, warn.PlanID, userID, warn.Bucket, warn.Before, warn.After, warn.LimitValue, warn.WindowStart)
 		})
 	}
-
-	return allowed, nil
+	return true, nil
 }
 
-// verifySubStillActive 在 atomicConsume 事务即将提交前再校验订阅状态。
+func consumePlanInTx(tx *gorm.DB, subID uint, spec consumeSpec, isPrecheck bool) (*planConsumeWarn, error) {
+	now := time.Now()
+	var usage database.SubscriptionUsage
+	err := tx.Where("subscription_id = ? AND quota_plan_id = ? AND model_bucket = ?",
+		subID, spec.PlanID, spec.Bucket).First(&usage).Error
+
+	if errors.Is(err, gorm.ErrRecordNotFound) {
+		if spec.LimitValue > 0 && spec.Delta > spec.LimitValue {
+			return nil, errPlanLimitExceeded
+		}
+		if isPrecheck {
+			return nil, nil
+		}
+		windowEnd := now
+		if spec.WindowSeconds > 0 {
+			windowEnd = now.Add(time.Duration(spec.WindowSeconds) * time.Second)
+		} else {
+			windowEnd = now.Add(365 * 24 * time.Hour)
+		}
+		newRow := database.SubscriptionUsage{
+			SubscriptionID: subID,
+			QuotaPlanID:    spec.PlanID,
+			ModelBucket:    spec.Bucket,
+			WindowStartAt:  now,
+			WindowEndAt:    windowEnd,
+			ConsumedValue:  spec.Delta,
+			RequestCount:   1,
+		}
+		if cerr := tx.Create(&newRow).Error; cerr != nil {
+			// 并发首插撞唯一索引时，重读后走累加路径。
+			if existing := (database.SubscriptionUsage{}); tx.
+				Where("subscription_id = ? AND quota_plan_id = ? AND model_bucket = ?", subID, spec.PlanID, spec.Bucket).
+				First(&existing).Error == nil {
+				usage = existing
+				err = nil
+			} else {
+				return nil, fmt.Errorf("usage create: %w", cerr)
+			}
+		} else {
+			return &planConsumeWarn{
+				PlanID:      spec.PlanID,
+				Bucket:      spec.Bucket,
+				Before:      0,
+				After:       spec.Delta,
+				LimitValue:  spec.LimitValue,
+				WindowStart: now,
+			}, nil
+		}
+	} else if err != nil {
+		return nil, fmt.Errorf("usage query: %w", err)
+	}
+
+	if spec.WindowSeconds > 0 && now.After(usage.WindowEndAt) {
+		if spec.LimitValue > 0 && spec.Delta > spec.LimitValue {
+			return nil, errPlanLimitExceeded
+		}
+		if isPrecheck {
+			return nil, nil
+		}
+		newEnd := now.Add(time.Duration(spec.WindowSeconds) * time.Second)
+		res := tx.Model(&database.SubscriptionUsage{}).
+			Where("id = ? AND window_end_at = ?", usage.ID, usage.WindowEndAt).
+			Updates(map[string]any{
+				"window_start_at": now,
+				"window_end_at":   newEnd,
+				"consumed_value":  spec.Delta,
+				"request_count":   1,
+			})
+		if res.Error != nil {
+			return nil, fmt.Errorf("usage reset: %w", res.Error)
+		}
+		if res.RowsAffected > 0 {
+			return &planConsumeWarn{
+				PlanID:      spec.PlanID,
+				Bucket:      spec.Bucket,
+				Before:      0,
+				After:       spec.Delta,
+				LimitValue:  spec.LimitValue,
+				WindowStart: now,
+			}, nil
+		}
+		if rErr := tx.First(&usage, usage.ID).Error; rErr != nil {
+			return nil, fmt.Errorf("re-read usage: %w", rErr)
+		}
+	}
+
+	if spec.LimitValue > 0 && usage.ConsumedValue+spec.Delta > spec.LimitValue {
+		return nil, errPlanLimitExceeded
+	}
+	if isPrecheck {
+		return nil, nil
+	}
+	q := tx.Model(&database.SubscriptionUsage{}).Where("id = ?", usage.ID)
+	if spec.LimitValue > 0 {
+		q = q.Where("consumed_value + ? <= ?", spec.Delta, spec.LimitValue)
+	}
+	res := q.Updates(map[string]any{
+		"consumed_value": gorm.Expr("consumed_value + ?", spec.Delta),
+		"request_count":  gorm.Expr("request_count + 1"),
+	})
+	if res.Error != nil {
+		return nil, fmt.Errorf("usage accumulate: %w", res.Error)
+	}
+	if res.RowsAffected == 0 {
+		return nil, errPlanLimitExceeded
+	}
+	return &planConsumeWarn{
+		PlanID:      spec.PlanID,
+		Bucket:      spec.Bucket,
+		Before:      usage.ConsumedValue,
+		After:       usage.ConsumedValue + spec.Delta,
+		LimitValue:  spec.LimitValue,
+		WindowStart: usage.WindowStartAt,
+	}, nil
+}
+
+// verifySubStillActive 在 atomicConsumeMany 事务即将提交前再校验订阅状态。
 //
 // fix MAJOR M-A2（codex 第二十一轮）：原实现用 `database.DB`（非 tx）发起独立连接 SELECT，
 // 在 SQLite `MaxOpenConns=1`（部分测试 / 资源受限环境）下会与当前事务争抢同一连接 → 自死锁：
-//   - 当前 atomicConsume 事务持锁
+//   - 当前 atomicConsumeMany 事务持锁
 //   - verifySubStillActive 等同一连接释放
 //   - 双方互锁，事务超时
 //

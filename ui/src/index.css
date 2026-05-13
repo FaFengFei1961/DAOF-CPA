@@ -402,7 +402,7 @@
 }
 
 /*
- * fl-section-header — 全站统一的区块标题（"热门模型 →" 模式）
+ * fl-section-header — 全站统一的区块标题（厂商分组模式）
  * 用 button 包裹时点击跳详情；纯展示用 div。
  */
 .fl-section-header {

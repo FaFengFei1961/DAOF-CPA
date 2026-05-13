@@ -16,13 +16,19 @@ import (
 // fix MAJOR M22-A1 Phase 4-fix（自审）：原实现 Cost float64 直接 scan SUM(cost) 的 int64 micro，
 // 导致 50_000_000 micro_usd 被当成 $50M 输出给前端，金额放大 1e6 倍。
 type StatDataPoint struct {
-	Date            string `json:"date"`
-	ModelName       string `json:"model_name"`
-	Reqs            int    `json:"reqs"`
-	Tokens          int    `json:"tokens"`
-	CachedTokens    int    `json:"cached_tokens"`
-	ReasoningTokens int    `json:"reasoning_tokens"`
-	Cost            int64  `json:"-"` // micro_usd; JSON 输出由 MarshalJSON 转 USD float
+	Date             string `json:"date"`
+	ModelName        string `json:"model_name"`
+	Reqs             int    `json:"reqs"`
+	SuccessReqs      int    `json:"success_reqs"`
+	FailedReqs       int    `json:"failed_reqs"`
+	PromptTokens     int    `json:"prompt_tokens"`
+	CompletionTokens int    `json:"completion_tokens"`
+	Tokens           int    `json:"tokens"`
+	CachedTokens     int    `json:"cached_tokens"`
+	CacheWriteTokens int    `json:"cache_write_tokens"`
+	ReasoningTokens  int    `json:"reasoning_tokens"`
+	Cost             int64  `json:"-"` // micro_usd; JSON 输出由 MarshalJSON 转 USD float
+	LatencyTotal     int64  `json:"-"`
 }
 
 func (p StatDataPoint) MarshalJSON() ([]byte, error) {
@@ -81,7 +87,7 @@ func GetStats(c *fiber.Ctx) error {
 		dateFormat = "%Y-%m-%d %H:00"
 	case "7d":
 		startDate = now.AddDate(0, 0, -7)
-		dateFormat = "%Y-%m-%d"
+		dateFormat = "%Y-%m-%d %H:00"
 	case "30d":
 		startDate = now.AddDate(0, 0, -30)
 		dateFormat = "%Y-%m-%d"
@@ -95,7 +101,19 @@ func GetStats(c *fiber.Ctx) error {
 	// 1. Chart data: grouped by (date, model_name)
 	var chartData []StatDataPoint
 	if err := database.DB.Model(&database.ApiLog{}).
-		Select("strftime(?, created_at) as date, model_name, COUNT(id) as reqs, SUM(prompt_tokens + completion_tokens) as tokens, SUM(cached_tokens) as cached_tokens, SUM(reasoning_tokens) as reasoning_tokens, SUM(cost) as cost", dateFormat).
+		Select(`strftime(?, created_at) as date,
+			model_name,
+			COUNT(id) as reqs,
+			SUM(CASE WHEN status >= 200 AND status < 300 THEN 1 ELSE 0 END) as success_reqs,
+			SUM(CASE WHEN status < 200 OR status >= 300 THEN 1 ELSE 0 END) as failed_reqs,
+			COALESCE(SUM(prompt_tokens), 0) as prompt_tokens,
+			COALESCE(SUM(completion_tokens), 0) as completion_tokens,
+			COALESCE(SUM(prompt_tokens + completion_tokens), 0) as tokens,
+			COALESCE(SUM(cached_tokens), 0) as cached_tokens,
+			COALESCE(SUM(cache_write_tokens), 0) as cache_write_tokens,
+			COALESCE(SUM(reasoning_tokens), 0) as reasoning_tokens,
+			COALESCE(SUM(cost), 0) as cost,
+			COALESCE(SUM(latency), 0) as latency_total`, dateFormat).
 		Where("user_id = ? AND created_at >= ?", user.ID, startDate).
 		Group("date, model_name").
 		Order("date ASC, model_name ASC").
@@ -148,17 +166,29 @@ func GetStats(c *fiber.Ctx) error {
 	}
 
 	totalReqs := 0
+	successReqs := 0
+	failedReqs := 0
 	totalTokens := 0
 	totalCached := 0
+	totalCacheWrite := 0
 	totalReasoning := 0
 	var totalCostMicro int64 // 累加 int64 micro_usd 避免浮点误差
+	var totalLatencyMs int64
 
 	for _, p := range chartData {
 		totalReqs += p.Reqs
+		successReqs += p.SuccessReqs
+		failedReqs += p.FailedReqs
 		totalTokens += p.Tokens
 		totalCached += p.CachedTokens
+		totalCacheWrite += p.CacheWriteTokens
 		totalReasoning += p.ReasoningTokens
 		totalCostMicro += p.Cost
+		totalLatencyMs += p.LatencyTotal
+	}
+	avgLatencySeconds := 0.0
+	if totalReqs > 0 {
+		avgLatencySeconds = float64(totalLatencyMs) / float64(totalReqs) / 1000
 	}
 
 	// RPM/TPM: rolling 30-minute window (matching CPAMC)
@@ -188,13 +218,17 @@ func GetStats(c *fiber.Ctx) error {
 		"success": true,
 		"data": map[string]interface{}{
 			"summary": map[string]interface{}{
-				"totalReqs":      totalReqs,
-				"totalTokens":    totalTokens,
-				"totalCached":    totalCached,
-				"totalReasoning": totalReasoning,
-				"totalCost":      database.MicroToUSD(totalCostMicro),
-				"rpm":            rpm,
-				"tpm":            tpm,
+				"totalReqs":       totalReqs,
+				"successReqs":     successReqs,
+				"failedReqs":      failedReqs,
+				"totalTokens":     totalTokens,
+				"totalCached":     totalCached,
+				"totalCacheWrite": totalCacheWrite,
+				"totalReasoning":  totalReasoning,
+				"totalCost":       database.MicroToUSD(totalCostMicro),
+				"avgLatency":      avgLatencySeconds,
+				"rpm":             rpm,
+				"tpm":             tpm,
 			},
 			"chart_data":  chartData,
 			"token_stats": tokenStats,

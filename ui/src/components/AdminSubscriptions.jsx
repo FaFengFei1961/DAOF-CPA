@@ -1,13 +1,14 @@
 import React, { useState, useEffect, useCallback, useRef } from 'react';
 import { useTranslation } from 'react-i18next';
-import { Package, RefreshCw, RotateCcw, Search, X, Gift, ChevronDown } from 'lucide-react';
+import { Package, RefreshCw, RotateCcw, Search, X, Gift, ChevronDown, Gauge, TimerReset, Activity, Users, Undo2 } from 'lucide-react';
 import toast from 'react-hot-toast';
 import { useConfirm } from '../context/ConfirmContext';
 import { authFetch } from '../utils/authFetch';
+import { remainingColor, safePct } from '../utils/credits';
 import AdminGrantSubscriptionModal from './AdminGrantSubscriptionModal';
 
 // 与后端 adminSubItem 字段对齐
-const STATUS_OPTIONS = ['', 'active', 'canceled', 'expired', 'refunded', 'paused'];
+const STATUS_OPTIONS = ['', 'active', 'canceled', 'expired', 'refunded', 'paused', 'revoked'];
 
 // 状态显示样式（颜色 + 文案）
 const statusStyle = (s) => {
@@ -17,6 +18,7 @@ const statusStyle = (s) => {
     case 'expired': return { bg: 'bg-gray-500/10', text: 'text-gray-400' };
     case 'refunded': return { bg: 'bg-rose-500/10', text: 'text-rose-400' };
     case 'paused': return { bg: 'bg-blue-500/10', text: 'text-blue-400' };
+    case 'revoked': return { bg: 'bg-zinc-500/10', text: 'text-zinc-400' };
     default: return { bg: 'bg-surface-container-high', text: 'text-on-surface-variant' };
   }
 };
@@ -24,6 +26,67 @@ const statusStyle = (s) => {
 const fmtTime = (iso) => {
   if (!iso) return '-';
   try { return new Date(iso).toLocaleString(); } catch { return iso; }
+};
+
+const parseUsageDetails = (raw) => {
+  if (!raw) return [];
+  try {
+    const rows = JSON.parse(raw);
+    return Array.isArray(rows) ? rows : [];
+  } catch {
+    return [];
+  }
+};
+
+const fmtUsageValue = (value, unit) => {
+  const n = Number(value || 0);
+  if (unit === 'api_cost_usd') return `$${n.toFixed(n >= 100 ? 0 : 2)}`;
+  if (unit === 'request_count') return `${Math.round(n)}`;
+  if (unit && String(unit).includes('tokens')) return n >= 1000 ? `${(n / 1000).toFixed(1)}k` : `${Math.round(n)}`;
+  return n.toFixed(2);
+};
+
+const formatWindowLabel = (seconds) => {
+  const n = Number(seconds || 0);
+  if (!n) return '套餐周期';
+  if (n === 5 * 3600) return '5 小时';
+  if (n === 7 * 86400) return '7 天';
+  if (n % 86400 === 0) return `${n / 86400} 天`;
+  if (n % 3600 === 0) return `${n / 3600} 小时`;
+  return `${n} 秒`;
+};
+
+const formatUsageName = (d) => {
+  const window = formatWindowLabel(d.window_seconds);
+  if (d.unit === 'api_cost_usd') return `${window} API 等值额度`;
+  if (d.unit === 'request_count') return `${window} 调用次数`;
+  if (d.unit && String(d.unit).includes('tokens')) return `${window} Token 额度`;
+  return d.name || `plan#${d.plan_id}`;
+};
+
+const readConfirmValue = (result) => {
+  if (result && typeof result === 'object' && Object.prototype.hasOwnProperty.call(result, 'value')) {
+    return result.value;
+  }
+  return result;
+};
+
+const summarizePageUsage = (rows) => {
+  const details = rows.flatMap((row) => parseUsageDetails(row.usage_details_json));
+  const active = rows.filter((row) => row.status === 'active').length;
+  const apiRows = details.filter((d) => d.unit === 'api_cost_usd');
+  const fiveHour = apiRows.filter((d) => Number(d.window_seconds || 0) === 5 * 3600);
+  const sevenDay = apiRows.filter((d) => Number(d.window_seconds || 0) === 7 * 86400);
+  const sum = (items, field) => items.reduce((acc, item) => acc + Number(item[field] || 0), 0);
+  const maxPct = details.reduce((max, d) => Math.max(max, Number(d.pct || 0)), 0);
+  return {
+    active,
+    fiveHourUsed: sum(fiveHour, 'consumed'),
+    fiveHourLimit: sum(fiveHour, 'limit'),
+    sevenDayUsed: sum(sevenDay, 'consumed'),
+    sevenDayLimit: sum(sevenDay, 'limit'),
+    maxPct: safePct(maxPct),
+  };
 };
 
 const AdminSubscriptions = () => {
@@ -36,6 +99,7 @@ const AdminSubscriptions = () => {
   const [searchQ, setSearchQ] = useState('');
   const [searchSubmitted, setSearchSubmitted] = useState('');
   const [refundingId, setRefundingId] = useState(null);
+  const [revokingId, setRevokingId] = useState(null);
   const [expandedRow, setExpandedRow] = useState(null);
   const [grantModalOpen, setGrantModalOpen] = useState(false);
 
@@ -73,11 +137,13 @@ const AdminSubscriptions = () => {
     setSearchSubmitted(searchQ.trim());
   };
 
+  const pageUsage = React.useMemo(() => summarizePageUsage(rows), [rows]);
+
   const refund = async (sub) => {
     // 弹窗输入退款金额 + 原因。admin 默认按"剩余天数比例"建议金额，可手动改
     const maxAmount = (sub.purchased_price_usd || 0).toFixed(2);
     const suggested = (sub.suggested_refund_usd || 0).toFixed(2);
-    const amountStr = await confirm({
+    const amountResult = await confirm({
       title: t('ADMIN_SUBS.REFUND_TITLE', '订阅退款（平台内部）'),
       message: t('ADMIN_SUBS.REFUND_BODY', {
         user: sub.username || `#${sub.user_id}`,
@@ -93,18 +159,20 @@ const AdminSubscriptions = () => {
       input: { label: t('ADMIN_SUBS.REFUND_AMOUNT', '退款金额（USD）'), placeholder: maxAmount, defaultValue: suggested },
       confirmText: t('ADMIN_SUBS.REFUND_CONFIRM', '确认退款'),
     });
-    if (!amountStr) return; // 用户取消
+    const amountStr = readConfirmValue(amountResult);
+    if (amountStr === false || amountStr === null || amountStr === undefined || amountStr === '') return; // 用户取消
     const amount = parseFloat(amountStr);
     if (!isFinite(amount) || amount <= 0) {
       toast.error(t('ADMIN_SUBS.AMOUNT_INVALID', '请输入有效金额'));
       return;
     }
-    const reason = await confirm({
+    const reasonResult = await confirm({
       title: t('ADMIN_SUBS.REASON_TITLE', '退款原因'),
       message: t('ADMIN_SUBS.REASON_BODY', '请简要说明退款原因（写入审计日志）'),
       input: { label: t('ADMIN_SUBS.REASON_LABEL', '原因'), placeholder: '协商退款 / 服务问题 / 用户撤回 ...', defaultValue: '协商退款' },
     });
-    if (reason === null) return;
+    if (reasonResult === false || reasonResult === null || reasonResult === undefined) return;
+    const reason = readConfirmValue(reasonResult);
 
     setRefundingId(sub.id);
     try {
@@ -122,6 +190,48 @@ const AdminSubscriptions = () => {
       toast.error(t('API.ERR_NETWORK', '网络异常'));
     } finally {
       setRefundingId(null);
+    }
+  };
+
+  const revokeGrant = async (sub) => {
+    const reasonResult = await confirm({
+      title: t('ADMIN_SUBS.REVOKE_TITLE', '收回赠送权益'),
+      message: t('ADMIN_SUBS.REVOKE_BODY', {
+        user: sub.username || `#${sub.user_id}`,
+        pkg: sub.package_name || `#${sub.package_id}`,
+        defaultValue: '收回赠送给「{{user}}」的「{{pkg}}」？\n\n此操作只撤销赠送权益，不退款、不改变用户余额。请填写收回原因，写入账单与审计日志。',
+      }),
+      input: {
+        label: t('ADMIN_SUBS.REVOKE_REASON_LABEL', '收回原因'),
+        placeholder: t('ADMIN_SUBS.REVOKE_REASON_PH', '发放错误 / 内测结束 / 风控处理 ...'),
+        defaultValue: t('ADMIN_SUBS.REVOKE_REASON_DEFAULT', '发放错误，收回赠送权益'),
+      },
+      confirmText: t('ADMIN_SUBS.REVOKE_CONFIRM', '确认收回'),
+    });
+    if (reasonResult === false || reasonResult === null || reasonResult === undefined) return;
+    const reason = readConfirmValue(reasonResult);
+    const trimmed = String(reason || '').trim();
+    if (!trimmed) {
+      toast.error(t('ADMIN_SUBS.REVOKE_REASON_REQUIRED', '请填写收回原因'));
+      return;
+    }
+
+    setRevokingId(sub.id);
+    try {
+      const json = await authFetch(`/api/admin/subscriptions/${sub.id}/revoke-grant`, {
+        method: 'POST',
+        body: { reason: trimmed },
+      });
+      if (json.success) {
+        toast.success(t('ADMIN_SUBS.REVOKE_OK', '已收回赠送权益'));
+        load(meta.page);
+      } else {
+        toast.error(json.message || t('ADMIN_SUBS.REVOKE_FAIL', '收回失败'));
+      }
+    } catch {
+      toast.error(t('API.ERR_NETWORK', '网络异常'));
+    } finally {
+      setRevokingId(null);
     }
   };
 
@@ -155,6 +265,25 @@ const AdminSubscriptions = () => {
         onClose={() => setGrantModalOpen(false)}
         onSuccess={() => load(meta.page)}
       />
+
+      <div className="grid grid-cols-1 sm:grid-cols-2 xl:grid-cols-4 gap-3">
+        <AdminUsageMetric icon={Users} label="当前页活跃订阅" value={`${pageUsage.active}`} sub={`共 ${meta.total || rows.length} 条记录`} />
+        <AdminUsageMetric
+          icon={TimerReset}
+          label="5 小时 API 等值"
+          value={`${fmtUsageValue(pageUsage.fiveHourUsed, 'api_cost_usd')} / ${fmtUsageValue(pageUsage.fiveHourLimit, 'api_cost_usd')}`}
+          sub="当前页合计"
+          pct={pageUsage.fiveHourLimit > 0 ? pageUsage.fiveHourUsed / pageUsage.fiveHourLimit * 100 : 0}
+        />
+        <AdminUsageMetric
+          icon={Gauge}
+          label="7 天 API 等值"
+          value={`${fmtUsageValue(pageUsage.sevenDayUsed, 'api_cost_usd')} / ${fmtUsageValue(pageUsage.sevenDayLimit, 'api_cost_usd')}`}
+          sub="当前页合计"
+          pct={pageUsage.sevenDayLimit > 0 ? pageUsage.sevenDayUsed / pageUsage.sevenDayLimit * 100 : 0}
+        />
+        <AdminUsageMetric icon={Activity} label="最高用量水位" value={`${pageUsage.maxPct.toFixed(1)}%`} sub="当前页最高 plan" pct={pageUsage.maxPct} />
+      </div>
 
       {/* 过滤条 */}
       <form onSubmit={submitSearch} className="flex flex-wrap gap-3 items-center">
@@ -214,6 +343,7 @@ const AdminSubscriptions = () => {
                 // fix MINOR（codex 第二十轮）：补 'paused' —— 后端 AdminRefundSubscription 接受 paused 退款，
                 // 但前端原数组没有 paused 导致 paused 订阅按钮变灰，admin 无法在 UI 操作合法退款
                 const refundable = !sub.is_granted && ['active', 'canceled', 'expired', 'paused'].includes(sub.status);
+                const revocableGrant = sub.is_granted && ['active', 'paused'].includes(sub.status);
                 // 剩余天数颜色：> 50% 绿（建议高比例退）/ 20-50% 黄 / < 20% 红（剩余少建议低额度退）
                 const daysPctColor =
                   sub.time_remaining_pct >= 50 ? 'text-emerald-400' :
@@ -269,9 +399,6 @@ const AdminSubscriptions = () => {
                       </td>
                       <td className="px-3 py-2 text-right font-mono text-on-surface">
                         ${sub.purchased_price_usd?.toFixed(2) || '0.00'}
-                        {sub.bonus_usd > 0 && (
-                          <div className="text-xs text-emerald-400">+${sub.bonus_usd.toFixed(2)} bonus</div>
-                        )}
                       </td>
                       <td className="px-3 py-2 text-right">
                         <div className={`font-mono ${daysPctColor}`}>
@@ -291,18 +418,33 @@ const AdminSubscriptions = () => {
                         </span>
                       </td>
                       <td className="px-3 py-2 text-center">
-                        <button
-                          disabled={!refundable || refundingId === sub.id}
-                          onClick={(e) => { e.stopPropagation(); refund(sub); }}
-                          className={`inline-flex items-center gap-1 px-3 py-1 rounded-lg text-xs ${
-                            refundable
-                              ? 'bg-rose-500/10 text-rose-400 hover:bg-rose-500/20'
-                              : 'bg-surface-container-high text-on-surface-variant cursor-not-allowed'
-                          }`}
-                          title={refundable ? t('ADMIN_SUBS.REFUND_BTN', '退款') : t('ADMIN_SUBS.REFUND_DISABLED', '该状态不可退款')}>
-                          <RotateCcw size={12} />
-                          {refundingId === sub.id ? t('ADMIN_SUBS.REFUNDING', '处理中...') : t('ADMIN_SUBS.REFUND_BTN', '退款')}
-                        </button>
+                        {sub.is_granted ? (
+                          <button
+                            disabled={!revocableGrant || revokingId === sub.id}
+                            onClick={(e) => { e.stopPropagation(); revokeGrant(sub); }}
+                            className={`inline-flex items-center gap-1 px-3 py-1 rounded-lg text-xs ${
+                              revocableGrant
+                                ? 'bg-amber-500/10 text-amber-400 hover:bg-amber-500/20'
+                                : 'bg-surface-container-high text-on-surface-variant cursor-not-allowed'
+                            }`}
+                            title={revocableGrant ? t('ADMIN_SUBS.REVOKE_BTN', '收回') : t('ADMIN_SUBS.REVOKE_DISABLED', '该赠送状态不可收回')}>
+                            <Undo2 size={12} />
+                            {revokingId === sub.id ? t('ADMIN_SUBS.REVOKING', '处理中...') : t('ADMIN_SUBS.REVOKE_BTN', '收回')}
+                          </button>
+                        ) : (
+                          <button
+                            disabled={!refundable || refundingId === sub.id}
+                            onClick={(e) => { e.stopPropagation(); refund(sub); }}
+                            className={`inline-flex items-center gap-1 px-3 py-1 rounded-lg text-xs ${
+                              refundable
+                                ? 'bg-rose-500/10 text-rose-400 hover:bg-rose-500/20'
+                                : 'bg-surface-container-high text-on-surface-variant cursor-not-allowed'
+                            }`}
+                            title={refundable ? t('ADMIN_SUBS.REFUND_BTN', '退款') : t('ADMIN_SUBS.REFUND_DISABLED', '该状态不可退款')}>
+                            <RotateCcw size={12} />
+                            {refundingId === sub.id ? t('ADMIN_SUBS.REFUNDING', '处理中...') : t('ADMIN_SUBS.REFUND_BTN', '退款')}
+                          </button>
+                        )}
                       </td>
                     </tr>
                     {expandedRow === sub.id && (
@@ -315,7 +457,9 @@ const AdminSubscriptions = () => {
                               <div>开始：<span className="font-mono text-on-surface">{fmtTime(sub.start_at)}</span></div>
                               <div>结束：<span className="font-mono text-on-surface">{fmtTime(sub.end_at)}</span></div>
                               {sub.canceled_at && (
-                                <div className="text-amber-400">取消：<span className="font-mono">{fmtTime(sub.canceled_at)}</span></div>
+                                <div className="text-amber-400">
+                                  {sub.status === 'revoked' ? '收回' : '取消'}：<span className="font-mono">{fmtTime(sub.canceled_at)}</span>
+                                </div>
                               )}
                               <div className="text-on-surface-variant">
                                 时间剩余：<span className={`font-mono ${daysPctColor}`}>{sub.time_remaining_pct?.toFixed(1)}%</span>
@@ -328,22 +472,14 @@ const AdminSubscriptions = () => {
                               <div className="text-xs text-on-surface-variant mb-1">
                                 {t('ADMIN_SUBS.USAGE_DETAIL', '用量参考（plan 周期内的滚动窗口）')}
                               </div>
-                              <div className="space-y-1">
-                                {(() => {
-                                  try {
-                                    const details = JSON.parse(sub.usage_details_json);
-                                    if (!details.length) return <div className="text-xs text-on-surface-variant">无用量记录</div>;
-                                    return details.map((d, i) => (
-                                      <div key={i} className="flex justify-between text-xs">
-                                        <span className="text-on-surface">{d.name || `plan#${d.plan_id}`}</span>
-                                        <span className="font-mono text-on-surface-variant">
-                                          {d.consumed?.toFixed(2) || 0} / {d.limit?.toFixed(2) || '∞'} {d.unit}
-                                          {d.pct !== undefined && ` (${d.pct.toFixed(1)}%)`}
-                                        </span>
-                                      </div>
-                                    ));
-                                  } catch { return null; }
-                                })()}
+                              <div className="grid grid-cols-1 lg:grid-cols-2 gap-3">
+                                {parseUsageDetails(sub.usage_details_json).length === 0 ? (
+                                  <div className="text-xs text-on-surface-variant">无用量记录</div>
+                                ) : (
+                                  parseUsageDetails(sub.usage_details_json).map((d, i) => (
+                                    <AdminUsageDetailMeter key={`${d.plan_id || i}:${d.name || ''}`} detail={d} />
+                                  ))
+                                )}
                               </div>
                               <div className="text-xs text-on-surface-variant mt-1 italic">
                                 * 用量是 plan 滚动窗口内的限额，仅供参考。退款应按剩余天数计算。
@@ -370,6 +506,68 @@ const AdminSubscriptions = () => {
           <span>{meta.page} / {Math.max(1, Math.ceil(meta.total / meta.page_size))}</span>
           <button disabled={meta.page * meta.page_size >= meta.total} onClick={() => load(meta.page + 1)}
             className="px-3 py-1 rounded bg-surface-container-high disabled:opacity-50">→</button>
+        </div>
+      </div>
+    </div>
+  );
+};
+
+const AdminUsageMetric = ({ icon: Icon, label, value, sub, pct }) => {
+  const usedPct = pct == null ? null : safePct(pct);
+  const remainingPct = usedPct == null ? null : Math.max(0, 100 - usedPct);
+  const color = remainingPct == null ? '#c4b5fd' : remainingColor(remainingPct);
+  return (
+    <div className="fl-card p-4 min-h-[96px]">
+      <div className="flex items-start justify-between gap-3">
+        <div className="min-w-0">
+          <div className="text-xs text-on-surface-variant">{label}</div>
+          <div className="mt-2 text-xl font-bold text-on-surface truncate" style={{ color }}>{value}</div>
+          <div className="mt-1 text-xs text-outline truncate">{sub}</div>
+        </div>
+        <div className="w-9 h-9 rounded-control bg-primary/10 flex items-center justify-center shrink-0">
+          <Icon size={18} className="text-primary" />
+        </div>
+      </div>
+      {usedPct != null && (
+        <div className="mt-3 h-1.5 rounded-full bg-black/35 overflow-hidden">
+          <div className="h-full" style={{ width: `${usedPct}%`, background: color }} />
+        </div>
+      )}
+    </div>
+  );
+};
+
+const AdminUsageDetailMeter = ({ detail }) => {
+  const usedPct = safePct(detail.pct || 0);
+  const remainingPct = Math.max(0, 100 - usedPct);
+  const color = remainingColor(remainingPct);
+  return (
+    <div className="rounded-overlay border border-outline-variant/40 bg-surface-container-low p-3">
+      <div className="flex items-start justify-between gap-3">
+        <div className="min-w-0">
+          <div className="text-sm font-semibold text-on-surface truncate">{formatUsageName(detail)}</div>
+          <div className="text-[11px] text-outline font-mono truncate">{detail.name || `plan#${detail.plan_id}`}</div>
+        </div>
+        <div className="text-right shrink-0">
+          <div className="text-[11px] text-on-surface-variant">已用</div>
+          <div className="text-lg font-bold" style={{ color }}>{usedPct.toFixed(1)}%</div>
+        </div>
+      </div>
+      <div className="mt-3 h-2 rounded-full bg-black/35 overflow-hidden">
+        <div className="h-full" style={{ width: `${usedPct}%`, background: color }} />
+      </div>
+      <div className="mt-3 grid grid-cols-3 gap-2 text-xs">
+        <div>
+          <div className="text-outline">已用</div>
+          <div className="font-mono text-on-surface">{fmtUsageValue(detail.consumed, detail.unit)}</div>
+        </div>
+        <div>
+          <div className="text-outline">额度</div>
+          <div className="font-mono text-on-surface">{detail.limit > 0 ? fmtUsageValue(detail.limit, detail.unit) : '不限'}</div>
+        </div>
+        <div>
+          <div className="text-outline">窗口</div>
+          <div className="font-mono text-on-surface">{formatWindowLabel(detail.window_seconds)}</div>
         </div>
       </div>
     </div>

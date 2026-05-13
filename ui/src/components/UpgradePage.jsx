@@ -1,26 +1,111 @@
 import React, { useState, useEffect, useCallback } from 'react';
 import { useTranslation } from 'react-i18next';
-import { ShoppingCart, Check, Layers, Sparkles, Cpu, Zap, Activity, Package as PackageIcon } from 'lucide-react';
+import { ShoppingCart, Check, Layers, Sparkles, Cpu, Zap, Activity, Package as PackageIcon, BrainCircuit, Bot } from 'lucide-react';
 import toast from 'react-hot-toast';
 import { useConfirm } from '../context/ConfirmContext';
-import { authFetch, isLoggedIn } from '../utils/authFetch';
+import { authFetch, isLoggedIn, readAuthState } from '../utils/authFetch';
+import { clearPageCache, isPageCacheFresh, readPageCache, writePageCache } from '../utils/pageCache';
+import { useCurrency } from '../context/CurrencyContext';
 import { formatDuration } from './DurationInput';
 import { StorePage, StoreHero } from './store/StorePrimitives';
 import MySubscriptions from './MySubscriptions';
 
 // 用户购买套餐入口页。展示元数据（图标 / 颜色 / 渐变 / 标签）来自 Package 表，admin 自由配置。
 
-const ICON_MAP = { Sparkles, Cpu, Zap, Activity, Layers, PackageIcon };
-const pickIcon = (key) => ICON_MAP[key] || PackageIcon;
+const ICON_MAP = {
+  Sparkles, Cpu, Zap, Activity, Layers, PackageIcon,
+  anthropic: BrainCircuit,
+  claude: BrainCircuit,
+  codex: Bot,
+  openai: Bot,
+  google: Sparkles,
+  gemini: Sparkles,
+  combo: Layers,
+  trinity: Layers,
+};
+const pickIcon = (key) => {
+  const raw = String(key || '').trim();
+  return ICON_MAP[raw] || ICON_MAP[raw.toLowerCase()] || PackageIcon;
+};
+const UPGRADE_CACHE_TTL_MS = 60000;
+const PACKAGE_CACHE_KEY = 'upgrade:packages:v3';
+const STORE_GROUPS = [
+  { id: 'claude', label: 'Claude', order: 10 },
+  { id: 'codex', label: 'Codex', order: 20 },
+  { id: 'gemini', label: 'Gemini', order: 30 },
+  { id: 'combo', label: 'Combo', order: 40 },
+  { id: 'other', label: 'Other', order: 1000 },
+];
+const STORE_GROUP_BY_ID = Object.fromEntries(STORE_GROUPS.map((g) => [g.id, g]));
+const getCouponCacheKey = () => {
+  const { isAdmin, userToken } = readAuthState();
+  return `upgrade:coupons:${isAdmin ? 'admin' : userToken || 'guest'}`;
+};
+
+const readPackageExtraConfig = (pkg) => {
+  try {
+    const parsed = JSON.parse(pkg.extra_config || '{}');
+    return parsed && typeof parsed === 'object' ? parsed : {};
+  } catch {
+    return {};
+  }
+};
+
+const inferPackageGroupId = (pkg) => {
+  const cfg = readPackageExtraConfig(pkg);
+  const provider = String(cfg.provider || pkg.icon_key || '').trim().toLowerCase();
+  if (provider === 'combo' || provider === 'trinity') return 'combo';
+  if (provider === 'codex' || provider === 'openai') return 'codex';
+  if (provider === 'google' || provider === 'gemini') return 'gemini';
+  if (provider === 'anthropic' || provider === 'claude') return 'claude';
+
+  const raw = [
+    pkg.name,
+    pkg.description,
+  ].filter(Boolean).join(' ').toLowerCase();
+
+  if (raw.includes('combo') || raw.includes('trinity') || raw.includes('御三家')) return 'combo';
+  if (raw.includes('anthropic') || raw.includes('claude')) return 'claude';
+  if (raw.includes('codex') || raw.includes('openai') || /\bgpt\b/.test(raw)) return 'codex';
+  if (raw.includes('google') || raw.includes('gemini')) return 'gemini';
+  return 'other';
+};
+
+const displayPackageName = (pkg) => String(pkg.name || '')
+  .replace(/^GPT\b/, 'Codex')
+  .replace(/^御三家\b/, 'Combo');
+
+const displayPackageDescription = (pkg) => String(pkg.description || '')
+  .replaceAll('OpenAI / GPT', 'Codex / OpenAI')
+  .replaceAll('Claude + GPT + Gemini', 'Claude + Codex + Gemini')
+  .replaceAll('御三家', 'Combo');
+
+const groupStorePackages = (packages) => {
+  const grouped = new Map();
+  for (const pkg of packages) {
+    const groupId = inferPackageGroupId(pkg);
+    const group = STORE_GROUP_BY_ID[groupId] || STORE_GROUP_BY_ID.other;
+    if (!grouped.has(group.id)) grouped.set(group.id, { ...group, items: [] });
+    grouped.get(group.id).items.push(pkg);
+  }
+  return Array.from(grouped.values())
+    .map((group) => ({
+      ...group,
+      items: [...group.items].sort((a, b) => (a.sort_order || 0) - (b.sort_order || 0) || String(a.name || '').localeCompare(String(b.name || ''))),
+    }))
+    .sort((a, b) => a.order - b.order);
+};
 
 const UpgradePage = ({ onPurchaseSuccess, isAuthenticated = true, onSignIn }) => {
   // 注：套餐列表 /api/packages 完全公开，未登录也能看价格；
   // 仅"购买"动作需要登录（已在 purchase() 内 isLoggedIn() 校验）。
   const { t } = useTranslation();
   const confirm = useConfirm();
-  const [pkgs, setPkgs] = useState([]);
-  const [coupons, setCoupons] = useState([]); // 用户可用券（仅登录用户）
-  const [loading, setLoading] = useState(true);
+  const { formatCurrency } = useCurrency();
+  const couponCacheKey = React.useMemo(getCouponCacheKey, [isAuthenticated]);
+  const [pkgs, setPkgs] = useState(() => readPageCache(PACKAGE_CACHE_KEY) || []);
+  const [coupons, setCoupons] = useState(() => (isAuthenticated ? readPageCache(couponCacheKey) : null) || []); // 用户可用券（仅登录用户）
+  const [loading, setLoading] = useState(() => !readPageCache(PACKAGE_CACHE_KEY));
   const [purchasing, setPurchasing] = useState(null);
   // 选中的券：key=packageId, value=couponId（用户在卡片上为每个 package 单独选）
   const [selectedCouponByPkg, setSelectedCouponByPkg] = useState({});
@@ -38,23 +123,45 @@ const UpgradePage = ({ onPurchaseSuccess, isAuthenticated = true, onSignIn }) =>
   // fix CRITICAL R23+2-F2（gemini 全方面审查）：用 authFetch 而不是原生 fetch，
   // 否则后端 getCurrentUserOptional 拿不到 token，老用户被识别为未登录新客。
   // fix MAJOR R23+2-F4（gemini 第三轮）：用 Promise.all 并发拉两个端点（之前 await 串行 → waterfall）
-  const load = useCallback(async () => {
-    setLoading(true);
+  const load = useCallback(async ({ force = false } = {}) => {
+    const cachedPkgs = readPageCache(PACKAGE_CACHE_KEY);
+    const cachedCoupons = isAuthenticated ? readPageCache(couponCacheKey) : [];
+    const hasUsableCache = !!cachedPkgs && (!isAuthenticated || !!cachedCoupons);
+
+    if (cachedPkgs) setPkgs(cachedPkgs);
+    if (isAuthenticated && cachedCoupons) setCoupons(cachedCoupons);
+    if (!isAuthenticated) setCoupons([]);
+
+    if (hasUsableCache) {
+      setLoading(false);
+      const packagesFresh = isPageCacheFresh(PACKAGE_CACHE_KEY, UPGRADE_CACHE_TTL_MS);
+      const couponsFresh = !isAuthenticated || isPageCacheFresh(couponCacheKey, UPGRADE_CACHE_TTL_MS);
+      if (!force && packagesFresh && couponsFresh) return;
+    } else {
+      setLoading(true);
+    }
+
     try {
       const requests = [authFetch('/api/packages')];
       if (isAuthenticated) requests.push(authFetch('/api/coupons/my'));
       const results = await Promise.all(requests);
       const pkgJson = results[0];
-      if (pkgJson?.success) setPkgs(pkgJson.data || []);
+      if (pkgJson?.success) {
+        const nextPkgs = pkgJson.data || [];
+        writePageCache(PACKAGE_CACHE_KEY, nextPkgs);
+        setPkgs(nextPkgs);
+      }
       if (isAuthenticated && results[1]?.success) {
         // 仅 effective_status=available 的券能用
-        setCoupons((results[1].data || []).filter((c) => c.effective_status === 'available'));
+        const nextCoupons = (results[1].data || []).filter((c) => c.effective_status === 'available');
+        writePageCache(couponCacheKey, nextCoupons);
+        setCoupons(nextCoupons);
       } else {
         setCoupons([]);
       }
     } catch { toast.error(t('UPGRADE.LOAD_FAIL', '加载失败')); }
     finally { setLoading(false); }
-  }, [t, isAuthenticated]);
+  }, [t, isAuthenticated, couponCacheKey]);
 
   // fix MAJOR R23+2-F5：依赖 isAuthenticated，登录态切换时重新拉数据（含可用券）
   useEffect(() => { load(); }, [load]);
@@ -91,9 +198,9 @@ const UpgradePage = ({ onPurchaseSuccess, isAuthenticated = true, onSignIn }) =>
     const finalPrice = effectivePriceFor(pkg, couponId);
     // fix MAJOR R23+2-F3：confirm 弹窗显示**最终扣款金额**（含券折扣后），而不是原价
     const confirmMsg = t('UPGRADE.CONFIRM_PURCHASE', {
-      name: pkg.name,
-      price: finalPrice.toFixed(2),
-      defaultValue: '购买「{{name}}」？\n\n实际扣款：${{price}}（从你的余额扣除）',
+      name: displayPackageName(pkg),
+      price: formatCurrency(Number(finalPrice || 0), 2),
+      defaultValue: '购买「{{name}}」？\n\n实际扣款：{{price}}（从你的余额扣除）',
     });
     if (!(await confirm(confirmMsg))) return;
 
@@ -106,8 +213,12 @@ const UpgradePage = ({ onPurchaseSuccess, isAuthenticated = true, onSignIn }) =>
         toast.success(t('UPGRADE.PURCHASE_OK', '🎉 购买成功'));
         // fix Major Codex UX 审查（第二十五轮）：原注释承诺"切到 mine"实际只 load/callback，没切。
         setPane('mine');
+        clearPageCache('subscriptions:');
+        clearPageCache('billing:');
+        clearPageCache('user-coupons:');
+        window.dispatchEvent(new CustomEvent('user-profile-refresh'));
         // 重新拉券（已用券会从可用列表消失）
-        load();
+        load({ force: true });
         if (onPurchaseSuccess) onPurchaseSuccess(json);
       } else {
         toast.error(json.message || t('UPGRADE.PURCHASE_FAIL', '购买失败'));
@@ -117,7 +228,7 @@ const UpgradePage = ({ onPurchaseSuccess, isAuthenticated = true, onSignIn }) =>
   };
 
   return (
-    <div className="w-full max-w-7xl mx-auto px-4 md:px-8 py-8">
+    <div className="w-full max-w-[1680px] mx-auto px-4 md:px-8 2xl:px-10 py-8">
       <StorePage>
         <StoreHero
           icon={Sparkles}
@@ -189,14 +300,26 @@ const UpgradePage = ({ onPurchaseSuccess, isAuthenticated = true, onSignIn }) =>
               </div>
             );
           }
+          const groups = groupStorePackages(filtered);
           return (
-          <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 gap-3">
-            {filtered.map(pkg => {
+          <div className="space-y-8">
+            {groups.map(group => (
+              <section key={group.id} aria-labelledby={`store-group-${group.id}`} className="space-y-3">
+                <div className="flex items-center justify-between gap-4">
+                  <h2 id={`store-group-${group.id}`} className="text-lg font-bold text-on-surface">{group.label}</h2>
+                  <span className="text-xs text-on-surface-variant">{group.items.length} 个套餐</span>
+                </div>
+                <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-3">
+            {group.items.map(pkg => {
               const Icon = pickIcon(pkg.icon_key);
               const usableCoupons = usableCouponsForPkg(pkg.id);
               const selectedCouponId = selectedCouponByPkg[pkg.id] || 0;
               const finalPrice = effectivePriceFor(pkg, selectedCouponId);
-              const hasDiscount = selectedCouponId && finalPrice < pkg.price_amount;
+              const hasDiscount = Boolean(selectedCouponId) && finalPrice < pkg.price_amount;
+              const shownName = displayPackageName(pkg);
+              const shownDescription = displayPackageDescription(pkg);
+              const finalPriceText = formatCurrency(Number(finalPrice || 0), 2);
+              const originalPriceText = formatCurrency(Number(pkg.price_amount || 0), 2);
               return (
                 <div key={pkg.id}
                   className="relative fl-card p-6"
@@ -207,28 +330,28 @@ const UpgradePage = ({ onPurchaseSuccess, isAuthenticated = true, onSignIn }) =>
                     </div>
                   )}
                   <Icon size={28} className="text-primary mb-3" style={pkg.badge_color ? { color: pkg.badge_color } : {}} />
-                  <h3 className="text-lg font-bold mb-1">{pkg.name}</h3>
+                  <h3 className="text-lg font-bold mb-1">{shownName}</h3>
                   <div className="flex items-baseline gap-2 mb-1 flex-wrap">
                     {/* fix MAJOR R23+2-F3 / F6（gemini 二轮）：sr-only 必须包含具体金额，
                         否则屏幕阅读器只读"折扣价 / 原价"，听不到数字。
-                        fix MINOR Phase-3-review（gemini 第十七轮）：所有金额统一 .toFixed(2)，避免 "$9.9" 视觉不齐 */}
+                        fix MINOR Phase-3-review（gemini 第十七轮）：所有金额统一走全局法币格式化 */}
                     {hasDiscount && (
                       <>
-                        <span className="sr-only">{t('UPGRADE.SR_DISCOUNT_PRICE', '折扣价')} ${finalPrice.toFixed(2)}</span>
-                        <span aria-hidden="true" className="text-2xl font-bold text-emerald-400">${finalPrice.toFixed(2)}</span>
-                        <span className="sr-only">，{t('UPGRADE.SR_ORIGINAL_PRICE', '原价')} ${Number(pkg.price_amount).toFixed(2)}</span>
-                        <span aria-hidden="true" className="text-xs text-outline line-through">${Number(pkg.price_amount).toFixed(2)}</span>
+                        <span className="sr-only">{t('UPGRADE.SR_DISCOUNT_PRICE', '折扣价')} {finalPriceText}</span>
+                        <span aria-hidden="true" className="text-2xl font-bold text-emerald-400">{finalPriceText}</span>
+                        <span className="sr-only">，{t('UPGRADE.SR_ORIGINAL_PRICE', '原价')} {originalPriceText}</span>
+                        <span aria-hidden="true" className="text-xs text-outline line-through">{originalPriceText}</span>
                       </>
                     )}
                     {!hasDiscount && (
-                      <span className="text-2xl font-bold">${Number(pkg.price_amount).toFixed(2)}</span>
+                      <span className="text-2xl font-bold">{originalPriceText}</span>
                     )}
                     <span className="text-xs text-on-surface-variant">/ {formatDuration(pkg.billing_period_seconds)}</span>
                   </div>
 
                   <div className="flex flex-wrap gap-1 mb-3 text-[10px]">
                     <span className="px-2 py-0.5 rounded bg-emerald-500/20 text-emerald-400">{t('UPGRADE.INSTANT', '⚡ 即时开通')}</span>
-                    {pkg.stackable && <span className="px-2 py-0.5 rounded bg-purple-500/20 text-purple-400">{t('UPGRADE.STACKABLE', '可叠加')}</span>}
+                    {Boolean(pkg.stackable) && <span className="px-2 py-0.5 rounded bg-purple-500/20 text-purple-400">{t('UPGRADE.STACKABLE', '可叠加')}</span>}
                     {hasDiscount && (
                       <span className="px-2 py-0.5 rounded bg-fuchsia-500/20 text-fuchsia-400 font-bold">
                         <span aria-hidden="true">🎟️ </span>{t('UPGRADE.COUPON_APPLIED', '使用券')}
@@ -236,8 +359,8 @@ const UpgradePage = ({ onPurchaseSuccess, isAuthenticated = true, onSignIn }) =>
                     )}
                   </div>
 
-                  {pkg.description && (
-                    <p className="text-xs text-on-surface-variant mb-3 line-clamp-2">{pkg.description}</p>
+                  {shownDescription && (
+                    <p className="text-xs text-on-surface-variant mb-3 line-clamp-2">{shownDescription}</p>
                   )}
 
                   {pkg.plans && pkg.plans.length > 0 && (
@@ -245,8 +368,10 @@ const UpgradePage = ({ onPurchaseSuccess, isAuthenticated = true, onSignIn }) =>
                       {pkg.plans.map(p => (
                         <li key={p.id} className="text-xs text-on-surface-variant flex items-start gap-1.5">
                           <Check size={12} className="text-emerald-400 shrink-0 mt-0.5" aria-hidden="true" />
-                          <span className="truncate">
-                            {p.plan?.display_name || p.plan?.name}
+                          <span className="min-w-0 break-words leading-relaxed">
+                            {String(p.plan?.display_name || p.plan?.name || '')
+                              .replaceAll('GPT', 'Codex')
+                              .replaceAll('御三家', 'Combo')}
                             {p.plan?.limit_value > 0 && (
                               <span className="text-outline"> · {p.plan.limit_value} {p.plan.limit_unit}</span>
                             )}
@@ -254,10 +379,6 @@ const UpgradePage = ({ onPurchaseSuccess, isAuthenticated = true, onSignIn }) =>
                         </li>
                       ))}
                     </ul>
-                  )}
-
-                  {pkg.bonus_balance_usd > 0 && (
-                    <div className="text-xs text-emerald-400 mb-2">{t('UPGRADE.BONUS', { amount: Number(pkg.bonus_balance_usd).toFixed(2), defaultValue: '+赠送 ${{amount}} 余额' })}</div>
                   )}
 
                   {/* 优惠券选择器（仅登录用户 + 至少 1 张可用） */}
@@ -276,7 +397,7 @@ const UpgradePage = ({ onPurchaseSuccess, isAuthenticated = true, onSignIn }) =>
                         {usableCoupons.map((c) => (
                           <option key={c.id} value={c.id}>
                             {c.snapshot_name}
-                            {c.snapshot_type === 'fixed_price' ? ` ($${c.snapshot_value})` : ''}
+                            {c.snapshot_type === 'fixed_price' ? ` (${formatCurrency(Number(c.snapshot_value || 0), 2)})` : ''}
                           </option>
                         ))}
                       </select>
@@ -292,6 +413,9 @@ const UpgradePage = ({ onPurchaseSuccess, isAuthenticated = true, onSignIn }) =>
                 </div>
               );
             })}
+                </div>
+              </section>
+            ))}
           </div>
           );
         })()}

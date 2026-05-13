@@ -6,6 +6,7 @@ import {
 } from 'lucide-react';
 import toast from 'react-hot-toast';
 import { authFetch, readAuthState } from '../utils/authFetch';
+import { isPageCacheFresh, readPageCache, writePageCache } from '../utils/pageCache';
 import Pagination from './common/Pagination';
 
 // EntryType → 显示元数据。每种类型一个图标 + 颜色 + 中文标签。
@@ -17,12 +18,13 @@ const TYPE_META = {
   topup:                       { icon: ArrowDownCircle, color: 'text-green-600',   bg: 'bg-green-50',   i18n: 'BILL.T_TOPUP',              fallback: '充值',            direction: 'in' },
   purchase_sub:                { icon: ArrowUpCircle,   color: 'text-blue-600',    bg: 'bg-blue-50',    i18n: 'BILL.T_PURCHASE_SUB',       fallback: '购买套餐',         direction: 'out' },
   purchase_addon:              { icon: ArrowUpCircle,   color: 'text-cyan-600',    bg: 'bg-cyan-50',    i18n: 'BILL.T_PURCHASE_ADDON',     fallback: '购买增量包',       direction: 'out' },
-  bonus_credit:                { icon: ArrowDownCircle, color: 'text-emerald-600', bg: 'bg-emerald-50', i18n: 'BILL.T_BONUS',              fallback: '套餐附赠',         direction: 'in' },
+  bonus_credit:                { icon: ArrowDownCircle, color: 'text-emerald-600', bg: 'bg-emerald-50', i18n: 'BILL.T_BONUS',              fallback: '奖励入账',         direction: 'in' },
   refund_sub:                  { icon: ArrowDownCircle, color: 'text-amber-600',   bg: 'bg-amber-50',   i18n: 'BILL.T_REFUND_SUB',         fallback: '订阅退款',         direction: 'in' },
   refund_topup:                { icon: ArrowUpCircle,   color: 'text-orange-600',  bg: 'bg-orange-50',  i18n: 'BILL.T_REFUND_TOPUP',       fallback: '充值退款',         direction: 'out' },
   admin_adjust:                { icon: RefreshCw,       color: 'text-purple-600',  bg: 'bg-purple-50',  i18n: 'BILL.T_ADMIN_ADJUST',       fallback: '管理员调整',       direction: 'neutral' },
   admin_grant_sub:             { icon: ArrowDownCircle, color: 'text-indigo-600',  bg: 'bg-indigo-50',  i18n: 'BILL.T_ADMIN_GRANT_SUB',    fallback: '管理员赠送订阅',   direction: 'neutral' },
   admin_grant_addon:           { icon: ArrowDownCircle, color: 'text-indigo-600',  bg: 'bg-indigo-50',  i18n: 'BILL.T_ADMIN_GRANT_ADDON',  fallback: '管理员赠送增量包', direction: 'neutral' },
+  admin_revoke_grant:          { icon: RefreshCw,       color: 'text-amber-600',   bg: 'bg-amber-50',   i18n: 'BILL.T_ADMIN_REVOKE_GRANT', fallback: '管理员收回赠送',   direction: 'neutral' },
   api_consume_balance:         { icon: Activity,        color: 'text-rose-600',    bg: 'bg-rose-50',    i18n: 'BILL.T_API_BALANCE',        fallback: '余额扣费',         direction: 'out' },
   api_usage_sub:               { icon: Activity,        color: 'text-slate-500',   bg: 'bg-slate-50',   i18n: 'BILL.T_API_SUB',            fallback: '套餐扣额度',       direction: 'usage' },
   api_usage_addon:             { icon: Activity,        color: 'text-slate-500',   bg: 'bg-slate-50',   i18n: 'BILL.T_API_ADDON',          fallback: '增量包扣额度',     direction: 'usage' },
@@ -42,12 +44,41 @@ const fmtTime = (s) => {
   return d.toLocaleString();
 };
 
+const BILLING_CACHE_TTL_MS = 30000;
+const DEFAULT_NON_USAGE_TYPES = Object.keys(TYPE_META).filter(
+  (k) => k !== 'api_usage_sub' && k !== 'api_usage_addon'
+);
+
+const getBillingAuthKey = () => {
+  const { isAdmin, userToken } = readAuthState();
+  return isAdmin ? 'admin' : userToken || 'guest';
+};
+
+const buildDefaultBillingQuery = (extra = {}) => {
+  const params = new URLSearchParams();
+  params.set('types', DEFAULT_NON_USAGE_TYPES.join(','));
+  Object.entries(extra).forEach(([k, v]) => params.set(k, v));
+  return params.toString();
+};
+
+const getBillingListCacheKey = (authKey, qs) => `billing:list:${authKey}:${qs}`;
+const getBillingSummaryCacheKey = (authKey, qs) => `billing:summary:${authKey}:${qs}`;
+
 const BillsPage = () => {
   const { t } = useTranslation();
+  const billingAuthKey = useRef(getBillingAuthKey()).current;
+  const initialListCache = readPageCache(getBillingListCacheKey(
+    billingAuthKey,
+    buildDefaultBillingQuery({ page: 1, page_size: 30 })
+  ));
+  const initialSummaryCache = readPageCache(getBillingSummaryCacheKey(
+    billingAuthKey,
+    buildDefaultBillingQuery()
+  ));
 
-  const [entries, setEntries] = useState([]);
-  const [summary, setSummary] = useState(null);
-  const [loading, setLoading] = useState(true);
+  const [entries, setEntries] = useState(() => initialListCache?.entries || []);
+  const [summary, setSummary] = useState(() => initialSummaryCache || null);
+  const [loading, setLoading] = useState(() => !initialListCache);
   const [page, setPage] = useState(1);
   const [pageSize] = useState(30);
   const [total, setTotal] = useState(0);
@@ -79,17 +110,28 @@ const BillsPage = () => {
     return params.toString();
   }, [selectedTypes, hideUsage, fromDate, toDate]);
 
-  const loadEntries = useCallback(async () => {
+  const loadEntries = useCallback(async ({ force = false } = {}) => {
     const myReqId = ++reqIdRef.current;
-    setLoading(true);
+    const qs = buildQuery({ page, page_size: pageSize });
+    const cacheKey = getBillingListCacheKey(billingAuthKey, qs);
+    const cached = readPageCache(cacheKey);
+    if (cached) {
+      setEntries(cached.entries || []);
+      setTotal(cached.total || 0);
+      setLoading(false);
+      if (!force && isPageCacheFresh(cacheKey, BILLING_CACHE_TTL_MS)) return;
+    } else {
+      setLoading(true);
+    }
     try {
-      const qs = buildQuery({ page, page_size: pageSize });
       const json = await authFetch(`/api/billing/mine?${qs}`);
       // M8: 旧请求晚于新请求返回时丢弃结果
       if (myReqId !== reqIdRef.current) return;
       if (json.success) {
-        setEntries(json.data || []);
-        setTotal(json.meta?.total || 0);
+        const next = { entries: json.data || [], total: json.meta?.total || 0 };
+        writePageCache(cacheKey, next);
+        setEntries(next.entries);
+        setTotal(next.total);
       } else {
         toast.error(t('BILL.LOAD_FAIL', '加载账单失败'));
       }
@@ -99,19 +141,28 @@ const BillsPage = () => {
     } finally {
       if (myReqId === reqIdRef.current) setLoading(false);
     }
-  }, [buildQuery, page, pageSize, t]);
+  }, [billingAuthKey, buildQuery, page, pageSize, t]);
 
-  const loadSummary = useCallback(async () => {
+  const loadSummary = useCallback(async ({ force = false } = {}) => {
     const myReqId = ++summaryReqIdRef.current;
+    const qs = buildQuery();
+    const cacheKey = getBillingSummaryCacheKey(billingAuthKey, qs);
+    const cached = readPageCache(cacheKey);
+    if (cached) {
+      setSummary(cached);
+      if (!force && isPageCacheFresh(cacheKey, BILLING_CACHE_TTL_MS)) return;
+    }
     try {
-      const qs = buildQuery();
       const json = await authFetch(`/api/billing/mine/summary?${qs}`);
       if (myReqId !== summaryReqIdRef.current) return;
-      if (json.success) setSummary(json.data);
+      if (json.success) {
+        writePageCache(cacheKey, json.data);
+        setSummary(json.data);
+      }
     } catch {
       // 静默：列表已经显示了，summary 失败不阻塞
     }
-  }, [buildQuery]);
+  }, [billingAuthKey, buildQuery]);
 
   useEffect(() => { loadEntries(); }, [loadEntries]);
   useEffect(() => { loadSummary(); }, [loadSummary]);
@@ -173,7 +224,7 @@ const BillsPage = () => {
         <div className="flex gap-2">
           <button
             type="button"
-            onClick={() => { loadEntries(); loadSummary(); }}
+            onClick={() => { loadEntries({ force: true }); loadSummary({ force: true }); }}
             className="inline-flex items-center gap-1.5 px-3 py-2 rounded-lg border border-outline-variant text-sm hover:bg-on-surface/[0.04]"
           >
             <RefreshCw className="w-4 h-4" />{t('BILL.REFRESH', '刷新')}

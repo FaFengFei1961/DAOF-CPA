@@ -2,10 +2,9 @@
 //
 // 平台号池额度采集 HTTP 端点。
 //
-// 三个 endpoint：
+// 两个 endpoint：
 //   - GET  /api/admin/credits-pool          -> admin 全量明细 (auth_index、邮箱等敏感字段)
 //   - POST /api/admin/credits-pool/refresh  -> 立即触发一轮全量刷新（异步，立刻返回）
-//   - GET  /api/credits-pool/summary        -> 公开按模型聚合数据（无 auth_index、无 providers）
 //
 // 实际数据采集 / 缓存 / 重试逻辑在 proxy/credits_pool.go 内常驻 goroutine。
 package controller
@@ -96,28 +95,5 @@ func RefreshAdminCreditsPool(c *fiber.Ctx) error {
 		"success":      true,
 		"message":      "已触发后台刷新，预计数十秒后完成",
 		"message_code": "SUCCESS_CREDITS_REFRESH_TRIGGERED",
-	})
-}
-
-// GetPublicCreditsSummary 给普通用户看的聚合数据：每个模型剩余多少、健康节点数。
-// 不包含 auth_index / email / providers 列表 / 重试细节。
-//
-// 注意：本端点是有意公开的（设计上让登录用户在首页看到号池健康度），但通过：
-//  1. 移除 ModelSummary.Providers 字段，不暴露平台采购的 provider 组合
-//  2. 在 main.go 路由层加适度限流（防止持续探测 + 时间攻击）
-//  3. 前端 CreditsPoolCard 仅在登录用户的 dashboard 视图渲染
-//
-// 这三层共同减少信息泄漏风险。
-func GetPublicCreditsSummary(c *fiber.Ctx) error {
-	summaries, lastFull := proxy.SnapshotByModel()
-
-	return c.JSON(fiber.Map{
-		"success": true,
-		"data": fiber.Map{
-			"models":      summaries,
-			"last_full":   lastFull,
-			"stale":       proxy.IsStale(),
-			"server_time": time.Now(),
-		},
 	})
 }

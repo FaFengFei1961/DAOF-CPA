@@ -27,18 +27,19 @@ import (
 // fix MAJOR（codex 第十七轮）：补齐 admin_grant_* 与 api_usage_pending_reconcile，
 // 否则 admin 账单页过滤会把"赠送账单"和"待对账记录"排除，财务对账出现 hole。
 var allowedBillingTypes = map[string]bool{
-	database.BillingTypeTopup:                   true,
-	database.BillingTypePurchaseSub:             true,
-	database.BillingTypePurchaseAddon:           true,
-	database.BillingTypeBonusCredit:             true,
-	database.BillingTypeRefundSub:               true,
-	database.BillingTypeRefundTopup:             true,
-	database.BillingTypeAdminAdjust:             true,
-	database.BillingTypeAdminGrantSub:           true,
-	database.BillingTypeAdminGrantAddon:         true,
-	database.BillingTypeApiConsumeBalance:       true,
-	database.BillingTypeApiUsageSub:             true,
-	database.BillingTypeApiUsageAddon:           true,
+	database.BillingTypeTopup:                    true,
+	database.BillingTypePurchaseSub:              true,
+	database.BillingTypePurchaseAddon:            true,
+	database.BillingTypeBonusCredit:              true,
+	database.BillingTypeRefundSub:                true,
+	database.BillingTypeRefundTopup:              true,
+	database.BillingTypeAdminAdjust:              true,
+	database.BillingTypeAdminGrantSub:            true,
+	database.BillingTypeAdminGrantAddon:          true,
+	database.BillingTypeAdminRevokeGrant:         true,
+	database.BillingTypeApiConsumeBalance:        true,
+	database.BillingTypeApiUsageSub:              true,
+	database.BillingTypeApiUsageAddon:            true,
 	database.BillingTypeApiUsagePendingReconcile: true,
 }
 
@@ -354,6 +355,7 @@ func exportBillingCSV(c *fiber.Ctx, userID uint) error {
 //   - UTF-8 BOM (\uFEFF) 在前 → 实际有效字符是第二字节
 //   - 前导空格 / 制表符 / 换行 → Excel 经常 trim 后再解析公式
 //   - 字节级判断不能识别 BOM（多字节）
+//
 // 改为：先 strings.TrimLeft 掉 BOM + 空白控制字符，看剩余首字符是否危险。
 // 注意：返回的转义结果用原始 s 加前缀单引号，**保留原文** 不做剥除（审计追溯）。
 func csvSanitize(s string) string {
@@ -386,7 +388,7 @@ func localizeBillingType(t string) string {
 	case database.BillingTypePurchaseAddon:
 		return "购买增量包"
 	case database.BillingTypeBonusCredit:
-		return "套餐附赠"
+		return "奖励入账"
 	case database.BillingTypeRefundSub:
 		return "订阅退款"
 	case database.BillingTypeRefundTopup:
@@ -397,6 +399,8 @@ func localizeBillingType(t string) string {
 		return "管理员赠送订阅"
 	case database.BillingTypeAdminGrantAddon:
 		return "管理员赠送增量包"
+	case database.BillingTypeAdminRevokeGrant:
+		return "管理员收回赠送"
 	case database.BillingTypeApiConsumeBalance:
 		return "余额扣费"
 	case database.BillingTypeApiUsageSub:

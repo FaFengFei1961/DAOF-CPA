@@ -62,6 +62,7 @@ ui/dist/
 .DS_Store
 
 # ─── 本地 Agent 配置 ───────────────────────────────
+.claude/
 .claude/*.local.json
 
 # ─── 不进版本库的 admin 操作产物 ─────────────────────

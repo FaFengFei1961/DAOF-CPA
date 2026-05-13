@@ -3,19 +3,27 @@ import { useTranslation } from 'react-i18next';
 import { MessageSquare, Send, Plus, X, ArrowLeft, RefreshCw, CheckCircle2, ArrowDown } from 'lucide-react';
 import toast from 'react-hot-toast';
 import { useConfirm } from '../context/ConfirmContext';
-import { authFetch, isLoggedIn } from '../utils/authFetch';
+import { authFetch, isLoggedIn, readAuthState } from '../utils/authFetch';
+import { isPageCacheFresh, readPageCache, writePageCache } from '../utils/pageCache';
 import { StorePage } from './store/StorePrimitives';
 
 // 用户工单页（独立 sidebar tab）
 // - 列表：所有工单（按 last_message_at 倒序），含未读徽章
 // - 进入工单：消息流（user/admin 气泡）+ 输入框 + "结束会话"按钮
 // - 创建：输入 subject + 第一条消息
+const TICKETS_CACHE_TTL_MS = 30000;
+const getTicketsCacheKey = () => {
+  const { isAdmin, userToken } = readAuthState();
+  return `tickets:${isAdmin ? 'admin' : userToken || 'guest'}`;
+};
+
 const Tickets = () => {
   const { t } = useTranslation();
   const confirm = useConfirm();
   const [view, setView] = useState('list'); // list | create | detail
-  const [tickets, setTickets] = useState([]);
-  const [loading, setLoading] = useState(true);
+  const ticketsCacheKey = React.useMemo(getTicketsCacheKey, []);
+  const [tickets, setTickets] = useState(() => readPageCache(ticketsCacheKey) || []);
+  const [loading, setLoading] = useState(() => !readPageCache(ticketsCacheKey));
   const [activeTicket, setActiveTicket] = useState(null);
   const [activeMessages, setActiveMessages] = useState([]);
   const [composingSubject, setComposingSubject] = useState('');
@@ -84,17 +92,30 @@ const Tickets = () => {
     if (isNearBottom(messagesContainerRef.current)) setShowNewMsgBtn(false);
   };
 
-  const loadList = useCallback(async () => {
+  const loadList = useCallback(async ({ force = false } = {}) => {
     if (!isLoggedIn()) { if (mountedRef.current) setLoading(false); return; }
-    if (mountedRef.current) setLoading(true);
+    const cached = readPageCache(ticketsCacheKey);
+    if (cached) {
+      if (mountedRef.current) {
+        setTickets(cached);
+        setLoading(false);
+      }
+      if (!force && isPageCacheFresh(ticketsCacheKey, TICKETS_CACHE_TTL_MS)) return;
+    } else if (mountedRef.current) {
+      setLoading(true);
+    }
     try {
       const json = await authFetch('/api/tickets/mine?page=1&page_size=30');
-      if (mountedRef.current && json.success) setTickets(json.data || []);
+      if (mountedRef.current && json.success) {
+        const nextTickets = json.data || [];
+        writePageCache(ticketsCacheKey, nextTickets);
+        setTickets(nextTickets);
+      }
     } catch { /* 静默：toast 在父级或下一次刷新时表达 */ }
     finally {
       if (mountedRef.current) setLoading(false);
     }
-  }, []);
+  }, [ticketsCacheKey]);
 
   const loadDetail = useCallback(async (ticketId, gen) => {
     try {
@@ -150,7 +171,7 @@ const Tickets = () => {
       if (json.success) {
         toast.success(t('TICKET.CREATED', '工单已创建'));
         setComposingSubject(''); setComposingBody('');
-        await loadList();
+        await loadList({ force: true });
         if (json.data?.id) await openTicket(json.data.id);
       } else if (json.message_code === 'ERR_TOO_MANY_MESSAGES') {
         toast.error(t('TICKET.RATE_LIMIT', '操作过于频繁，每小时最多 10 条消息'));
@@ -245,7 +266,7 @@ const Tickets = () => {
         // 关闭工单后 UI 不刷新，"结束会话" 按钮残留直到手动刷新页面。
         detailGenRef.current += 1;
         await loadDetail(activeTicket.id, detailGenRef.current);
-        await loadList();
+        await loadList({ force: true });
       } else {
         toast.error(json.message || t('TICKET.CLOSE_FAIL', '关闭失败'));
       }
@@ -265,7 +286,7 @@ const Tickets = () => {
         <div className="w-full max-w-3xl mx-auto px-4 md:px-8 py-6">
           <button
             type="button"
-            onClick={() => { setView('list'); setActiveMessages([]); loadList(); }}
+            onClick={() => { setView('list'); setActiveMessages([]); loadList({ force: true }); }}
             className="mb-4 text-sm text-on-surface-variant hover:text-on-surface flex items-center gap-1"
           >
             <ArrowLeft size={14} /> {t('TICKET.BACK', '返回列表')}
@@ -280,7 +301,7 @@ const Tickets = () => {
       <div className="w-full max-w-3xl mx-auto px-4 md:px-8 py-6">
         <button
           type="button"
-          onClick={() => { setView('list'); setActiveTicket(null); setActiveMessages([]); loadList(); }}
+          onClick={() => { setView('list'); setActiveTicket(null); setActiveMessages([]); loadList({ force: true }); }}
           className="mb-4 text-sm text-on-surface-variant hover:text-on-surface flex items-center gap-1"
         >
           <ArrowLeft size={14} /> {t('TICKET.BACK', '返回列表')}
@@ -457,7 +478,7 @@ const Tickets = () => {
           <div className="flex gap-2">
             <button
               type="button"
-              onClick={loadList}
+              onClick={() => loadList({ force: true })}
               className="h-9 w-9 flex items-center justify-center rounded-control bg-surface-container hover:bg-on-surface/[0.04]"
               aria-label={t('SYSTEM.REFRESH', '刷新')}
             >

@@ -4,7 +4,7 @@
 //
 // **核心约束**：对任意一段时间窗口 [t0, t1]，对每个 user：
 //
-//	  ΔQuota(user) == Σ AmountUSD(billing entries[t0..t1])
+//	ΔQuota(user) == Σ AmountUSD(billing entries[t0..t1])
 //
 // 其中：
 //   - ΔQuota = user.Quota(t1) - user.Quota(t0)
@@ -18,11 +18,11 @@
 //
 // 覆盖路径（按业务时序串成一条端到端 fixture，每步检查守恒）：
 //  1. Topup paid 回调 → ΔQuota = +AmountUSD; billing(topup) = +AmountUSD
-//  2. 购买含 bonus 套餐 → ΔQuota = -(price - bonus); billing = (-price) + (+bonus)
+//  2. 购买套餐 → ΔQuota = -price; billing = -price
 //  3. AdminRefundSubscription → ΔQuota = +refund; billing = +refund
 //  4. AdminRefundTopup reclaim_quota=true → ΔQuota = -reclaim; billing = -reclaim
 //  5. AdminRefundTopup reclaim_quota=false → ΔQuota = 0; billing = 0（保留额度）
-//  6. AdminGrantSubscription apply_bonus=true → ΔQuota = +bonus_total; billing(grant)=0 + billing(bonus)=+bonus_total
+//  6. AdminGrantSubscription → ΔQuota = 0; billing(grant)=0
 //  7. UpdateUser admin 手动调额 → ΔQuota = newQuota - oldQuota; billing(admin_adjust) = same delta
 //
 // 每条路径单独子测试 + 串行场景跑完汇总验证。
@@ -123,14 +123,13 @@ func TestConservation_Topup_Direct(t *testing.T) {
 	}
 }
 
-// TestConservation_PurchaseWithBonus 购买含 bonus 套餐：
-// 价格 $10、bonus $3 → ΔQuota = -7 USD; billing = (-$10 purchase) + (+$3 bonus)
-func TestConservation_PurchaseWithBonus(t *testing.T) {
+// TestConservation_Purchase 购买套餐：
+// 价格 $10 → ΔQuota = -10 USD; billing = -$10 purchase
+func TestConservation_Purchase(t *testing.T) {
 	setupSubTestDB(t)
 	user := seedTestUser(t, 100)
 	pkg := seedPackage(t, func(p *database.Package) {
 		p.PriceAmount = 10 * database.MicroPerUSD
-		p.BonusBalanceUSD = 3 * database.MicroPerUSD
 	})
 	app := newTestApp(user)
 
@@ -142,21 +141,20 @@ func TestConservation_PurchaseWithBonus(t *testing.T) {
 		t.Fatalf("purchase: %d", code)
 	}
 
-	delta := assertConservation(t, user.ID, beforeMicro, atTime, "purchase+bonus")
-	wantDelta := int64(-7 * database.MicroPerUSD) // -10 + 3
+	delta := assertConservation(t, user.ID, beforeMicro, atTime, "purchase")
+	wantDelta := int64(-10 * database.MicroPerUSD)
 	if delta != wantDelta {
 		t.Errorf("expected delta=%d, got %d", wantDelta, delta)
 	}
 }
 
-// TestConservation_PurchaseWithFreeCoupon 免费券购买：实付 0、bonus 被券价封顶 0
-// → ΔQuota = 0; billing 总和 = 0（应该有 -0 purchase + 0 bonus，净 0）
+// TestConservation_PurchaseWithFreeCoupon 免费券购买：实付 0
+// → ΔQuota = 0; billing 总和 = 0
 func TestConservation_PurchaseWithFreeCoupon(t *testing.T) {
 	setupSubTestDB(t)
 	user := seedTestUser(t, 100)
 	pkg := seedPackage(t, func(p *database.Package) {
 		p.PriceAmount = 20 * database.MicroPerUSD
-		p.BonusBalanceUSD = 5 * database.MicroPerUSD
 	})
 
 	freeCoupon := database.UserCoupon{
@@ -177,7 +175,7 @@ func TestConservation_PurchaseWithFreeCoupon(t *testing.T) {
 
 	delta := assertConservation(t, user.ID, beforeMicro, atTime, "free-coupon-purchase")
 	if delta != 0 {
-		t.Errorf("expected delta=0 (free coupon + bonus capped), got %d", delta)
+		t.Errorf("expected delta=0 (free coupon), got %d", delta)
 	}
 }
 
@@ -215,35 +213,30 @@ func TestConservation_AdminRefundSub(t *testing.T) {
 	}
 }
 
-// TestConservation_AdminGrantSub_WithBonus 管理员赠送：
-// admin_grant_sub 类型 AmountUSD=0；但 apply_bonus 时聚合 bonus_credit 入账。
-// → ΔQuota = +bonus_total; billing 总和 = 0 (grants) + bonus_total = bonus_total
-func TestConservation_AdminGrantSub_WithBonus(t *testing.T) {
+// TestConservation_AdminGrantSub 管理员赠送：
+// admin_grant_sub 类型 AmountUSD=0，user.Quota 不变。
+func TestConservation_AdminGrantSub(t *testing.T) {
 	setupSubTestDB(t)
 	admin := seedAdminUser(t)
 	user := seedTestUser(t, 0)
-	pkg := seedPackage(t, func(p *database.Package) {
-		p.BonusBalanceUSD = 5 * database.MicroPerUSD // $5 bonus
-	})
+	pkg := seedPackage(t)
 	app := newAdminGrantTestApp(admin)
 
 	beforeMicro, atTime := snapshotUser(t, user.ID)
 
 	code, _ := doJSON(t, app, "POST", "/admin/sub/grant", map[string]any{
-		"user_id":     user.ID,
-		"package_id":  pkg.ID,
-		"quantity":    2,
-		"reason":      "守恒测试",
-		"apply_bonus": true,
+		"user_id":    user.ID,
+		"package_id": pkg.ID,
+		"quantity":   2,
+		"reason":     "守恒测试",
 	})
 	if code != 200 {
 		t.Fatalf("grant: %d", code)
 	}
 
-	delta := assertConservation(t, user.ID, beforeMicro, atTime, "admin-grant-with-bonus")
-	wantDelta := int64(2 * 5 * database.MicroPerUSD) // 2 份 × $5 bonus
-	if delta != wantDelta {
-		t.Errorf("expected delta=%d, got %d", wantDelta, delta)
+	delta := assertConservation(t, user.ID, beforeMicro, atTime, "admin-grant")
+	if delta != 0 {
+		t.Errorf("expected delta=0, got %d", delta)
 	}
 }
 
@@ -284,7 +277,7 @@ func TestConservation_AdminAdjustQuota(t *testing.T) {
 	}
 }
 
-// TestConservation_EndToEnd 端到端流水：充值 → 购买含 bonus → admin 退款 → admin 赠送+bonus → admin 调额。
+// TestConservation_EndToEnd 端到端流水：充值 → 购买套餐 → admin 退款 → admin 赠送 → admin 调额。
 //
 // 总账验证：单 user 历史所有事件后 user.Quota == initial + Σbilling。
 // 这是最强的不变量检测——任何路径的 quota/billing 漂移都会让最终值偏。
@@ -318,10 +311,9 @@ func TestConservation_EndToEnd(t *testing.T) {
 	// 所以这里手动同步一次让后续 PurchasePackage 的事务外预检通过）
 	user.Quota += topupMicro
 
-	// === 阶段 2：购买含 bonus 套餐 $10 / bonus $3 ===
+	// === 阶段 2：购买套餐 $10 ===
 	pkg := seedPackage(t, func(p *database.Package) {
 		p.PriceAmount = 10 * database.MicroPerUSD
-		p.BonusBalanceUSD = 3 * database.MicroPerUSD
 	})
 	userApp := newTestApp(user)
 	if code, _ := doJSON(t, userApp, "POST", "/purchase",
@@ -338,14 +330,13 @@ func TestConservation_EndToEnd(t *testing.T) {
 		t.Fatalf("refund: %d", code)
 	}
 
-	// === 阶段 4：admin 赠送 1 份附 bonus（$3） ===
+	// === 阶段 4：admin 赠送 1 份 ===
 	grantApp := newAdminGrantTestApp(admin)
 	if code, _ := doJSON(t, grantApp, "POST", "/admin/sub/grant", map[string]any{
-		"user_id":     user.ID,
-		"package_id":  pkg.ID,
-		"quantity":    1,
-		"reason":      "E2E grant",
-		"apply_bonus": true,
+		"user_id":    user.ID,
+		"package_id": pkg.ID,
+		"quantity":   1,
+		"reason":     "E2E grant",
 	}); code != 200 {
 		t.Fatalf("grant: %d", code)
 	}

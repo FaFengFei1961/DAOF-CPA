@@ -27,8 +27,8 @@ import (
 	"github.com/tidwall/sjson"
 	"gorm.io/gorm"
 
-	sdktranslator "github.com/router-for-me/CLIProxyAPI/v6/sdk/translator"
-	_ "github.com/router-for-me/CLIProxyAPI/v6/sdk/translator/builtin"
+	sdktranslator "github.com/router-for-me/CLIProxyAPI/v7/sdk/translator"
+	_ "github.com/router-for-me/CLIProxyAPI/v7/sdk/translator/builtin"
 )
 
 var (
@@ -179,6 +179,29 @@ func estimatePrecheckTokens(body []byte) int {
 			addText(input.String())
 		}
 	}
+	// Gemini contents / systemInstruction
+	if contents := gjson.GetBytes(body, "contents"); contents.IsArray() {
+		contents.ForEach(func(_, c gjson.Result) bool {
+			addText(c.Get("role").String())
+			c.Get("parts").ForEach(func(_, p gjson.Result) bool {
+				if text := p.Get("text"); text.Exists() {
+					addText(text.String())
+				} else {
+					nonTextParts++
+				}
+				return true
+			})
+			return true
+		})
+	}
+	if sys := gjson.GetBytes(body, "systemInstruction.parts"); sys.IsArray() {
+		sys.ForEach(func(_, p gjson.Result) bool {
+			if text := p.Get("text"); text.Exists() {
+				addText(text.String())
+			}
+			return true
+		})
+	}
 	// tools / functions schema（OpenAI tool calling）— description + parameters JSON 都计入
 	if tools := gjson.GetBytes(body, "tools"); tools.IsArray() {
 		tools.ForEach(func(_, p gjson.Result) bool {
@@ -201,21 +224,82 @@ func estimatePrecheckTokens(body []byte) int {
 	return estimated
 }
 
+func extractGeminiModelFromPath(path string) string {
+	p, err := url.PathUnescape(path)
+	if err != nil {
+		p = path
+	}
+	lower := strings.ToLower(p)
+	idx := strings.Index(lower, "/models/")
+	if idx < 0 {
+		return ""
+	}
+	modelAction := p[idx+len("/models/"):]
+	if slash := strings.Index(modelAction, "/"); slash >= 0 {
+		modelAction = modelAction[:slash]
+	}
+	if colon := strings.LastIndex(modelAction, ":"); colon >= 0 {
+		modelAction = modelAction[:colon]
+	}
+	modelAction = strings.TrimSpace(strings.TrimPrefix(modelAction, "models/"))
+	return modelAction
+}
+
+func isGeminiStreamPath(path string) bool {
+	return strings.Contains(strings.ToLower(path), ":streamgeneratecontent")
+}
+
+func isClaudeCountTokensPath(path string) bool {
+	return strings.Contains(strings.ToLower(path), "/messages/count_tokens")
+}
+
+func recordProxyApiLog(userID uint, token, modelName string, status int, clientIP string, startTime time.Time, requestPath, errorType, errorMessage string) {
+	modelName = strings.TrimSpace(modelName)
+	if modelName == "" {
+		modelName = "unknown"
+	}
+	if status >= 200 && status < 400 {
+		errorType = ""
+		errorMessage = ""
+	}
+	database.DB.Create(&database.ApiLog{
+		UserID:       userID,
+		TokenName:    HashTokenForLog(token),
+		ModelName:    modelName,
+		Status:       status,
+		IPAddress:    clientIP,
+		Latency:      time.Since(startTime).Milliseconds(),
+		Cost:         0,
+		RequestPath:  sanitizeError(requestPath, 160),
+		ErrorType:    sanitizeError(errorType, 64),
+		ErrorMessage: sanitizeError(errorMessage, 512),
+		CreatedAt:    time.Now(),
+	})
+}
+
 // ChatCompletionProxyHandler intercept and forward OpenAI /v1/chat/completions stream
 func ChatCompletionProxyHandler(c *fiber.Ctx) error {
 	startTime := time.Now()
 	clientIP := c.IP()
+	path := strings.Clone(c.Path())
+	srcFormat := inferSourceFormat(path)
 
 	// 1. High Speed Auth Verification
 	authHeader := string([]byte(c.Get("Authorization")))
-	token := strings.TrimPrefix(authHeader, "Bearer ")
+	token := ""
+	if strings.HasPrefix(strings.TrimSpace(authHeader), "Bearer ") {
+		token = strings.TrimSpace(strings.TrimPrefix(strings.TrimSpace(authHeader), "Bearer "))
+	}
+	if token == "" && srcFormat == sdktranslator.FormatGemini {
+		token = strings.TrimSpace(c.Get("x-goog-api-key"))
+	}
 
 	authMutex.RLock()
 	user, exists := AuthCache[token]
 	authMutex.RUnlock()
 
 	if !exists {
-		database.DB.Create(&database.ApiLog{UserID: 0, TokenName: HashTokenForLog(token), ModelName: "unknown", Status: 401, IPAddress: clientIP, Latency: time.Since(startTime).Milliseconds(), Cost: 0, CreatedAt: time.Now()})
+		recordProxyApiLog(0, token, "unknown", 401, clientIP, startTime, path, "auth_error", "Invalid API Key")
 		return c.Status(401).JSON(fiber.Map{"error": fiber.Map{"message": "Invalid API Key", "type": "auth_error"}})
 	}
 	// fix Major（codex 第五轮）：纵深防御——即使 RefreshUserAuth 漏过封禁用户的清理（DB 异步竞态），
@@ -224,7 +308,7 @@ func ChatCompletionProxyHandler(c *fiber.Ctx) error {
 		authMutex.Lock()
 		delete(AuthCache, token)
 		authMutex.Unlock()
-		database.DB.Create(&database.ApiLog{UserID: user.ID, TokenName: HashTokenForLog(token), ModelName: "unknown", Status: 403, IPAddress: clientIP, Latency: time.Since(startTime).Milliseconds(), Cost: 0, CreatedAt: time.Now()})
+		recordProxyApiLog(user.ID, token, "unknown", 403, clientIP, startTime, path, "auth_error", "Account suspended")
 		return c.Status(403).JSON(fiber.Map{"error": fiber.Map{"message": "Account suspended", "type": "auth_error"}})
 	}
 
@@ -235,15 +319,15 @@ func ChatCompletionProxyHandler(c *fiber.Ctx) error {
 	// Intercept Sub-token lifespan and quota logic
 	if isSubToken {
 		if subToken.Status != 1 {
-			database.DB.Create(&database.ApiLog{UserID: user.ID, TokenName: HashTokenForLog(token), ModelName: "unknown", Status: 401, IPAddress: clientIP, Latency: time.Since(startTime).Milliseconds(), Cost: 0, CreatedAt: time.Now()})
+			recordProxyApiLog(user.ID, token, "unknown", 401, clientIP, startTime, path, "auth_error", "API Key is disabled or frozen")
 			return c.Status(401).JSON(fiber.Map{"error": fiber.Map{"message": "API Key is disabled or frozen", "type": "auth_error"}})
 		}
 		if subToken.ExpiredAt != nil && time.Now().After(*subToken.ExpiredAt) {
-			database.DB.Create(&database.ApiLog{UserID: user.ID, TokenName: HashTokenForLog(token), ModelName: "unknown", Status: 401, IPAddress: clientIP, Latency: time.Since(startTime).Milliseconds(), Cost: 0, CreatedAt: time.Now()})
+			recordProxyApiLog(user.ID, token, "unknown", 401, clientIP, startTime, path, "auth_error", "API Key has expired")
 			return c.Status(401).JSON(fiber.Map{"error": fiber.Map{"message": "API Key has expired", "type": "auth_error"}})
 		}
 		if subToken.QuotaLimit > 0 && subToken.UsedQuota >= subToken.QuotaLimit {
-			database.DB.Create(&database.ApiLog{UserID: user.ID, TokenName: HashTokenForLog(token), ModelName: "unknown", Status: 403, IPAddress: clientIP, Latency: time.Since(startTime).Milliseconds(), Cost: 0, CreatedAt: time.Now()})
+			recordProxyApiLog(user.ID, token, "unknown", 403, clientIP, startTime, path, "quota_exceeded", "API Key has reached its quota limit")
 			return c.Status(403).JSON(fiber.Map{"error": fiber.Map{"message": "API Key has reached its quota limit", "type": "quota_exceeded"}})
 		}
 	}
@@ -254,14 +338,17 @@ func ChatCompletionProxyHandler(c *fiber.Ctx) error {
 	copy(body, rawBody)
 
 	modelResult := gjson.GetBytes(body, "model")
-	if !modelResult.Exists() {
-		database.DB.Create(&database.ApiLog{UserID: user.ID, TokenName: HashTokenForLog(token), ModelName: "unknown", Status: 400, IPAddress: clientIP, Latency: time.Since(startTime).Milliseconds(), Cost: 0, CreatedAt: time.Now()})
+	modelName := strings.TrimSpace(modelResult.String())
+	if modelName == "" && srcFormat == sdktranslator.FormatGemini {
+		modelName = extractGeminiModelFromPath(path)
+	}
+	if modelName == "" {
+		recordProxyApiLog(user.ID, token, "unknown", 400, clientIP, startTime, path, "invalid_request", "Model is required")
 		return c.Status(400).JSON(fiber.Map{"error": fiber.Map{"message": "Model is required", "type": "invalid_request"}})
 	}
-	modelName := modelResult.String()
 
 	// fix CRITICAL C1（codex 第十五轮）：precheck 必须传**估算的 token 数**，而非 0。
-	// 否则对于 limit_unit=input_tokens / total_tokens / weighted_tokens / usd_equivalent 的订阅 plan，
+	// 否则对于 limit_unit=input_tokens / total_tokens / weighted_tokens / api_cost_usd 的订阅 plan，
 	// computeDelta=0 → atomicConsume 永远放行 → 上游服务 → commit 时 BalanceConsumeEnabled=false 不扣费 →
 	// 用户可重复白嫖 token-unit 订阅。
 	//
@@ -280,16 +367,20 @@ func ChatCompletionProxyHandler(c *fiber.Ctx) error {
 		precheckOutputTokens = int(maxTok) // OpenAI Responses API
 	} else if maxTok := gjson.GetBytes(body, "max_completion_tokens").Int(); maxTok > 0 {
 		precheckOutputTokens = int(maxTok)
+	} else if maxTok := gjson.GetBytes(body, "generationConfig.maxOutputTokens").Int(); maxTok > 0 {
+		precheckOutputTokens = int(maxTok)
 	}
 	// 客户端可能传巨大值想绕开预检，cap 到合理上限（与窗口相比仍是有意义的占位）
 	if precheckOutputTokens > 100000 {
 		precheckOutputTokens = 100000
 	}
+	precheckCostMicroUSD := estimatePrecheckBalanceDelta(modelName, precheckInputTokens, precheckOutputTokens)
 	engineDecision := Decide(EngineRequest{
 		UserID:       user.ID,
 		ModelName:    modelName,
 		InputTokens:  precheckInputTokens,
 		OutputTokens: precheckOutputTokens,
+		CostMicroUSD: precheckCostMicroUSD,
 		IsPrecheck:   true,
 	})
 	if !engineDecision.Allowed {
@@ -300,17 +391,17 @@ func ChatCompletionProxyHandler(c *fiber.Ctx) error {
 		// fix CRITICAL R23+2-C3：DB 加载失败 fail-closed 503（让客户端 backoff），
 		// 而不是 402 让用户以为"额度用尽"
 		if engineDecision.NeedsRetry {
-			database.DB.Create(&database.ApiLog{UserID: user.ID, TokenName: HashTokenForLog(token), ModelName: modelName, Status: 503, IPAddress: clientIP, Latency: time.Since(startTime).Milliseconds(), Cost: 0, CreatedAt: time.Now()})
+			recordProxyApiLog(user.ID, token, modelName, 503, clientIP, startTime, path, "subscription_load_failed", msg)
 			return c.Status(503).JSON(fiber.Map{"error": fiber.Map{"message": msg, "type": "service_unavailable", "code": "subscription_load_failed"}})
 		}
-		database.DB.Create(&database.ApiLog{UserID: user.ID, TokenName: HashTokenForLog(token), ModelName: modelName, Status: 402, IPAddress: clientIP, Latency: time.Since(startTime).Milliseconds(), Cost: 0, CreatedAt: time.Now()})
+		recordProxyApiLog(user.ID, token, modelName, 402, clientIP, startTime, path, "subscription_required", msg)
 		return c.Status(402).JSON(fiber.Map{"error": fiber.Map{"message": msg, "type": "subscription_required"}})
 	}
 	// fallback 到余额：必须 (1) BalanceConsumeEnabled (2) 窗口限额未用尽 (3) 余额>0。
 	// 项目未上线，不保留绕过余额消费开关的旧直扣路径。
 	if engineDecision.FallbackToBalance {
 		if !user.BalanceConsumeEnabled {
-			database.DB.Create(&database.ApiLog{UserID: user.ID, TokenName: HashTokenForLog(token), ModelName: modelName, Status: 402, IPAddress: clientIP, Latency: time.Since(startTime).Milliseconds(), Cost: 0, CreatedAt: time.Now()})
+			recordProxyApiLog(user.ID, token, modelName, 402, clientIP, startTime, path, "subscription_required", "quota exhausted and balance consume disabled")
 			return c.Status(402).JSON(fiber.Map{"error": fiber.Map{
 				"message":      "您已用尽订阅额度。请购买套餐，或在「账号设置 → 余额消费控制」中开启余额消费。",
 				"type":         "subscription_required",
@@ -327,9 +418,8 @@ func ChatCompletionProxyHandler(c *fiber.Ctx) error {
 		//   - 按 modelName 在 RouteCache 中找**最贵**路由（HighInput/HighOutput 阈值场景也覆盖）
 		//   - delta = precheckInput * maxInput + precheckOutput * maxOutput（USD/token）
 		//   - 找不到路由 → 用保守上界 $30/1M（覆盖 GPT-4 Turbo、Claude Opus 等高端档位）
-		estDeltaMicroUSD := estimatePrecheckBalanceDelta(modelName, precheckInputTokens, precheckOutputTokens)
-		if !CheckBalanceConsumeAllowed(user, estDeltaMicroUSD) {
-			database.DB.Create(&database.ApiLog{UserID: user.ID, TokenName: HashTokenForLog(token), ModelName: modelName, Status: 402, IPAddress: clientIP, Latency: time.Since(startTime).Milliseconds(), Cost: 0, CreatedAt: time.Now()})
+		if !CheckBalanceConsumeAllowed(user, precheckCostMicroUSD) {
+			recordProxyApiLog(user.ID, token, modelName, 402, clientIP, startTime, path, "balance_limit_reached", "balance consume window limit reached")
 			return c.Status(402).JSON(fiber.Map{"error": fiber.Map{
 				"message":      "本周期余额消费已达上限，请提高限额或等待下次重置。",
 				"type":         "balance_limit_reached",
@@ -337,7 +427,7 @@ func ChatCompletionProxyHandler(c *fiber.Ctx) error {
 			}})
 		}
 		if user.Quota <= 0 {
-			database.DB.Create(&database.ApiLog{UserID: user.ID, TokenName: HashTokenForLog(token), ModelName: modelName, Status: 403, IPAddress: clientIP, Latency: time.Since(startTime).Milliseconds(), Cost: 0, CreatedAt: time.Now()})
+			recordProxyApiLog(user.ID, token, modelName, 403, clientIP, startTime, path, "quota_exceeded", "insufficient balance")
 			return c.Status(403).JSON(fiber.Map{"error": fiber.Map{
 				"message":      "余额不足，请充值",
 				"type":         "quota_exceeded",
@@ -358,19 +448,14 @@ func ChatCompletionProxyHandler(c *fiber.Ctx) error {
 	channelMutex.RUnlock()
 
 	if !hasRoute || len(routes) == 0 {
-		database.DB.Create(&database.ApiLog{UserID: user.ID, TokenName: HashTokenForLog(token), ModelName: modelName, Status: 404, IPAddress: clientIP, Latency: time.Since(startTime).Milliseconds(), Cost: 0, CreatedAt: time.Now()})
+		recordProxyApiLog(user.ID, token, modelName, 404, clientIP, startTime, path, "model_not_found", "Model not available via any channel")
 		return c.Status(404).JSON(fiber.Map{"error": fiber.Map{"message": "Model not available via any channel", "type": "model_not_found"}})
 	}
-
-	// 根据入口路径推断客户端使用的 API 格式（OpenAI / Anthropic / Gemini）。
-	// fix MINOR R23-m2（codex 审查）：统一调 inferSourceFormat，便于后续开放 Gemini
-	// 原生入口时只需扩展 inferSourceFormat 一处。
-	srcFormat := inferSourceFormat(c.Path())
 
 	// 4. 内容审核（per-ChannelModel 风控）
 	//
 	// fix CRITICAL R23 v2（codex 第二十三轮反馈）：必须 AFTER Decide(IsPrecheck=true) 防"成本放大"——
-	// 没余额的攻击者刷请求若每条都打 OpenAI Moderation API → 我方账单被打爆。Decide 先把没余额的卡掉。
+	// 没余额的攻击者刷请求若每条都打智能审核服务 → 我方账单被打爆。Decide 先把没余额的卡掉。
 	// AFTER 路由解析：404 模型不浪费审核配额；BEFORE 路由循环：拦在任何上游（含 cloaked 路径）之前。
 	modPolicy := LookupModerationPolicy(modelName)
 	// fix MAJOR R23-M3：LoadFailed 时 IsActive 仍为 false，但必须 fail-closed —— 不能放行裸奔
@@ -392,6 +477,9 @@ func ChatCompletionProxyHandler(c *fiber.Ctx) error {
 	}
 
 	isStream := gjson.GetBytes(body, "stream").Bool()
+	if srcFormat == sdktranslator.FormatGemini && isGeminiStreamPath(path) {
+		isStream = true
+	}
 	finalPayloadTemplate := make([]byte, len(body))
 	copy(finalPayloadTemplate, body)
 
@@ -413,6 +501,8 @@ func ChatCompletionProxyHandler(c *fiber.Ctx) error {
 	var httpResp *http.Response
 	var lastErrResp []byte
 	var lastErrStatus int
+	var lastErrType string
+	var lastErrMessage string
 	var selectedPath *database.ChannelModel
 	var selectedChan *database.Channel
 	var targetFormat sdktranslator.Format
@@ -461,6 +551,8 @@ func ChatCompletionProxyHandler(c *fiber.Ctx) error {
 		if selectedChan == nil {
 			failedChannels[selectedPath.ChannelID] = true
 			lastErrStatus = 502
+			lastErrType = "channel_unavailable"
+			lastErrMessage = "channel was disabled or removed mid-flight"
 			lastErrResp = []byte(`{"error":{"message":"channel was disabled or removed mid-flight","type":"channel_unavailable"}}`)
 			continue
 		}
@@ -470,24 +562,43 @@ func ChatCompletionProxyHandler(c *fiber.Ctx) error {
 		copy(finalPayload, finalPayloadTemplate)
 
 		upstreamURL := strings.TrimRight(selectedChan.BaseURL, "/")
-		pathSuffix := c.Path()
+		pathSuffix := path
 
-		switch selectedChan.Type {
-		case "anthropic":
+		channelType := NormalizeChannelType(selectedChan.Type)
+		switch channelType {
+		case ChannelTypeAnthropic:
 			targetFormat = sdktranslator.FormatClaude
 			upstreamURL += "/v1/messages"
-		case "gemini":
+		case ChannelTypeGemini:
 			targetFormat = sdktranslator.FormatGemini
-			upstreamURL += "/v1beta/models/" + modelName + ":streamGenerateContent?key=" + selectedChan.Key
-		case "google-cli":
+			action := "generateContent"
+			if isStream {
+				action = "streamGenerateContent"
+			}
+			upstreamURL += "/v1beta/models/" + url.PathEscape(modelName) + ":" + action + "?key=" + selectedChan.Key
+		case ChannelTypeGoogleCLI:
 			targetFormat = sdktranslator.FormatGeminiCLI
 			upstreamURL += pathSuffix
-		case "codex":
+		case ChannelTypeCodex:
 			targetFormat = sdktranslator.FormatCodex
 			upstreamURL += pathSuffix
-		default:
+		case ChannelTypeCLIProxy:
+			// CLIProxyAPI is already a multi-protocol gateway. Preserve the client
+			// protocol and path so Claude Code tools, Codex responses, and OpenAI
+			// chat payloads are not cross-translated before reaching it.
+			targetFormat = srcFormat
+			upstreamURL += normalizeCLIProxyPath(pathSuffix)
+		case ChannelTypeOpenAI:
 			targetFormat = sdktranslator.FormatOpenAI
 			upstreamURL += pathSuffix
+		default:
+			failedChannels[selectedPath.ChannelID] = true
+			lastErrStatus = 502
+			lastErrType = "channel_misconfigured"
+			lastErrMessage = "unsupported channel type"
+			lastErrResp = []byte(`{"error":{"message":"unsupported channel type","type":"channel_misconfigured"}}`)
+			log.Printf("[CHANNEL-MISCONFIG] channel=%d unsupported type=%q", selectedPath.ChannelID, selectedChan.Type)
+			continue
 		}
 
 		// 仅在源格式与上游目标格式不一致时才执行翻译。
@@ -508,13 +619,16 @@ func ChatCompletionProxyHandler(c *fiber.Ctx) error {
 		if err != nil {
 			upstreamCancel()
 			failedChannels[selectedPath.ChannelID] = true
+			lastErrStatus = 502
+			lastErrType = "bad_gateway"
+			lastErrMessage = err.Error()
 			continue
 		}
 
 		httpReq.Header.Set("Content-Type", "application/json")
-		if selectedChan.Type == "openai" || selectedChan.Type == "google-cli" || selectedChan.Type == "codex" {
+		if channelType == ChannelTypeOpenAI || channelType == ChannelTypeGoogleCLI || channelType == ChannelTypeCodex || channelType == ChannelTypeCLIProxy {
 			httpReq.Header.Set("Authorization", "Bearer "+selectedChan.Key)
-		} else if selectedChan.Type == "anthropic" {
+		} else if channelType == ChannelTypeAnthropic {
 			httpReq.Header.Set("x-api-key", selectedChan.Key)
 			httpReq.Header.Set("anthropic-version", "2023-06-01")
 		}
@@ -552,6 +666,8 @@ func ChatCompletionProxyHandler(c *fiber.Ctx) error {
 			upstreamCancel() // 失败的 upstream ctx 立即释放
 			failedChannels[selectedPath.ChannelID] = true
 			lastErrStatus = 502
+			lastErrType = "bad_gateway"
+			lastErrMessage = err.Error()
 			// fix CRITICAL（codex 第七轮）：原 message 拼了 err.Error()。
 			// httpReq.URL 在 err 文本里包含完整 URL（含 Gemini 的 ?key=APIKEY 查询参数），
 			// 连接失败时直接把 API 密钥回显给前端，等同凭证泄露。
@@ -572,11 +688,13 @@ func ChatCompletionProxyHandler(c *fiber.Ctx) error {
 			upstreamCancel() // 失败的 upstream ctx 立即释放
 			failedChannels[selectedPath.ChannelID] = true
 			lastErrStatus = resp.StatusCode
+			lastErrType = "upstream_error"
 			// fix Major（codex 第六轮）：原实现把上游 raw body 原样回给客户端，
 			// 可能泄露上游 stack trace / SQL / 内部地址 / API key 回显。
 			// 仅记录到服务端日志（带 channel + status），对客户端返回脱敏的通用消息。
 			respBytes, _ := io.ReadAll(io.LimitReader(resp.Body, 4*1024))
 			resp.Body.Close()
+			lastErrMessage = string(respBytes)
 			log.Printf("[UPSTREAM-ERR] channel=%d status=%d body=%q", selectedPath.ChannelID, resp.StatusCode, truncForLog(respBytes, 256))
 			lastErrResp, _ = json.Marshal(map[string]any{
 				"error": map[string]any{
@@ -598,16 +716,20 @@ func ChatCompletionProxyHandler(c *fiber.Ctx) error {
 		// 全部 upstream 失败：所有 cancel 已在 continue 处调用，无需额外清理
 		if lastErrStatus == 0 {
 			lastErrStatus = 502
+			lastErrType = "backend_exhausted"
+			lastErrMessage = "All upstream channels exhausted or failing"
 			lastErrResp = []byte(`{"error":{"message":"All upstream channels exhausted or failing", "type": "backend_exhausted"}}`)
 		}
-		database.DB.Create(&database.ApiLog{UserID: user.ID, TokenName: HashTokenForLog(token), ModelName: modelName, Status: lastErrStatus, IPAddress: clientIP, Latency: time.Since(startTime).Milliseconds(), Cost: 0, CreatedAt: time.Now()})
+		recordProxyApiLog(user.ID, token, modelName, lastErrStatus, clientIP, startTime, path, lastErrType, lastErrMessage)
 
 		c.Set("Content-Type", "application/json")
 		return c.Status(lastErrStatus).Send(lastErrResp)
 	}
 
 	// Helper for Atomic Quota Deduction
-	deductQuota := func(promptTokens, completionTokens, cachedTokens, reasoningTokens, status int) {
+	apiErrorType := ""
+	apiErrorMessage := ""
+	deductQuota := func(promptTokens, completionTokens, cachedTokens, cacheWriteTokens, cacheWrite5mTokens, cacheWrite1hTokens, reasoningTokens, status int) {
 		// fix CRITICAL Phase 4-codex（第二十四轮）：所有 token 必须 clamp >= 0；
 		// cached 必须 ≤ prompt（cached 是 prompt 子集），否则 (prompt-cached) 为负让 cost 变负，
 		// 进入 `if costMicroUSD > 0` 分支被跳过 → 用户得到免费服务且 ApiLog.Cost 污染统计。
@@ -620,21 +742,50 @@ func ChatCompletionProxyHandler(c *fiber.Ctx) error {
 		if cachedTokens < 0 {
 			cachedTokens = 0
 		}
+		if cacheWriteTokens < 0 {
+			cacheWriteTokens = 0
+		}
+		if cacheWrite5mTokens < 0 {
+			cacheWrite5mTokens = 0
+		}
+		if cacheWrite1hTokens < 0 {
+			cacheWrite1hTokens = 0
+		}
 		if reasoningTokens < 0 {
 			reasoningTokens = 0
+		}
+		bucketedCacheWriteTokens := cacheWrite5mTokens + cacheWrite1hTokens
+		if bucketedCacheWriteTokens > 0 {
+			cacheWriteTokens = bucketedCacheWriteTokens
+		} else if cacheWriteTokens > 0 {
+			// Legacy providers only expose a single creation counter. Treat it as the
+			// default Anthropic 5m cache tier so old payloads keep current behavior.
+			cacheWrite5mTokens = cacheWriteTokens
 		}
 		if cachedTokens > promptTokens {
 			cachedTokens = promptTokens
 		}
+		if cachedTokens+cacheWriteTokens > promptTokens {
+			cacheWriteTokens = promptTokens - cachedTokens
+			if cacheWriteTokens < 0 {
+				cacheWriteTokens = 0
+			}
+		}
+		if cacheWrite5mTokens+cacheWrite1hTokens > cacheWriteTokens {
+			overflow := cacheWrite5mTokens + cacheWrite1hTokens - cacheWriteTokens
+			if cacheWrite5mTokens >= overflow {
+				cacheWrite5mTokens -= overflow
+			} else {
+				overflow -= cacheWrite5mTokens
+				cacheWrite5mTokens = 0
+				cacheWrite1hTokens -= overflow
+				if cacheWrite1hTokens < 0 {
+					cacheWrite1hTokens = 0
+				}
+			}
+		}
 		if reasoningTokens > completionTokens {
 			reasoningTokens = completionTokens
-		}
-
-		if promptTokens == 0 {
-			promptTokens = len(body) / 4
-			if promptTokens < 0 {
-				promptTokens = 0
-			}
 		}
 
 		// fix MAJOR Phase 4-codex（第二十四轮）：失败请求（status < 200 || >= 400）不扣费，
@@ -644,10 +795,29 @@ func ChatCompletionProxyHandler(c *fiber.Ctx) error {
 
 		inputPrice := selectedPath.InputPrice
 		outputPrice := selectedPath.OutputPrice
+		cachedInputPrice := selectedPath.CachedInputPrice
 
-		if selectedPath.ContextPriceThreshold > 0 && (promptTokens+completionTokens) >= selectedPath.ContextPriceThreshold {
-			inputPrice = selectedPath.HighInputPrice
-			outputPrice = selectedPath.HighOutputPrice
+		if selectedPath.ContextPriceThreshold > 0 && promptTokens >= selectedPath.ContextPriceThreshold {
+			if selectedPath.HighInputPrice > 0 {
+				inputPrice = selectedPath.HighInputPrice
+			}
+			if selectedPath.HighCachedInputPrice > 0 {
+				cachedInputPrice = selectedPath.HighCachedInputPrice
+			}
+			if selectedPath.HighOutputPrice > 0 {
+				outputPrice = selectedPath.HighOutputPrice
+			}
+		}
+		cacheWriteInputPrice := selectedPath.CacheWriteInputPrice
+		if cacheWriteInputPrice <= 0 {
+			cacheWriteInputPrice = inputPrice
+			if strings.Contains(strings.ToLower(modelName), "claude") {
+				cacheWriteInputPrice = inputPrice * 1.25
+			}
+		}
+		cacheWrite1hInputPrice := selectedPath.CacheWrite1hInputPrice
+		if cacheWrite1hInputPrice <= 0 {
+			cacheWrite1hInputPrice = inputPrice * 2
 		}
 
 		// fix MAJOR M-B5（codex 第二十一轮）：原成本公式漏掉 reasoningTokens（OpenAI o1/o3、Claude
@@ -655,6 +825,10 @@ func ChatCompletionProxyHandler(c *fiber.Ctx) error {
 		nonReasoningCompletion := completionTokens - reasoningTokens
 		if nonReasoningCompletion < 0 {
 			nonReasoningCompletion = 0
+		}
+		standardInputTokens := promptTokens - cachedTokens - cacheWriteTokens
+		if standardInputTokens < 0 {
+			standardInputTokens = 0
 		}
 		// fix MAJOR M22-A1 Phase 1：cost 单位 micro_usd（int64）。
 		// fix MAJOR Phase 4-codex：用 checkedCostMicroUSD 加固，failedRequest 直接 0，
@@ -665,32 +839,40 @@ func ChatCompletionProxyHandler(c *fiber.Ctx) error {
 			costMicroUSD, costOK = 0, true
 		} else {
 			costMicroUSD, costOK = checkedCostMicroUSD(
-				promptTokens-cachedTokens, inputPrice,
-				cachedTokens, selectedPath.CachedInputPrice,
+				standardInputTokens, inputPrice,
+				cachedTokens, cachedInputPrice,
+				cacheWrite5mTokens, cacheWriteInputPrice,
+				cacheWrite1hTokens, cacheWrite1hInputPrice,
 				nonReasoningCompletion, outputPrice,
 				reasoningTokens, outputPrice,
 			)
 			if !costOK {
-				log.Printf("[BILLING-CRITICAL] user=%d model=%s cost overflow/NaN; prompt=%d completion=%d cached=%d reasoning=%d inputPrice=%v outputPrice=%v cachedPrice=%v — failing closed (0 cost)",
-					user.ID, modelName, promptTokens, completionTokens, cachedTokens, reasoningTokens,
-					inputPrice, outputPrice, selectedPath.CachedInputPrice)
+				log.Printf("[BILLING-CRITICAL] user=%d model=%s cost overflow/NaN; prompt=%d completion=%d cached_read=%d cache_write=%d cache_write_5m=%d cache_write_1h=%d reasoning=%d inputPrice=%v outputPrice=%v cachedPrice=%v cacheWrite5mPrice=%v cacheWrite1hPrice=%v — failing closed (0 cost)",
+					user.ID, modelName, promptTokens, completionTokens, cachedTokens, cacheWriteTokens, cacheWrite5mTokens, cacheWrite1hTokens, reasoningTokens,
+					inputPrice, outputPrice, cachedInputPrice, cacheWriteInputPrice, cacheWrite1hInputPrice)
 				costMicroUSD = 0
 			}
 		}
 
 		apiLog := database.ApiLog{
-			UserID:           user.ID,
-			TokenName:        HashTokenForLog(token),
-			ModelName:        modelName,
-			PromptTokens:     promptTokens,
-			CompletionTokens: completionTokens,
-			CachedTokens:     cachedTokens,
-			ReasoningTokens:  reasoningTokens,
-			Cost:             costMicroUSD,
-			Latency:          time.Since(startTime).Milliseconds(), // Parity Tracker
-			Status:           status,                               // Parity Tracker
-			IPAddress:        clientIP,                             // Parity Tracker
-			CreatedAt:        time.Now(),
+			UserID:             user.ID,
+			TokenName:          HashTokenForLog(token),
+			ModelName:          modelName,
+			PromptTokens:       promptTokens,
+			CompletionTokens:   completionTokens,
+			CachedTokens:       cachedTokens,
+			CacheWriteTokens:   cacheWriteTokens,
+			CacheWrite5mTokens: cacheWrite5mTokens,
+			CacheWrite1hTokens: cacheWrite1hTokens,
+			ReasoningTokens:    reasoningTokens,
+			Cost:               costMicroUSD,
+			Latency:            time.Since(startTime).Milliseconds(), // Parity Tracker
+			Status:             status,                               // Parity Tracker
+			IPAddress:          clientIP,                             // Parity Tracker
+			RequestPath:        sanitizeError(path, 160),
+			ErrorType:          sanitizeError(apiErrorType, 64),
+			ErrorMessage:       sanitizeError(apiErrorMessage, 512),
+			CreatedAt:          time.Now(),
 		}
 		// fix Major（codex 第十四轮）：原 Create 未检 .Error → apiLog.ID=0 时下游账单
 		// RelatedID 写空指针。失败仅日志告警，但账单条目对应 RelatedID 留空避免假关联。
@@ -710,6 +892,7 @@ func ChatCompletionProxyHandler(c *fiber.Ctx) error {
 				ModelName:    modelName,
 				InputTokens:  promptTokens,
 				OutputTokens: completionTokens,
+				CostMicroUSD: costMicroUSD,
 				IsPrecheck:   false,
 			})
 			commitOK = commitDecision.Allowed && !commitDecision.FallbackToBalance
@@ -964,6 +1147,8 @@ func ChatCompletionProxyHandler(c *fiber.Ctx) error {
 		// 上游可能在 4xx 错误里回显请求 URL（含 ?key= API 密钥）/ stack / 内部地址。
 		// 详细 body 仅服务端日志记录，对客户端返回脱敏的统一 error。
 		if statusCode >= 400 {
+			apiErrorType = "upstream_error"
+			apiErrorMessage = string(bodyCopy)
 			log.Printf("[UPSTREAM-ERR-NONRETRY] channel=%d status=%d body=%s", selectedPath.ChannelID, statusCode, sanitizeError(truncForLog(bodyCopy, 1024), 1024))
 			generic, _ := json.Marshal(map[string]any{
 				"error": map[string]any{
@@ -974,32 +1159,43 @@ func ChatCompletionProxyHandler(c *fiber.Ctx) error {
 			bodyCopy = generic
 			c.Set("Content-Type", "application/json")
 		}
+		if statusCode >= 200 && statusCode < 300 && isClaudeCountTokensPath(path) {
+			inputTokens := int(gjson.GetBytes(bodyCopy, "input_tokens").Int())
+			if inputTokens < 0 {
+				inputTokens = 0
+			}
+			if err := database.DB.Create(&database.ApiLog{
+				UserID:       user.ID,
+				TokenName:    HashTokenForLog(token),
+				ModelName:    modelName,
+				PromptTokens: inputTokens,
+				Cost:         0,
+				Latency:      time.Since(startTime).Milliseconds(),
+				Status:       statusCode,
+				IPAddress:    clientIP,
+				RequestPath:  sanitizeError(path, 160),
+				CreatedAt:    time.Now(),
+			}).Error; err != nil {
+				log.Printf("[BILLING-CRITICAL] user=%d model=%s count_tokens api_log create failed: %v", user.ID, modelName, err)
+			}
+			return c.Send(bodyCopy)
+		}
 
-		// 兼容三种 usage 字段命名：
-		//   OpenAI: usage.prompt_tokens / completion_tokens
-		//   Anthropic Claude: usage.input_tokens / output_tokens / cache_read_input_tokens
-		//   OpenAI Responses (o-series): usage.input_tokens_details.cached_tokens 等
-		promptTokens := int(gjson.GetBytes(bodyCopy, "usage.prompt_tokens").Int())
-		if promptTokens == 0 {
-			promptTokens = int(gjson.GetBytes(bodyCopy, "usage.input_tokens").Int())
+		usageBlock := gjson.GetBytes(bodyCopy, "usage")
+		if !usageBlock.Exists() {
+			usageBlock = gjson.GetBytes(bodyCopy, "usageMetadata")
 		}
-		completionTokens := int(gjson.GetBytes(bodyCopy, "usage.completion_tokens").Int())
-		if completionTokens == 0 {
-			completionTokens = int(gjson.GetBytes(bodyCopy, "usage.output_tokens").Int())
+		usage := extractUsageTokenCounts(usageBlock)
+		if statusCode >= 200 && statusCode < 300 && !usage.HasAny() {
+			log.Printf("[BILLING-UNMETERED] user=%d model=%s non-stream upstream omitted usage metadata; refusing unmetered success", user.ID, modelName)
+			recordProxyApiLog(user.ID, token, modelName, 502, clientIP, startTime, path, "upstream_unmetered", "upstream response omitted usage metadata")
+			c.Set("Content-Type", "application/json")
+			return c.Status(502).JSON(fiber.Map{"error": fiber.Map{
+				"message": "upstream response omitted usage metadata",
+				"type":    "upstream_unmetered",
+			}})
 		}
-		cachedTokens := int(gjson.GetBytes(bodyCopy, "usage.prompt_tokens_details.cached_tokens").Int())
-		if cachedTokens == 0 {
-			cachedTokens = int(gjson.GetBytes(bodyCopy, "usage.input_tokens_details.cached_tokens").Int())
-		}
-		if cachedTokens == 0 {
-			cachedTokens = int(gjson.GetBytes(bodyCopy, "usage.cache_read_input_tokens").Int())
-		}
-
-		reasoningTokens := int(gjson.GetBytes(bodyCopy, "usage.completion_tokens_details.reasoning_tokens").Int())
-		if reasoningTokens == 0 {
-			reasoningTokens = int(gjson.GetBytes(bodyCopy, "usage.output_tokens_details.reasoning_tokens").Int())
-		}
-		deductQuota(promptTokens, completionTokens, cachedTokens, reasoningTokens, statusCode)
+		deductQuota(usage.PromptTokens, usage.CompletionTokens, usage.CachedTokens, usage.CacheWriteTokens, usage.CacheWrite5mTokens, usage.CacheWrite1hTokens, usage.ReasoningTokens, statusCode)
 
 		return c.Send(bodyCopy)
 	}
@@ -1035,90 +1231,48 @@ func ChatCompletionProxyHandler(c *fiber.Ctx) error {
 		promptTokens := 0
 		completionTokens := 0
 		cachedTokens := 0
+		cacheWriteTokens := 0
+		cacheWrite5mTokens := 0
+		cacheWrite1hTokens := 0
 		reasoningTokens := 0
-		estimatedOutputBytes := 0
-		estimatedReasoningBytes := 0
+		sawMeteredUsage := false
 		var param any
-
-		// extractContentLen extracts content length from an SSE JSON payload,
-		// checking all known content fields (standard, reasoning, text, Anthropic).
-		extractContentLen := func(jsonData []byte) int {
-			n := 0
-			// Standard OpenAI chat completion delta
-			if s := gjson.GetBytes(jsonData, "choices.0.delta.content").String(); len(s) > 0 {
-				n += len(s)
-			}
-			// Reasoning models (o1/o3/o4/gpt-5 etc.) use reasoning_content
-			if s := gjson.GetBytes(jsonData, "choices.0.delta.reasoning_content").String(); len(s) > 0 {
-				n += len(s)
-				estimatedReasoningBytes += len(s)
-			}
-			// Legacy completions API uses "text"
-			if s := gjson.GetBytes(jsonData, "choices.0.text").String(); len(s) > 0 {
-				n += len(s)
-			}
-			// Anthropic content_block_delta event: {"type":"content_block_delta","delta":{"type":"text_delta","text":"..."}}
-			if s := gjson.GetBytes(jsonData, "delta.text").String(); len(s) > 0 {
-				n += len(s)
-			}
-			// Anthropic extended thinking: {"delta":{"type":"thinking_delta","thinking":"..."}}
-			if s := gjson.GetBytes(jsonData, "delta.thinking").String(); len(s) > 0 {
-				n += len(s)
-				estimatedReasoningBytes += len(s)
-			}
-			// OpenAI Responses API (Codex): {"type":"response.output_text.delta","delta":"hello"}
-			// 这里 delta 是字符串而非对象，需要单独判断 type 后再读
-			if t := gjson.GetBytes(jsonData, "type").String(); t == "response.output_text.delta" {
-				if s := gjson.GetBytes(jsonData, "delta").String(); len(s) > 0 {
-					n += len(s)
-				}
-			} else if t == "response.reasoning_summary_text.delta" || t == "response.reasoning_text.delta" {
-				if s := gjson.GetBytes(jsonData, "delta").String(); len(s) > 0 {
-					n += len(s)
-					estimatedReasoningBytes += len(s)
-				}
-			}
-			return n
-		}
 
 		extractUsage := func(jsonData []byte) {
 			// OpenAI Chat Completions / Anthropic Messages：usage 在根级
 			// OpenAI Responses API (Codex) SSE：usage 嵌套在 response.usage 里
 			//   data: {"type":"response.completed","response":{"usage":{"input_tokens":18123,...}}}
+			// Gemini 原生 SSE：usageMetadata 在根级。
 			usageBlock := gjson.GetBytes(jsonData, "usage")
 			if !usageBlock.Exists() {
 				usageBlock = gjson.GetBytes(jsonData, "response.usage")
 			}
 			if !usageBlock.Exists() {
+				usageBlock = gjson.GetBytes(jsonData, "usageMetadata")
+			}
+			if !usageBlock.Exists() {
 				return
 			}
-			// OpenAI 格式: prompt_tokens / completion_tokens
-			if p := int(usageBlock.Get("prompt_tokens").Int()); p > 0 {
-				promptTokens = p
+			usage := extractUsageTokenCounts(usageBlock)
+			if usage.HasAny() {
+				sawMeteredUsage = true
 			}
-			if c := int(usageBlock.Get("completion_tokens").Int()); c > 0 {
-				completionTokens = c
+			if usage.HasPromptTokens {
+				promptTokens = usage.PromptTokens
 			}
-			// Anthropic Claude 格式: input_tokens / output_tokens
-			// Claude SSE: message_start 事件给 input_tokens；message_delta 末尾给 output_tokens 累计值
-			if p := int(usageBlock.Get("input_tokens").Int()); p > 0 {
-				promptTokens = p
+			if usage.HasCompletionTokens {
+				completionTokens = usage.CompletionTokens
 			}
-			if c := int(usageBlock.Get("output_tokens").Int()); c > 0 {
-				completionTokens = c
+			if usage.HasCachedTokens {
+				cachedTokens = usage.CachedTokens
 			}
-			// 缓存命中：OpenAI / Responses API / Anthropic 三种命名
-			if ca := int(usageBlock.Get("prompt_tokens_details.cached_tokens").Int()); ca > 0 || usageBlock.Get("prompt_tokens_details.cached_tokens").Exists() {
-				cachedTokens = ca
-			} else if ca := int(usageBlock.Get("input_tokens_details.cached_tokens").Int()); ca > 0 || usageBlock.Get("input_tokens_details.cached_tokens").Exists() {
-				cachedTokens = ca
-			} else if ca := int(usageBlock.Get("cache_read_input_tokens").Int()); ca > 0 {
-				cachedTokens = ca
+			if usage.HasCacheWriteTokens {
+				cacheWriteTokens = usage.CacheWriteTokens
+				cacheWrite5mTokens = usage.CacheWrite5mTokens
+				cacheWrite1hTokens = usage.CacheWrite1hTokens
 			}
-			if r := int(usageBlock.Get("completion_tokens_details.reasoning_tokens").Int()); r > 0 || usageBlock.Get("completion_tokens_details.reasoning_tokens").Exists() {
-				reasoningTokens = r
-			} else if r := int(usageBlock.Get("output_tokens_details.reasoning_tokens").Int()); r > 0 || usageBlock.Get("output_tokens_details.reasoning_tokens").Exists() {
-				reasoningTokens = r
+			if usage.HasReasoningTokens {
+				reasoningTokens = usage.ReasoningTokens
 			}
 		}
 
@@ -1171,13 +1325,6 @@ func ChatCompletionProxyHandler(c *fiber.Ctx) error {
 				chunks := sdktranslator.TranslateStream(context.Background(), targetFormat, srcFormat, modelName, body, finalPayload, line, &param)
 				for _, chunk := range chunks {
 					if jsonData := jsonPayload(chunk); jsonData != nil {
-						n := extractContentLen(jsonData)
-						if n == 0 && len(jsonData) > 20 {
-							// Fallback: if we can't parse any known content field,
-							// count raw JSON payload bytes as a rough output estimator
-							n = len(jsonData) / 4
-						}
-						estimatedOutputBytes += n
 						extractUsage(jsonData)
 					}
 
@@ -1189,11 +1336,6 @@ func ChatCompletionProxyHandler(c *fiber.Ctx) error {
 				}
 			} else {
 				if jsonData := jsonPayload(line); jsonData != nil {
-					n := extractContentLen(jsonData)
-					if n == 0 && len(jsonData) > 20 {
-						n = len(jsonData) / 4
-					}
-					estimatedOutputBytes += n
 					extractUsage(jsonData)
 				}
 				w.Write(line)
@@ -1210,7 +1352,14 @@ func ChatCompletionProxyHandler(c *fiber.Ctx) error {
 			// 这里显式调一次让上游 Read 立刻返回 err，scanner 退出更快、token 计费更准确）。
 			successfulUpstreamCancel()
 			// 仍然走 deductQuota（已经接收到的 token 应当计费），但跳过下面的 [DONE] / error 事件
-			deductQuota(promptTokens, completionTokens, cachedTokens, reasoningTokens, 200)
+			if !sawMeteredUsage {
+				log.Printf("[BILLING-UNMETERED] user=%d model=%s stream disconnected before usage metadata; delivered portion not billed", user.ID, modelName)
+				apiErrorType = "client_disconnected_unmetered"
+				apiErrorMessage = "client disconnected before usage metadata"
+				deductQuota(promptTokens, completionTokens, cachedTokens, cacheWriteTokens, cacheWrite5mTokens, cacheWrite1hTokens, reasoningTokens, 499)
+				return
+			}
+			deductQuota(promptTokens, completionTokens, cachedTokens, cacheWriteTokens, cacheWrite5mTokens, cacheWrite1hTokens, reasoningTokens, 200)
 			return
 		}
 
@@ -1225,28 +1374,20 @@ func ChatCompletionProxyHandler(c *fiber.Ctx) error {
 			w.Flush()
 		}
 
-		if targetFormat != sdktranslator.FormatOpenAI {
+		if (srcFormat == sdktranslator.FormatOpenAI || srcFormat == sdktranslator.FormatOpenAIResponse) && targetFormat != sdktranslator.FormatOpenAI {
 			w.Write([]byte("data: [DONE]\n\n"))
 			w.Flush()
 		}
 
-		// Fallback: if upstream proxy didn't provide completion_tokens in usage,
-		// use accumulated output bytes to estimate token count (avg ~3 bytes/token for English, ~2 for CJK)
-		if completionTokens == 0 && estimatedOutputBytes > 0 {
-			completionTokens = estimatedOutputBytes / 3
-			if completionTokens < 1 {
-				completionTokens = 1
-			}
+		if !sawMeteredUsage {
+			log.Printf("[BILLING-UNMETERED] user=%d model=%s stream upstream omitted usage metadata; delivered response not billed", user.ID, modelName)
+			apiErrorType = "upstream_unmetered"
+			apiErrorMessage = "upstream stream omitted usage metadata"
+			deductQuota(promptTokens, completionTokens, cachedTokens, cacheWriteTokens, cacheWrite5mTokens, cacheWrite1hTokens, reasoningTokens, 502)
+			return
 		}
 
-		if reasoningTokens == 0 && estimatedReasoningBytes > 0 {
-			reasoningTokens = estimatedReasoningBytes / 3
-			if reasoningTokens < 1 {
-				reasoningTokens = 1
-			}
-		}
-
-		deductQuota(promptTokens, completionTokens, cachedTokens, reasoningTokens, 200)
+		deductQuota(promptTokens, completionTokens, cachedTokens, cacheWriteTokens, cacheWrite5mTokens, cacheWrite1hTokens, reasoningTokens, 200)
 	})
 
 	return nil
@@ -1306,11 +1447,145 @@ func estimatePrecheckBalanceDelta(modelName string, inputTokens, outputTokens in
 		0, 0,
 		outputTokens, maxOutput,
 		0, 0,
+		0, 0,
+		0, 0,
 	)
 	if !ok || delta < minDeltaMicroUSD {
 		delta = minDeltaMicroUSD
 	}
 	return delta
+}
+
+type usageTokenCounts struct {
+	PromptTokens        int
+	CompletionTokens    int
+	CachedTokens        int
+	CacheWriteTokens    int
+	CacheWrite5mTokens  int
+	CacheWrite1hTokens  int
+	ReasoningTokens     int
+	HasPromptTokens     bool
+	HasCompletionTokens bool
+	HasCachedTokens     bool
+	HasCacheWriteTokens bool
+	HasReasoningTokens  bool
+}
+
+func (u usageTokenCounts) HasAny() bool {
+	return u.HasPromptTokens || u.HasCompletionTokens || u.HasCachedTokens || u.HasCacheWriteTokens || u.HasReasoningTokens
+}
+
+func extractUsageTokenCounts(usage gjson.Result) usageTokenCounts {
+	var out usageTokenCounts
+	if !usage.Exists() {
+		return out
+	}
+
+	promptTokens, hasPromptTokens := usageInt(usage, "prompt_tokens")
+	inputTokens, hasInputTokens := usageInt(usage, "input_tokens")
+	geminiPromptTokens, hasGeminiPromptTokens := usageInt(usage, "promptTokenCount", "prompt_token_count")
+	if hasPromptTokens {
+		out.PromptTokens = promptTokens
+		out.HasPromptTokens = true
+	} else if hasInputTokens {
+		out.PromptTokens = inputTokens
+		out.HasPromptTokens = true
+	} else if hasGeminiPromptTokens {
+		out.PromptTokens = geminiPromptTokens
+		out.HasPromptTokens = true
+	}
+
+	if v, ok := usageInt(usage,
+		"completion_tokens",
+		"output_tokens",
+		"candidatesTokenCount",
+		"candidates_token_count",
+	); ok {
+		out.CompletionTokens = v
+		out.HasCompletionTokens = true
+	}
+	if v, ok := usageInt(usage,
+		"prompt_tokens_details.cached_tokens",
+		"input_tokens_details.cached_tokens",
+		"cache_read_input_tokens",
+		"cachedContentTokenCount",
+		"cached_content_token_count",
+	); ok {
+		out.CachedTokens = v
+		out.HasCachedTokens = true
+	}
+	cacheWrite5mTokens, hasCacheWrite5mTokens := usageInt(usage,
+		"cache_creation.ephemeral_5m_input_tokens",
+		"cache_creation.ephemeral5m_input_tokens",
+		"cache_creation_5m_input_tokens",
+		"cache_write_5m_input_tokens",
+	)
+	cacheWrite1hTokens, hasCacheWrite1hTokens := usageInt(usage,
+		"cache_creation.ephemeral_1h_input_tokens",
+		"cache_creation.ephemeral1h_input_tokens",
+		"cache_creation_1h_input_tokens",
+		"cache_write_1h_input_tokens",
+	)
+	if hasCacheWrite5mTokens || hasCacheWrite1hTokens {
+		out.CacheWrite5mTokens = cacheWrite5mTokens
+		out.CacheWrite1hTokens = cacheWrite1hTokens
+		out.CacheWriteTokens = cacheWrite5mTokens + cacheWrite1hTokens
+		out.HasCacheWriteTokens = true
+	} else if v, ok := usageInt(usage,
+		"cache_creation_input_tokens",
+		"cache_write_input_tokens",
+		"prompt_tokens_details.cache_creation_tokens",
+		"input_tokens_details.cache_creation_tokens",
+	); ok {
+		out.CacheWriteTokens = v
+		out.CacheWrite5mTokens = v
+		out.HasCacheWriteTokens = true
+	}
+	if v, ok := usageInt(usage,
+		"completion_tokens_details.reasoning_tokens",
+		"output_tokens_details.reasoning_tokens",
+		"reasoning_tokens",
+		"thoughtsTokenCount",
+		"thoughts_token_count",
+	); ok {
+		out.ReasoningTokens = v
+		out.HasReasoningTokens = true
+	}
+	// Gemini usageMetadata reports candidatesTokenCount and thoughtsTokenCount separately.
+	// Treat thoughts as output-side reasoning so billing and charts include the full delivered output.
+	if out.HasReasoningTokens && (usage.Get("thoughtsTokenCount").Exists() || usage.Get("thoughts_token_count").Exists()) {
+		out.CompletionTokens += out.ReasoningTokens
+		out.HasCompletionTokens = true
+	}
+	if !out.HasPromptTokens && (out.HasCachedTokens || out.HasCacheWriteTokens) {
+		out.PromptTokens = out.CachedTokens + out.CacheWriteTokens
+		out.HasPromptTokens = true
+	}
+
+	// OpenAI prompt/input token totals already include cached tokens when details are present.
+	// Anthropic Messages reports cache read/write tokens as separate top-level counters, so
+	// add them into the total prompt side for billing and observability.
+	promptIncludesCache := hasPromptTokens ||
+		hasGeminiPromptTokens ||
+		usage.Get("prompt_tokens_details").Exists() ||
+		usage.Get("input_tokens_details").Exists() ||
+		usage.Get("promptTokenCount").Exists() ||
+		usage.Get("prompt_token_count").Exists()
+	if out.HasPromptTokens && !promptIncludesCache {
+		out.PromptTokens += out.CachedTokens + out.CacheWriteTokens
+	}
+
+	return out
+}
+
+func usageInt(usage gjson.Result, paths ...string) (int, bool) {
+	for _, path := range paths {
+		v := usage.Get(path)
+		if v.Exists() {
+			return int(v.Int()), true
+		}
+	}
+	return 0, false
 }
 
 // checkedCostMicroUSD 用 NaN/Inf/int64 上下界守护的整数化 cost 计算。
@@ -1325,11 +1600,11 @@ func estimatePrecheckBalanceDelta(modelName string, inputTokens, outputTokens in
 //
 // 任意一种都会破坏财务守恒。本函数 fail-closed：异常返回 (0, false)，调用方不扣不计。
 //
-// 参数采用 (token, pricePerMTok) 4 对，与 deductQuota 4 项费用对齐。
+// 参数采用 (token, pricePerMTok) 6 对，与 deductQuota 费用项对齐。
 // 0 价格档位（如无 cached price）传 0/0 即可，对结果无贡献。
-func checkedCostMicroUSD(t1 int, p1 float64, t2 int, p2 float64, t3 int, p3 float64, t4 int, p4 float64) (int64, bool) {
+func checkedCostMicroUSD(t1 int, p1 float64, t2 int, p2 float64, t3 int, p3 float64, t4 int, p4 float64, t5 int, p5 float64, t6 int, p6 float64) (int64, bool) {
 	// 价格 NaN/Inf 直接拒（应是 0 或正有限数）
-	for _, p := range [...]float64{p1, p2, p3, p4} {
+	for _, p := range [...]float64{p1, p2, p3, p4, p5, p6} {
 		if math.IsNaN(p) || math.IsInf(p, 0) {
 			return 0, false
 		}
@@ -1338,10 +1613,10 @@ func checkedCostMicroUSD(t1 int, p1 float64, t2 int, p2 float64, t3 int, p3 floa
 		}
 	}
 	// token 必须 >= 0
-	if t1 < 0 || t2 < 0 || t3 < 0 || t4 < 0 {
+	if t1 < 0 || t2 < 0 || t3 < 0 || t4 < 0 || t5 < 0 || t6 < 0 {
 		return 0, false
 	}
-	sum := float64(t1)*p1 + float64(t2)*p2 + float64(t3)*p3 + float64(t4)*p4
+	sum := float64(t1)*p1 + float64(t2)*p2 + float64(t3)*p3 + float64(t4)*p4 + float64(t5)*p5 + float64(t6)*p6
 	if math.IsNaN(sum) || math.IsInf(sum, 0) {
 		return 0, false
 	}

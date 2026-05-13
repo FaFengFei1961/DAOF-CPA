@@ -57,6 +57,7 @@ func main() {
 		AppName:               "DAOF-CPA Fast Engine v1.0",
 		// 并发极大化配置
 		Concurrency:             256 * 1024,
+		BodyLimit:               32 * 1024 * 1024,
 		EnableTrustedProxyCheck: true,
 		// 仅信任本机回环作为可信代理。cloudflared 跑在本机，所有外部请求经 loopback 进入。
 		// 收窄信任面可避免攻击者伪造 X-Forwarded-For: 127.0.0.1 让 c.IP() 返回 127.0.0.1。
@@ -132,6 +133,11 @@ func main() {
 	app.All("/v1/messages", llmProxyLimiter, proxy.ChatCompletionProxyHandler)
 	// 容错：客户端 base URL 误填为 ".../v1" 时 SDK 会拼出 /v1/v1/messages，仍正确路由
 	app.All("/v1/v1/messages", llmProxyLimiter, proxy.ChatCompletionProxyHandler)
+	app.All("/v1/messages/count_tokens", llmProxyLimiter, proxy.ChatCompletionProxyHandler)
+	app.All("/v1/v1/messages/count_tokens", llmProxyLimiter, proxy.ChatCompletionProxyHandler)
+	// Gemini 原生 Generative Language API（Gemini CLI / Google GenAI SDK）
+	app.All("/v1beta/models/:modelAction", llmProxyLimiter, proxy.ChatCompletionProxyHandler)
+	app.All("/v1/models/:modelAction", llmProxyLimiter, proxy.ChatCompletionProxyHandler)
 	app.Get("/v1/models", controller.GetPublicModels)
 
 	// 前端控制台 API 占位
@@ -186,29 +192,6 @@ func main() {
 	api.Get("/i18n/locales", controller.GetLocalesList)
 	api.Get("/i18n/locales/:lang", controller.GetLocaleContent)
 
-	// 号池剩余额度公开聚合（按模型聚合，无 auth_index 暴露）
-	// 限流：单 IP 每分钟最多 6 次（约 10s 一次），防止持续探测号池耗尽时机做时间攻击。
-	// 兜底用 RemoteIP() 而非 c.IP()：c.IP() 在 EnableTrustedProxyCheck=true 下若信任头缺失会返回 loopback，
-	// 导致所有走本机回环的请求共用同一限流桶。RemoteIP() 是真实 TCP 对端 IP，更准确。
-	creditsSummaryLimiter := limiter.New(limiter.Config{
-		Max:        6,
-		Expiration: 1 * time.Minute,
-		KeyGenerator: func(c *fiber.Ctx) string {
-			return "credits-summary:" + utils.RealClientIP(c)
-		},
-		LimitReached: func(c *fiber.Ctx) error {
-			return c.Status(429).JSON(fiber.Map{
-				"success":      false,
-				"message":      "请求过于频繁，请稍后再试",
-				"message_code": "ERR_RATE_LIMIT",
-			})
-		},
-	})
-	// 设计上保持公开（无 UserGuard），让访客在落地页也能看到号池健康度——这是营销卖点。
-	// 信息分层防御：ModelSummary 字段已精简到只含 model_name / avg_remaining_pct / online，
-	// 不再暴露 healthy_count / total_count / providers 等基础设施细节，不会泄露采购规模情报。
-	// 限流 6 次/分钟兜底，防止持续探测。
-	api.Get("/credits-pool/summary", creditsSummaryLimiter, controller.GetPublicCreditsSummary)
 	// fix MAJOR Phase 4-codex（第二十四轮）：UserGuard 接受 admin cookie，所有写路由都必须挂 CSRFGuard，
 	// 否则 admin 浏览器 cookie 可被跨源页面诱导写令牌/扣费/退款等。Bearer 鉴权（SDK/CI）免校验。
 	api.Get("/tokens", middleware.UserGuard, controller.GetTokens)
@@ -247,6 +230,10 @@ func main() {
 	adminApi := api.Group("/admin", middleware.LanGuard, middleware.AdminGuard)
 	adminApi.Get("/config", controller.GetSysConfigs)
 	adminApi.Post("/config", controller.BatchUpdateSysConfigs)
+	adminApi.Post("/moderation/test", controller.TestModerationConfig)
+	adminApi.Post("/moderation/evaluate", controller.EvaluateModerationDryRun)
+	adminApi.Post("/moderation/keywords/generate", controller.GenerateModerationKeywords)
+	adminApi.Get("/moderation/events", controller.ListModerationRiskEvents)
 
 	adminApi.Get("/users", controller.GetUsers)
 	adminApi.Get("/users-usage", controller.GetUsersUsage)
@@ -259,7 +246,6 @@ func main() {
 	adminApi.Get("/users/:id/operations", controller.GetUserOperations)
 
 	adminApi.Put("/credentials", controller.UpdateAdminCredentials)
-	adminApi.Post("/factory-reset", controller.FactoryReset)
 
 	adminApi.Get("/channels", controller.GetAdminChannels)
 	adminApi.Post("/channels", controller.CreateChannel)
@@ -492,6 +478,8 @@ func main() {
 	adminApi.Get("/billing/users/:id/export", controller.AdminUserBillingExport)
 	// 订阅退款（用户走客服工单提交申请；admin 协商金额后手动触发本接口）
 	adminApi.Post("/subscriptions/:id/refund", refundLimiter, controller.AdminRefundSubscription)
+	// 收回管理员赠送的订阅 / 增量包：只撤销权益，不退款、不改变 user.quota
+	adminApi.Post("/subscriptions/:id/revoke-grant", refundLimiter, controller.AdminRevokeGrantedSubscription)
 	// 赠送订阅 / 增量包：admin 给目标用户免费开通指定套餐（IsGranted=true → refund 路径拒绝）
 	// 复用 refundLimiter（金融敏感操作；按 admin token 限速 10 次/分钟，与退款同等约束）
 	// fix MINOR（codex 第二十轮）：原注释写"6 次/分钟"与实际 Max:10 不一致，已统一描述。
@@ -504,12 +492,27 @@ func main() {
 	// ==========================================
 	// 前后统一同源接管 (Static & SPA Fallback)
 	// ==========================================
+	app.Use("/api", func(c *fiber.Ctx) error {
+		return c.Status(404).JSON(fiber.Map{
+			"success":      false,
+			"message":      "API endpoint not found",
+			"message_code": "ERR_API_NOT_FOUND",
+		})
+	})
+	app.Use("/v1", func(c *fiber.Ctx) error {
+		return c.Status(404).JSON(fiber.Map{
+			"error": fiber.Map{
+				"message": "API endpoint not found",
+				"type":    "invalid_request_error",
+			},
+		})
+	})
 	// fix Minor（codex 第六轮）：拒绝任何含 /. 的路径访问，防止误打包 .env / .git / source map
 	// 等 dotfiles 走静态服务暴露。这一道在 Static 之前生效。
 	app.Use("/", func(c *fiber.Ctx) error {
 		p := c.Path()
 		// 含 /. 的任意段都拒绝（覆盖 /.env、/api/.well-known 等都不该走静态）
-		// API 路由前缀 (/api, /v1) 不会走到这里因为已被前面 Group 接管
+		// API 路由前缀 (/api, /v1) 在上面已有显式 404，不会落到 SPA HTML。
 		if strings.Contains(p, "/.") {
 			return c.Status(404).SendString("not found")
 		}

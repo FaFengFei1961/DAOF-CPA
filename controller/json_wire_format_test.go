@@ -102,9 +102,9 @@ func TestWireFormat_AdminTopupOrders(t *testing.T) {
 	// seed 3 笔不同状态的 topup
 	database.DB.Create(&database.TopupOrder{
 		OutTradeNo: "tp_wire_1", UserID: user.ID,
-		MoneyRMB:             7200,                       // ¥72.00
-		AmountUSD:            10 * database.MicroPerUSD,  // $10
-		RefundedAmountRMB:    3600,                       // 已退 ¥36
+		MoneyRMB:             7200,                      // ¥72.00
+		AmountUSD:            10 * database.MicroPerUSD, // $10
+		RefundedAmountRMB:    3600,                      // 已退 ¥36
 		ExchangeRateSnapshot: 7.2, Status: "paid",
 	})
 
@@ -159,14 +159,13 @@ func TestWireFormat_GetSelfData(t *testing.T) {
 	}
 }
 
-// TestWireFormat_AdminListPackages /admin/packages 列表 PriceAmount/BonusBalanceUSD 应是 USD float
+// TestWireFormat_AdminListPackages /admin/packages 列表 PriceAmount 应是 USD float，且不再暴露套餐 bonus 字段。
 func TestWireFormat_AdminListPackages(t *testing.T) {
 	setupSubTestDB(t)
 	admin := seedAdminUser(t)
 
 	pkg := seedPackage(t, func(p *database.Package) {
 		p.PriceAmount = 19_900_000 // $19.90
-		p.BonusBalanceUSD = 5_000_000 // $5
 	})
 
 	out := runAdminGETAndDecode(t, admin, "/admin/packages/:id", "/admin/packages/"+strconv.FormatUint(uint64(pkg.ID), 10), GetPackageAdmin)
@@ -177,8 +176,28 @@ func TestWireFormat_AdminListPackages(t *testing.T) {
 	if v, _ := data["price_amount"].(float64); v != 19.9 {
 		t.Errorf("price_amount: got %v, want 19.9", data["price_amount"])
 	}
-	if v, _ := data["bonus_balance_usd"].(float64); v != 5.0 {
-		t.Errorf("bonus_balance_usd: got %v, want 5.0", data["bonus_balance_usd"])
+	if _, ok := data["bonus_balance_usd"]; ok {
+		t.Errorf("bonus_balance_usd should not be exposed: %v", data["bonus_balance_usd"])
+	}
+	plans, _ := data["plans"].([]any)
+	if len(plans) != 1 {
+		t.Fatalf("package detail should expose plans, got %v", data["plans"])
+	}
+
+	listOut := runAdminGETAndDecode(t, admin, "/admin/packages", "/admin/packages", ListPackagesAdmin)
+	list, _ := listOut["data"].([]any)
+	if len(list) != 1 {
+		t.Fatalf("list data len=%d out=%v", len(list), listOut)
+	}
+	row, _ := list[0].(map[string]any)
+	if v, _ := row["price_amount"].(float64); v != 19.9 {
+		t.Errorf("list price_amount: got %v, want 19.9", row["price_amount"])
+	}
+	if _, ok := row["plan_count"]; !ok {
+		t.Fatalf("list row missing plan_count: %v", row)
+	}
+	if _, ok := row["active_subs_count"]; !ok {
+		t.Fatalf("list row missing active_subs_count: %v", row)
 	}
 }
 

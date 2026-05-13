@@ -1,7 +1,6 @@
-import React, { useState, useEffect, useRef, useCallback } from 'react';
+import React, { useState, useEffect, useCallback } from 'react';
 import { useTranslation } from 'react-i18next';
-import { useModalA11y } from '../hooks/useModalA11y';
-import { ShieldAlert, Save, Eye, EyeOff, KeyRound, Monitor, Key, MessageSquare, ShieldCheck, Users, User, Globe, Network, Server, BarChart3, AlertOctagon, X, Activity, Layers, Bell, Wallet, Receipt, Package as PackageIcon, Shield, RefreshCw } from 'lucide-react';
+import { ShieldAlert, Save, Eye, EyeOff, KeyRound, Monitor, Key, MessageSquare, ShieldCheck, Users, User, Globe, Network, Server, BarChart3, Activity, Layers, Bell, Wallet, Receipt, Package as PackageIcon, Shield, RefreshCw, ChevronLeft, ChevronRight } from 'lucide-react';
 import toast from 'react-hot-toast';
 import UserManagement from './UserManagement';
 import UserUsageDash from './UserUsageDash';
@@ -27,6 +26,7 @@ const Settings = ({ isAdmin, isAuthenticated }) => {
   const { t } = useTranslation();
   const [activeTab, setActiveTab] = useState('general');
   const [financeTab, setFinanceTab] = useState('settings');
+  const [settingsNavCollapsed, setSettingsNavCollapsed] = useState(() => localStorage.getItem('daof_settings_nav_collapsed') === '1');
   const [showClipKey, setShowClipKey] = useState(false);
   const [configs, setConfigs] = useState({
     github_client_id: '',
@@ -51,7 +51,21 @@ const Settings = ({ isAdmin, isAuthenticated }) => {
     cliproxy_key: '',
     credits_refresh_interval: '15',
     credits_max_retries: '3',
-    credits_retry_interval: '5'
+    credits_retry_interval: '5',
+    moderation_provider: 'cliproxy_model',
+    moderation_cliproxy_model: 'gpt-5.4-mini',
+    moderation_threshold: '0.8',
+    moderation_api_timeout_seconds: '15',
+    moderation_image_policy: 'reject',
+    moderation_autoban_enabled: 'false',
+    moderation_autoban_keyword_threshold: '1',
+    moderation_autoban_policy_threshold: '0',
+    moderation_autoban_risk_rule_threshold: '1',
+    moderation_autoban_risk_score_threshold: '0',
+    moderation_autoban_image_threshold: '2',
+    moderation_autoban_oversize_threshold: '0',
+    moderation_autoban_window_seconds: '86400',
+    moderation_keyword_ai_max_candidates: '80'
   });
 
   // 保存 CLIProxyAPI 连接配置到 Go 后端加密存储。
@@ -71,57 +85,6 @@ const Settings = ({ isAdmin, isAuthenticated }) => {
   const [loading, setLoading] = useState(false);
   const [couponTemplates, setCouponTemplates] = useState([]);
   const [couponTemplatesLoading, setCouponTemplatesLoading] = useState(false);
-
-  // 出厂重置弹窗（多了 password 字段做二次鉴权）
-  const [resetModal, setResetModal] = useState({ open: false, confirmText: '', password: '', loading: false });
-
-  // fix Major M8（gemini 第十五轮）：原 resetModal 无 ESC + 背景点击关闭
-  // 用 useModalA11y hook 统一行为；loading 期间禁用关闭防误操作
-  const closeResetModal = () => {
-    if (!resetModal.loading) {
-      setResetModal({ open: false, confirmText: '', password: '', loading: false });
-    }
-  };
-  const resetModalRef = useRef(null); // C-F1 第二十一轮: focus trap 范围
-  const { onBackdropClick: onResetBackdropClick } = useModalA11y(resetModal.open, closeResetModal, undefined, resetModalRef);
-  const performFactoryReset = async () => {
-    if (resetModal.confirmText !== 'FACTORY_RESET') {
-      toast.error('请精确输入 FACTORY_RESET 才能执行');
-      return;
-    }
-    if (!resetModal.password) {
-      toast.error('需要输入当前管理员密码做二次鉴权');
-      return;
-    }
-    setResetModal(prev => ({ ...prev, loading: true }));
-    try {
-      const res = await fetch('/api/admin/factory-reset', {
-        method: 'POST',
-        credentials: 'include',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ confirm: 'FACTORY_RESET', password: resetModal.password }),
-      });
-      const data = await res.json();
-      if (data.success) {
-        // 立刻打断所有同步轮询，避免重置完成期间的 401 触发 godModeUnlocked 闪烁
-        // 用 sessionStorage 标志位让 App.jsx 的 verifyAdminCookie 跳过本次轮询
-        sessionStorage.setItem('daof_factory_resetting', '1');
-        toast.success('平台已恢复出厂设置，3 秒后跳转到 setup 入口...', { duration: 3000 });
-        localStorage.removeItem('daof_token');
-        localStorage.removeItem('daof_admin_unlocked');
-        setTimeout(() => {
-          sessionStorage.removeItem('daof_factory_resetting');
-          window.location.href = '/?sys=root';
-        }, 3000);
-      } else {
-        toast.error((data.message_code ? t('API.' + data.message_code) : data.message) || '出厂重置失败');
-        setResetModal(prev => ({ ...prev, loading: false }));
-      }
-    } catch (e) {
-      toast.error('网络异常，出厂重置失败');
-      setResetModal(prev => ({ ...prev, loading: false }));
-    }
-  };
 
   // 挂载时去 Go 后台把已存的配置拉取回来
   useEffect(() => {
@@ -163,6 +126,10 @@ const Settings = ({ isAdmin, isAuthenticated }) => {
       fetchCouponTemplates();
     }
   }, [activeTab, fetchCouponTemplates]);
+
+  useEffect(() => {
+    localStorage.setItem('daof_settings_nav_collapsed', settingsNavCollapsed ? '1' : '0');
+  }, [settingsNavCollapsed]);
 
   const handleChange = (key, val) => {
     setConfigs(prev => ({ ...prev, [key]: val }));
@@ -210,6 +177,45 @@ const Settings = ({ isAdmin, isAuthenticated }) => {
         errors.push('新用户余额消费默认窗口必须在 60 秒到 365 天之间');
       }
     }
+    if (cfg.moderation_autoban_enabled !== undefined) {
+      const enabled = String(cfg.moderation_autoban_enabled).trim().toLowerCase();
+      if (!['true', 'false'].includes(enabled)) {
+        errors.push('自动封禁开关必须是 true/false');
+      }
+    }
+    [
+      'moderation_autoban_keyword_threshold',
+      'moderation_autoban_policy_threshold',
+      'moderation_autoban_risk_rule_threshold',
+      'moderation_autoban_risk_score_threshold',
+      'moderation_autoban_image_threshold',
+      'moderation_autoban_oversize_threshold',
+    ].forEach((key) => {
+      if (cfg[key] !== undefined) {
+        const n = parseInt(cfg[key], 10);
+        if (Number.isNaN(n) || n < 0 || n > 100) {
+          errors.push('自动封禁阈值必须是 0-100 之间的整数');
+        }
+      }
+    });
+    if (cfg.moderation_autoban_window_seconds !== undefined) {
+      const n = parseInt(cfg.moderation_autoban_window_seconds, 10);
+      if (Number.isNaN(n) || n < 60 || n > 365 * 24 * 60 * 60) {
+        errors.push('自动封禁统计窗口必须在 60 秒到 365 天之间');
+      }
+    }
+    if (cfg.moderation_keyword_ai_max_candidates !== undefined) {
+      const n = parseInt(cfg.moderation_keyword_ai_max_candidates, 10);
+      if (Number.isNaN(n) || n < 1 || n > 200) {
+        errors.push('AI 词库候选数量必须是 1-200 之间的整数');
+      }
+    }
+    if (cfg.moderation_api_timeout_seconds !== undefined) {
+      const n = parseInt(cfg.moderation_api_timeout_seconds, 10);
+      if (Number.isNaN(n) || n < 1 || n > 120) {
+        errors.push('审核模型超时必须是 1-120 秒之间的整数');
+      }
+    }
     return errors;
   };
 
@@ -222,7 +228,12 @@ const Settings = ({ isAdmin, isAuthenticated }) => {
 
   // 统一保存逻辑。partialPayload 给定时只 POST 该子集（用于 saveClipProxySettings），否则 POST 全部 configs。
   const handleSave = async (partialPayload = null, successMsg = null) => {
-    const payload = partialPayload || configs;
+    const payload = { ...(partialPayload || configs) };
+    if (payload.moderation_provider !== undefined) payload.moderation_provider = 'cliproxy_model';
+    delete payload.moderation_gemini_endpoint;
+    delete payload.moderation_gemini_model;
+    delete payload.moderation_gemini_auth_index;
+    delete payload.moderation_gemini_safety_threshold;
     const errs = validateCreditsConfig(payload);
     if (errs.length > 0) {
       toast.error(errs.join('；'));
@@ -312,7 +323,7 @@ const Settings = ({ isAdmin, isAuthenticated }) => {
   ];
 
   return (
-    <div className="w-full h-full flex flex-col md:flex-row gap-6 animate-in fade-in slide-in-from-bottom-2">
+    <div className="w-full min-h-full flex flex-col md:flex-row gap-4 animate-in fade-in slide-in-from-bottom-2">
 
       {/* 移动端：下拉切换 */}
       <div className="md:hidden -mx-4 px-4 py-3 sticky top-0 z-10 bg-surface/90 backdrop-blur-md border-b border-outline-variant">
@@ -332,13 +343,40 @@ const Settings = ({ isAdmin, isAuthenticated }) => {
       </div>
 
       {/* 桌面端：左侧菜单 — 用 acrylic 二级面板让整套看起来"嵌在 mica 大背景里" */}
-      <aside className="hidden md:block w-56 shrink-0">
-        <nav aria-label={t('SETTINGS.NAV_LABEL', '设置导航')} className="sticky top-16 space-y-5 fl-acrylic rounded-overlay p-3">
-          {menuGroups.map((group) => (
-            <div key={group.title}>
-              <p className="px-3 mb-1.5 text-[11px] uppercase tracking-wider text-on-surface-variant/70 font-medium">
-                {group.title}
-              </p>
+      <aside className={`hidden md:block fixed left-4 lg:left-5 top-20 bottom-6 z-20 transition-all duration-200 ${settingsNavCollapsed ? 'w-14' : 'w-48'}`}>
+        <nav
+          aria-label={t('SETTINGS.NAV_LABEL', '设置导航')}
+          className={`h-full overflow-y-auto overscroll-contain fl-acrylic rounded-overlay transition-all duration-200 ${
+            settingsNavCollapsed ? 'space-y-2 p-1.5' : 'space-y-3 p-2'
+          }`}
+        >
+          <button
+            type="button"
+            aria-label={settingsNavCollapsed ? t('SETTINGS.NAV_EXPAND', '展开设置菜单') : t('SETTINGS.NAV_COLLAPSE', '收起设置菜单')}
+            title={settingsNavCollapsed ? t('SETTINGS.NAV_EXPAND', '展开设置菜单') : t('SETTINGS.NAV_COLLAPSE', '收起设置菜单')}
+            onClick={() => setSettingsNavCollapsed(prev => !prev)}
+            className={`h-8 w-full flex items-center rounded-lg border border-outline-variant/70 text-on-surface-variant hover:text-on-surface hover:bg-surface-container transition ${
+              settingsNavCollapsed ? 'justify-center px-0' : 'justify-between px-2.5'
+            }`}
+          >
+            {!settingsNavCollapsed && (
+              <span className="text-xs font-medium truncate">
+                {t('SETTINGS.NAV_MENU', '设置菜单')}
+              </span>
+            )}
+            {settingsNavCollapsed ? <ChevronRight size={16} /> : <ChevronLeft size={16} />}
+          </button>
+
+          {menuGroups.map((group, groupIndex) => (
+            <div
+              key={group.title}
+              className={settingsNavCollapsed && groupIndex > 0 ? 'pt-1.5 border-t border-outline-variant/50' : undefined}
+            >
+              {!settingsNavCollapsed && (
+                <p className="px-2.5 mb-1 text-[11px] uppercase tracking-wider text-on-surface-variant/70 font-medium">
+                  {group.title}
+                </p>
+              )}
               <ul className="space-y-0.5">
                 {group.items.map((it) => {
                   const Icon = it.icon;
@@ -348,15 +386,19 @@ const Settings = ({ isAdmin, isAuthenticated }) => {
                       <button
                         type="button"
                         aria-current={isActive ? 'page' : undefined}
+                        aria-label={it.label}
+                        title={settingsNavCollapsed ? it.label : undefined}
                         onClick={() => setActiveTab(it.id)}
-                        className={`w-full flex items-center gap-2.5 px-3 py-2 rounded-lg text-sm text-left transition
+                        className={`w-full h-8 flex items-center rounded-lg text-sm transition ${
+                          settingsNavCollapsed ? 'justify-center px-0' : 'gap-2 px-2.5 text-left'
+                        }
                           ${isActive
                             ? 'bg-primary-container text-on-primary-container font-medium'
                             : 'text-on-surface-variant hover:bg-surface-container'
                           }`}
                       >
-                        <Icon size={16} className={isActive ? 'opacity-100' : 'opacity-70'} />
-                        <span className="truncate">{it.label}</span>
+                        <Icon size={16} className={`shrink-0 ${isActive ? 'opacity-100' : 'opacity-70'}`} />
+                        {!settingsNavCollapsed && <span className="truncate">{it.label}</span>}
                       </button>
                     </li>
                   );
@@ -368,7 +410,7 @@ const Settings = ({ isAdmin, isAuthenticated }) => {
       </aside>
 
       {/* 主面板替换区 */}
-      <div className="flex-1 min-w-0 pb-12">
+      <div className={`flex-1 min-w-0 pb-12 transition-[margin] duration-200 ${settingsNavCollapsed ? 'md:ml-16' : 'md:ml-52'}`}>
         
         {/* =========================================================
             常规设置 (任何人可见) 
@@ -669,9 +711,8 @@ const Settings = ({ isAdmin, isAuthenticated }) => {
 
         {/* =========================================================
             内容审核（per-ChannelModel 风控的全局共享层）
-            fix CRITICAL R23 (codex 第二十三轮反馈)：御三家 GPT 最易因 jailbreak 封号；
-            Claude/Gemini 自带防护。这里配置 OpenAI Moderation API 凭证、关键字词库、
-            缓存参数、长 prompt 限制、多模态图片策略、双语拒绝文案。
+            这里配置 CPA 模型池智能审核、关键字词库、缓存参数、长 prompt 限制、
+            多模态图片策略、双语拒绝文案。
             具体每个渠道每个模型走哪种风控等级在 ChannelManagement → 模型编辑里设。
             ========================================================= */}
         {isAdmin && activeTab === 'moderation' && (
@@ -845,143 +886,12 @@ const Settings = ({ isAdmin, isAuthenticated }) => {
             </div>
 
             <SaveBar loading={loading} onSave={handleSave} t={t} />
-
-            {/* 极端危险区：出厂重置 */}
-            <div className="mt-16 mb-12 border-2 border-red-900/50 rounded-2xl p-6 bg-red-950/10 relative overflow-hidden">
-              <div className="absolute top-0 right-0 text-red-900/10 pointer-events-none -mr-4 -mt-4">
-                <AlertOctagon size={120} strokeWidth={1} />
-              </div>
-              <div className="flex items-start gap-3 mb-5 relative z-10">
-                <AlertOctagon className="text-red-500 shrink-0 mt-1" size={22} />
-                <div>
-                  <h3 className="text-lg font-bold text-red-400 tracking-tight">极端危险区 / DANGER ZONE</h3>
-                  <p className="text-xs text-on-surface-variant mt-1">下方操作会**不可逆地**抹除所有数据，仅在你完全清楚后果时使用。</p>
-                </div>
-              </div>
-
-              <div className="bg-black/30 border border-red-900/30 rounded-xl p-5 relative z-10">
-                <div className="flex flex-col md:flex-row md:items-center md:justify-between gap-4">
-                  <div className="flex-1">
-                    <h4 className="text-base font-bold text-on-surface mb-2">恢复出厂设置</h4>
-                    <p className="text-xs text-on-surface-variant leading-relaxed">
-                      将清空所有 <span className="text-red-400">用户、API 令牌、调用日志、审计日志、上游渠道、模型映射、系统配置（含 cliproxy_key、GitHub OAuth、阿里云密钥等）</span>，
-                      并重新创建默认管理员 <span className="text-amber-400 font-mono">root / 123456</span>。
-                      操作后你将自动登出，需用 <span className="font-mono">?sys=root</span> 入口重新引导。
-                    </p>
-                    <p className="text-xs text-red-400/90 mt-3 font-medium">
-                      ⚠️ 不可恢复，请确保已备份必要数据（如 daof.key、SQLite 文件副本）。
-                    </p>
-                  </div>
-                  <button
-                    type="button"
-                    onClick={() => setResetModal({ open: true, confirmText: '', password: '', loading: false })}
-                    className="shrink-0 px-5 py-2.5 bg-red-700 hover:bg-red-600 text-white font-medium rounded-lg flex items-center gap-2 shadow-[0_0_15px_rgba(220,38,38,0.3)] transition-colors"
-                  >
-                    <AlertOctagon size={16} />
-                    恢复出厂设置
-                  </button>
-                </div>
-              </div>
-            </div>
               </>
             )}
 
             {financeTab === 'payment_channels' && <AdminPaymentChannels />}
             {financeTab === 'topup_orders' && <AdminTopupOrders />}
             {financeTab === 'admin_subscriptions' && <AdminSubscriptions />}
-          </div>
-        )}
-
-        {/* 出厂重置确认弹窗 */}
-        {resetModal.open && (
-          <div
-            ref={resetModalRef}
-            role="dialog"
-            aria-modal="true"
-            aria-labelledby="reset-modal-title"
-            onClick={onResetBackdropClick}
-            className="fixed inset-0 z-[70] flex items-start sm:items-center justify-center p-2 sm:p-4 bg-black/80 backdrop-blur-md overflow-y-auto"
-          >
-            <div className="relative w-full max-w-md bg-surface-container border-2 border-red-700 rounded-2xl shadow-[0_0_40px_rgba(220,38,38,0.4)] p-6">
-              <button
-                onClick={closeResetModal}
-                className="absolute top-4 right-4 text-on-surface-variant hover:text-white"
-                disabled={resetModal.loading}
-                aria-label={t('COMMON.CLOSE', '关闭')}
-              >
-                <X size={18} />
-              </button>
-
-              <div className="flex items-center gap-3 mb-5">
-                <div className="w-12 h-12 rounded-full bg-red-900/40 border border-red-700 flex items-center justify-center">
-                  <AlertOctagon className="text-red-400" size={24} />
-                </div>
-                <div>
-                  <h2 id="reset-modal-title" className="text-xl font-bold text-red-400">最终确认</h2>
-                  <p className="text-xs text-on-surface-variant mt-0.5">此操作不可撤销</p>
-                </div>
-              </div>
-
-              <div className="space-y-3 mb-5 text-sm">
-                <p className="text-on-surface">即将抹除：</p>
-                <ul className="text-xs text-on-surface-variant space-y-1 ml-4 list-disc">
-                  <li>所有普通用户与管理员（重建默认 root）</li>
-                  <li>所有 API 令牌（含子凭证）</li>
-                  <li>所有调用日志、审计日志</li>
-                  <li>所有上游渠道与模型映射</li>
-                  <li>所有系统配置（GitHub OAuth、阿里云、cliproxy_key 等）</li>
-                </ul>
-              </div>
-
-              <div className="space-y-2 mb-4">
-                <label htmlFor="settings-factory-reset-confirm" className="text-xs font-semibold text-red-400">
-                  请精确输入 <span className="font-mono bg-red-900/40 px-1.5 py-0.5 rounded">FACTORY_RESET</span> 以确认：
-                </label>
-                <input
-                  id="settings-factory-reset-confirm"
-                  type="text"
-                  autoFocus
-                  value={resetModal.confirmText}
-                  onChange={e => setResetModal(prev => ({ ...prev, confirmText: e.target.value }))}
-                  placeholder="FACTORY_RESET"
-                  aria-invalid={resetModal.confirmText !== '' && resetModal.confirmText !== 'FACTORY_RESET'}
-                  className="w-full h-11 bg-black/50 border border-red-900/50 rounded-lg px-3 text-base text-red-300 font-mono focus:border-red-500 outline-none"
-                  disabled={resetModal.loading}
-                />
-              </div>
-
-              <div className="space-y-2 mb-5">
-                <label htmlFor="settings-factory-reset-password" className="text-xs font-semibold text-red-400">
-                  二次鉴权：再次输入当前管理员密码
-                </label>
-                <input
-                  id="settings-factory-reset-password"
-                  type="password"
-                  value={resetModal.password}
-                  onChange={e => setResetModal(prev => ({ ...prev, password: e.target.value }))}
-                  placeholder="当前管理员密码"
-                  className="w-full h-11 bg-black/50 border border-red-900/50 rounded-lg px-3 text-base text-on-surface font-mono focus:border-red-500 outline-none"
-                  disabled={resetModal.loading}
-                />
-              </div>
-
-              <div className="flex gap-3">
-                <button
-                  onClick={() => setResetModal({ open: false, confirmText: '', password: '', loading: false })}
-                  disabled={resetModal.loading}
-                  className="flex-1 h-10 bg-surface-container-high border border-outline-variant text-on-surface rounded-lg hover:bg-surface-variant transition-colors text-sm font-medium"
-                >
-                  取消
-                </button>
-                <button
-                  onClick={performFactoryReset}
-                  disabled={resetModal.loading || resetModal.confirmText !== 'FACTORY_RESET' || !resetModal.password}
-                  className="flex-1 h-10 bg-red-700 hover:bg-red-600 disabled:opacity-30 disabled:cursor-not-allowed text-white rounded-lg transition-colors text-sm font-bold"
-                >
-                  {resetModal.loading ? '正在抹除...' : '确认重置'}
-                </button>
-              </div>
-            </div>
           </div>
         )}
 

@@ -1,19 +1,28 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useCallback, useMemo } from 'react';
 import { useTranslation } from 'react-i18next';
 import { Key, Plus, Copy, Trash2, CheckCircle2, Activity, ShieldAlert, Power, Clock, Save, FileBox, Edit2, Link } from 'lucide-react';
 import { useCurrency } from '../context/CurrencyContext';
 import toast from 'react-hot-toast';
 import { useConfirm } from '../context/ConfirmContext';
-import { authFetch } from '../utils/authFetch';
+import { authFetch, readAuthState } from '../utils/authFetch';
+import { isPageCacheFresh, readPageCache, writePageCache } from '../utils/pageCache';
 import { StorePage } from './store/StorePrimitives';
+
+const TOKEN_CACHE_TTL_MS = 30000;
+
+const getTokenCacheKey = () => {
+    const { isAdmin, userToken } = readAuthState();
+    return `tokens:${isAdmin ? 'admin' : userToken || 'guest'}`;
+};
 
 const TokenManager = ({ isAuthenticated }) => {
     const confirm = useConfirm();
     const { t } = useTranslation();
     const { formatCurrency } = useCurrency();
-    const [tokens, setTokens] = useState([]);
+    const tokenCacheKey = useMemo(getTokenCacheKey, [isAuthenticated]);
+    const [tokens, setTokens] = useState(() => readPageCache(tokenCacheKey) || []);
     // 未登录时不需要加载（避免显示"加载中…"卡住，让 RequireAuth banner 提示登录即可）
-    const [loadingTokens, setLoadingTokens] = useState(isAuthenticated);
+    const [loadingTokens, setLoadingTokens] = useState(() => isAuthenticated && !readPageCache(tokenCacheKey));
     const [isCreating, setIsCreating] = useState(false);
     const [newTokenName, setNewTokenName] = useState('');
     const [editingTokenId, setEditingTokenId] = useState(null);
@@ -23,24 +32,41 @@ const TokenManager = ({ isAuthenticated }) => {
     const [editingQuota, setEditingQuota] = useState('');
     const [editingExpiry, setEditingExpiry] = useState('');
 
-    const fetchTokens = async () => {
-        setLoadingTokens(true);
+    const fetchTokens = useCallback(async ({ force = false } = {}) => {
+        if (!isAuthenticated) {
+            setTokens([]);
+            setLoadingTokens(false);
+            return;
+        }
+
+        const cached = readPageCache(tokenCacheKey);
+        if (cached) {
+            setTokens(cached);
+            setLoadingTokens(false);
+            if (!force && isPageCacheFresh(tokenCacheKey, TOKEN_CACHE_TTL_MS)) return;
+        } else {
+            setLoadingTokens(true);
+        }
+
         try {
             const data = await authFetch('/api/tokens');
             if (data.success) {
-                setTokens(data.data || []);
+                const nextTokens = data.data || [];
+                writePageCache(tokenCacheKey, nextTokens);
+                setTokens(nextTokens);
             }
         } catch {
             toast.error(t('TOKEN_MGMT.NET_ERROR'));
+        } finally {
+            setLoadingTokens(false);
         }
-        setLoadingTokens(false);
-    };
+    }, [isAuthenticated, t, tokenCacheKey]);
 
     useEffect(() => {
         if (isAuthenticated) {
             fetchTokens();
         }
-    }, [isAuthenticated]);
+    }, [isAuthenticated, fetchTokens]);
 
     const handleCreateToken = async () => {
         if (isCreating) return;
@@ -58,7 +84,7 @@ const TokenManager = ({ isAuthenticated }) => {
                 setNewTokenName('');
                 setNewQuotaLimit('');
                 setNewExpiredAt('');
-                fetchTokens();
+                fetchTokens({ force: true });
                 toast.success(t('TOKEN_MGMT.CREATE_OK', '令牌已创建'));
             } else {
                 toast.error((data.message_code ? t('API.' + data.message_code) : data.message));
@@ -77,7 +103,7 @@ const TokenManager = ({ isAuthenticated }) => {
                 body: { status: newStatus }
             });
             if (data.success) {
-                fetchTokens();
+                fetchTokens({ force: true });
                 toast.success(newStatus === 1 ? t('TOKEN_MGMT.ENABLED_OK', '已启用') : t('TOKEN_MGMT.DISABLED_OK', '已禁用'));
             } else {
                 toast.error(data.message || '操作失败');
@@ -115,16 +141,16 @@ const TokenManager = ({ isAuthenticated }) => {
                 body: { name: trimmed, quota_limit: parsedQuota, expired_at: parsedExpiry, clear_expiry: !parsedExpiry }
             });
             if (data.success) {
-                fetchTokens();
+                fetchTokens({ force: true });
             } else {
                 // 修改失败必须告诉用户原因，而不是静默 fetch（之前 optimistic update 已写入界面，
                 // 用户会以为修改成功，实际服务端拒绝了）
                 toast.error((data.message_code ? t('API.' + data.message_code) : data.message) || t('TOKEN_MGMT.UPDATE_FAILED', '保存失败'));
-                fetchTokens();
+                fetchTokens({ force: true });
             }
         } catch {
             toast.error(t('TOKEN_MGMT.NET_ERROR'));
-            fetchTokens();
+            fetchTokens({ force: true });
         }
     };
 
@@ -133,7 +159,7 @@ const TokenManager = ({ isAuthenticated }) => {
         try {
             const data = await authFetch(`/api/tokens/${id}`, { method: 'DELETE' });
             if (data.success) {
-                fetchTokens();
+                fetchTokens({ force: true });
                 toast.success(t('TOKEN_MGMT.DELETE_OK', '令牌已删除'));
             } else {
                 toast.error(data.message || '删除失败');

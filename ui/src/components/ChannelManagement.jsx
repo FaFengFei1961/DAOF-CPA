@@ -60,7 +60,7 @@ const ChannelManagement = () => {
         return Object.entries(grouped).sort(([a], [b]) => a.localeCompare(b));
     }, [upstreamModels]);
 
-    const initChanForm = { type: 'openai', name: '', key: '', base_url: '', proxy_url: '', headers: '', weight: 1 };
+    const initChanForm = { type: 'cliproxy', name: '', key: '', base_url: '', proxy_url: '', headers: '', weight: 1 };
     const [chanForm, setChanForm] = useState(initChanForm);
 
     // a11y: 三个模态各自的初始焦点 ref —— 优先聚焦关闭按钮，避免 ESC/Tab 用户卡死
@@ -76,7 +76,8 @@ const ChannelManagement = () => {
     const { onBackdropClick: onUpstreamBackdropClick } = useModalA11y(isUpstreamModalOpen, () => setIsUpstreamModalOpen(false), upstreamModalCloseRef, upstreamModalRef);
 
     const channelTypes = [
-        { id: 'openai', label: 'OpenAI / DeepSeek / 国产模型通用兼容 (openai)' },
+        { id: 'cliproxy', label: 'CLIProxyAPI 多协议网关' },
+        { id: 'openai', label: 'OpenAI / DeepSeek / 国产模型通用兼容' },
         { id: 'anthropic', label: 'Anthropic (Claude)' },
         { id: 'gemini', label: 'Google Gemini' },
         { id: 'google-cli', label: 'Google Gemini (CLI/Unofficial)' },
@@ -85,7 +86,9 @@ const ChannelManagement = () => {
 
     const initModelForm = {
         model_id: '', display_name: '', input_price: 0, output_price: 0,
-        cached_input_price: 0, context_price_threshold: 0, high_input_price: 0, high_output_price: 0, weight: 1, max_context_length: 0,
+        cached_input_price: 0, cache_write_input_price: 0, cache_write_1h_input_price: 0,
+        context_price_threshold: 0, high_input_price: 0, high_cached_input_price: 0, high_output_price: 0,
+        weight: 1, max_context_length: 0,
         // fix CRITICAL R23：内容审核字段（per-channel-per-model 风控）
         moderation_level: 'off',          // off / keyword / moderation / strict
         moderation_fail_mode: 'open',     // open / closed
@@ -99,6 +102,25 @@ const ChannelManagement = () => {
         anthropic: ['api.anthropic.com'],
         gemini: ['generativelanguage.googleapis.com'],
     };
+
+    const isOpenAIModelId = (modelId = '') => {
+        const id = String(modelId).trim().toLowerCase();
+        if (!id) return false;
+        const hasGptSegment = id.split(/[/: \t]+/).some(part => part === 'gpt' || part.startsWith('gpt-') || part.startsWith('gpt_'));
+        return hasGptSegment
+            || id.includes('openai')
+            || id.startsWith('chatgpt-')
+            || id.startsWith('codex-')
+            || /^o\d/.test(id);
+    };
+
+    const withOpenAIModelModeration = (form) => (
+        isOpenAIModelId(form.model_id)
+            ? { ...form, moderation_level: 'strict', moderation_fail_mode: 'closed', confirm_official_no_moderation: false }
+            : form
+    );
+
+    const isOpenAIModel = useMemo(() => isOpenAIModelId(modelForm.model_id), [modelForm.model_id]);
 
     // 判断当前选中渠道是否指向某家"官方上游"（影响审核默认值与告警）
     const isOfficialChannel = useMemo(() => {
@@ -115,9 +137,12 @@ const ChannelManagement = () => {
         }
     }, [selectedChannel]);
 
-    // 一键应用推荐预设：官方渠道用 moderation+closed；非官方用 off+open（与服务端默认一致）
+    // 一键应用推荐预设：OpenAI 模型固定 strict+closed；官方渠道用 moderation+closed；
+    // 非官方非 OpenAI 模型用 off+open（与服务端默认一致）
     const applyRecommendedModerationPreset = () => {
-        if (isOfficialChannel) {
+        if (isOpenAIModel) {
+            setModelForm(prev => ({ ...prev, moderation_level: 'strict', moderation_fail_mode: 'closed', confirm_official_no_moderation: false }));
+        } else if (isOfficialChannel) {
             setModelForm(prev => ({ ...prev, moderation_level: 'moderation', moderation_fail_mode: 'closed', confirm_official_no_moderation: false }));
         } else {
             setModelForm(prev => ({ ...prev, moderation_level: 'off', moderation_fail_mode: 'open', confirm_official_no_moderation: false }));
@@ -238,12 +263,12 @@ const ChannelManagement = () => {
         setInputCurrency('USD');
         if (model) {
             setCurrentModel(model);
-            setModelForm({
+            setModelForm(withOpenAIModelModeration({
                 ...model,
                 moderation_level: model.moderation_level,
                 moderation_fail_mode: model.moderation_fail_mode,
                 confirm_official_no_moderation: false,
-            });
+            }));
         } else {
             setCurrentModel(null);
             // 新建路径：根据渠道是否官方自动套推荐预设（admin 仍可在 UI 内修改）
@@ -259,11 +284,11 @@ const ChannelManagement = () => {
                     } catch { /* 非法 URL → 不当作官方 */ }
                 }
             }
-            setModelForm({
+            setModelForm(withOpenAIModelModeration({
                 ...initModelForm,
                 moderation_level: isOfficial ? 'moderation' : 'off',
                 moderation_fail_mode: isOfficial ? 'closed' : 'open',
-            });
+            }));
         }
         setIsModelModalOpen(true);
     };
@@ -271,7 +296,7 @@ const ChannelManagement = () => {
     const toggleInputCurrency = (target) => {
         if (inputCurrency === target) return;
         const form = { ...modelForm };
-        const fields = ['input_price', 'output_price', 'cached_input_price', 'high_input_price', 'high_output_price'];
+        const fields = ['input_price', 'output_price', 'cached_input_price', 'cache_write_input_price', 'cache_write_1h_input_price', 'high_input_price', 'high_cached_input_price', 'high_output_price'];
         fields.forEach(f => {
             let val = parseFloat(form[f]) || 0;
             const converted = target === 'CNY' ? val * exchangeRate : val / exchangeRate;
@@ -295,15 +320,18 @@ const ChannelManagement = () => {
                 input_price: inputCurrency === 'CNY' ? (parseFloat(modelForm.input_price) || 0) / exchangeRate : (parseFloat(modelForm.input_price) || 0),
                 output_price: inputCurrency === 'CNY' ? (parseFloat(modelForm.output_price) || 0) / exchangeRate : (parseFloat(modelForm.output_price) || 0),
                 cached_input_price: inputCurrency === 'CNY' ? (parseFloat(modelForm.cached_input_price) || 0) / exchangeRate : (parseFloat(modelForm.cached_input_price) || 0),
+                cache_write_input_price: inputCurrency === 'CNY' ? (parseFloat(modelForm.cache_write_input_price) || 0) / exchangeRate : (parseFloat(modelForm.cache_write_input_price) || 0),
+                cache_write_1h_input_price: inputCurrency === 'CNY' ? (parseFloat(modelForm.cache_write_1h_input_price) || 0) / exchangeRate : (parseFloat(modelForm.cache_write_1h_input_price) || 0),
                 context_price_threshold: parseInt(modelForm.context_price_threshold) || 0,
                 high_input_price: inputCurrency === 'CNY' ? (parseFloat(modelForm.high_input_price) || 0) / exchangeRate : (parseFloat(modelForm.high_input_price) || 0),
+                high_cached_input_price: inputCurrency === 'CNY' ? (parseFloat(modelForm.high_cached_input_price) || 0) / exchangeRate : (parseFloat(modelForm.high_cached_input_price) || 0),
                 high_output_price: inputCurrency === 'CNY' ? (parseFloat(modelForm.high_output_price) || 0) / exchangeRate : (parseFloat(modelForm.high_output_price) || 0),
                 weight: parseInt(modelForm.weight) || 1,
                 max_context_length: parseInt(modelForm.max_context_length) || 0,
                 // fix CRITICAL R23：审核字段透传（默认值在 initModelForm 已设；后端再做 enum 校验）
-                moderation_level: modelForm.moderation_level || 'off',
-                moderation_fail_mode: modelForm.moderation_fail_mode || 'open',
-                confirm_official_no_moderation: !!modelForm.confirm_official_no_moderation,
+                moderation_level: isOpenAIModel ? 'strict' : (modelForm.moderation_level || 'off'),
+                moderation_fail_mode: isOpenAIModel ? 'closed' : (modelForm.moderation_fail_mode || 'open'),
+                confirm_official_no_moderation: isOpenAIModel ? false : !!modelForm.confirm_official_no_moderation,
             };
 
             const data = await authFetch(url, { method, body: payload });
@@ -473,6 +501,8 @@ const ChannelManagement = () => {
                                                 <span className="text-on-surface-variant">{t('CHANNEL_MGMT.MODEL.IN')}: {formatCurrency(m.input_price, 6)}</span>
                                                 <span className="text-on-surface-variant">{t('CHANNEL_MGMT.MODEL.OUT')}: {formatCurrency(m.output_price, 6)}</span>
                                                 {m.cached_input_price > 0 && <span className="text-emerald-400">{t('CHANNEL_MGMT.MODEL.CACHE')}: {formatCurrency(m.cached_input_price, 6)}</span>}
+                                                {m.cache_write_input_price > 0 && <span className="text-orange-400">{t('CHANNEL_MGMT.MODEL.CACHE_WRITE_5M', '缓存写5m')}: {formatCurrency(m.cache_write_input_price, 6)}</span>}
+                                                {m.cache_write_1h_input_price > 0 && <span className="text-orange-300">{t('CHANNEL_MGMT.MODEL.CACHE_WRITE_1H', '缓存写1h')}: {formatCurrency(m.cache_write_1h_input_price, 6)}</span>}
                                             </div>
                                         </td>
                                         <td className="px-6 py-4">
@@ -483,6 +513,7 @@ const ChannelManagement = () => {
                                                         {t('CHANNEL_MGMT.MODEL.TIER_ACTIVE', { threshold: formatTokens(m.context_price_threshold) })}
                                                     </span>
                                                     <span className="text-on-surface-variant">{t('CHANNEL_MGMT.MODEL.IN')}: {formatCurrency(m.high_input_price, 6)}</span>
+                                                    {m.high_cached_input_price > 0 && <span className="text-emerald-400">{t('CHANNEL_MGMT.MODEL.CACHE')}: {formatCurrency(m.high_cached_input_price, 6)}</span>}
                                                     <span className="text-on-surface-variant">{t('CHANNEL_MGMT.MODEL.OUT')}: {formatCurrency(m.high_output_price, 6)}</span>
                                                 </div>
                                             ) : (
@@ -537,7 +568,14 @@ const ChannelManagement = () => {
                             <div className="p-6 overflow-y-auto space-y-4">
                                 <div>
                                     <label htmlFor="channel-model-id" className="block text-xs font-medium text-on-surface-variant mb-1">{t('CHANNEL_MGMT.MODEL.MODAL.MODEL_ID')}</label>
-                                    <input id="channel-model-id" type="text" required value={modelForm.model_id} onChange={e=>setModelForm({...modelForm, model_id: e.target.value})} className="w-full bg-surface-container-high border border-outline-variant rounded-xl px-4 py-2.5 text-on-surface" />
+                                    <input
+                                        id="channel-model-id"
+                                        type="text"
+                                        required
+                                        value={modelForm.model_id}
+                                        onChange={e=>setModelForm(withOpenAIModelModeration({...modelForm, model_id: e.target.value}))}
+                                        className="w-full bg-surface-container-high border border-outline-variant rounded-xl px-4 py-2.5 text-on-surface"
+                                    />
                                 </div>
                                 <div>
                                     <label htmlFor="channel-model-display-name" className="block text-xs font-medium text-on-surface-variant mb-1">{t('CHANNEL_MGMT.MODEL.MODAL.DISPLAY_NAME')}</label>
@@ -573,12 +611,26 @@ const ChannelManagement = () => {
                                         </label>
                                         <input id="channel-model-output-price" type="number" step="0.000001" min="0" required value={modelForm.output_price} onChange={e=>setModelForm({...modelForm, output_price: e.target.value})} className="w-full bg-[#1a1b1e] border border-outline-variant rounded-lg px-3 py-2 text-on-surface" />
                                     </div>
-                                    <div className="col-span-2">
+                                    <div>
                                         <label htmlFor="channel-model-cache-price" className="block text-xs font-medium text-emerald-500 mb-1">
                                             {t('CHANNEL_MGMT.MODEL.MODAL.CACHE_PRICE')}
                                             <span className="ml-1 text-emerald-400/70">({inputCurrency === 'CNY' ? '￥/1M' : '$/1M'})</span>
                                         </label>
                                         <input id="channel-model-cache-price" type="number" step="0.000001" min="0" value={modelForm.cached_input_price} onChange={e=>setModelForm({...modelForm, cached_input_price: e.target.value})} className="w-full bg-[#1a1b1e] border border-emerald-500/30 rounded-lg px-3 py-2 text-on-surface" />
+                                    </div>
+                                    <div>
+                                        <label htmlFor="channel-model-cache-write-price" className="block text-xs font-medium text-orange-400 mb-1">
+                                            {t('CHANNEL_MGMT.MODEL.MODAL.CACHE_WRITE_PRICE', '缓存写入单价 ($/1M Token)')}
+                                            <span className="ml-1 text-orange-400/70">({inputCurrency === 'CNY' ? '￥/1M' : '$/1M'})</span>
+                                        </label>
+                                        <input id="channel-model-cache-write-price" type="number" step="0.000001" min="0" value={modelForm.cache_write_input_price} onChange={e=>setModelForm({...modelForm, cache_write_input_price: e.target.value})} className="w-full bg-[#1a1b1e] border border-orange-500/30 rounded-lg px-3 py-2 text-on-surface" />
+                                    </div>
+                                    <div className="col-span-1 sm:col-span-2">
+                                        <label htmlFor="channel-model-cache-write-1h-price" className="block text-xs font-medium text-orange-300 mb-1">
+                                            {t('CHANNEL_MGMT.MODEL.MODAL.CACHE_WRITE_1H_PRICE', '1小时缓存写入单价 ($/1M Token)')}
+                                            <span className="ml-1 text-orange-300/70">({inputCurrency === 'CNY' ? '￥/1M' : '$/1M'})</span>
+                                        </label>
+                                        <input id="channel-model-cache-write-1h-price" type="number" step="0.000001" min="0" value={modelForm.cache_write_1h_input_price} onChange={e=>setModelForm({...modelForm, cache_write_1h_input_price: e.target.value})} className="w-full bg-[#1a1b1e] border border-orange-400/30 rounded-lg px-3 py-2 text-on-surface" />
                                     </div>
                                 </div>
                                 <div className="p-4 bg-amber-500/5 border border-amber-500/20 rounded-xl space-y-4">
@@ -592,13 +644,20 @@ const ChannelManagement = () => {
                                         </div>
                                     </div>
                                     {parseInt(modelForm.context_price_threshold) > 0 && (
-                                        <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+                                        <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
                                             <div>
                                                 <label htmlFor="channel-model-high-input" className="block text-xs font-medium text-on-surface-variant mb-1">
                                                     {t('CHANNEL_MGMT.MODEL.MODAL.HIGH_IN_PRICE')}
                                                     <span className="ml-1 text-blue-400">({inputCurrency === 'CNY' ? '￥/1M' : '$/1M'})</span>
                                                 </label>
                                                 <input id="channel-model-high-input" type="number" step="0.000001" min="0" required value={modelForm.high_input_price} onChange={e=>setModelForm({...modelForm, high_input_price: e.target.value})} className="w-full bg-[#1a1b1e] border border-outline-variant rounded-lg px-3 py-2 text-on-surface" />
+                                            </div>
+                                            <div>
+                                                <label htmlFor="channel-model-high-cache" className="block text-xs font-medium text-on-surface-variant mb-1">
+                                                    {t('CHANNEL_MGMT.MODEL.MODAL.HIGH_CACHE_PRICE', '阶梯缓存读取单价 ($/1M)')}
+                                                    <span className="ml-1 text-blue-400">({inputCurrency === 'CNY' ? '￥/1M' : '$/1M'})</span>
+                                                </label>
+                                                <input id="channel-model-high-cache" type="number" step="0.000001" min="0" value={modelForm.high_cached_input_price} onChange={e=>setModelForm({...modelForm, high_cached_input_price: e.target.value})} className="w-full bg-[#1a1b1e] border border-outline-variant rounded-lg px-3 py-2 text-on-surface" />
                                             </div>
                                             <div>
                                                 <label htmlFor="channel-model-high-output" className="block text-xs font-medium text-on-surface-variant mb-1">
@@ -625,13 +684,14 @@ const ChannelManagement = () => {
                                             <select
                                                 id="moderation-level"
                                                 value={modelForm.moderation_level || 'off'}
-                                                onChange={e=>setModelForm({...modelForm, moderation_level: e.target.value, confirm_official_no_moderation: false})}
+                                                onChange={e=>setModelForm(withOpenAIModelModeration({...modelForm, moderation_level: e.target.value, confirm_official_no_moderation: false}))}
+                                                disabled={isOpenAIModel}
                                                 className="w-full bg-surface-container-high border border-outline-variant rounded-xl px-4 py-2.5 text-on-surface"
                                             >
                                                 <option value="off">{t('CHANNEL_MGMT.MOD.LEVEL_OFF', 'OFF — 不审核')}</option>
                                                 <option value="keyword">{t('CHANNEL_MGMT.MOD.LEVEL_KEYWORD', 'KW — 仅关键字快扫')}</option>
-                                                <option value="moderation">{t('CHANNEL_MGMT.MOD.LEVEL_MODERATION', 'MOD — 仅 OpenAI Moderation API')}</option>
-                                                <option value="strict">{t('CHANNEL_MGMT.MOD.LEVEL_STRICT', 'STRICT — 关键字 + Moderation 双层（推荐直连官方）')}</option>
+                                                <option value="moderation">{t('CHANNEL_MGMT.MOD.LEVEL_MODERATION', 'MOD — 仅智能审核服务')}</option>
+                                                <option value="strict">{t('CHANNEL_MGMT.MOD.LEVEL_STRICT', 'STRICT — 关键字 + 智能审核双层（推荐官方高风险模型）')}</option>
                                             </select>
                                         </div>
                                         <div>
@@ -641,7 +701,8 @@ const ChannelManagement = () => {
                                             <select
                                                 id="moderation-fail-mode"
                                                 value={modelForm.moderation_fail_mode || 'open'}
-                                                onChange={e=>setModelForm({...modelForm, moderation_fail_mode: e.target.value})}
+                                                onChange={e=>setModelForm(withOpenAIModelModeration({...modelForm, moderation_fail_mode: e.target.value}))}
+                                                disabled={isOpenAIModel}
                                                 className="w-full bg-surface-container-high border border-outline-variant rounded-xl px-4 py-2.5 text-on-surface"
                                             >
                                                 <option value="open">{t('CHANNEL_MGMT.MOD.FAIL_OPEN', 'OPEN — 放行（cloaked 路径推荐）')}</option>
@@ -655,9 +716,17 @@ const ChannelManagement = () => {
                                             {t('CHANNEL_MGMT.MOD.OFFICIAL_HINT', '当前渠道指向官方 API（OpenAI / Anthropic / Gemini）。建议设为 STRICT + CLOSED 防账号被封禁。点击右下角"应用推荐预设"。')}
                                         </div>
                                     )}
+                                    {isOpenAIModel && (
+                                        <div className="mt-3 p-3 bg-emerald-500/10 border border-emerald-500/30 rounded-lg text-xs text-emerald-200 leading-relaxed">
+                                            <AlertTriangle size={12} className="inline mr-1 -mt-0.5" />
+                                            {t('CHANNEL_MGMT.MOD.OPENAI_LOCK_HINT', 'OpenAI / Codex-family 模型已全局强制启用 STRICT + CLOSED 内容审查。')}
+                                        </div>
+                                    )}
                                     <div className="flex items-center justify-between mt-3">
                                         <span className="text-[11px] text-on-surface-variant italic">
-                                            {isOfficialChannel
+                                            {isOpenAIModel
+                                                ? t('CHANNEL_MGMT.MOD.PRESET_OPENAI_DESC', '强制：STRICT + CLOSED')
+                                                : isOfficialChannel
                                                 ? t('CHANNEL_MGMT.MOD.PRESET_OFFICIAL_DESC', '推荐：MOD + CLOSED')
                                                 : t('CHANNEL_MGMT.MOD.PRESET_CLOAKED_DESC', '推荐（cloaked / 自部署）：OFF + OPEN')}
                                         </span>
@@ -683,7 +752,7 @@ const ChannelManagement = () => {
                                 {/* fix MINOR R23-m4：官方渠道关审核没勾 confirm 时禁用 Save，省一次后端往返 */}
                                 <button
                                     onClick={handleModelSubmit}
-                                    disabled={isSubmitting || (isOfficialChannel && modelForm.moderation_level === 'off' && !modelForm.confirm_official_no_moderation)}
+                                    disabled={isSubmitting || (!isOpenAIModel && isOfficialChannel && modelForm.moderation_level === 'off' && !modelForm.confirm_official_no_moderation)}
                                     className="px-6 py-2.5 bg-primary text-on-primary hover:bg-primary-container hover:text-on-primary-container rounded-xl font-medium flex items-center gap-2 disabled:opacity-50 disabled:cursor-not-allowed"
                                 >
                                     {isSubmitting ? <RefreshCw className="animate-spin" size={18}/> : <Save size={18}/>} {t('CHANNEL_MGMT.MODEL.MODAL.BTN_SAVE')}

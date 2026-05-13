@@ -1,6 +1,6 @@
-import React, { useState, useEffect, useMemo } from 'react';
+import React, { useState, useEffect, useMemo, useRef, useCallback } from 'react';
 import { useTranslation } from 'react-i18next';
-import { Users, Activity, Coins, Zap, RefreshCw, ChevronRight, ChevronDown, BarChart3, AlertTriangle, ChevronLeft, Download } from 'lucide-react';
+import { Users, Activity, Coins, Zap, RefreshCw, ChevronRight, ChevronDown, BarChart3, AlertTriangle, ChevronLeft, Download, ChevronsLeft, ChevronsRight } from 'lucide-react';
 import { LineChart, Line, AreaChart, Area, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer, Legend } from 'recharts';
 import toast from 'react-hot-toast';
 import { useCurrency } from '../context/CurrencyContext';
@@ -63,7 +63,7 @@ const StatCard = ({ icon: Icon, label, value, sub, color }) => (
 
 const UserUsageDash = () => {
   const { t } = useTranslation();
-  const { formatCurrency } = useCurrency();
+  const { formatCurrency, formatCurrencyFixed } = useCurrency();
   const [period, setPeriod] = useState('7d');
   const [sortKey, setSortKey] = useState('cost_desc');
   const [searchTerm, setSearchTerm] = useState('');
@@ -82,6 +82,10 @@ const UserUsageDash = () => {
   const [eventsPage, setEventsPage] = useState(1);
   const [eventFilterUser, setEventFilterUser] = useState('');
   const [eventFilterModel, setEventFilterModel] = useState('');
+  const [eventFilterStatus, setEventFilterStatus] = useState('');
+  const [eventFilterErrorType, setEventFilterErrorType] = useState('');
+  const [eventsJumpPage, setEventsJumpPage] = useState('1');
+  const eventsScrollYRef = useRef(null);
   const EVENTS_PAGE_SIZE = 50;
 
   const fetchData = async () => {
@@ -121,6 +125,8 @@ const UserUsageDash = () => {
       });
       if (eventFilterUser) params.set('user_id', eventFilterUser);
       if (eventFilterModel) params.set('model', eventFilterModel);
+      if (eventFilterStatus) params.set('status', eventFilterStatus);
+      if (eventFilterErrorType) params.set('error_type', eventFilterErrorType);
       const res = await fetch(`/api/admin/users-usage/events?${params}`, { credentials: 'include' });
       const json = await res.json();
       if (json.success) setEventsData(json.data);
@@ -137,7 +143,19 @@ const UserUsageDash = () => {
 
   useEffect(() => {
     fetchEvents();
-  }, [period, eventsPage, eventFilterUser, eventFilterModel]);
+  }, [period, eventsPage, eventFilterUser, eventFilterModel, eventFilterStatus, eventFilterErrorType]);
+
+  useEffect(() => {
+    setEventsJumpPage(String(eventsPage));
+  }, [eventsPage]);
+
+  useEffect(() => {
+    if (!eventsLoading && eventsScrollYRef.current !== null) {
+      const y = eventsScrollYRef.current;
+      eventsScrollYRef.current = null;
+      requestAnimationFrame(() => window.scrollTo({ top: y, left: window.scrollX }));
+    }
+  }, [eventsLoading, eventsData]);
 
   // 时间序列 chart 数据：把 series 转成 recharts 友好的扁平 rows
   const chartRows = useMemo(() => {
@@ -160,15 +178,16 @@ const UserUsageDash = () => {
   const tokenStackRows = useMemo(() => {
     if (!chartData?.buckets || !chartData?.series) return [];
     return chartData.buckets.map((bucket, i) => {
-      let prompt = 0, completion = 0, reasoning = 0, cached = 0;
+      let prompt = 0, completion = 0, reasoning = 0, cached = 0, cacheWrite = 0;
       chartData.series.forEach(s => {
         const p = s.points[i] || {};
         prompt += p.prompt_tokens || 0;
         completion += p.completion_tokens || 0;
         reasoning += p.reasoning_tokens || 0;
         cached += p.cached_tokens || 0;
+        cacheWrite += p.cache_write_tokens || 0;
       });
-      return { bucket, prompt, completion, reasoning, cached };
+      return { bucket, prompt, completion, reasoning, cached, cacheWrite };
     });
   }, [chartData]);
 
@@ -193,14 +212,35 @@ const UserUsageDash = () => {
   }, [data]);
 
   const summary = data?.summary || {};
+  const formatMeterCost = (value) => formatCurrencyFixed(Number(value || 0), 3);
+  const eventsTotalPages = Math.max(1, Number(eventsData?.total_page || 1));
+  const clampEventsPage = useCallback((page) => {
+    const n = Number.parseInt(page, 10);
+    if (!Number.isFinite(n)) return eventsPage;
+    return Math.min(eventsTotalPages, Math.max(1, n));
+  }, [eventsPage, eventsTotalPages]);
+  const setEventsPagePreserveScroll = useCallback((nextPage) => {
+    const normalized = clampEventsPage(nextPage);
+    if (normalized === eventsPage) {
+      setEventsJumpPage(String(normalized));
+      return;
+    }
+    eventsScrollYRef.current = window.scrollY;
+    setEventsPage(normalized);
+  }, [clampEventsPage, eventsPage]);
+  const handleEventsJumpSubmit = useCallback((e) => {
+    e.preventDefault();
+    setEventsPagePreserveScroll(eventsJumpPage);
+  }, [eventsJumpPage, setEventsPagePreserveScroll]);
 
   const handleExportEventsCsv = () => {
     if (!eventsData?.events?.length) return;
-    const header = ['时间', '用户', '模型', 'Token Source', '状态', '延迟ms', '输入', '输出', '思考', '缓存', '总Token', '花费', 'IP'];
+    const header = ['时间', '用户', '模型', 'Token Source', '状态', '失败类型', '失败摘要', '请求路径', '延迟ms', '输入', '输出', '思考', '缓存读', '缓存写', '缓存写5m', '缓存写1h', '总Token', '花费', 'IP'];
     const rows = eventsData.events.map(e => [
       e.created_at, e.username || `#${e.user_id}`, e.model_name, e.token_name,
-      e.status, e.latency_ms, e.prompt_tokens, e.completion_tokens, e.reasoning_tokens,
-      e.cached_tokens, e.total_tokens, e.cost, e.ip_address
+      e.status, e.error_type, e.error_message, e.request_path, e.latency_ms,
+      e.prompt_tokens, e.completion_tokens, e.reasoning_tokens, e.cached_tokens,
+      e.cache_write_tokens, e.cache_write_5m_tokens || 0, e.cache_write_1h_tokens || 0, e.total_tokens, e.cost, e.ip_address
     ].map(v => `"${String(v ?? '').replace(/"/g, '""')}"`).join(','));
     const csv = [header.join(','), ...rows].join('\n');
     const blob = new Blob([csv], { type: 'text/csv;charset=utf-8' });
@@ -275,7 +315,7 @@ const UserUsageDash = () => {
         <StatCard icon={Activity} label="总请求数" value={(summary.total_requests ?? 0).toLocaleString()} color="#10b981" />
         <StatCard icon={AlertTriangle} label="失败请求" value={(filteredUsers.reduce((s, u) => s + (u.failed_requests || 0), 0)).toLocaleString()} color="#ef4444" />
         <StatCard icon={Zap} label="总 Token" value={formatTokens(summary.total_tokens)} color="#8b5cf6" />
-        <StatCard icon={Coins} label="总花费" value={formatCurrency(summary.total_cost ?? 0)} color="#f59e0b" />
+        <StatCard icon={Coins} label="总花费" value={formatMeterCost(summary.total_cost ?? 0)} color="#f59e0b" />
       </div>
 
       {/* 用户趋势折线图 */}
@@ -309,7 +349,7 @@ const UserUsageDash = () => {
                 <CartesianGrid strokeDasharray="3 3" stroke="#2b2b2b" vertical={false} />
                 <XAxis dataKey="bucket" stroke="#6b7280" fontSize={10} tickMargin={6} minTickGap={20} />
                 <YAxis stroke="#6b7280" fontSize={10} axisLine={false} tickLine={false}
-                  tickFormatter={chartMetric === 'cost' ? (v) => `$${v.toFixed(2)}` : (v) => formatTokens(v)} />
+                  tickFormatter={chartMetric === 'cost' ? formatMeterCost : (v) => formatTokens(v)} />
                 <Tooltip contentStyle={{ backgroundColor: '#1a1a1a', border: '1px solid #2b2b2b', borderRadius: 8, fontSize: 12 }} />
                 <Legend wrapperStyle={{ fontSize: 11 }} />
                 {chartData?.series?.map((s, i) => {
@@ -342,7 +382,8 @@ const UserUsageDash = () => {
                 <Area isAnimationActive={false} type="monotone" dataKey="prompt" name="输入" stackId="1" stroke="#9ca3af" fill="#9ca3af" fillOpacity={0.4} />
                 <Area isAnimationActive={false} type="monotone" dataKey="completion" name="输出" stackId="1" stroke="#10b981" fill="#10b981" fillOpacity={0.4} />
                 <Area isAnimationActive={false} type="monotone" dataKey="reasoning" name="思考" stackId="1" stroke="#8b5cf6" fill="#8b5cf6" fillOpacity={0.5} />
-                <Area isAnimationActive={false} type="monotone" dataKey="cached" name="缓存" stackId="1" stroke="#f59e0b" fill="#f59e0b" fillOpacity={0.5} />
+                <Area isAnimationActive={false} type="monotone" dataKey="cached" name="缓存读" stackId="1" stroke="#f59e0b" fill="#f59e0b" fillOpacity={0.5} />
+                <Area isAnimationActive={false} type="monotone" dataKey="cacheWrite" name="缓存写" stackId="1" stroke="#f97316" fill="#f97316" fillOpacity={0.5} />
               </AreaChart>
             </ResponsiveContainer>
           )}
@@ -373,7 +414,8 @@ const UserUsageDash = () => {
                   <th className="px-4 py-3 text-xs font-semibold text-on-surface-variant text-right">输入</th>
                   <th className="px-4 py-3 text-xs font-semibold text-on-surface-variant text-right">输出</th>
                   <th className="px-4 py-3 text-xs font-semibold text-on-surface-variant text-right">思考</th>
-                  <th className="px-4 py-3 text-xs font-semibold text-on-surface-variant text-right">缓存</th>
+                  <th className="px-4 py-3 text-xs font-semibold text-on-surface-variant text-right" title="来自 usage metadata，不是本平台会话缓存">缓存读</th>
+                  <th className="px-4 py-3 text-xs font-semibold text-on-surface-variant text-right" title="来自 usage metadata，不是本平台会话缓存">缓存写</th>
                   <th className="px-4 py-3 text-xs font-semibold text-on-surface-variant text-right">花费</th>
                   <th className="px-4 py-3 text-xs font-semibold text-on-surface-variant text-right">平均延迟</th>
                   <th className="px-4 py-3 text-xs font-semibold text-on-surface-variant text-right">最近活跃</th>
@@ -420,7 +462,8 @@ const UserUsageDash = () => {
                         <td className="px-4 py-3 text-right text-xs text-on-surface font-mono">{formatTokens(u.output_tokens)}</td>
                         <td className="px-4 py-3 text-right text-xs text-purple-400 font-mono">{formatTokens(u.reasoning_tokens)}</td>
                         <td className="px-4 py-3 text-right text-xs text-amber-400 font-mono">{formatTokens(u.cached_tokens)}</td>
-                        <td className="px-4 py-3 text-right text-xs text-on-surface font-semibold font-mono">{formatCurrency(u.cost || 0)}</td>
+                        <td className="px-4 py-3 text-right text-xs text-orange-400 font-mono">{formatTokens(u.cache_write_tokens)}</td>
+                        <td className="px-4 py-3 text-right text-xs text-on-surface font-semibold font-mono">{formatMeterCost(u.cost || 0)}</td>
                         <td className="px-4 py-3 text-right text-xs text-on-surface-variant font-mono">{formatLatency(u.avg_latency_ms)}</td>
                         <td className="px-4 py-3 text-right text-xs text-on-surface-variant whitespace-nowrap">{formatRelativeTime(u.last_active_at)}</td>
                       </tr>
@@ -448,7 +491,7 @@ const UserUsageDash = () => {
                                         <td className="py-2 font-mono text-on-surface">{m.model_name || 'unknown'}</td>
                                         <td className="py-2 text-right font-mono text-on-surface-variant">{m.requests.toLocaleString()}</td>
                                         <td className="py-2 text-right font-mono text-on-surface-variant">{formatTokens(m.tokens)}</td>
-                                        <td className="py-2 text-right font-mono text-on-surface">{formatCurrency(m.cost)}</td>
+                                        <td className="py-2 text-right font-mono text-on-surface">{formatMeterCost(m.cost)}</td>
                                         <td className="py-2 text-right">
                                           <button
                                             onClick={(e) => { e.stopPropagation(); setEventFilterUser(String(u.user_id)); setEventFilterModel(m.model_name); setEventsPage(1); }}
@@ -505,8 +548,22 @@ const UserUsageDash = () => {
               <option value="">全部模型</option>
               {allModels.map(m => <option key={m} value={m}>{m}</option>)}
             </select>
+            <select
+              value={eventFilterStatus}
+              onChange={(e) => { setEventFilterStatus(e.target.value); setEventsPage(1); }}
+              className="bg-surface-container-high border border-outline-variant text-xs text-on-surface-variant rounded-md px-2 py-1.5 outline-none"
+            >
+              <option value="">全部状态</option>
+              <option value="success">成功</option>
+              <option value="failed">失败</option>
+              <option value="400">400</option>
+              <option value="401">401</option>
+              <option value="404">404</option>
+              <option value="500">500</option>
+              <option value="502">502</option>
+            </select>
             <button
-              onClick={() => { setEventFilterUser(''); setEventFilterModel(''); setEventsPage(1); }}
+              onClick={() => { setEventFilterUser(''); setEventFilterModel(''); setEventFilterStatus(''); setEventFilterErrorType(''); setEventsPage(1); }}
               className="text-xs text-on-surface-variant hover:text-on-surface px-2 py-1.5 rounded border border-outline-variant"
             >
               清除筛选
@@ -521,14 +578,41 @@ const UserUsageDash = () => {
           </div>
         </div>
 
-        {eventsLoading ? (
+        {!!eventsData?.error_summary?.length && (
+          <div className="px-5 py-3 border-b border-outline-variant bg-surface-container/30 flex flex-wrap items-center gap-2">
+            <span className="text-xs font-semibold text-on-surface-variant">失败聚合</span>
+            {eventsData.error_summary.map((item, idx) => (
+              <button
+                key={`${item.error_type}-${item.status}-${item.request_path}-${idx}`}
+                onClick={() => { setEventFilterStatus(String(item.status)); setEventFilterErrorType(item.error_type?.startsWith('http_') ? '' : item.error_type); setEventsPage(1); }}
+                className="text-[11px] px-2 py-1 rounded border border-red-500/30 bg-red-500/10 text-red-200 hover:bg-red-500/20 max-w-[360px] truncate"
+                title={`${item.error_type || 'unknown'} · HTTP ${item.status} · ${item.request_path || '-'} · ${item.count} 条`}
+              >
+                <span className="font-mono">{item.error_type || 'unknown'}</span>
+                <span className="text-red-300/80 ml-1">HTTP {item.status}</span>
+                <span className="text-red-100/70 ml-1">{item.count} 条</span>
+                {item.request_path ? <span className="text-red-100/50 ml-1">{item.request_path}</span> : null}
+              </button>
+            ))}
+          </div>
+        )}
+
+        {eventsLoading && !eventsData ? (
           <div className="py-12 text-center text-on-surface-variant text-sm">加载中…</div>
         ) : !eventsData?.events?.length ? (
           <div className="py-12 text-center text-on-surface-variant text-sm">该时间窗内无请求事件</div>
         ) : (
           <>
-            <div className="overflow-x-auto">
-              <table className="w-full text-left min-w-[1300px]">
+            <div className="overflow-x-auto relative min-h-[560px]">
+              {eventsLoading && (
+                <div className="absolute inset-0 z-10 bg-surface/35 backdrop-blur-[1px] flex items-start justify-center pt-8 pointer-events-none">
+                  <span className="inline-flex items-center gap-2 px-3 py-1.5 rounded-lg border border-outline-variant bg-surface-container-high text-xs text-on-surface-variant shadow-lg">
+                    <RefreshCw size={12} className="animate-spin" />
+                    加载新页…
+                  </span>
+                </div>
+              )}
+              <table className="w-full text-left min-w-[1500px]">
                 <thead>
                   <tr className="bg-surface-container-high border-b border-outline-variant">
                     <th className="px-3 py-3 text-xs font-semibold text-on-surface-variant whitespace-nowrap">时间</th>
@@ -536,12 +620,15 @@ const UserUsageDash = () => {
                     <th className="px-3 py-3 text-xs font-semibold text-on-surface-variant">模型</th>
                     <th className="px-3 py-3 text-xs font-semibold text-on-surface-variant whitespace-nowrap">Token Source</th>
                     <th className="px-3 py-3 text-xs font-semibold text-on-surface-variant whitespace-nowrap">来源 IP</th>
+                    <th className="px-3 py-3 text-xs font-semibold text-on-surface-variant whitespace-nowrap">路径</th>
                     <th className="px-3 py-3 text-xs font-semibold text-on-surface-variant text-center">状态</th>
+                    <th className="px-3 py-3 text-xs font-semibold text-on-surface-variant">失败原因</th>
                     <th className="px-3 py-3 text-xs font-semibold text-on-surface-variant text-right">延迟</th>
                     <th className="px-3 py-3 text-xs font-semibold text-on-surface-variant text-right">输入</th>
                     <th className="px-3 py-3 text-xs font-semibold text-on-surface-variant text-right">输出</th>
                     <th className="px-3 py-3 text-xs font-semibold text-on-surface-variant text-right">思考</th>
-                    <th className="px-3 py-3 text-xs font-semibold text-on-surface-variant text-right">缓存</th>
+                    <th className="px-3 py-3 text-xs font-semibold text-on-surface-variant text-right" title="来自 usage metadata，不是本平台会话缓存">缓存读</th>
+                    <th className="px-3 py-3 text-xs font-semibold text-on-surface-variant text-right" title="来自 usage metadata，不是本平台会话缓存">缓存写</th>
                     <th className="px-3 py-3 text-xs font-semibold text-on-surface-variant text-right">总Token</th>
                     <th className="px-3 py-3 text-xs font-semibold text-on-surface-variant text-right">花费</th>
                   </tr>
@@ -554,18 +641,35 @@ const UserUsageDash = () => {
                       <td className="px-3 py-2 text-xs text-on-surface-variant font-mono">{e.model_name}</td>
                       <td className="px-3 py-2 text-[11px] text-outline-variant font-mono truncate max-w-[180px]" title={e.token_name}>{e.token_name || '-'}</td>
                       <td className="px-3 py-2 text-[11px] text-outline-variant font-mono">{e.ip_address || '-'}</td>
+                      <td className="px-3 py-2 text-[11px] text-outline-variant font-mono truncate max-w-[180px]" title={e.request_path}>{e.request_path || '-'}</td>
                       <td className="px-3 py-2 text-center">
                         <span className={`text-[10px] font-bold px-2 py-0.5 rounded ${e.status >= 200 && e.status < 300 ? 'bg-emerald-500/20 text-emerald-400' : 'bg-red-500/20 text-red-400'}`}>
                           {e.status >= 200 && e.status < 300 ? '✓' : (e.status || '×')}
                         </span>
+                      </td>
+                      <td className="px-3 py-2 text-[11px] text-on-surface-variant max-w-[240px]">
+                        {e.error_type ? (
+                          <div className="truncate" title={e.error_message || e.error_type}>
+                            <span className="font-mono text-red-300">{e.error_type}</span>
+                            {e.error_message ? <span className="text-outline-variant ml-1">{e.error_message}</span> : null}
+                          </div>
+                        ) : '-'}
                       </td>
                       <td className="px-3 py-2 text-right text-xs text-on-surface-variant font-mono">{formatLatency(e.latency_ms)}</td>
                       <td className="px-3 py-2 text-right text-xs font-mono">{(e.prompt_tokens || 0).toLocaleString()}</td>
                       <td className="px-3 py-2 text-right text-xs font-mono">{(e.completion_tokens || 0).toLocaleString()}</td>
                       <td className="px-3 py-2 text-right text-xs font-mono text-purple-400">{(e.reasoning_tokens || 0).toLocaleString()}</td>
                       <td className="px-3 py-2 text-right text-xs font-mono text-amber-400">{(e.cached_tokens || 0).toLocaleString()}</td>
+                      <td className="px-3 py-2 text-right text-xs font-mono text-orange-400">
+                        <div>{(e.cache_write_tokens || 0).toLocaleString()}</div>
+                        {((e.cache_write_5m_tokens || 0) > 0 || (e.cache_write_1h_tokens || 0) > 0) && (
+                          <div className="text-[10px] text-orange-300/70 whitespace-nowrap">
+                            5m {(e.cache_write_5m_tokens || 0).toLocaleString()} · 1h {(e.cache_write_1h_tokens || 0).toLocaleString()}
+                          </div>
+                        )}
+                      </td>
                       <td className="px-3 py-2 text-right text-xs font-mono text-on-surface">{e.total_tokens.toLocaleString()}</td>
-                      <td className="px-3 py-2 text-right text-xs font-mono">{formatCurrency(e.cost)}</td>
+                      <td className="px-3 py-2 text-right text-xs font-mono">{formatMeterCost(e.cost)}</td>
                     </tr>
                   ))}
                 </tbody>
@@ -573,25 +677,70 @@ const UserUsageDash = () => {
             </div>
 
             {/* 分页 */}
-            {eventsData.total_page > 1 && (
-              <div className="px-5 py-3 border-t border-outline-variant flex items-center justify-center gap-3">
-                <button
-                  onClick={() => setEventsPage(p => Math.max(1, p - 1))}
-                  disabled={eventsPage <= 1}
-                  className="p-1.5 rounded-lg border border-outline-variant text-on-surface-variant hover:text-on-surface hover:border-outline disabled:opacity-30"
-                >
-                  <ChevronLeft size={14} />
-                </button>
-                <span className="text-xs text-on-surface-variant font-mono">
-                  {eventsPage} / {eventsData.total_page}
+            {eventsTotalPages > 1 && (
+              <div className="px-5 py-3 border-t border-outline-variant flex flex-col md:flex-row md:items-center justify-center gap-3">
+                <div className="flex items-center justify-center gap-2">
+                  <button
+                    type="button"
+                    onClick={() => setEventsPagePreserveScroll(1)}
+                    disabled={eventsPage <= 1 || eventsLoading}
+                    className="p-1.5 rounded-lg border border-outline-variant text-on-surface-variant hover:text-on-surface hover:border-outline disabled:opacity-30"
+                    title="第一页"
+                  >
+                    <ChevronsLeft size={14} />
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => setEventsPagePreserveScroll(eventsPage - 1)}
+                    disabled={eventsPage <= 1 || eventsLoading}
+                    className="p-1.5 rounded-lg border border-outline-variant text-on-surface-variant hover:text-on-surface hover:border-outline disabled:opacity-30"
+                    title="上一页"
+                  >
+                    <ChevronLeft size={14} />
+                  </button>
+                </div>
+                <span className="text-xs text-on-surface-variant font-mono text-center min-w-20">
+                  {eventsPage} / {eventsTotalPages}
                 </span>
-                <button
-                  onClick={() => setEventsPage(p => Math.min(eventsData.total_page, p + 1))}
-                  disabled={eventsPage >= eventsData.total_page}
-                  className="p-1.5 rounded-lg border border-outline-variant text-on-surface-variant hover:text-on-surface hover:border-outline disabled:opacity-30"
-                >
-                  <ChevronRight size={14} />
-                </button>
+                <div className="flex items-center justify-center gap-2">
+                  <button
+                    type="button"
+                    onClick={() => setEventsPagePreserveScroll(eventsPage + 1)}
+                    disabled={eventsPage >= eventsTotalPages || eventsLoading}
+                    className="p-1.5 rounded-lg border border-outline-variant text-on-surface-variant hover:text-on-surface hover:border-outline disabled:opacity-30"
+                    title="下一页"
+                  >
+                    <ChevronRight size={14} />
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => setEventsPagePreserveScroll(eventsTotalPages)}
+                    disabled={eventsPage >= eventsTotalPages || eventsLoading}
+                    className="p-1.5 rounded-lg border border-outline-variant text-on-surface-variant hover:text-on-surface hover:border-outline disabled:opacity-30"
+                    title="最后一页"
+                  >
+                    <ChevronsRight size={14} />
+                  </button>
+                </div>
+                <form onSubmit={handleEventsJumpSubmit} className="flex items-center justify-center gap-2">
+                  <span className="text-xs text-on-surface-variant">跳至</span>
+                  <input
+                    type="number"
+                    min="1"
+                    max={eventsTotalPages}
+                    value={eventsJumpPage}
+                    onChange={(e) => setEventsJumpPage(e.target.value)}
+                    disabled={eventsLoading}
+                    className="h-8 w-20 rounded-lg border border-outline-variant bg-surface-container-high px-2 text-center text-xs font-mono text-on-surface outline-none focus:border-primary disabled:opacity-50"
+                  />
+                  <button
+                    type="submit"
+                    disabled={eventsLoading}
+                    className="h-8 px-3 rounded-lg border border-outline-variant text-xs text-on-surface-variant hover:text-on-surface hover:border-outline disabled:opacity-30"
+                  >
+                    跳转
+                  </button>
+                </form>
               </div>
             )}
           </>

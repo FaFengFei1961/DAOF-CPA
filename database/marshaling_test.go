@@ -112,7 +112,6 @@ func TestMarshalJSON_Package(t *testing.T) {
 		ID:                   1,
 		Name:                 "Pro",
 		PriceAmount:          9_900_000, // $9.90
-		BonusBalanceUSD:      3_000_000, // $3
 		BillingPeriodSeconds: 2592000,
 	}
 	b, _ := json.Marshal(pkg)
@@ -120,18 +119,18 @@ func TestMarshalJSON_Package(t *testing.T) {
 	if !strings.Contains(s, `"price_amount":9.9`) {
 		t.Errorf("price: %s", s)
 	}
-	if !strings.Contains(s, `"bonus_balance_usd":3`) {
-		t.Errorf("bonus: %s", s)
+	if strings.Contains(s, "bonus_balance_usd") {
+		t.Errorf("package JSON should not expose removed bonus field: %s", s)
 	}
 }
 
 func TestMarshalJSON_TopupOrder(t *testing.T) {
 	to := TopupOrder{
-		ID:                1,
-		UserID:            2,
-		MoneyRMB:          7200,        // ¥72
-		AmountUSD:         10_000_000,  // $10
-		RefundedAmountRMB: 1000,        // ¥10 退过
+		ID:                   1,
+		UserID:               2,
+		MoneyRMB:             7200,       // ¥72
+		AmountUSD:            10_000_000, // $10
+		RefundedAmountRMB:    1000,       // ¥10 退过
 		ExchangeRateSnapshot: 7.2,
 	}
 	b, _ := json.Marshal(to)

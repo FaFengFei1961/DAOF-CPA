@@ -13,11 +13,10 @@ import { useModalA11y } from '../hooks/useModalA11y';
  *   - 用户选择（按 username / phone / github_id 搜索）
  *   - 套餐选择（来自 /api/admin/packages）
  *   - 数量
- *   - 是否带 bonus
  *   - 赠送理由（必填，进审计）
  *
  * 与后端 POST /api/admin/subscriptions/grant 对齐：
- *   { user_id, package_id, quantity, reason, apply_bonus }
+ *   { user_id, package_id, quantity, reason }
  *
  * Props:
  *   open       - 是否显示
@@ -41,7 +40,6 @@ const AdminGrantSubscriptionModal = ({ open, onClose, onSuccess, prefillUser = n
 
   // 表单字段
   const [quantity, setQuantity] = useState(1);
-  const [applyBonus, setApplyBonus] = useState(false);
   const [reason, setReason] = useState('');
   const [submitting, setSubmitting] = useState(false);
 
@@ -59,7 +57,6 @@ const AdminGrantSubscriptionModal = ({ open, onClose, onSuccess, prefillUser = n
       setUserSuggestions([]);
       setSelectedPackageId('');
       setQuantity(1);
-      setApplyBonus(false);
       setReason('');
     }
   }, [open, prefillUser]);
@@ -121,7 +118,6 @@ const AdminGrantSubscriptionModal = ({ open, onClose, onSuccess, prefillUser = n
 
   if (!open) return null;
 
-  const selectedPackage = packages.find((p) => String(p.id) === String(selectedPackageId));
   // 表单基础有效性（Submit 按钮 disabled 用，减少无效点击）
   const isFormValid = !!selectedUser?.id && !!selectedPackageId && reason.trim().length > 0;
 
@@ -162,7 +158,6 @@ const AdminGrantSubscriptionModal = ({ open, onClose, onSuccess, prefillUser = n
           package_id: parseInt(selectedPackageId, 10),
           quantity: qty,
           reason: trimmedReason,
-          apply_bonus: applyBonus,
         },
       });
       if (json?.success) {
@@ -289,7 +284,6 @@ const AdminGrantSubscriptionModal = ({ open, onClose, onSuccess, prefillUser = n
                 <option key={p.id} value={p.id}>
                   {p.product_type === 'addon' ? '[增量包] ' : '[订阅] '}
                   {p.name} - ${p.price_amount?.toFixed(2)}
-                  {p.bonus_balance_usd > 0 ? ` (含 $${p.bonus_balance_usd} bonus)` : ''}
                 </option>
               ))}
             </select>
@@ -312,27 +306,6 @@ const AdminGrantSubscriptionModal = ({ open, onClose, onSuccess, prefillUser = n
               className="w-32 bg-surface-container-high border border-outline-variant rounded-lg px-3 py-2 text-sm font-mono focus:outline-none focus:border-primary"
             />
             <span className="ml-3 text-xs text-on-surface-variant">{t('ADMIN_GRANT.QTY_HINT', '受套餐持有上限约束')}</span>
-          </div>
-
-          {/* Apply bonus */}
-          <div>
-            <label className="flex items-center gap-2 cursor-pointer">
-              <input
-                type="checkbox"
-                checked={applyBonus}
-                onChange={(e) => setApplyBonus(e.target.checked)}
-                disabled={submitting || !selectedPackage || !(selectedPackage.bonus_balance_usd > 0)}
-                className="rounded"
-              />
-              <span className="text-sm text-on-surface">
-                {t('ADMIN_GRANT.APPLY_BONUS', '同时赠送套餐附带的 bonus（USD 余额）')}
-              </span>
-            </label>
-            {selectedPackage && selectedPackage.bonus_balance_usd > 0 && (
-              <div className="text-xs text-on-surface-variant mt-1 ml-6">
-                {t('ADMIN_GRANT.BONUS_PREVIEW', { amount: (selectedPackage.bonus_balance_usd * Number(quantity || 0)).toFixed(2), defaultValue: '勾选后用户将收到 ${{amount}} 余额' })}
-              </div>
-            )}
           </div>
 
           {/* Reason */}
