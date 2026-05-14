@@ -494,3 +494,80 @@
   scrollbar-width: thin;
   scrollbar-color: color-mix(in srgb, var(--color-on-surface) 25%, transparent) transparent;
 }
+
+/*
+ * ─── Phase 0.5 quick win utilities (gemini ccg 推荐) ────────────
+ *
+ * .fl-table-shell — 给所有裸 table 套外壳：边框 + 圆角 + 横滚边缘渐变
+ *   解决 1960px 宽表"用户视觉不知道右侧还有数据"的问题
+ *
+ * 用法：
+ *   <div class="fl-table-shell">
+ *     <div class="fl-table-scroll">
+ *       <table>...</table>
+ *     </div>
+ *   </div>
+ */
+.fl-table-shell {
+  border: 1px solid var(--color-outline-variant);
+  border-radius: var(--radius-overlay);
+  overflow: hidden;
+  background-color: var(--color-surface-container);
+}
+
+.fl-table-scroll {
+  position: relative;
+  overflow-x: auto;
+}
+
+/* 右边缘渐变阴影：内容超出视口时提示"右侧还有更多" */
+.fl-table-scroll::after {
+  content: "";
+  position: sticky;
+  right: 0;
+  top: 0;
+  bottom: 0;
+  width: 24px;
+  pointer-events: none;
+  background: linear-gradient(
+    to right,
+    transparent,
+    color-mix(in srgb, var(--color-surface) 70%, transparent)
+  );
+  /* sticky after 不参与 normal flow；用 float 让它成为右上角覆盖 */
+  float: right;
+  margin-left: -24px;
+}
+
+/* sticky 表头：长表滚动时表头始终可见 */
+.fl-table-shell thead th {
+  position: sticky;
+  top: 0;
+  background-color: var(--color-surface-container-high);
+  z-index: 1;
+}
+
+/*
+ * .fl-spring — Fluent 2 灵魂：按钮/卡片点击回弹（gemini ccg 第 4 项）
+ * 用 cubic-bezier 模拟 spring，比 linear 0.98 更"手感"
+ */
+.fl-spring {
+  transition: transform 0.12s cubic-bezier(0.16, 1, 0.3, 1);
+}
+.fl-spring:active {
+  transform: scale(0.97);
+}
+
+/*
+ * .fl-page-stack — 页面内主分块的统一垂直节奏
+ * Phase 0.5 强制呼吸感：模块间 32px (gap-8)
+ * 对应 components/ui/PageContainer 的 className，给非 PageContainer 路径用
+ */
+.fl-page-stack > * + * {
+  margin-top: 32px;
+}
+@media (max-width: 768px) {
+  .fl-page-stack > * + * {
+    margin-top: 24px;
+  }
+}
