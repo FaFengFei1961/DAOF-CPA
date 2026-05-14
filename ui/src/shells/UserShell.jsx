@@ -34,7 +34,7 @@ const UserShell = () => {
 
       <UserSidebar />
 
-      <div className="flex-1 md:ml-16 flex flex-col h-screen overflow-y-auto pb-20 md:pb-8">
+      <div className="flex-1 md:ml-60 flex flex-col h-screen overflow-y-auto pb-20 md:pb-8">
         <TopBar
           isAuthenticated={isAuthenticated}
           isAdmin={isAdmin}

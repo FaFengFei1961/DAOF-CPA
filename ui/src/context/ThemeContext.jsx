@@ -70,7 +70,9 @@ export const ThemeProvider = ({ children }) => {
 
   // Seed color: any Hex string。MD3 调色板由此一色种子展开 30+ 衍生色。
   const [seedColor, setSeedColor] = useState(() => {
-    return localStorage.getItem('daof_seed_color') || '#7c5cff'; // 默认紫色，比蓝色更温和
+    // Phase 7.7-2：默认 seed 色 #7c5cff（lavender 偏游戏调）→ #6366f1（Indigo），
+    // Linear / Notion / Cursor 同款深紫蓝，开发者向 SaaS 标准选择
+    return localStorage.getItem('daof_seed_color') || '#6366f1';
   });
 
   // Current active mode — 初始值同步推断，避免首屏先白后黑闪光
