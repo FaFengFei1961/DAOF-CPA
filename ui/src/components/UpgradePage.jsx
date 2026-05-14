@@ -1,7 +1,7 @@
 import React, { useState, useEffect, useCallback } from 'react';
 import { useTranslation } from 'react-i18next';
 import { useSearchParams } from 'react-router-dom';
-import { ShoppingCart, Check, Layers, Sparkles, Cpu, Zap, Activity, Package as PackageIcon, BrainCircuit, Bot, ChevronRight } from 'lucide-react';
+import { ShoppingCart, Check, Layers, Sparkles, Cpu, Zap, Activity, Package as PackageIcon, BrainCircuit, Bot } from 'lucide-react';
 import toast from 'react-hot-toast';
 import { useConfirm } from '../context/ConfirmContext';
 import { authFetch, isLoggedIn, readAuthState } from '../utils/authFetch';
@@ -31,56 +31,23 @@ const pickIcon = (key) => {
 };
 const UPGRADE_CACHE_TTL_MS = 60000;
 const PACKAGE_CACHE_KEY = 'upgrade:packages:v4';
-const STORE_GROUPS = [
-  { id: 'claude', label: 'Claude', order: 10 },
-  { id: 'codex', label: 'Codex', order: 20 },
-  { id: 'gemini', label: 'Gemini', order: 30 },
-  { id: 'combo', label: 'Combo', order: 40 },
-  { id: 'other', label: 'Other', order: 1000 },
-];
-const STORE_GROUP_BY_ID = Object.fromEntries(STORE_GROUPS.map((g) => [g.id, g]));
 const getCouponCacheKey = () => {
   const { isAdmin, userToken } = readAuthState();
   return `upgrade:coupons:${isAdmin ? 'admin' : userToken || 'guest'}`;
 };
 
-const readPackageExtraConfig = (pkg) => {
-  try {
-    const parsed = JSON.parse(pkg.extra_config || '{}');
-    return parsed && typeof parsed === 'object' ? parsed : {};
-  } catch {
-    return {};
-  }
-};
+// Phase 8：产品线收敛到只剩 Combo。
+// 之前的 STORE_GROUPS（claude / codex / gemini / combo / other）+
+// inferPackageGroupId（基于 extra_config.provider / pkg.icon_key / 名字字符串
+// 推断分组）+ groupStorePackages（按 store_group section 分组渲染）全删。
+// 现在套餐 flat grid 渲染，按 sort_order + name 排序。
+//
+// 注意：后端 Package model 没有 store_group 字段，分组逻辑本来就是前端推断。
+// 所以这次 admin 想"全平台只剩 Combo" → 去 admin 套餐管理把 Claude / Codex /
+// Gemini 三个独立套餐删掉即可（数据清理，不需要 schema 改动）。
 
-const inferPackageGroupId = (pkg) => {
-  const cfg = readPackageExtraConfig(pkg);
-  const provider = String(cfg.provider || pkg.icon_key || '').trim().toLowerCase();
-  if (provider === 'combo' || provider === 'trinity') return 'combo';
-  if (provider === 'codex' || provider === 'openai') return 'codex';
-  if (provider === 'google' || provider === 'gemini') return 'gemini';
-  if (provider === 'anthropic' || provider === 'claude') return 'claude';
-
-  const raw = [
-    pkg.name,
-    pkg.description,
-  ].filter(Boolean).join(' ').toLowerCase();
-
-  if (raw.includes('combo') || raw.includes('trinity') || raw.includes('御三家')) return 'combo';
-  if (raw.includes('anthropic') || raw.includes('claude')) return 'claude';
-  if (raw.includes('codex') || raw.includes('openai') || /\bgpt\b/.test(raw)) return 'codex';
-  if (raw.includes('google') || raw.includes('gemini')) return 'gemini';
-  return 'other';
-};
-
-const displayPackageName = (pkg) => String(pkg.name || '')
-  .replace(/^GPT\b/, 'Codex')
-  .replace(/^御三家\b/, 'Combo');
-
-const displayPackageDescription = (pkg) => String(pkg.description || '')
-  .replaceAll('OpenAI / GPT', 'Codex / OpenAI')
-  .replaceAll('Claude + GPT + Gemini', 'Claude + Codex + Gemini')
-  .replaceAll('御三家', 'Combo');
+const displayPackageName = (pkg) => String(pkg.name || '');
+const displayPackageDescription = (pkg) => String(pkg.description || '');
 
 const formatPlanLimit = (plan) => {
   const value = Number(plan?.limit_value || 0);
@@ -93,21 +60,12 @@ const formatPlanLimit = (plan) => {
   return `${displayValue} ${unit}`;
 };
 
-const groupStorePackages = (packages) => {
-  const grouped = new Map();
-  for (const pkg of packages) {
-    const groupId = inferPackageGroupId(pkg);
-    const group = STORE_GROUP_BY_ID[groupId] || STORE_GROUP_BY_ID.other;
-    if (!grouped.has(group.id)) grouped.set(group.id, { ...group, items: [] });
-    grouped.get(group.id).items.push(pkg);
-  }
-  return Array.from(grouped.values())
-    .map((group) => ({
-      ...group,
-      items: [...group.items].sort((a, b) => (a.sort_order || 0) - (b.sort_order || 0) || String(a.name || '').localeCompare(String(b.name || ''))),
-    }))
-    .sort((a, b) => a.order - b.order);
-};
+// Phase 8：扁平排序，不再分组（产品线只剩 Combo 一种，无分组必要）
+const sortStorePackages = (packages) =>
+  [...packages].sort((a, b) =>
+    (a.sort_order || 0) - (b.sort_order || 0) ||
+    String(a.name || '').localeCompare(String(b.name || ''))
+  );
 
 const UpgradePage = ({ onPurchaseSuccess }) => {
   // 注：套餐列表 /api/packages 完全公开，未登录也能看价格；
@@ -328,28 +286,10 @@ const UpgradePage = ({ onPurchaseSuccess }) => {
               </div>
             );
           }
-          const groups = groupStorePackages(filtered);
+          const sorted = sortStorePackages(filtered);
           return (
-          <div className="space-y-8">
-            {groups.map(group => (
-              <section key={group.id} aria-labelledby={`store-group-${group.id}`} className="space-y-3">
-                {/* Phase 7.5：撤掉 group header 上的 brand chip + chevron（chevron 暗示
-                    可点击但实际不导航 = misleading；brand chip 在卡片内已经标识了避免重复） */}
-                <header className="flex items-baseline justify-between gap-4 px-1">
-                  <h2
-                    id={`store-group-${group.id}`}
-                    className="text-lg font-semibold tracking-tight text-on-surface"
-                  >
-                    {group.label === 'Combo' ? t('PRODUCTS.COMBO_TITLE', '组合套餐') :
-                     group.label === 'Other' ? t('PRODUCTS.OTHER_TITLE', '其他') :
-                     group.label}
-                  </h2>
-                  <span className="text-xs text-on-surface-variant tabular-nums">
-                    {group.items.length} {t('PRODUCTS.PKG_COUNT_UNIT', '个套餐')}
-                  </span>
-                </header>
-                <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-3">
-            {group.items.map(pkg => {
+          <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-3">
+            {sorted.map(pkg => {
               const Icon = pickIcon(pkg.icon_key);
               const usableCoupons = usableCouponsForPkg(pkg.id);
               const selectedCouponId = selectedCouponByPkg[pkg.id] || 0;
@@ -371,10 +311,8 @@ const UpgradePage = ({ onPurchaseSuccess }) => {
                       {pkg.highlight_tag}
                     </span>
                   )}
-                  <div className="flex items-start justify-between mb-3">
-                    <Icon size={28} className="text-primary" style={pkg.badge_color ? { color: pkg.badge_color } : {}} />
-                    <span className="fl-brand-chip" data-brand={group.id}>{group.label}</span>
-                  </div>
+                  {/* Phase 8：去 brand-chip 产品线标识（只剩 Combo 一种产品没必要标）*/}
+                  <Icon size={28} className="text-primary mb-3" style={pkg.badge_color ? { color: pkg.badge_color } : {}} />
                   <h3 className="text-lg font-bold mb-1">{shownName}</h3>
                   <div className="flex items-baseline gap-2 mb-1 flex-wrap">
                     {/* fix MAJOR R23+2-F3 / F6（gemini 二轮）：sr-only 必须包含具体金额，
@@ -458,9 +396,6 @@ const UpgradePage = ({ onPurchaseSuccess }) => {
                 </div>
               );
             })}
-                </div>
-              </section>
-            ))}
           </div>
           );
         })()}
