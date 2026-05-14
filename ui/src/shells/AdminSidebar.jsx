@@ -1,7 +1,7 @@
 import React from 'react';
 import { useTranslation } from 'react-i18next';
 import { Link, NavLink } from 'react-router-dom';
-import { Home, ShieldCheck } from 'lucide-react';
+import { Home, ShieldAlert, ArrowLeft } from 'lucide-react';
 import { adminNav } from '../navManifest';
 
 /**
@@ -23,19 +23,30 @@ const AdminSidebar = () => {
       aria-label={t('SETTINGS.NAV_LABEL', '管理导航')}
       className="hidden md:flex flex-col w-56 h-screen fl-acrylic border-r border-outline-variant/40 fixed top-0 left-0 z-50"
     >
-      {/* 顶部品牌 + 返回用户视图 */}
-      <div className="px-4 py-3 border-b border-outline-variant/40">
-        <Link to="/" className="flex items-center gap-2 group">
-          <img src="/daof_logo.png" alt="" className="w-7 h-7 rounded" />
-          <div className="min-w-0">
-            <div className="text-xs font-semibold text-on-surface flex items-center gap-1">
-              <ShieldCheck size={12} className="text-primary" />
+      {/* 顶部品牌：admin 身份强视觉提示（与 TopBar fuchsia 入口对称）
+          - 整块 fuchsia 半透明底 + 左侧 3px 强调条
+          - 角色标签 + 返回用户视图分两行清晰区分 */}
+      <div className="relative border-b border-outline-variant/40 bg-fuchsia-500/[0.06]">
+        <span aria-hidden className="absolute left-0 top-3 bottom-3 w-[3px] rounded-r bg-fuchsia-400" />
+        <div className="px-4 py-3 flex items-center gap-2.5">
+          <img src="/daof_logo.png" alt="" className="w-8 h-8 rounded" />
+          <div className="min-w-0 flex-1">
+            <div className="flex items-center gap-1.5 text-[11px] font-bold tracking-wider uppercase text-fuchsia-300">
+              <ShieldAlert size={12} />
               {t('ADMIN.SHELL_TITLE', '管理控制台')}
             </div>
-            <div className="text-[10px] text-on-surface-variant group-hover:text-primary transition truncate">
-              ← {t('ADMIN.BACK_TO_USER', '返回用户视图')}
+            <div className="text-xs text-on-surface font-medium truncate mt-0.5">
+              DAOF-CPA
             </div>
           </div>
+        </div>
+        {/* 返回用户视图 — 独立可点击 row，避免与 logo 点击歧义 */}
+        <Link
+          to="/"
+          className="flex items-center gap-1.5 px-4 pb-2.5 -mt-0.5 text-[11px] text-on-surface-variant hover:text-fuchsia-300 transition group"
+        >
+          <ArrowLeft size={11} className="group-hover:-translate-x-0.5 transition-transform" />
+          {t('ADMIN.BACK_TO_USER', '返回用户视图')}
         </Link>
       </div>
 
