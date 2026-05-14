@@ -42,7 +42,7 @@ const PricingDash = () => {
                         placeholder={t('PRICING.SEARCH_PLACEHOLDER', '搜索模型名称 (如 gpt-4, claude)...')}
                         value={searchTerm}
                         onChange={(e) => setSearchTerm(e.target.value)}
-                        className="w-full bg-surface-container-high border border-outline-variant text-on-surface text-sm rounded-lg focus:ring-1 focus:ring-blue-500 focus:border-primary block p-2.5 pl-10 "
+                        className="w-full bg-surface-container-high border border-outline-variant text-on-surface text-sm rounded-lg focus:ring-1 focus:ring-primary focus:border-primary block p-2.5 pl-10 "
                     />
                 </div>
             </div>
@@ -171,7 +171,7 @@ const PricingRow = ({ model: m, provider, formatCurrency, formatTokens, t }) => 
         </td>
         <td className="px-4 py-3">
             <div className="flex flex-col items-end gap-1.5">
-                <div className="font-mono text-sm tabular-nums text-sky-400">
+                <div className="font-mono text-sm tabular-nums text-on-surface">
                     {formatCurrency(m.min_input_price, 4)}
                 </div>
                 {m.context_threshold > 0 && (
@@ -184,7 +184,7 @@ const PricingRow = ({ model: m, provider, formatCurrency, formatTokens, t }) => 
         </td>
         <td className="px-4 py-3">
             <div className="flex flex-col items-end gap-1.5">
-                <div className="font-mono text-sm tabular-nums text-violet-400">
+                <div className="font-mono text-sm tabular-nums text-on-surface">
                     {formatCurrency(m.min_output_price, 4)}
                 </div>
                 {m.context_threshold > 0 && (
@@ -197,7 +197,7 @@ const PricingRow = ({ model: m, provider, formatCurrency, formatTokens, t }) => 
         </td>
         <td className="px-4 py-3 text-right">
             <div className="flex flex-col items-end gap-1.5">
-                <div className="font-mono text-sm tabular-nums text-emerald-400">{m.min_cache_price > 0 ? formatCurrency(m.min_cache_price, 4) : '-'}</div>
+                <div className="font-mono text-sm tabular-nums text-on-surface">{m.min_cache_price > 0 ? formatCurrency(m.min_cache_price, 4) : '-'}</div>
                 {m.context_threshold > 0 && m.min_high_cache_price > 0 && (
                     <div className="flex items-center gap-1.5 cursor-help" title={t('PRICING.LONG_CONTEXT_HINT', { threshold: m.context_threshold })}>
                         <span className="text-[10px] font-medium bg-amber-500/15 text-amber-300 rounded px-1.5 py-0.5 border border-amber-500/30">{`>${formatTokens(m.context_threshold)} `}{t('PRICING.TIER_TAG', '阶梯')}</span>

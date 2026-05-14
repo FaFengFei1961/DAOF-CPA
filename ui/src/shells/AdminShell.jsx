@@ -31,7 +31,7 @@ const AdminShell = () => {
 
         <AdminSidebar />
 
-        <div className="flex-1 md:ml-56 flex flex-col h-screen overflow-y-auto">
+        <div className="flex-1 lg:ml-60 flex flex-col h-screen overflow-y-auto">
           <TopBar
             isAuthenticated={isAuthenticated}
             isAdmin={isAdmin}

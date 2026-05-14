@@ -362,15 +362,14 @@ const UpgradePage = ({ onPurchaseSuccess }) => {
               const isRecommended = !!pkg.highlight_tag;
               return (
                 <div key={pkg.id}
-                  className={`relative fl-card p-6 ${isRecommended ? 'ring-2 ring-primary ring-offset-2 ring-offset-surface' : ''}`}
-                  style={pkg.gradient ? { background: pkg.gradient } : {}}>
-                  {/* Phase 7.5：撤掉 fl-brand-band（顶 3px 色条视觉过强），改 Stripe pricing
-                      table 风格 — highlight_tag 套餐用 ring-2 ring-primary 高亮，未推荐
-                      套餐保持纯 fl-card 中性外观；brand 标识缩为标题旁的小 chip */}
+                  className={`relative fl-card p-6 ${isRecommended ? 'border-primary' : ''}`}>
+                  {/* Phase 8：去 ring-2 + ring-offset + shadow-md（"超市价签"营销
+                      视觉），改成 border-primary 高亮（推荐套餐边框由灰变主色）+
+                      标题旁中性 chip 标识，避免 admin 自定义 pkg.gradient 覆盖背景 */}
                   {isRecommended && (
-                    <div className="absolute -top-3 left-6 px-3 py-1 bg-primary text-on-primary text-xs font-bold rounded-full shadow-md shadow-primary/30">
+                    <span className="absolute top-3 right-3 inline-flex items-center px-2 py-0.5 rounded-full text-[10px] font-medium bg-primary/15 text-primary border border-primary/30">
                       {pkg.highlight_tag}
-                    </div>
+                    </span>
                   )}
                   <div className="flex items-start justify-between mb-3">
                     <Icon size={28} className="text-primary" style={pkg.badge_color ? { color: pkg.badge_color } : {}} />

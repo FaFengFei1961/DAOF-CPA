@@ -21,29 +21,27 @@ const AdminSidebar = () => {
   return (
     <aside
       aria-label={t('SETTINGS.NAV_LABEL', '管理导航')}
-      className="hidden md:flex flex-col w-56 h-screen fl-acrylic border-r border-outline-variant/40 fixed top-0 left-0 z-50"
+      className="hidden lg:flex flex-col w-60 h-screen bg-surface-container/40 border-r border-outline-variant/40 fixed top-0 left-0 z-50"
     >
-      {/* 顶部品牌：admin 身份强视觉提示（与 TopBar fuchsia 入口对称）
-          - 整块 fuchsia 半透明底 + 左侧 3px 强调条
-          - 角色标签 + 返回用户视图分两行清晰区分 */}
-      <div className="relative border-b border-outline-variant/40 bg-fuchsia-500/[0.06]">
-        <span aria-hidden className="absolute left-0 top-3 bottom-3 w-[3px] rounded-r bg-fuchsia-400" />
+      {/* Phase 8：admin brand 区中性化（去 fuchsia "admin = 高权限要醒目"
+          的 promo banner 设计），跟用户 sidebar 视觉一致；admin 身份用图标 +
+          小字 caption 标识即可 */}
+      <div className="border-b border-outline-variant/40">
         <div className="px-4 py-3 flex items-center gap-2.5">
           <img src="/daof_logo.png" alt="" className="w-8 h-8 rounded" />
           <div className="min-w-0 flex-1">
-            <div className="flex items-center gap-1.5 text-[11px] font-bold tracking-wider uppercase text-fuchsia-300">
-              <ShieldAlert size={12} />
-              {t('ADMIN.SHELL_TITLE', '管理控制台')}
-            </div>
-            <div className="text-xs text-on-surface font-medium truncate mt-0.5">
+            <div className="text-sm font-semibold text-on-surface truncate leading-tight">
               DAOF-CPA
+            </div>
+            <div className="flex items-center gap-1 text-[11px] text-on-surface-variant mt-0.5">
+              <ShieldAlert size={11} />
+              {t('ADMIN.SHELL_TITLE', '管理控制台')}
             </div>
           </div>
         </div>
-        {/* 返回用户视图 — 独立可点击 row，避免与 logo 点击歧义 */}
         <Link
           to="/"
-          className="flex items-center gap-1.5 px-4 pb-2.5 -mt-0.5 text-[11px] text-on-surface-variant hover:text-fuchsia-300 transition group"
+          className="flex items-center gap-1.5 px-4 pb-2.5 text-[11px] text-on-surface-variant hover:text-on-surface transition group"
         >
           <ArrowLeft size={11} className="group-hover:-translate-x-0.5 transition-transform" />
           {t('ADMIN.BACK_TO_USER', '返回用户视图')}
