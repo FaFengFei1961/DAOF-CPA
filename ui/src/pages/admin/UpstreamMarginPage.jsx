@@ -27,7 +27,7 @@ const PeriodSwitch = ({ value, onChange }) => (
         key={p.value}
         type="button"
         onClick={() => onChange(p.value)}
-        className={`px-3 py-1 text-xs font-medium rounded fl-spring ${
+        className={`px-3 py-1 text-xs font-medium rounded ${
           value === p.value ? 'bg-surface-variant text-on-surface shadow-sm' : 'text-on-surface-variant hover:text-on-surface'
         }`}
       >{p.label}</button>
@@ -243,7 +243,7 @@ const UpstreamMarginPage = () => {
         <button
           type="button"
           onClick={openBulk}
-          className="px-3 py-1.5 rounded text-xs font-medium bg-primary text-on-primary fl-spring"
+          className="px-3 py-1.5 rounded text-xs font-medium bg-primary text-on-primary"
         >
           批量配置 {selectedKeys.length} 个
         </button>
@@ -252,7 +252,7 @@ const UpstreamMarginPage = () => {
       <button
         type="button"
         onClick={fetchData}
-        className="p-2 rounded border border-outline-variant text-on-surface-variant hover:text-on-surface transition fl-spring"
+        className="p-2 rounded border border-outline-variant text-on-surface-variant hover:text-on-surface transition"
         aria-label="刷新"
       >
         <RefreshCw size={14} className={loading ? 'animate-spin' : ''} />

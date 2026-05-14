@@ -19,7 +19,7 @@ export const SaveBar = ({ loading, onSave }) => {
         type="button"
         onClick={() => onSave()}
         disabled={loading}
-        className="h-11 px-6 bg-primary text-on-primary hover:bg-primary-container hover:text-on-primary-container font-medium rounded-xl flex items-center justify-center gap-2 shadow-[0_0_15px_rgba(37,99,235,0.2)] disabled:opacity-50 fl-spring"
+        className="h-11 px-6 bg-primary text-on-primary hover:bg-primary-container hover:text-on-primary-container font-medium rounded-xl flex items-center justify-center gap-2 shadow-[0_0_15px_rgba(37,99,235,0.2)] disabled:opacity-50"
       >
         {loading ? t('SETTINGS.BTN_SAVING', '保存中…') : (
           <>

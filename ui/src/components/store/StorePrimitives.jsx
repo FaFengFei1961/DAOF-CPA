@@ -24,7 +24,7 @@ import { ChevronRight, ArrowUpRight } from 'lucide-react';
 //   - 与 fl-mica 配合的可选 mica 外壳
 export function StorePage({ title, subtitle, icon: Icon, actions, children, mica = false }) {
   return (
-    <div className={`w-full ${mica ? 'fl-mica rounded-overlay' : ''}`}>
+    <div className={`w-full ${mica ? 'bg-surface-container border border-outline-variant rounded-overlay' : ''}`}>
       {(title || subtitle) && (
         <header className="mb-8 flex flex-col md:flex-row md:items-end md:justify-between gap-3">
           <div>

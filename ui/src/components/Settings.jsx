@@ -61,7 +61,7 @@ const Settings = ({ initialTab }) => {
       <aside className="hidden md:block fixed left-4 lg:left-5 top-20 bottom-6 z-20 w-48">
         <nav
           aria-label={t('SETTINGS.NAV_LABEL', '设置导航')}
-          className="h-full overflow-y-auto fl-acrylic rounded-overlay p-2 space-y-0.5"
+          className="h-full overflow-y-auto bg-surface-container/40 rounded-overlay p-2 space-y-0.5"
         >
           {userTabs.map(it => {
             const Icon = it.icon;
@@ -72,7 +72,7 @@ const Settings = ({ initialTab }) => {
                 type="button"
                 aria-current={isActive ? 'page' : undefined}
                 onClick={() => setActiveTab(it.id)}
-                className={`w-full h-8 flex items-center gap-2 px-2.5 rounded-lg text-sm transition fl-spring ${
+                className={`w-full h-8 flex items-center gap-2 px-2.5 rounded-lg text-sm transition ${
                   isActive
                     ? 'bg-primary-container text-on-primary-container font-medium'
                     : 'text-on-surface-variant hover:bg-surface-container'
@@ -120,7 +120,7 @@ const Settings = ({ initialTab }) => {
                     <button
                       key={v} type="button" role="radio" aria-checked={themePref === v}
                       onClick={() => changeTheme(v)}
-                      className={`px-3 py-1.5 text-sm rounded-md transition fl-spring ${
+                      className={`px-3 py-1.5 text-sm rounded-md transition ${
                         themePref === v
                           ? 'bg-primary text-on-primary font-medium'
                           : 'text-on-surface-variant hover:text-on-surface'
@@ -141,7 +141,7 @@ const Settings = ({ initialTab }) => {
                     <button
                       key={hex} type="button" onClick={() => changeSeedColor(hex)}
                       title={name} aria-label={`主题色: ${name}`}
-                      className={`w-7 h-7 rounded-full border-2 transition fl-spring ${
+                      className={`w-7 h-7 rounded-full border-2 transition ${
                         seedColor.toLowerCase() === hex.toLowerCase()
                           ? 'border-on-surface scale-110'
                           : 'border-outline-variant hover:scale-110'

@@ -139,7 +139,7 @@ const DataTablePagination = ({ page, pageSize, total, onPageChange }) => {
           type="button"
           disabled={page <= 1}
           onClick={() => onPageChange(page - 1)}
-          className="px-2 py-1 rounded text-xs border border-outline-variant text-on-surface-variant hover:text-on-surface hover:bg-on-surface/[0.04] disabled:opacity-40 disabled:cursor-not-allowed fl-spring"
+          className="px-2 py-1 rounded text-xs border border-outline-variant text-on-surface-variant hover:text-on-surface hover:bg-on-surface/[0.04] disabled:opacity-40 disabled:cursor-not-allowed"
         >
           {t('COMMON.PREV', '上一页')}
         </button>
@@ -148,7 +148,7 @@ const DataTablePagination = ({ page, pageSize, total, onPageChange }) => {
           type="button"
           disabled={page >= pageCount}
           onClick={() => onPageChange(page + 1)}
-          className="px-2 py-1 rounded text-xs border border-outline-variant text-on-surface-variant hover:text-on-surface hover:bg-on-surface/[0.04] disabled:opacity-40 disabled:cursor-not-allowed fl-spring"
+          className="px-2 py-1 rounded text-xs border border-outline-variant text-on-surface-variant hover:text-on-surface hover:bg-on-surface/[0.04] disabled:opacity-40 disabled:cursor-not-allowed"
         >
           {t('COMMON.NEXT', '下一页')}
         </button>

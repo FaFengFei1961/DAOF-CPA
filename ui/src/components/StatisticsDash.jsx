@@ -103,7 +103,7 @@ const StatsLoadingShell = ({ t }) => (
                 <div className="h-10 w-48 rounded-lg bg-surface-container-high border border-outline-variant" />
                 <div className="h-4 w-80 max-w-full rounded bg-surface-container-high border border-outline-variant mt-3" />
             </div>
-            <div className="flex items-center gap-2 fl-acrylic p-1 rounded-control">
+            <div className="flex items-center gap-2 bg-surface-container/40 p-1 rounded-control">
                 {['24h', '7d', '30d'].map(p => (
                     <div key={p} className="h-8 w-14 rounded-md bg-surface-container-high" />
                 ))}
@@ -459,7 +459,7 @@ const StatisticsDash = ({ isAdmin = false, isAuthenticated = true }) => {
                         {t('STATS.SUBTITLE', '按时间窗口聚合的请求、成本与失败率，支持模型 / Token 维度筛选')}
                     </p>
                 </div>
-                <div className="flex items-center gap-3 fl-acrylic p-1 rounded-control">
+                <div className="flex items-center gap-3 bg-surface-container/40 p-1 rounded-control">
                     {['24h', '7d', '30d'].map(p => (
                         <button key={p} onClick={() => {
                             if (p === period) return;

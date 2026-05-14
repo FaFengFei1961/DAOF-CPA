@@ -81,7 +81,7 @@ const GeneralAdminPage = () => {
             ].map(({ v, label }) => (
               <button key={v} type="button" role="radio" aria-checked={themePref === v}
                 onClick={() => changeTheme(v)}
-                className={`px-3 py-1.5 text-sm rounded-md transition fl-spring ${
+                className={`px-3 py-1.5 text-sm rounded-md transition ${
                   themePref === v ? 'bg-primary text-on-primary font-medium' : 'text-on-surface-variant hover:text-on-surface'
                 }`}
               >{label}</button>
@@ -99,7 +99,7 @@ const GeneralAdminPage = () => {
               <button
                 key={hex} type="button" onClick={() => changeSeedColor(hex)}
                 title={name} aria-label={`主题色: ${name}`}
-                className={`w-7 h-7 rounded-full border-2 transition fl-spring ${
+                className={`w-7 h-7 rounded-full border-2 transition ${
                   seedColor.toLowerCase() === hex.toLowerCase()
                     ? 'border-on-surface scale-110' : 'border-outline-variant hover:scale-110'
                 }`}
@@ -124,7 +124,7 @@ const GeneralAdminPage = () => {
             type="button"
             onClick={saveClipProxy}
             disabled={loading || savingClip}
-            className="flex items-center gap-2 px-5 py-2 bg-primary text-on-primary rounded-full text-sm font-medium hover:opacity-90 disabled:opacity-50 fl-spring"
+            className="flex items-center gap-2 px-5 py-2 bg-primary text-on-primary rounded-full text-sm font-medium hover:opacity-90 disabled:opacity-50"
           >
             <Save size={14} />
             {savingClip ? t('SETTINGS.BTN_SAVING', '保存中…') : '保存连接配置'}

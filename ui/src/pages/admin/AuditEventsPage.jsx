@@ -44,7 +44,7 @@ const PeriodSwitch = ({ value, onChange }) => (
         key={p.value}
         type="button"
         onClick={() => onChange(p.value)}
-        className={`px-3 py-1 text-xs font-medium rounded fl-spring ${
+        className={`px-3 py-1 text-xs font-medium rounded ${
           value === p.value ? 'bg-surface-variant text-on-surface shadow-sm' : 'text-on-surface-variant hover:text-on-surface'
         }`}
       >{p.label}</button>
@@ -194,7 +194,7 @@ const AuditEventsPage = () => {
       <button
         type="button"
         onClick={() => setFiltersOpen(o => !o)}
-        className={`inline-flex items-center gap-1.5 px-3 py-1.5 rounded text-xs font-medium border fl-spring ${
+        className={`inline-flex items-center gap-1.5 px-3 py-1.5 rounded text-xs font-medium border ${
           filtersOpen || userIdFilter || modelFilter || statusFilter || errorTypeFilter
             ? 'bg-primary-container text-on-primary-container border-primary/40'
             : 'border-outline-variant text-on-surface-variant hover:text-on-surface'
@@ -209,7 +209,7 @@ const AuditEventsPage = () => {
       <button
         type="button"
         onClick={handleExportCsv}
-        className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded text-xs font-medium border border-outline-variant text-on-surface-variant hover:text-on-surface fl-spring"
+        className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded text-xs font-medium border border-outline-variant text-on-surface-variant hover:text-on-surface"
       >
         <Download size={12} />
         CSV
@@ -218,7 +218,7 @@ const AuditEventsPage = () => {
       <button
         type="button"
         onClick={fetchData}
-        className="p-2 rounded border border-outline-variant text-on-surface-variant hover:text-on-surface transition fl-spring"
+        className="p-2 rounded border border-outline-variant text-on-surface-variant hover:text-on-surface transition"
         aria-label="刷新"
       >
         <RefreshCw size={14} className={loading ? 'animate-spin' : ''} />

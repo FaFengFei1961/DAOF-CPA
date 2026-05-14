@@ -70,7 +70,7 @@ const FinanceSettingsPage = () => {
             aria-checked={balanceEnabled}
             aria-labelledby="balance-default-enabled-label"
             onClick={() => handleChange('balance_consume_default_enabled', balanceEnabled ? 'false' : 'true')}
-            className={`relative shrink-0 w-12 h-6 rounded-full transition fl-spring ${balanceEnabled ? 'bg-primary' : 'bg-on-surface/20'}`}
+            className={`relative shrink-0 w-12 h-6 rounded-full transition ${balanceEnabled ? 'bg-primary' : 'bg-on-surface/20'}`}
           >
             <span className={`absolute top-0.5 w-5 h-5 rounded-full bg-white transition-all ${balanceEnabled ? 'left-6' : 'left-0.5'}`} />
           </button>

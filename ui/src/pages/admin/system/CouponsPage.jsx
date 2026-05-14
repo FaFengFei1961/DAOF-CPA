@@ -70,7 +70,7 @@ const CouponsPage = () => {
             type="button"
             onClick={fetchTemplates}
             disabled={templatesLoading}
-            className="h-9 px-3 bg-surface-container-high border border-outline rounded-lg text-xs text-on-surface hover:border-primary disabled:opacity-50 flex items-center gap-2 fl-spring"
+            className="h-9 px-3 bg-surface-container-high border border-outline rounded-lg text-xs text-on-surface hover:border-primary disabled:opacity-50 flex items-center gap-2"
           >
             <RefreshCw size={14} className={templatesLoading ? 'animate-spin' : ''} />
             {t('SYSTEM.REFRESH', '刷新')}
@@ -94,7 +94,7 @@ const CouponsPage = () => {
             type="button"
             onClick={saveSignupCoupon}
             disabled={configsLoading || templatesLoading || signupSaving}
-            className="h-10 px-5 bg-primary text-on-primary rounded-lg text-sm font-medium hover:opacity-90 disabled:opacity-50 flex items-center justify-center gap-2 fl-spring"
+            className="h-10 px-5 bg-primary text-on-primary rounded-lg text-sm font-medium hover:opacity-90 disabled:opacity-50 flex items-center justify-center gap-2"
           >
             <Save size={16} />
             {(configsLoading || signupSaving) ? t('SETTINGS.BTN_SAVING', '保存中…') : t('SETTINGS.SIGNUP_COUPON_SAVE', '保存新人券')}

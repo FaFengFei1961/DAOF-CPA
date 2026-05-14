@@ -165,7 +165,7 @@ const UsersUsageOverviewPage = () => {
       <button
         type="button"
         onClick={() => { fetchOverview(); fetchChart(); }}
-        className="p-2 rounded border border-outline-variant text-on-surface-variant hover:text-on-surface hover:border-outline transition fl-spring"
+        className="p-2 rounded border border-outline-variant text-on-surface-variant hover:text-on-surface hover:border-outline transition"
         aria-label="刷新"
         title="刷新"
       >
@@ -243,7 +243,7 @@ const UsersUsageOverviewPage = () => {
                 key={v}
                 type="button"
                 onClick={() => setChartMetric(v)}
-                className={`px-2 py-1 text-xs rounded fl-spring ${
+                className={`px-2 py-1 text-xs rounded ${
                   chartMetric === v ? 'bg-primary text-on-primary' : 'text-on-surface-variant hover:text-on-surface'
                 }`}
               >{l}</button>
@@ -305,7 +305,7 @@ const PeriodSwitch = ({ value, onChange }) => (
         key={p.value}
         type="button"
         onClick={() => onChange(p.value)}
-        className={`px-3 py-1 text-xs font-medium rounded fl-spring ${
+        className={`px-3 py-1 text-xs font-medium rounded ${
           value === p.value ? 'bg-surface-variant text-on-surface shadow-sm' : 'text-on-surface-variant hover:text-on-surface'
         }`}
       >{p.label}</button>

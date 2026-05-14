@@ -1,19 +1,19 @@
 @import "tailwindcss";
 
 /*
- * 设计系统：Microsoft Fluent 2 / Microsoft Store 风格
+ * 设计系统（Phase 8 — 极简专业控制台风）
  *
- * 参考：
- *  - https://fluent2.microsoft.design/ — Fluent 2 设计语言
- *  - Microsoft Store / Settings (Win11) — 视觉基准
+ * 参考：Linear / Vercel / Stripe / Anthropic Console 共性
+ *  - 单 accent 色（indigo #6366f1），其余全部中性灰阶
+ *  - 4 个字号：caption(12) / body(14) / heading(20) / display(28)
+ *  - 3 个字重：400 normal / 500 medium / 600 semibold
+ *  - 2 个圆角：control(4px 按钮/输入) / overlay(8px 卡片/弹层)
+ *  - 4px 网格 spacing
+ *  - 中性 hover：bg 提亮 4-6%，不 transform、不 scale
+ *  - 阴影仅用于 elevated（modal / popover），平面卡用 1px 边框分层
  *
- * 关键特征：
- *  - 字体：Segoe UI Variable（Win11 默认），fallback 到 Segoe UI / system-ui
- *  - 圆角：xs=2 / sm=4 / md=8 / lg=12 / xl=16（Fluent corner radius scale）
- *  - 表面：Mica 风格深色（极轻微的色相） + 半透明 acrylic 卡片
- *  - 强调色：accent (主题色，由 ThemeContext 的 seed 派生 MD3)
- *  - 交互：hover reveal（浅亮一层，~6% 不透明），active 时 scale(0.98)
- *  - 阴影：仅在 elevated 卡（modal / popover）使用，平面卡用边框分层
+ * 不再使用：Mica / Acrylic / Reveal 光晕 / spring 弹跳 / brand 色大面积铺色
+ *  这些都是 MS Store 的"商品橱窗"装饰，与 SaaS 控制台调性冲突。
  */
 
 @theme {
@@ -65,19 +65,33 @@
   --space-xxxl: 32px;
 
   /*
-   * Fluent v9 typography ramp（实测值，与 Win11 Settings/Store 一致）
+   * Phase 8 typography ramp — 收敛到 4 个语义字号 + 4 个数字字号
+   * 语义命名（首选，新代码用这套）：
+   *   --font-caption  12px  辅助/标签
+   *   --font-body     14px  正文（默认）
+   *   --font-heading  20px  section 标题
+   *   --font-display  28px  页面 H1
+   *
+   * 数字字号（向下兼容旧 Fluent 调用，逐步弃用）：
+   *   --font-caption2 / caption1 / body1 / body2 / subtitle2 / subtitle1 /
+   *   title3 / title2 / title1 / large-title 全部 alias 到上述 4 个
    */
-  --font-caption2: 10px;
+  --font-caption: 12px;
+  --font-body: 14px;
+  --font-heading: 20px;
+  --font-display: 28px;
+
+  /* 向下兼容 alias — 不要在新代码用 */
+  --font-caption2: 12px;
   --font-caption1: 12px;
   --font-body1: 14px;
-  --font-body2: 16px;
-  --font-subtitle2: 16px;
+  --font-body2: 14px;
+  --font-subtitle2: 14px;
   --font-subtitle1: 20px;
-  --font-title3: 24px;
+  --font-title3: 20px;
   --font-title2: 28px;
-  --font-title1: 32px;
-  --font-large-title: 40px;
-  --font-display: 68px;
+  --font-title1: 28px;
+  --font-large-title: 28px;
 
   /*
    * Phase 7.7：字体栈彻底重做 — 最大单项视觉提升
@@ -177,161 +191,21 @@
 }
 
 /*
- * Fluent 卡片（fl-card）— 平面卡，用边框分层而非阴影。
- * Acrylic 半透明只在 dark 模式生效，浅色模式保持纯色避免混浊。
- */
-/*
- * fl-card — 小卡片（应用行 / 列表项 / 普通信息卡）
- * Microsoft Store 实测：小卡只用 hover 上浮 + 阴影，**不带 reveal 光晕**。
+ * fl-card — 平面卡片，design system 主原语
+ * Phase 8：去掉 hover 上浮 transform + 重阴影（"商品橱窗"装饰），改为
+ * Linear/Vercel 控制台的中性 hover —— 仅 bg 微亮 + border 加深，无位移。
  */
 .fl-card {
   position: relative;
   border: 1px solid var(--color-outline-variant);
   background-color: var(--color-surface-container);
   border-radius: var(--radius-overlay);
-  transition: background-color 0.18s ease,
-              border-color 0.18s ease,
-              transform 0.18s cubic-bezier(0.16, 1, 0.3, 1),
-              box-shadow 0.18s cubic-bezier(0.16, 1, 0.3, 1);
+  transition: background-color 0.15s ease, border-color 0.15s ease;
 }
 .fl-card:hover {
   background-color: var(--color-surface-container-high);
   border-color: var(--color-outline);
-  transform: translateY(-2px);
-  box-shadow:
-    0 8px 16px -4px rgba(0, 0, 0, 0.1),
-    0 4px 8px -2px rgba(0, 0, 0, 0.06);
 }
-.dark .fl-card:hover {
-  box-shadow:
-    0 12px 24px -6px rgba(0, 0, 0, 0.4),
-    0 4px 10px -2px rgba(0, 0, 0, 0.25);
-}
-
-/*
- * fl-hero — Hero 大卡（MS Store 主页风格）
- *
- * Microsoft Store 实测行为（图 2/3/4 切换截图）：
- *   - 大卡**不上浮**（位置不变）
- *   - 鼠标在卡内移动时，**边框出现一段亮光跟随鼠标位置**（蜡烛照亮边缘）
- *   - 卡内可见一团淡淡的跟随柔光
- *   - 鼠标离开后，光晕消失，卡仍然在原位
- *
- * --mx / --my 由 src/fluent-reveal.js 实时更新（rAF 节流）。
- */
-.fl-hero {
-  position: relative;
-  isolation: isolate;
-  border-radius: var(--radius-overlay);
-  border: 1px solid rgba(255, 255, 255, 0.06);
-  overflow: hidden;
-  background:
-    radial-gradient(120% 100% at 100% 0%, var(--hero-bg-2, #4c1d95) 0%, transparent 60%),
-    radial-gradient(120% 100% at 0% 100%, var(--hero-bg-3, #1e1b4b) 0%, transparent 70%),
-    var(--hero-bg-1, #2a1a4f);
-  color: white;
-  /* 顶部 1px 高光线（Mica 反射），无 hover transform */
-  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.18);
-}
-
-/*
- * 边框 reveal — 跟随鼠标位置的"蜡烛光"
- * 关键：不靠 :hover 切换 opacity，而是让光晕始终存在但中心点跟随鼠标。
- * 鼠标在卡内 → 光晕看得见；鼠标离开 → --mx/--my 不再更新，但保留最后位置
- *   → 用 isolation: isolate + transition opacity 让"离开淡出"。
- *   方案：::before/::after opacity 受 :hover 控制，但 background 的 radial-gradient
- *   位置完全由 --mx/--my 决定，所以在 hover 期间一直跟手。
- */
-.fl-hero::before {
-  content: "";
-  position: absolute;
-  inset: 0;
-  border-radius: inherit;
-  padding: 1.5px;
-  background: radial-gradient(
-    240px circle at var(--mx, 50%) var(--my, 50%),
-    rgba(255, 255, 255, 0.85),
-    rgba(255, 255, 255, 0.25) 35%,
-    transparent 65%
-  );
-  -webkit-mask:
-    linear-gradient(#000 0 0) content-box,
-    linear-gradient(#000 0 0);
-  -webkit-mask-composite: xor;
-  mask:
-    linear-gradient(#000 0 0) content-box,
-    linear-gradient(#000 0 0);
-  mask-composite: exclude;
-  opacity: 0;
-  transition: opacity 0.25s ease;
-  pointer-events: none;
-  z-index: 3;
-}
-.fl-hero:hover::before { opacity: 1; }
-
-.fl-hero::after {
-  content: "";
-  position: absolute;
-  inset: 0;
-  border-radius: inherit;
-  background: radial-gradient(
-    420px circle at var(--mx, 50%) var(--my, 50%),
-    rgba(255, 255, 255, 0.10),
-    rgba(255, 255, 255, 0.04) 35%,
-    transparent 65%
-  );
-  opacity: 0;
-  transition: opacity 0.3s ease;
-  pointer-events: none;
-  z-index: 1;
-}
-.fl-hero:hover::after { opacity: 1; }
-
-.fl-hero > * {
-  position: relative;
-  z-index: 4;
-}
-.fl-hero .fl-hero-text-secondary {
-  color: rgba(255, 255, 255, 0.75);
-}
-
-/*
- * fl-reveal — 通用 Reveal Highlight 工具类（鼠标跟随光晕，不上浮）
- *
- * 用法：任何元素加上 .fl-reveal 即可获得跟随鼠标的边框光。
- * 与 .fl-hero 同样行为，但用在浅色卡片上时光强降低（避免刺眼）。
- * --mx / --my 由 src/fluent-reveal.js 实时更新。
- */
-.fl-reveal {
-  position: relative;
-  isolation: isolate;
-}
-.fl-reveal::before {
-  content: "";
-  position: absolute;
-  inset: 0;
-  border-radius: inherit;
-  padding: 1px;
-  background: radial-gradient(
-    200px circle at var(--mx, 50%) var(--my, 50%),
-    rgba(255, 255, 255, 0.55),
-    rgba(255, 255, 255, 0.15) 35%,
-    transparent 65%
-  );
-  -webkit-mask:
-    linear-gradient(#000 0 0) content-box,
-    linear-gradient(#000 0 0);
-  -webkit-mask-composite: xor;
-  mask:
-    linear-gradient(#000 0 0) content-box,
-    linear-gradient(#000 0 0);
-  mask-composite: exclude;
-  opacity: 0;
-  transition: opacity 0.2s ease;
-  pointer-events: none;
-  z-index: 2;
-}
-.fl-reveal:hover::before { opacity: 1; }
 
 /*
  * Fluent Button - 按 prominent / standard / subtle 三档（与 Fluent 文档一致）
@@ -392,34 +266,6 @@
 }
 .fl-btn-subtle:hover:not(:disabled) {
   background-color: var(--color-surface-container);
-}
-
-/*
- * fl-mica — Mica 材质区块（页面级容器 / 大面板）
- * Win11 实测：Mica 是"窗口级 chrome"，磨砂带壁纸色相，比 Acrylic 模糊更弱。
- * 用法：包裹整个页面或大区域（Settings 主区、Dashboard 容器）。
- */
-.fl-mica {
-  background-color: color-mix(in srgb, var(--color-surface) 70%, transparent);
-  backdrop-filter: blur(40px) saturate(140%);
-  -webkit-backdrop-filter: blur(40px) saturate(140%);
-}
-.dark .fl-mica {
-  background-color: color-mix(in srgb, var(--color-surface) 60%, transparent);
-}
-
-/*
- * fl-acrylic — Acrylic 材质（Flyout / 浮层 / 副面板）
- * Win11 实测：Acrylic 模糊更强（噪点 + 高斯），用于"短暂可见"的层级（Sidebar 浮层、Command Bar、Tooltip）。
- */
-.fl-acrylic {
-  background-color: color-mix(in srgb, var(--color-surface-container) 75%, transparent);
-  backdrop-filter: blur(60px) saturate(160%);
-  -webkit-backdrop-filter: blur(60px) saturate(160%);
-  border: 1px solid color-mix(in srgb, var(--color-outline-variant) 60%, transparent);
-}
-.dark .fl-acrylic {
-  background-color: color-mix(in srgb, var(--color-surface-container) 65%, transparent);
 }
 
 /*
@@ -569,39 +415,11 @@
 }
 
 /*
- * .fl-spring — Fluent 2 灵魂：按钮/卡片点击回弹（gemini ccg 第 4 项）
- * 用 cubic-bezier 模拟 spring，比 linear 0.98 更"手感"
- */
-.fl-spring {
-  transition: transform 0.12s cubic-bezier(0.16, 1, 0.3, 1);
-}
-.fl-spring:active {
-  transform: scale(0.97);
-}
-
-/*
- * .fl-page-stack — 页面内主分块的统一垂直节奏
- * Phase 0.5 强制呼吸感：模块间 32px (gap-8)
- * 对应 components/ui/PageContainer 的 className，给非 PageContainer 路径用
- */
-.fl-page-stack > * + * {
-  margin-top: 32px;
-}
-@media (max-width: 768px) {
-  .fl-page-stack > * + * {
-    margin-top: 24px;
-  }
-}
-
-/*
- * ─── Phase 7: Microsoft Store 视觉语言 ────────────────────────────────
+ * 产品线 brand accent token — 仅用于小尺寸 chip 标识（fl-brand-chip），
+ * 不再用于大面积铺色 / hero 渐变 / 套餐卡顶色条。
  *
- * 把 daof-cpa 的 4 个产品线（Claude / Codex / Gemini / Combo）做成 MS Store
- * 里的"游戏 / 应用 / 影视"频道，每个产品线一种 brand accent 色。
- * Hero / 套餐卡 / 上游账号面板都按对应色派生。
+ * Phase 8：保留 token 但仅作为产品标识，主视觉走单 indigo accent。
  */
-
-/* 产品线 brand accent — 同时存深浅两版（rgb 三元组方便 alpha 混合） */
 :root {
   /* Claude — 深紫，Anthropic brand 色系 */
   --brand-claude: 168 85 247;        /* #A855F7 */

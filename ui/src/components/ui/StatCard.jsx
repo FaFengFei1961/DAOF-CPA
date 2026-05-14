@@ -29,10 +29,10 @@ const StatCard = ({
     neutral: 'bg-on-surface/[0.06] text-on-surface-variant border-outline-variant',
   }[trendTone];
 
-  const baseClass = `fl-card fl-reveal p-4 md:p-5 flex flex-col gap-3 min-h-[112px] ${className}`;
+  const baseClass = `fl-card p-4 md:p-5 flex flex-col gap-3 min-h-[112px] ${className}`;
   const Wrapper = onClick ? 'button' : 'div';
   const wrapperProps = onClick
-    ? { type: 'button', onClick, className: `${baseClass} text-left fl-spring focus-visible:ring-2 focus-visible:ring-primary outline-none` }
+    ? { type: 'button', onClick, className: `${baseClass} text-left focus-visible:ring-2 focus-visible:ring-primary outline-none` }
     : { className: baseClass };
 
   return (

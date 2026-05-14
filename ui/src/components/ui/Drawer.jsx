@@ -80,7 +80,7 @@ const Drawer = ({
             type="button"
             onClick={onClose}
             aria-label={t('COMMON.CLOSE', '关闭')}
-            className="w-8 h-8 rounded-lg flex items-center justify-center text-on-surface-variant hover:text-on-surface hover:bg-on-surface/[0.06] shrink-0 fl-spring"
+            className="w-8 h-8 rounded-lg flex items-center justify-center text-on-surface-variant hover:text-on-surface hover:bg-on-surface/[0.06] shrink-0"
           >
             <X size={18} />
           </button>
