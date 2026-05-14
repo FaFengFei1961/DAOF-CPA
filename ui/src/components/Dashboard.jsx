@@ -227,32 +227,39 @@ const HeroBlock = ({ title, sub, actionLabel, onClick, icon, hue = '#7c5cff', co
   );
 };
 
+// Phase 7：MS Store 风格 — section title + horizontal scroll + store-card
+// 改造前：3 列 grid，所有模型一次性铺满，视觉密度过高
+// 改造后：横向滚动 group（snap），单 group 最多展示 8 个 store-card
 const ProviderModelSection = ({ group, formatCurrency, onSeeAll, onModelClick }) => {
   const Icon = group.provider.icon;
+  const items = group.items.slice(0, 8); // MS Store 单行最多 6-8 张
   return (
     <section className="space-y-3">
       <header className="flex items-center justify-between">
         <button
           type="button"
           onClick={onSeeAll}
-          className="group flex items-center gap-2 text-on-surface hover:text-primary"
+          className="fl-section-title group"
         >
           <span
-            className="w-7 h-7 rounded-lg flex items-center justify-center border"
+            className="w-8 h-8 rounded-lg flex items-center justify-center border mr-2"
             style={{
               background: hexA(group.provider.hue, 0.16),
               borderColor: hexA(group.provider.hue, 0.25),
             }}
           >
-            <Icon size={15} style={{ color: group.provider.hue }} />
+            <Icon size={16} style={{ color: group.provider.hue }} />
           </span>
-          <h2 className="text-xl font-semibold tracking-tight">{group.provider.name}</h2>
-          <ChevronRight size={20} className="text-on-surface-variant group-hover:text-primary transition" />
+          <span>{group.provider.name}</span>
+          <ChevronRight size={20} className="ml-1" />
         </button>
+        <span className="text-xs text-on-surface-variant tabular-nums">
+          {group.items.length}
+        </span>
       </header>
-      <div className="grid grid-cols-1 md:grid-cols-2 2xl:grid-cols-3 gap-3">
-        {group.items.map(model => (
-          <ModelRow
+      <div className="fl-h-scroll -mx-1 px-1">
+        {items.map(model => (
+          <ModelStoreCard
             key={model.model_id}
             model={model}
             provider={group.provider}
@@ -265,7 +272,7 @@ const ProviderModelSection = ({ group, formatCurrency, onSeeAll, onModelClick })
   );
 };
 
-const ModelRow = ({ model, provider, formatCurrency, onClick }) => {
+const ModelStoreCard = ({ model, provider, formatCurrency, onClick }) => {
   const Icon = provider.icon;
   const inPrice = parseFloat(model.min_input_price) || 0;
   const isFree = !inPrice;
@@ -274,30 +281,35 @@ const ModelRow = ({ model, provider, formatCurrency, onClick }) => {
     <button
       type="button"
       onClick={onClick}
-      className="group flex items-center gap-3 p-3 rounded-lg border border-outline-variant/40 bg-surface/40 hover:bg-on-surface/[0.04] hover:border-outline transition text-left w-full min-h-[84px]"
+      className="fl-store-card text-left"
+      style={{
+        '--hero-bg-1': darkenHex(provider.hue, 0.55),
+        '--hero-bg-2': provider.hue,
+        '--hero-bg-3': darkenHex(provider.hue, 0.78),
+        width: '240px',
+        minHeight: '170px',
+      }}
+      title={model.model_id}
     >
-      <div
-        className="w-12 h-12 rounded-xl flex items-center justify-center shrink-0 border"
-        style={{
-          background: `linear-gradient(135deg, ${hexA(provider.hue, 0.3)} 0%, ${hexA(provider.hue, 0.1)} 100%)`,
-          borderColor: hexA(provider.hue, 0.25),
-        }}
-      >
-        <Icon size={22} style={{ color: provider.hue }} />
+      <div className="flex items-start justify-between">
+        <div className="w-11 h-11 rounded-xl flex items-center justify-center bg-white/15 backdrop-blur-md">
+          <Icon size={22} className="text-white" />
+        </div>
+        {isFree && (
+          <span className="px-2 py-0.5 rounded-full text-[10px] font-semibold bg-emerald-400/25 text-emerald-100 border border-emerald-300/40">
+            FREE
+          </span>
+        )}
       </div>
-
-      <div className="flex-1 min-w-0">
-        <div className="text-sm font-semibold text-on-surface truncate font-mono leading-5" title={model.model_id}>
+      <div className="fl-store-card-meta">
+        <div className="fl-store-card-title font-mono text-[15px] truncate">
           {model.model_id}
         </div>
-        <div className="text-xs text-on-surface-variant mt-1">{provider.name}</div>
-        <div className="mt-1">
-          {isFree ? (
-            <span className="text-xs font-semibold text-emerald-500 dark:text-emerald-400">免费</span>
-          ) : (
-            <span className="text-xs font-medium text-on-surface tabular-nums font-mono">
-              {formatCurrency(inPrice, 2)}
-              <span className="text-on-surface-variant">/M tokens</span>
+        <div className="fl-store-card-sub flex items-center justify-between gap-2">
+          <span>{provider.name}</span>
+          {!isFree && (
+            <span className="font-mono tabular-nums text-white/85 font-medium">
+              {formatCurrency(inPrice, 2)}<span className="text-white/55">/M</span>
             </span>
           )}
         </div>
