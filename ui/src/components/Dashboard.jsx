@@ -162,32 +162,51 @@ const Stat = ({ label, value, hint, prominent = false }) => (
 );
 
 // ─── Public Hero ────────────────────────────────────────────────────────
-// 未登录态：单行卡 + CTA，去掉大紫色块装饰；信息密度优先
+// 未登录态：左侧 H1 + 副标 + 双 CTA；右侧渐变品牌锚（subtle Mica + 大字体 logo
+// 替代之前的"大紫色块装饰"）。整体高度 ~180px 比纯文字横条更有视觉重量。
 const PublicHero = ({ onNavigate, t }) => (
-  <section className="fl-card flex flex-col sm:flex-row items-start sm:items-center gap-4 p-5 sm:p-6">
-    <div className="flex-1 min-w-0">
-      <h1 className="text-xl sm:text-2xl font-bold tracking-tight text-on-surface">
+  <section className="fl-card relative overflow-hidden grid grid-cols-1 md:grid-cols-[1fr_auto] items-center gap-6 px-6 sm:px-8 py-8 sm:py-10">
+    {/* 左：标题 + CTA */}
+    <div className="min-w-0">
+      <div className="text-[11px] uppercase tracking-[0.12em] font-semibold text-primary mb-2">
+        DAOF · CPA
+      </div>
+      <h1 className="text-2xl sm:text-[34px] font-bold tracking-tight text-on-surface leading-[1.15]">
         {t('DASH.PUBLIC_HERO_TITLE', '一个 sk- token 接入主流模型')}
       </h1>
-      <p className="text-sm text-on-surface-variant mt-1.5 max-w-2xl">
+      <p className="text-sm sm:text-base text-on-surface-variant mt-3 max-w-2xl leading-relaxed">
         {t('DASH.PUBLIC_HERO_SUB', 'OpenAI / Anthropic / Gemini 协议全兼容，按 token 计费，无月费门槛')}
       </p>
+      <div className="flex items-center gap-2 mt-5">
+        <button
+          type="button"
+          onClick={() => onNavigate('upgrade')}
+          className="fl-btn fl-btn-prominent h-10 px-5"
+        >
+          {t('DASH.SEE_PLANS', '查看套餐')}
+        </button>
+        <button
+          type="button"
+          onClick={() => onNavigate('pricing')}
+          className="fl-btn fl-btn-subtle h-10 px-5"
+        >
+          {t('DASH.SEE_PRICING', '查看定价')}
+        </button>
+      </div>
     </div>
-    <div className="flex items-center gap-2 shrink-0">
-      <button
-        type="button"
-        onClick={() => onNavigate('upgrade')}
-        className="fl-btn fl-btn-prominent h-10 px-5"
+
+    {/* 右：subtle 品牌锚（不抢戏，用 primary 半透明 + logo） */}
+    <div className="hidden md:flex items-center justify-center shrink-0">
+      <div
+        className="w-32 h-32 rounded-2xl flex items-center justify-center"
+        style={{
+          background:
+            'radial-gradient(circle at 30% 30%, color-mix(in srgb, var(--color-primary) 20%, transparent), transparent 70%), color-mix(in srgb, var(--color-primary) 8%, transparent)',
+          border: '1px solid color-mix(in srgb, var(--color-primary) 25%, transparent)',
+        }}
       >
-        {t('DASH.SEE_PLANS', '查看套餐')}
-      </button>
-      <button
-        type="button"
-        onClick={() => onNavigate('pricing')}
-        className="fl-btn fl-btn-subtle h-10 px-5"
-      >
-        {t('DASH.SEE_PRICING', '查看定价')}
-      </button>
+        <img src="/daof_logo.png" alt="" className="w-16 h-16 opacity-90" />
+      </div>
     </div>
   </section>
 );
@@ -212,39 +231,43 @@ function relativeTime(ts) {
   return new Date(ts).toLocaleDateString('zh-CN');
 }
 
-// Phase 7：MS Store 风格 — section title + horizontal scroll + store-card
-// 改造前：3 列 grid，所有模型一次性铺满，视觉密度过高
-// 改造后：横向滚动 group（snap），单 group 最多展示 8 个 store-card
+// Phase 7.5+：撤掉 Phase 7 的横向滚动大色块卡（用户截图反馈"好难看"），改 Vercel 风
+// 紧凑 grid + 横排极简卡：每张卡 ~72px 高，去掉饱和色 hero 渐变，brand 色仅作图标
+// tint 出现，整体回归数据/控制台调性
 const ProviderModelSection = ({ group, formatCurrency, onSeeAll, onModelClick }) => {
   const Icon = group.provider.icon;
-  const items = group.items.slice(0, 8); // MS Store 单行最多 6-8 张
+  const total = group.items.length;
+  const items = group.items.slice(0, 6); // grid 6 张刚好覆盖 sm 2x3 / md 3x2 / lg 6x1
   return (
     <section className="space-y-3">
-      <header className="flex items-center justify-between">
-        <button
-          type="button"
-          onClick={onSeeAll}
-          className="fl-section-title group"
-        >
+      <header className="flex items-baseline justify-between gap-3 px-1">
+        <h2 className="flex items-center gap-2 text-base font-semibold text-on-surface">
           <span
-            className="w-8 h-8 rounded-lg flex items-center justify-center border mr-2"
+            className="w-6 h-6 rounded-md flex items-center justify-center"
             style={{
               background: hexA(group.provider.hue, 0.16),
-              borderColor: hexA(group.provider.hue, 0.25),
+              border: `1px solid ${hexA(group.provider.hue, 0.3)}`,
             }}
           >
-            <Icon size={16} style={{ color: group.provider.hue }} />
+            <Icon size={13} style={{ color: group.provider.hue }} />
           </span>
           <span>{group.provider.name}</span>
-          <ChevronRight size={20} className="ml-1" />
-        </button>
-        <span className="text-xs text-on-surface-variant tabular-nums">
-          {group.items.length}
-        </span>
+          <span className="text-xs text-on-surface-variant font-normal">({total})</span>
+        </h2>
+        {total > items.length && (
+          <button
+            type="button"
+            onClick={onSeeAll}
+            className="text-xs text-on-surface-variant hover:text-primary transition inline-flex items-center gap-0.5"
+          >
+            {`查看全部 ${total} 个`}
+            <ChevronRight size={12} />
+          </button>
+        )}
       </header>
-      <div className="fl-h-scroll -mx-1 px-1">
+      <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-2">
         {items.map(model => (
-          <ModelStoreCard
+          <ModelCard
             key={model.model_id}
             model={model}
             provider={group.provider}
@@ -257,47 +280,55 @@ const ProviderModelSection = ({ group, formatCurrency, onSeeAll, onModelClick })
   );
 };
 
-const ModelStoreCard = ({ model, provider, formatCurrency, onClick }) => {
+const ModelCard = ({ model, provider, formatCurrency, onClick }) => {
   const Icon = provider.icon;
   const inPrice = parseFloat(model.min_input_price) || 0;
+  const outPrice = parseFloat(model.min_output_price) || 0;
   const isFree = !inPrice;
 
   return (
     <button
       type="button"
       onClick={onClick}
-      className="fl-store-card text-left"
-      style={{
-        '--hero-bg-1': darkenHex(provider.hue, 0.55),
-        '--hero-bg-2': provider.hue,
-        '--hero-bg-3': darkenHex(provider.hue, 0.78),
-        width: '240px',
-        minHeight: '170px',
-      }}
+      className="fl-card flex items-center gap-3 px-3.5 py-2.5 text-left"
       title={model.model_id}
     >
-      <div className="flex items-start justify-between">
-        <div className="w-11 h-11 rounded-xl flex items-center justify-center bg-white/15 backdrop-blur-md">
-          <Icon size={22} className="text-white" />
-        </div>
-        {isFree && (
-          <span className="px-2 py-0.5 rounded-full text-[10px] font-semibold bg-emerald-400/25 text-emerald-100 border border-emerald-300/40">
-            FREE
-          </span>
-        )}
+      {/* brand-tint 小图标 — 不再大色块铺背景 */}
+      <div
+        className="w-9 h-9 rounded-md flex items-center justify-center shrink-0"
+        style={{
+          background: hexA(provider.hue, 0.14),
+          border: `1px solid ${hexA(provider.hue, 0.28)}`,
+        }}
+      >
+        <Icon size={16} style={{ color: provider.hue }} />
       </div>
-      <div className="fl-store-card-meta">
-        <div className="fl-store-card-title font-mono text-[15px] truncate">
+
+      <div className="flex-1 min-w-0">
+        <div className="font-mono text-[13px] font-semibold text-on-surface truncate leading-tight">
           {model.model_id}
         </div>
-        <div className="fl-store-card-sub flex items-center justify-between gap-2">
-          <span>{provider.name}</span>
-          {!isFree && (
-            <span className="font-mono tabular-nums text-white/85 font-medium">
-              {formatCurrency(inPrice, 2)}<span className="text-white/55">/M</span>
-            </span>
-          )}
-        </div>
+        <div className="text-[11px] text-on-surface-variant mt-0.5">{provider.name}</div>
+      </div>
+
+      <div className="shrink-0 text-right">
+        {isFree ? (
+          <span className="inline-flex items-center px-1.5 py-0.5 rounded text-[10px] font-bold bg-emerald-500/15 text-emerald-400 border border-emerald-500/30">
+            FREE
+          </span>
+        ) : (
+          <>
+            <div className="font-mono text-[13px] font-semibold text-on-surface tabular-nums leading-tight">
+              {formatCurrency(inPrice, 2)}
+              <span className="text-on-surface-variant font-normal">/M</span>
+            </div>
+            {outPrice > 0 && outPrice !== inPrice && (
+              <div className="font-mono text-[10px] text-on-surface-variant tabular-nums">
+                out {formatCurrency(outPrice, 2)}
+              </div>
+            )}
+          </>
+        )}
       </div>
     </button>
   );
@@ -357,17 +388,6 @@ function hexA(hex, alpha) {
   if (!m) return `rgba(124, 92, 255, ${alpha})`;
   const n = parseInt(m[1], 16);
   return `rgba(${(n >> 16) & 255}, ${(n >> 8) & 255}, ${n & 255}, ${alpha})`;
-}
-
-function darkenHex(hex, factor = 0.5) {
-  if (!hex || hex[0] !== '#') return '#1e1b4b';
-  const m = hex.match(/^#([0-9a-f]{6})$/i);
-  if (!m) return '#1e1b4b';
-  const n = parseInt(m[1], 16);
-  const r = Math.round(((n >> 16) & 255) * (1 - factor));
-  const g = Math.round(((n >> 8) & 255) * (1 - factor));
-  const b = Math.round((n & 255) * (1 - factor));
-  return '#' + [r, g, b].map((x) => x.toString(16).padStart(2, '0')).join('');
 }
 
 export default Dashboard;
