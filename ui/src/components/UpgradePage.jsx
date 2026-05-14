@@ -333,17 +333,17 @@ const UpgradePage = ({ onPurchaseSuccess }) => {
           <div className="space-y-8">
             {groups.map(group => (
               <section key={group.id} aria-labelledby={`store-group-${group.id}`} className="space-y-3">
-                {/* Phase 7：MS Store 风格 group header — brand chip + section title + chevron */}
-                <header className="flex items-center justify-between gap-4">
-                  <div className="flex items-center gap-3">
-                    <span className="fl-brand-chip" data-brand={group.id}>{group.label}</span>
-                    <h2 id={`store-group-${group.id}`} className="fl-section-title cursor-default" style={{ pointerEvents: 'none' }}>
-                      {group.label === 'Combo' ? t('PRODUCTS.COMBO_TITLE', '组合套餐') :
-                       group.label === 'Other' ? t('PRODUCTS.OTHER_TITLE', '其他') :
-                       group.label}
-                      <ChevronRight size={20} aria-hidden="true" />
-                    </h2>
-                  </div>
+                {/* Phase 7.5：撤掉 group header 上的 brand chip + chevron（chevron 暗示
+                    可点击但实际不导航 = misleading；brand chip 在卡片内已经标识了避免重复） */}
+                <header className="flex items-baseline justify-between gap-4 px-1">
+                  <h2
+                    id={`store-group-${group.id}`}
+                    className="text-lg font-semibold tracking-tight text-on-surface"
+                  >
+                    {group.label === 'Combo' ? t('PRODUCTS.COMBO_TITLE', '组合套餐') :
+                     group.label === 'Other' ? t('PRODUCTS.OTHER_TITLE', '其他') :
+                     group.label}
+                  </h2>
                   <span className="text-xs text-on-surface-variant tabular-nums">
                     {group.items.length} {t('PRODUCTS.PKG_COUNT_UNIT', '个套餐')}
                   </span>
@@ -359,17 +359,23 @@ const UpgradePage = ({ onPurchaseSuccess }) => {
               const shownDescription = displayPackageDescription(pkg);
               const finalPriceText = formatCurrency(Number(finalPrice || 0), 2);
               const originalPriceText = formatCurrency(Number(pkg.price_amount || 0), 2);
+              const isRecommended = !!pkg.highlight_tag;
               return (
                 <div key={pkg.id}
-                  className="relative fl-card fl-brand-band p-6 pt-7"
-                  data-brand={group.id}
+                  className={`relative fl-card p-6 ${isRecommended ? 'ring-2 ring-primary ring-offset-2 ring-offset-surface' : ''}`}
                   style={pkg.gradient ? { background: pkg.gradient } : {}}>
-                  {pkg.highlight_tag && (
-                    <div className="absolute -top-3 left-6 px-3 py-1 bg-primary text-on-primary text-xs font-bold rounded-full">
+                  {/* Phase 7.5：撤掉 fl-brand-band（顶 3px 色条视觉过强），改 Stripe pricing
+                      table 风格 — highlight_tag 套餐用 ring-2 ring-primary 高亮，未推荐
+                      套餐保持纯 fl-card 中性外观；brand 标识缩为标题旁的小 chip */}
+                  {isRecommended && (
+                    <div className="absolute -top-3 left-6 px-3 py-1 bg-primary text-on-primary text-xs font-bold rounded-full shadow-md shadow-primary/30">
                       {pkg.highlight_tag}
                     </div>
                   )}
-                  <Icon size={28} className="text-primary mb-3" style={pkg.badge_color ? { color: pkg.badge_color } : {}} />
+                  <div className="flex items-start justify-between mb-3">
+                    <Icon size={28} className="text-primary" style={pkg.badge_color ? { color: pkg.badge_color } : {}} />
+                    <span className="fl-brand-chip" data-brand={group.id}>{group.label}</span>
+                  </div>
                   <h3 className="text-lg font-bold mb-1">{shownName}</h3>
                   <div className="flex items-baseline gap-2 mb-1 flex-wrap">
                     {/* fix MAJOR R23+2-F3 / F6（gemini 二轮）：sr-only 必须包含具体金额，
