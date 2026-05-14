@@ -1,7 +1,7 @@
 import React, { useState, useEffect, useCallback } from 'react';
 import { useTranslation } from 'react-i18next';
 import { useSearchParams } from 'react-router-dom';
-import { ShoppingCart, Check, Layers, Sparkles, Cpu, Zap, Activity, Package as PackageIcon, BrainCircuit, Bot } from 'lucide-react';
+import { ShoppingCart, Check, Layers, Sparkles, Cpu, Zap, Activity, Package as PackageIcon, BrainCircuit, Bot, ChevronRight } from 'lucide-react';
 import toast from 'react-hot-toast';
 import { useConfirm } from '../context/ConfirmContext';
 import { authFetch, isLoggedIn, readAuthState } from '../utils/authFetch';
@@ -333,10 +333,21 @@ const UpgradePage = ({ onPurchaseSuccess }) => {
           <div className="space-y-8">
             {groups.map(group => (
               <section key={group.id} aria-labelledby={`store-group-${group.id}`} className="space-y-3">
-                <div className="flex items-center justify-between gap-4">
-                  <h2 id={`store-group-${group.id}`} className="text-lg font-bold text-on-surface">{group.label}</h2>
-                  <span className="text-xs text-on-surface-variant">{group.items.length} 个套餐</span>
-                </div>
+                {/* Phase 7：MS Store 风格 group header — brand chip + section title + chevron */}
+                <header className="flex items-center justify-between gap-4">
+                  <div className="flex items-center gap-3">
+                    <span className="fl-brand-chip" data-brand={group.id}>{group.label}</span>
+                    <h2 id={`store-group-${group.id}`} className="fl-section-title cursor-default" style={{ pointerEvents: 'none' }}>
+                      {group.label === 'Combo' ? t('PRODUCTS.COMBO_TITLE', '组合套餐') :
+                       group.label === 'Other' ? t('PRODUCTS.OTHER_TITLE', '其他') :
+                       group.label}
+                      <ChevronRight size={20} aria-hidden="true" />
+                    </h2>
+                  </div>
+                  <span className="text-xs text-on-surface-variant tabular-nums">
+                    {group.items.length} {t('PRODUCTS.PKG_COUNT_UNIT', '个套餐')}
+                  </span>
+                </header>
                 <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-3">
             {group.items.map(pkg => {
               const Icon = pickIcon(pkg.icon_key);
@@ -350,7 +361,8 @@ const UpgradePage = ({ onPurchaseSuccess }) => {
               const originalPriceText = formatCurrency(Number(pkg.price_amount || 0), 2);
               return (
                 <div key={pkg.id}
-                  className="relative fl-card p-6"
+                  className="relative fl-card fl-brand-band p-6 pt-7"
+                  data-brand={group.id}
                   style={pkg.gradient ? { background: pkg.gradient } : {}}>
                   {pkg.highlight_tag && (
                     <div className="absolute -top-3 left-6 px-3 py-1 bg-primary text-on-primary text-xs font-bold rounded-full">
