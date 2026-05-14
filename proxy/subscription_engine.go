@@ -38,15 +38,22 @@ var errPlanLimitExceeded = errors.New("subscription quota plan limit exceeded")
 
 // EngineDecision 是引擎对一次请求的决策结果
 type EngineDecision struct {
-	Allowed           bool
-	SubscriptionID    uint
-	QuotaPlanID       uint
-	QuotaPlanIDs      []uint
-	ConsumedUnit      string
-	ConsumedDelta     float64
-	FallbackToBalance bool
-	BlockReason       string
-	BlockMessage      string
+	Allowed            bool
+	SubscriptionID     uint
+	QuotaPlanID        uint
+	QuotaPlanIDs       []uint
+	ConsumedUnit       string
+	ConsumedDelta      float64
+	FallbackToBalance  bool
+	BlockReason        string
+	BlockMessage       string
+	BlockQuotaPlanID   uint
+	BlockConsumedValue float64
+	BlockDelta         float64
+	BlockLimitValue    float64
+	BlockRemaining     float64
+	BlockWindowEndAt   *time.Time
+	BlockUnit          string
 	// ProductType 命中订阅时填 "subscription" 或 "addon"，便于账单区分扣自哪个产品类型。
 	// 未命中（FallbackToBalance / 拒绝）时为空字符串。
 	ProductType string
@@ -97,6 +104,7 @@ func Decide(req EngineRequest) EngineDecision {
 		return subs[i].Subscription.ConsumptionOrder < subs[j].Subscription.ConsumptionOrder
 	})
 
+	var lastLimitDecision EngineDecision
 	for _, cs := range subs {
 		d := trySharedQuota(cs, req)
 		if d.Allowed {
@@ -108,13 +116,51 @@ func Decide(req EngineRequest) EngineDecision {
 		if d.NeedsRetry {
 			return d
 		}
+		// fix MINOR（多模型审计第二十五轮 P3）：lastLimitDecision 优先保留 BlockQuotaPlanID != 0 的
+		// snapshot decision（precheck 路径才有详细 ConsumedValue/Remaining/WindowEndAt）。
+		// 否则后续 sub 的普通 plan_full_skip_sub 会覆盖前一个有 snapshot 的，前端损失精准提示。
+		if d.BlockQuotaPlanID != 0 {
+			lastLimitDecision = d
+		} else if lastLimitDecision.BlockQuotaPlanID == 0 && d.BlockReason == "plan_full_skip_sub" {
+			lastLimitDecision = d
+		}
 	}
 
 	// 所有订阅 + 增量包都没命中 → fallback 到余额
 	if engineFallbackToQuota() {
-		return EngineDecision{
+		d := EngineDecision{
 			Allowed:           true,
 			FallbackToBalance: true,
+		}
+		if lastLimitDecision.BlockReason != "" {
+			d.BlockReason = lastLimitDecision.BlockReason
+			d.BlockMessage = lastLimitDecision.BlockMessage
+			d.BlockQuotaPlanID = lastLimitDecision.BlockQuotaPlanID
+			d.BlockConsumedValue = lastLimitDecision.BlockConsumedValue
+			d.BlockDelta = lastLimitDecision.BlockDelta
+			d.BlockLimitValue = lastLimitDecision.BlockLimitValue
+			d.BlockRemaining = lastLimitDecision.BlockRemaining
+			d.BlockWindowEndAt = lastLimitDecision.BlockWindowEndAt
+			d.BlockUnit = lastLimitDecision.BlockUnit
+		}
+		return d
+	}
+	// fix MINOR（多模型审计第二十五轮 P2）：precheck 命中窗口超额时（BlockQuotaPlanID != 0
+	// 表示 trySharedQuota 已捕获 snapshot），即使 fallback=false 也要透出 snapshot 给前端
+	// 构建精准提示（"本次预估超过当前窗口剩余 X"），与 P1-6 TOCTOU 修复一脉相承。
+	// 非 precheck commit 路径（BlockQuotaPlanID=0）保持现有 generic 行为，不破坏既有契约。
+	if lastLimitDecision.BlockQuotaPlanID != 0 {
+		return EngineDecision{
+			Allowed:            false,
+			BlockReason:        lastLimitDecision.BlockReason,
+			BlockMessage:       lastLimitDecision.BlockMessage,
+			BlockQuotaPlanID:   lastLimitDecision.BlockQuotaPlanID,
+			BlockConsumedValue: lastLimitDecision.BlockConsumedValue,
+			BlockDelta:         lastLimitDecision.BlockDelta,
+			BlockLimitValue:    lastLimitDecision.BlockLimitValue,
+			BlockRemaining:     lastLimitDecision.BlockRemaining,
+			BlockWindowEndAt:   lastLimitDecision.BlockWindowEndAt,
+			BlockUnit:          lastLimitDecision.BlockUnit,
 		}
 	}
 	return EngineDecision{
@@ -191,7 +237,7 @@ func trySharedQuota(cs *CachedSubscription, req EngineRequest) EngineDecision {
 	if len(specs) == 0 {
 		return EngineDecision{Allowed: false, BlockReason: "no_plan_in_sub_matched"}
 	}
-	ok, dbErr := atomicConsumeMany(sub.ID, sub.UserID, specs, req.IsPrecheck)
+	ok, failSnap, dbErr := atomicConsumeMany(sub.ID, sub.UserID, specs, req.IsPrecheck)
 	if dbErr != nil {
 		// fix CRITICAL C2（codex 第二十轮）：DB 故障必须 fail-closed，绝不能 fallback 到余额。
 		// NeedsRetry=true + Allowed=false 让 stream.go 返回 503 让客户端重试，
@@ -204,7 +250,20 @@ func trySharedQuota(cs *CachedSubscription, req EngineRequest) EngineDecision {
 		}
 	}
 	if !ok {
-		return EngineDecision{Allowed: false, BlockReason: "plan_full_skip_sub"}
+		d := EngineDecision{Allowed: false, BlockReason: "plan_full_skip_sub"}
+		// fix CRITICAL（多模型审计第二十五轮）：snapshot 由 consumePlanInTx 在事务内捕获，
+		// 不再事务外重新 SELECT — 杜绝并发写造成的"剩余额度"展示错乱（"明明没用尽却提示用尽"）。
+		if req.IsPrecheck && failSnap != nil {
+			d.BlockQuotaPlanID = failSnap.PlanID
+			d.BlockConsumedValue = failSnap.ConsumedValue
+			d.BlockDelta = failSnap.Delta
+			d.BlockLimitValue = failSnap.LimitValue
+			d.BlockRemaining = failSnap.Remaining
+			d.BlockWindowEndAt = failSnap.WindowEndAt
+			d.BlockUnit = failSnap.Unit
+			d.BlockMessage = buildPrecheckLimitMessage(*failSnap)
+		}
+		return d
 	}
 	planIDs := make([]uint, 0, len(specs))
 	for _, spec := range specs {
@@ -227,6 +286,30 @@ type consumeSpec struct {
 	Unit          string
 	WindowSeconds int
 	LimitValue    float64
+}
+
+type precheckLimitDetail struct {
+	PlanID        uint
+	ConsumedValue float64
+	Delta         float64
+	LimitValue    float64
+	Remaining     float64
+	WindowEndAt   *time.Time
+	Unit          string
+}
+
+// fix CRITICAL（多模型审计第二十五轮）：原 diagnosePrecheckLimit 在事务外重新 SELECT，
+// 与 atomicConsumeMany 事务内的写存在 TOCTOU 竞态，会让用户看到"剩余额度"展示数值与
+// 实际拒绝原因不符（已确认的用户痛点："明明没用尽却提示用尽"）。
+//
+// 现在 snapshot 在 consumePlanInTx 触发 errPlanLimitExceeded 时同事务内捕获，
+// 由 atomicConsumeMany 的第二个返回值传出，caller 直接消费。彻底消除事务外重查路径。
+
+func buildPrecheckLimitMessage(detail precheckLimitDetail) string {
+	if detail.Unit == "api_cost_usd" {
+		return fmt.Sprintf("本次请求预估消耗 %.6f credits，超过当前窗口剩余额度 %.6f credits", detail.Delta, math.Max(0, detail.Remaining))
+	}
+	return fmt.Sprintf("本次请求预估消耗 %.0f %s，超过当前窗口剩余额度 %.0f %s", detail.Delta, detail.Unit, math.Max(0, detail.Remaining), detail.Unit)
 }
 
 // snapshotPlan 是从 package_snapshot 提取的简化 plan 结构
@@ -421,11 +504,18 @@ type planConsumeWarn struct {
 //
 // 这正是订阅产品当前需要的"5 小时爆发额度 + 7 天总额度"模型；不再保留旧的
 // "命中第一个 plan 即成功"语义。
-func atomicConsumeMany(subID, userID uint, specs []consumeSpec, isPrecheck bool) (bool, error) {
+//
+// fix CRITICAL（多模型审计第二十五轮）：返回值新增 *precheckLimitDetail snapshot，
+// 在 errPlanLimitExceeded 触发时由 consumePlanInTx 在 tx 内捕获真实 ConsumedValue/Remaining
+// 并冒泡到此处。caller 应直接消费此 snapshot，避免事务外重新 SELECT 造成 TOCTOU
+// （旧 diagnosePrecheckLimit 在 tx 提交后用 database.DB 重查，并发写会让"剩余额度"展示数字与
+// 实际拒绝原因不符，引发"明明没用尽却提示用尽"用户投诉）。
+func atomicConsumeMany(subID, userID uint, specs []consumeSpec, isPrecheck bool) (bool, *precheckLimitDetail, error) {
 	if len(specs) == 0 {
-		return false, nil
+		return false, nil, nil
 	}
 	warns := make([]planConsumeWarn, 0, len(specs))
+	var failedSnap *precheckLimitDetail
 	txErr := database.DB.Transaction(func(tx *gorm.DB) error {
 		var sub database.UserSubscription
 		if err := tx.Select("id, status, end_at").
@@ -438,8 +528,11 @@ func atomicConsumeMany(subID, userID uint, specs []consumeSpec, isPrecheck bool)
 		}
 
 		for _, spec := range specs {
-			warn, err := consumePlanInTx(tx, subID, spec, isPrecheck)
+			warn, snap, err := consumePlanInTx(tx, subID, spec, isPrecheck)
 			if err != nil {
+				if snap != nil {
+					failedSnap = snap
+				}
 				return err
 			}
 			if warn != nil {
@@ -455,11 +548,14 @@ func atomicConsumeMany(subID, userID uint, specs []consumeSpec, isPrecheck bool)
 	})
 
 	if txErr != nil {
-		if errors.Is(txErr, errSubInactive) || errors.Is(txErr, errPlanLimitExceeded) {
-			return false, nil
+		if errors.Is(txErr, errSubInactive) {
+			return false, nil, nil
+		}
+		if errors.Is(txErr, errPlanLimitExceeded) {
+			return false, failedSnap, nil
 		}
 		log.Printf("[ENGINE] atomicConsumeMany tx failed sub=%d err=%v", subID, txErr)
-		return false, txErr
+		return false, nil, txErr
 	}
 
 	for _, w := range warns {
@@ -468,21 +564,43 @@ func atomicConsumeMany(subID, userID uint, specs []consumeSpec, isPrecheck bool)
 			MaybeFireUsageWarn(subID, warn.PlanID, userID, warn.Bucket, warn.Before, warn.After, warn.LimitValue, warn.WindowStart)
 		})
 	}
-	return true, nil
+	return true, nil, nil
 }
 
-func consumePlanInTx(tx *gorm.DB, subID uint, spec consumeSpec, isPrecheck bool) (*planConsumeWarn, error) {
+func consumePlanInTx(tx *gorm.DB, subID uint, spec consumeSpec, isPrecheck bool) (*planConsumeWarn, *precheckLimitDetail, error) {
 	now := time.Now()
+	// fix CRITICAL（多模型审计第二十五轮）：snapshotForPlanLimit 在 tx 内捕获真实 usage 状态，
+	// 给 caller 用于构建用户侧错误消息（"本次预估超过当前窗口剩余"），不再事务外重查避免 TOCTOU。
+	snapshotForPlanLimit := func(consumedValue float64, windowEndAt time.Time) *precheckLimitDetail {
+		snap := &precheckLimitDetail{
+			PlanID:        spec.PlanID,
+			ConsumedValue: consumedValue,
+			Delta:         spec.Delta,
+			LimitValue:    spec.LimitValue,
+			Remaining:     math.Max(0, spec.LimitValue-consumedValue),
+			Unit:          spec.Unit,
+		}
+		if !windowEndAt.IsZero() {
+			end := windowEndAt
+			snap.WindowEndAt = &end
+		}
+		return snap
+	}
 	var usage database.SubscriptionUsage
 	err := tx.Where("subscription_id = ? AND quota_plan_id = ? AND model_bucket = ?",
 		subID, spec.PlanID, spec.Bucket).First(&usage).Error
 
 	if errors.Is(err, gorm.ErrRecordNotFound) {
 		if spec.LimitValue > 0 && spec.Delta > spec.LimitValue {
-			return nil, errPlanLimitExceeded
+			// 无 usage 行 → consumed=0；window 用预期开窗时间
+			windowEnd := time.Time{}
+			if spec.WindowSeconds > 0 {
+				windowEnd = now.Add(time.Duration(spec.WindowSeconds) * time.Second)
+			}
+			return nil, snapshotForPlanLimit(0, windowEnd), errPlanLimitExceeded
 		}
 		if isPrecheck {
-			return nil, nil
+			return nil, nil, nil
 		}
 		windowEnd := now
 		if spec.WindowSeconds > 0 {
@@ -507,7 +625,7 @@ func consumePlanInTx(tx *gorm.DB, subID uint, spec consumeSpec, isPrecheck bool)
 				usage = existing
 				err = nil
 			} else {
-				return nil, fmt.Errorf("usage create: %w", cerr)
+				return nil, nil, fmt.Errorf("usage create: %w", cerr)
 			}
 		} else {
 			return &planConsumeWarn{
@@ -517,18 +635,20 @@ func consumePlanInTx(tx *gorm.DB, subID uint, spec consumeSpec, isPrecheck bool)
 				After:       spec.Delta,
 				LimitValue:  spec.LimitValue,
 				WindowStart: now,
-			}, nil
+			}, nil, nil
 		}
 	} else if err != nil {
-		return nil, fmt.Errorf("usage query: %w", err)
+		return nil, nil, fmt.Errorf("usage query: %w", err)
 	}
 
 	if spec.WindowSeconds > 0 && now.After(usage.WindowEndAt) {
 		if spec.LimitValue > 0 && spec.Delta > spec.LimitValue {
-			return nil, errPlanLimitExceeded
+			// window 已过期 → 视为新窗口起点，consumed=0
+			newEnd := now.Add(time.Duration(spec.WindowSeconds) * time.Second)
+			return nil, snapshotForPlanLimit(0, newEnd), errPlanLimitExceeded
 		}
 		if isPrecheck {
-			return nil, nil
+			return nil, nil, nil
 		}
 		newEnd := now.Add(time.Duration(spec.WindowSeconds) * time.Second)
 		res := tx.Model(&database.SubscriptionUsage{}).
@@ -540,7 +660,7 @@ func consumePlanInTx(tx *gorm.DB, subID uint, spec consumeSpec, isPrecheck bool)
 				"request_count":   1,
 			})
 		if res.Error != nil {
-			return nil, fmt.Errorf("usage reset: %w", res.Error)
+			return nil, nil, fmt.Errorf("usage reset: %w", res.Error)
 		}
 		if res.RowsAffected > 0 {
 			return &planConsumeWarn{
@@ -550,18 +670,18 @@ func consumePlanInTx(tx *gorm.DB, subID uint, spec consumeSpec, isPrecheck bool)
 				After:       spec.Delta,
 				LimitValue:  spec.LimitValue,
 				WindowStart: now,
-			}, nil
+			}, nil, nil
 		}
 		if rErr := tx.First(&usage, usage.ID).Error; rErr != nil {
-			return nil, fmt.Errorf("re-read usage: %w", rErr)
+			return nil, nil, fmt.Errorf("re-read usage: %w", rErr)
 		}
 	}
 
 	if spec.LimitValue > 0 && usage.ConsumedValue+spec.Delta > spec.LimitValue {
-		return nil, errPlanLimitExceeded
+		return nil, snapshotForPlanLimit(usage.ConsumedValue, usage.WindowEndAt), errPlanLimitExceeded
 	}
 	if isPrecheck {
-		return nil, nil
+		return nil, nil, nil
 	}
 	q := tx.Model(&database.SubscriptionUsage{}).Where("id = ?", usage.ID)
 	if spec.LimitValue > 0 {
@@ -572,10 +692,17 @@ func consumePlanInTx(tx *gorm.DB, subID uint, spec consumeSpec, isPrecheck bool)
 		"request_count":  gorm.Expr("request_count + 1"),
 	})
 	if res.Error != nil {
-		return nil, fmt.Errorf("usage accumulate: %w", res.Error)
+		return nil, nil, fmt.Errorf("usage accumulate: %w", res.Error)
 	}
 	if res.RowsAffected == 0 {
-		return nil, errPlanLimitExceeded
+		// CAS 失败 → 并发请求已让 consumed_value 进一步上涨到无法容纳本次 delta。
+		// 重读当前事务可见的 usage（同 tx 内其他 SELECT 是 consistent read），用真实 consumed
+		// 构 snapshot，避免 caller 拿过时的 usage.ConsumedValue 给用户错误"剩余"展示。
+		var fresh database.SubscriptionUsage
+		if rerr := tx.First(&fresh, usage.ID).Error; rerr == nil {
+			return nil, snapshotForPlanLimit(fresh.ConsumedValue, fresh.WindowEndAt), errPlanLimitExceeded
+		}
+		return nil, snapshotForPlanLimit(usage.ConsumedValue, usage.WindowEndAt), errPlanLimitExceeded
 	}
 	return &planConsumeWarn{
 		PlanID:      spec.PlanID,
@@ -584,7 +711,7 @@ func consumePlanInTx(tx *gorm.DB, subID uint, spec consumeSpec, isPrecheck bool)
 		After:       usage.ConsumedValue + spec.Delta,
 		LimitValue:  spec.LimitValue,
 		WindowStart: usage.WindowStartAt,
-	}, nil
+	}, nil, nil
 }
 
 // verifySubStillActive 在 atomicConsumeMany 事务即将提交前再校验订阅状态。

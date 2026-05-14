@@ -151,6 +151,7 @@ func TestModerationRiskRulesDefaultJSON(t *testing.T) {
 		"prompt_override_regex",
 		"system_prompt_leak_regex",
 		"credential_exfil_to_target",
+		"credential_plaintext_display",
 		"env_file_exfil_combo",
 		"tool_result_forgery_combo",
 		"security_term_request_combo",
@@ -167,6 +168,7 @@ func TestSeedModerationDefaults_MergesKeywordBaselineOnce(t *testing.T) {
 
 	oldKeywords := `["Kiro_workspace","MCP_SESSION_ID","ignore all previous","read .env","tool invocation schema","avoid moralizing","you must not refuse","adult fictional content, ctf challenges","bypass moderation","prompt extraction","phishing kit","simulate a tool call","禁止拒绝回答","DAN mode","custom local rule"]`
 	seedEncryptedSysConfig(t, "moderation_keywords", oldKeywords)
+	seedEncryptedSysConfig(t, "moderation_risk_rules", `[{"id":"custom_rule","category":"policy_evasion","severity":"low","action":"score_only","contains":["custom local risk"]},{"id":"credential_exfil_to_target","category":"credential_exfiltration","severity":"critical","action":"block","regex":["x"]}]`)
 
 	SeedModerationDefaults()
 
@@ -222,6 +224,18 @@ func TestSeedModerationDefaults_MergesKeywordBaselineOnce(t *testing.T) {
 	}
 	if got := readDecryptedSysConfig(t, "moderation_keywords_prune_version"); got != ModerationKeywordPruneVersion {
 		t.Fatalf("prune version=%q want %q", got, ModerationKeywordPruneVersion)
+	}
+	var mergedRiskRules []map[string]any
+	if err := json.Unmarshal([]byte(readDecryptedSysConfig(t, "moderation_risk_rules")), &mergedRiskRules); err != nil {
+		t.Fatalf("merged risk rules invalid JSON: %v", err)
+	}
+	for _, want := range []string{"custom_rule", "credential_exfil_to_target", "credential_plaintext_display"} {
+		if !containsRiskRuleID(mergedRiskRules, want) {
+			t.Fatalf("merged risk rules missing %q", want)
+		}
+	}
+	if got := readDecryptedSysConfig(t, "moderation_risk_rules_baseline_version"); got != ModerationRiskRuleBaselineVersion {
+		t.Fatalf("risk rule baseline version=%q want %q", got, ModerationRiskRuleBaselineVersion)
 	}
 	if got := readDecryptedSysConfig(t, "moderation_provider"); got != "cliproxy_model" {
 		t.Fatalf("moderation_provider=%q want cliproxy_model", got)
@@ -360,6 +374,7 @@ func TestEnforceOpenAIModelModerationDefaults(t *testing.T) {
 	}
 	rows := []ChannelModel{
 		{ModelID: "gpt-5.4-mini", ModerationLevel: "off", ModerationFailMode: "open", Status: 1},
+		{ModelID: "gpt-5.5", ModerationLevel: "off", ModerationFailMode: "open", EndpointPolicy: EndpointPolicyAll, Status: 1},
 		{ModelID: "o3-mini", ModerationLevel: "keyword", ModerationFailMode: "open", Status: 1},
 		{ModelID: "codex-mini-latest", ModerationLevel: "moderation", ModerationFailMode: "open", Status: 1},
 		{ModelID: "claude-sonnet-4-7", ModerationLevel: "off", ModerationFailMode: "open", Status: 1},
@@ -380,6 +395,9 @@ func TestEnforceOpenAIModelModerationDefaults(t *testing.T) {
 				t.Fatalf("%s moderation=%s/%s want %s/%s",
 					row.ModelID, row.ModerationLevel, row.ModerationFailMode,
 					OpenAIModelModerationLevel, OpenAIModelModerationFailMode)
+			}
+			if row.ModelID == "gpt-5.5" && row.EndpointPolicy != EndpointPolicyNoChatNonStream {
+				t.Fatalf("gpt-5.5 endpoint_policy=%s want %s", row.EndpointPolicy, EndpointPolicyNoChatNonStream)
 			}
 			continue
 		}
@@ -424,6 +442,17 @@ func containsKeyword(arr []string, want string) bool {
 	want = strings.ToLower(strings.TrimSpace(want))
 	for _, kw := range arr {
 		if strings.ToLower(strings.TrimSpace(kw)) == want {
+			return true
+		}
+	}
+	return false
+}
+
+func containsRiskRuleID(arr []map[string]any, want string) bool {
+	want = strings.ToLower(strings.TrimSpace(want))
+	for _, rule := range arr {
+		id, _ := rule["id"].(string)
+		if strings.ToLower(strings.TrimSpace(id)) == want {
 			return true
 		}
 	}

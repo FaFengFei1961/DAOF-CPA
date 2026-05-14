@@ -35,6 +35,13 @@ var (
 	transportCache sync.Map
 )
 
+const (
+	proxyNonStreamUpstreamTimeoutKey = "proxy_nonstream_upstream_timeout_seconds"
+	defaultNonStreamUpstreamTimeout  = 15 * time.Minute
+	minNonStreamUpstreamTimeout      = 30 * time.Second
+	maxNonStreamUpstreamTimeout      = 60 * time.Minute
+)
+
 // safeTransport 是 http.DefaultTransport 的派生，带 DNS-rebinding-resistant DialContext。
 // 仅在没有 proxyURL 时使用（直连上游）；走 HTTP 代理时由代理服务器自己解析 host，
 // 我们的 DialContext 拿到的是代理 IP，无法防御代理之外的 rebinding，但代理本身是 admin 可信节点。
@@ -47,6 +54,47 @@ var safeTransport = func() *http.Transport {
 // SafeTransport 暴露给 controller 层调用上游模型探测 / 健康检查等场景，
 // 让任何 admin 触发的 HTTP 请求都默认带 DNS rebinding 防护。
 func SafeTransport() *http.Transport { return safeTransport }
+
+func nonStreamUpstreamTimeout() time.Duration {
+	SysConfigMutex.RLock()
+	raw := strings.TrimSpace(SysConfigCache[proxyNonStreamUpstreamTimeoutKey])
+	SysConfigMutex.RUnlock()
+	if raw == "" {
+		return defaultNonStreamUpstreamTimeout
+	}
+	seconds, err := strconv.Atoi(raw)
+	if err != nil {
+		return defaultNonStreamUpstreamTimeout
+	}
+	timeout := time.Duration(seconds) * time.Second
+	if timeout < minNonStreamUpstreamTimeout {
+		return minNonStreamUpstreamTimeout
+	}
+	if timeout > maxNonStreamUpstreamTimeout {
+		return maxNonStreamUpstreamTimeout
+	}
+	return timeout
+}
+
+func dropDeprecatedClaudeTemperature(modelName string, payload []byte) []byte {
+	if !isClaudeTemperatureDeprecatedModel(modelName) || !gjson.GetBytes(payload, "temperature").Exists() {
+		return payload
+	}
+	out, err := sjson.DeleteBytes(payload, "temperature")
+	if err != nil {
+		return payload
+	}
+	return out
+}
+
+func isClaudeTemperatureDeprecatedModel(modelName string) bool {
+	normalized := strings.ToLower(strings.TrimSpace(modelName))
+	if i := strings.Index(normalized, "("); i >= 0 {
+		normalized = strings.TrimSpace(normalized[:i])
+	}
+	normalized = strings.TrimSuffix(normalized, "-thinking")
+	return strings.HasPrefix(normalized, "claude-opus-4-7")
+}
 
 // truncForLog 把上游 body 截短供服务端日志使用，不让超大错误 body 撑爆 log。
 func truncForLog(b []byte, n int) string {
@@ -263,18 +311,141 @@ func recordProxyApiLog(userID uint, token, modelName string, status int, clientI
 		errorMessage = ""
 	}
 	database.DB.Create(&database.ApiLog{
-		UserID:       userID,
-		TokenName:    HashTokenForLog(token),
-		ModelName:    modelName,
-		Status:       status,
-		IPAddress:    clientIP,
-		Latency:      time.Since(startTime).Milliseconds(),
-		Cost:         0,
-		RequestPath:  sanitizeError(requestPath, 160),
-		ErrorType:    sanitizeError(errorType, 64),
-		ErrorMessage: sanitizeError(errorMessage, 512),
-		CreatedAt:    time.Now(),
+		UserID:           userID,
+		TokenName:        HashTokenForLog(token),
+		ModelName:        modelName,
+		RequestedModel:   modelName,
+		ServedModel:      modelName,
+		ModelWeight:      1,
+		HealthMultiplier: 1,
+		Status:           status,
+		IPAddress:        clientIP,
+		Latency:          time.Since(startTime).Milliseconds(),
+		Cost:             0,
+		RequestPath:      sanitizeError(requestPath, 160),
+		ErrorType:        sanitizeError(errorType, 64),
+		ErrorMessage:     sanitizeError(errorMessage, 512),
+		CreatedAt:        time.Now(),
 	})
+}
+
+func recordProxyApiLogWithPrecheck(userID uint, token, modelName string, status int, clientIP string, startTime time.Time, requestPath, errorType, errorMessage string, inputTokens, outputTokens int, billing BillingRuleResolution, decision EngineDecision) {
+	modelName = strings.TrimSpace(modelName)
+	if modelName == "" {
+		modelName = "unknown"
+	}
+	if status >= 200 && status < 400 {
+		errorType = ""
+		errorMessage = ""
+	}
+	quotaLimit, quotaUsed, quotaRemaining := precheckQuotaMicroValues(decision)
+	database.DB.Create(&database.ApiLog{
+		UserID:                 userID,
+		TokenName:              HashTokenForLog(token),
+		ModelName:              modelName,
+		RequestedModel:         modelName,
+		ServedModel:            modelName,
+		ModelWeight:            billing.ModelWeight,
+		HealthMultiplier:       billing.HealthMultiplier,
+		BillingRulesVersion:    billing.BillingRulesVersion,
+		FallbackUserOptIn:      billing.FallbackUserOptIn,
+		Status:                 status,
+		IPAddress:              clientIP,
+		Latency:                time.Since(startTime).Milliseconds(),
+		Cost:                   0,
+		ChargedCost:            0,
+		PlatformCostEstimate:   0,
+		PrecheckInputTokens:    inputTokens,
+		PrecheckOutputTokens:   outputTokens,
+		PrecheckRawCost:        billing.RawCostMicroUSD,
+		PrecheckChargedCost:    billing.ChargedCostMicroUSD,
+		PrecheckQuotaPlanID:    decision.BlockQuotaPlanID,
+		PrecheckQuotaLimit:     quotaLimit,
+		PrecheckQuotaUsed:      quotaUsed,
+		PrecheckQuotaRemaining: quotaRemaining,
+		PrecheckWindowEndAt:    decision.BlockWindowEndAt,
+		BlockReason:            sanitizeError(firstNonEmptyString(decision.BlockReason, errorType), 96),
+		RequestPath:            sanitizeError(requestPath, 160),
+		ErrorType:              sanitizeError(errorType, 64),
+		ErrorMessage:           sanitizeError(errorMessage, 512),
+		CreatedAt:              time.Now(),
+	})
+}
+
+func firstNonEmptyString(values ...string) string {
+	for _, v := range values {
+		if strings.TrimSpace(v) != "" {
+			return v
+		}
+	}
+	return ""
+}
+
+func precheckQuotaMicroValues(decision EngineDecision) (limit, used, remaining int64) {
+	if decision.BlockUnit != "api_cost_usd" {
+		return 0, 0, 0
+	}
+	limit, _ = database.USDToMicro(decision.BlockLimitValue)
+	used, _ = database.USDToMicro(decision.BlockConsumedValue)
+	remaining, _ = database.USDToMicro(math.Max(0, decision.BlockRemaining))
+	return
+}
+
+func precheckLimitMessage(decision EngineDecision, billing BillingRuleResolution) string {
+	remaining := math.Max(0, decision.BlockRemaining)
+	if decision.BlockUnit == "api_cost_usd" {
+		return fmt.Sprintf("本次请求预估消耗 %.6f credits，超过当前窗口剩余额度 %.6f credits。请减少上下文、等待窗口恢复，或开启余额兜底。", database.MicroToUSD(billing.ChargedCostMicroUSD), remaining)
+	}
+	if decision.BlockUnit != "" {
+		return fmt.Sprintf("本次请求预估消耗 %.0f %s，超过当前窗口剩余额度 %.0f %s。请减少上下文或等待窗口恢复。", decision.BlockDelta, decision.BlockUnit, remaining, decision.BlockUnit)
+	}
+	return "本次请求预估消耗超过当前窗口剩余额度。请减少上下文、等待窗口恢复，或开启余额兜底。"
+}
+
+func precheckLimitErrorPayload(message string, decision EngineDecision, inputTokens, outputTokens int, billing BillingRuleResolution) fiber.Map {
+	details := fiber.Map{
+		"block_reason":           "request_estimate_exceeds_window_remaining",
+		"precheck_input_tokens":  inputTokens,
+		"precheck_output_tokens": outputTokens,
+		"precheck_raw_cost":      database.MicroToUSD(billing.RawCostMicroUSD),
+		"precheck_charged_cost":  database.MicroToUSD(billing.ChargedCostMicroUSD),
+		"model_weight":           billing.ModelWeight,
+		"health_multiplier":      billing.HealthMultiplier,
+		"quota_plan_id":          decision.BlockQuotaPlanID,
+		"quota_unit":             decision.BlockUnit,
+		"quota_limit":            decision.BlockLimitValue,
+		"quota_used":             decision.BlockConsumedValue,
+		"quota_remaining":        math.Max(0, decision.BlockRemaining),
+	}
+	if decision.BlockWindowEndAt != nil {
+		details["window_end_at"] = decision.BlockWindowEndAt.Format(time.RFC3339)
+	}
+	return fiber.Map{"error": fiber.Map{
+		"message":      message,
+		"type":         "subscription_required",
+		"code":         "request_estimate_exceeds_window_remaining",
+		"message_code": "ERR_REQUEST_ESTIMATE_EXCEEDS_WINDOW_REMAINING",
+		"details":      details,
+	}}
+}
+
+func parseAllowFallbackHeader(c *fiber.Ctx) bool {
+	v := strings.ToLower(strings.TrimSpace(c.Get("X-Allow-Fallback")))
+	return v == "true" || v == "1" || v == "yes" || v == "on"
+}
+
+func setModelAuditHeaders(c *fiber.Ctx, requestedModel, servedModel string, fallbackOptIn bool, fallbackReason string) {
+	if strings.TrimSpace(requestedModel) != "" {
+		c.Set("X-Requested-Model", requestedModel)
+	}
+	if strings.TrimSpace(servedModel) != "" {
+		c.Set("X-Served-Model", servedModel)
+	}
+	c.Set("X-Fallback-Allowed", strconv.FormatBool(fallbackOptIn))
+	c.Set("X-Fallback-Applied", strconv.FormatBool(fallbackReason != ""))
+	if fallbackReason != "" {
+		c.Set("X-Fallback-Reason", sanitizeError(fallbackReason, 160))
+	}
 }
 
 // ChatCompletionProxyHandler intercept and forward OpenAI /v1/chat/completions stream
@@ -336,6 +507,7 @@ func ChatCompletionProxyHandler(c *fiber.Ctx) error {
 	rawBody := c.Body()
 	body := make([]byte, len(rawBody))
 	copy(body, rawBody)
+	fallbackUserOptIn := parseAllowFallbackHeader(c)
 
 	modelResult := gjson.GetBytes(body, "model")
 	modelName := strings.TrimSpace(modelResult.String())
@@ -345,6 +517,11 @@ func ChatCompletionProxyHandler(c *fiber.Ctx) error {
 	if modelName == "" {
 		recordProxyApiLog(user.ID, token, "unknown", 400, clientIP, startTime, path, "invalid_request", "Model is required")
 		return c.Status(400).JSON(fiber.Map{"error": fiber.Map{"message": "Model is required", "type": "invalid_request"}})
+	}
+	isCountTokensRequest := isClaudeCountTokensPath(path)
+	isStream := gjson.GetBytes(body, "stream").Bool()
+	if srcFormat == sdktranslator.FormatGemini && isGeminiStreamPath(path) {
+		isStream = true
 	}
 
 	// fix CRITICAL C1（codex 第十五轮）：precheck 必须传**估算的 token 数**，而非 0。
@@ -361,7 +538,9 @@ func ChatCompletionProxyHandler(c *fiber.Ctx) error {
 	// 估算策略：取 max_tokens（客户端传的限制）或默认 4096，作为最坏情况上界。
 	// 真实 OutputTokens 通常更小，predict 高让窗口更早触发限额；commit 用真实值修正。
 	precheckOutputTokens := 4096 // 默认保守上界
-	if maxTok := gjson.GetBytes(body, "max_tokens").Int(); maxTok > 0 {
+	if isCountTokensRequest {
+		precheckOutputTokens = 0
+	} else if maxTok := gjson.GetBytes(body, "max_tokens").Int(); maxTok > 0 {
 		precheckOutputTokens = int(maxTok)
 	} else if maxTok := gjson.GetBytes(body, "max_output_tokens").Int(); maxTok > 0 {
 		precheckOutputTokens = int(maxTok) // OpenAI Responses API
@@ -375,12 +554,13 @@ func ChatCompletionProxyHandler(c *fiber.Ctx) error {
 		precheckOutputTokens = 100000
 	}
 	precheckCostMicroUSD := estimatePrecheckBalanceDelta(modelName, precheckInputTokens, precheckOutputTokens)
+	precheckBilling := ResolveBillingRules(modelName, body, 0, "", fallbackUserOptIn).WithCosts(precheckCostMicroUSD)
 	engineDecision := Decide(EngineRequest{
 		UserID:       user.ID,
 		ModelName:    modelName,
 		InputTokens:  precheckInputTokens,
 		OutputTokens: precheckOutputTokens,
-		CostMicroUSD: precheckCostMicroUSD,
+		CostMicroUSD: precheckBilling.ChargedCostMicroUSD,
 		IsPrecheck:   true,
 	})
 	if !engineDecision.Allowed {
@@ -394,6 +574,11 @@ func ChatCompletionProxyHandler(c *fiber.Ctx) error {
 			recordProxyApiLog(user.ID, token, modelName, 503, clientIP, startTime, path, "subscription_load_failed", msg)
 			return c.Status(503).JSON(fiber.Map{"error": fiber.Map{"message": msg, "type": "service_unavailable", "code": "subscription_load_failed"}})
 		}
+		if engineDecision.BlockQuotaPlanID != 0 {
+			msg = precheckLimitMessage(engineDecision, precheckBilling)
+			recordProxyApiLogWithPrecheck(user.ID, token, modelName, 402, clientIP, startTime, path, "request_estimate_exceeds_window_remaining", msg, precheckInputTokens, precheckOutputTokens, precheckBilling, engineDecision)
+			return c.Status(402).JSON(precheckLimitErrorPayload(msg, engineDecision, precheckInputTokens, precheckOutputTokens, precheckBilling))
+		}
 		recordProxyApiLog(user.ID, token, modelName, 402, clientIP, startTime, path, "subscription_required", msg)
 		return c.Status(402).JSON(fiber.Map{"error": fiber.Map{"message": msg, "type": "subscription_required"}})
 	}
@@ -401,9 +586,14 @@ func ChatCompletionProxyHandler(c *fiber.Ctx) error {
 	// 项目未上线，不保留绕过余额消费开关的旧直扣路径。
 	if engineDecision.FallbackToBalance {
 		if !user.BalanceConsumeEnabled {
-			recordProxyApiLog(user.ID, token, modelName, 402, clientIP, startTime, path, "subscription_required", "quota exhausted and balance consume disabled")
+			if engineDecision.BlockQuotaPlanID != 0 {
+				msg := precheckLimitMessage(engineDecision, precheckBilling)
+				recordProxyApiLogWithPrecheck(user.ID, token, modelName, 402, clientIP, startTime, path, "request_estimate_exceeds_window_remaining", msg, precheckInputTokens, precheckOutputTokens, precheckBilling, engineDecision)
+				return c.Status(402).JSON(precheckLimitErrorPayload(msg, engineDecision, precheckInputTokens, precheckOutputTokens, precheckBilling))
+			}
+			recordProxyApiLog(user.ID, token, modelName, 402, clientIP, startTime, path, "subscription_required", "subscription quota unavailable and balance consume disabled")
 			return c.Status(402).JSON(fiber.Map{"error": fiber.Map{
-				"message":      "您已用尽订阅额度。请购买套餐，或在「账号设置 → 余额消费控制」中开启余额消费。",
+				"message":      "当前请求无法使用订阅额度。请购买套餐，或在「账号设置 → 余额消费控制」中开启余额消费。",
 				"type":         "subscription_required",
 				"message_code": "ERR_QUOTA_EXHAUSTED_BALANCE_DISABLED",
 			}})
@@ -418,7 +608,13 @@ func ChatCompletionProxyHandler(c *fiber.Ctx) error {
 		//   - 按 modelName 在 RouteCache 中找**最贵**路由（HighInput/HighOutput 阈值场景也覆盖）
 		//   - delta = precheckInput * maxInput + precheckOutput * maxOutput（USD/token）
 		//   - 找不到路由 → 用保守上界 $30/1M（覆盖 GPT-4 Turbo、Claude Opus 等高端档位）
-		if !CheckBalanceConsumeAllowed(user, precheckCostMicroUSD) {
+		//
+		// fix MAJOR（多模型审计第二十五轮）：余额消费窗口检查必须用 charged cost
+		// （precheckBilling.ChargedCostMicroUSD），不能用 raw precheckCostMicroUSD。
+		// 否则高权重模型（Opus weight=3.5）会被低估、绕过窗口限额；低权重模型（Haiku weight=0.3）
+		// 会被错误拦截。和 P0-1a commit 路径保持一致：raw cost 仅用于日志/ApiLog.Cost；
+		// 用户侧任何"是否允许扣"的判断都必须用 charged cost。
+		if !CheckBalanceConsumeAllowed(user, precheckBilling.ChargedCostMicroUSD) {
 			recordProxyApiLog(user.ID, token, modelName, 402, clientIP, startTime, path, "balance_limit_reached", "balance consume window limit reached")
 			return c.Status(402).JSON(fiber.Map{"error": fiber.Map{
 				"message":      "本周期余额消费已达上限，请提高限额或等待下次重置。",
@@ -451,6 +647,17 @@ func ChatCompletionProxyHandler(c *fiber.Ctx) error {
 		recordProxyApiLog(user.ID, token, modelName, 404, clientIP, startTime, path, "model_not_found", "Model not available via any channel")
 		return c.Status(404).JSON(fiber.Map{"error": fiber.Map{"message": "Model not available via any channel", "type": "model_not_found"}})
 	}
+	if filteredRoutes, blocked := filterRoutesByEndpointPolicy(routes, path, isStream); len(filteredRoutes) == 0 && blocked > 0 {
+		msg := unsupportedEndpointMessage(modelName, path, isStream)
+		recordProxyApiLog(user.ID, token, modelName, 400, clientIP, startTime, path, "unsupported_endpoint", msg)
+		return c.Status(400).JSON(fiber.Map{"error": fiber.Map{
+			"message":      msg,
+			"type":         "unsupported_endpoint",
+			"message_code": "ERR_MODEL_ENDPOINT_UNSUPPORTED",
+		}})
+	} else if blocked > 0 {
+		routes = filteredRoutes
+	}
 
 	// 4. 内容审核（per-ChannelModel 风控）
 	//
@@ -476,10 +683,6 @@ func ChatCompletionProxyHandler(c *fiber.Ctx) error {
 		}
 	}
 
-	isStream := gjson.GetBytes(body, "stream").Bool()
-	if srcFormat == sdktranslator.FormatGemini && isGeminiStreamPath(path) {
-		isStream = true
-	}
 	finalPayloadTemplate := make([]byte, len(body))
 	copy(finalPayloadTemplate, body)
 
@@ -606,6 +809,9 @@ func ChatCompletionProxyHandler(c *fiber.Ctx) error {
 		if srcFormat != targetFormat {
 			finalPayload = sdktranslator.TranslateRequest(srcFormat, targetFormat, modelName, finalPayload, isStream)
 		}
+		if channelType == ChannelTypeAnthropic || channelType == ChannelTypeCLIProxy {
+			finalPayload = dropDeprecatedClaudeTemperature(modelName, finalPayload)
+		}
 
 		// 4. HTTP Client allocation
 		// fix Major（codex 第九轮）：fasthttp RequestCtx 不在客户端 RST 时被取消，
@@ -653,7 +859,7 @@ func ChatCompletionProxyHandler(c *fiber.Ctx) error {
 		}
 
 		httpClient := &http.Client{
-			Timeout:   120 * time.Second,
+			Timeout:   nonStreamUpstreamTimeout(),
 			Transport: getTransport(selectedChan.ProxyURL),
 		}
 		if isStream {
@@ -853,26 +1059,42 @@ func ChatCompletionProxyHandler(c *fiber.Ctx) error {
 				costMicroUSD = 0
 			}
 		}
+		selectedChannelType := ""
+		if selectedChan != nil {
+			selectedChannelType = selectedChan.Type
+		}
+		billingResolution := ResolveBillingRules(modelName, body, reasoningTokens, selectedChannelType, fallbackUserOptIn).WithCosts(costMicroUSD)
+		chargedCostMicroUSD := billingResolution.ChargedCostMicroUSD
 
 		apiLog := database.ApiLog{
-			UserID:             user.ID,
-			TokenName:          HashTokenForLog(token),
-			ModelName:          modelName,
-			PromptTokens:       promptTokens,
-			CompletionTokens:   completionTokens,
-			CachedTokens:       cachedTokens,
-			CacheWriteTokens:   cacheWriteTokens,
-			CacheWrite5mTokens: cacheWrite5mTokens,
-			CacheWrite1hTokens: cacheWrite1hTokens,
-			ReasoningTokens:    reasoningTokens,
-			Cost:               costMicroUSD,
-			Latency:            time.Since(startTime).Milliseconds(), // Parity Tracker
-			Status:             status,                               // Parity Tracker
-			IPAddress:          clientIP,                             // Parity Tracker
-			RequestPath:        sanitizeError(path, 160),
-			ErrorType:          sanitizeError(apiErrorType, 64),
-			ErrorMessage:       sanitizeError(apiErrorMessage, 512),
-			CreatedAt:          time.Now(),
+			UserID:               user.ID,
+			TokenName:            HashTokenForLog(token),
+			ModelName:            modelName,
+			RequestedModel:       billingResolution.RequestedModel,
+			ServedModel:          billingResolution.ServedModel,
+			PromptTokens:         promptTokens,
+			CompletionTokens:     completionTokens,
+			CachedTokens:         cachedTokens,
+			CacheWriteTokens:     cacheWriteTokens,
+			CacheWrite5mTokens:   cacheWrite5mTokens,
+			CacheWrite1hTokens:   cacheWrite1hTokens,
+			ReasoningTokens:      reasoningTokens,
+			Cost:                 costMicroUSD,
+			ChargedCost:          chargedCostMicroUSD,
+			PlatformCostEstimate: billingResolution.PlatformCostEstimateMicro,
+			ModelWeight:          billingResolution.ModelWeight,
+			HealthMultiplier:     billingResolution.HealthMultiplier,
+			BillingRulesVersion:  billingResolution.BillingRulesVersion,
+			FallbackUserOptIn:    billingResolution.FallbackUserOptIn,
+			FallbackReason:       sanitizeError(billingResolution.FallbackReason, 160),
+			UpstreamProvider:     sanitizeError(strings.ToLower(strings.TrimSpace(selectedChannelType)), 64),
+			Latency:              time.Since(startTime).Milliseconds(), // Parity Tracker
+			Status:               status,                               // Parity Tracker
+			IPAddress:            clientIP,                             // Parity Tracker
+			RequestPath:          sanitizeError(path, 160),
+			ErrorType:            sanitizeError(apiErrorType, 64),
+			ErrorMessage:         sanitizeError(apiErrorMessage, 512),
+			CreatedAt:            time.Now(),
 		}
 		// fix Major（codex 第十四轮）：原 Create 未检 .Error → apiLog.ID=0 时下游账单
 		// RelatedID 写空指针。失败仅日志告警，但账单条目对应 RelatedID 留空避免假关联。
@@ -892,13 +1114,13 @@ func ChatCompletionProxyHandler(c *fiber.Ctx) error {
 				ModelName:    modelName,
 				InputTokens:  promptTokens,
 				OutputTokens: completionTokens,
-				CostMicroUSD: costMicroUSD,
+				CostMicroUSD: chargedCostMicroUSD,
 				IsPrecheck:   false,
 			})
 			commitOK = commitDecision.Allowed && !commitDecision.FallbackToBalance
 			if !commitOK {
-				log.Printf("[BILLING-FALLBACK] user=%d model=%s cost_micro=%d reason=%s allowed=%v fallback_balance=%v sub=%d plan=%d needs_retry=%v",
-					user.ID, modelName, costMicroUSD, commitDecision.BlockReason,
+				log.Printf("[BILLING-FALLBACK] user=%d model=%s raw_cost_micro=%d charged_cost_micro=%d reason=%s allowed=%v fallback_balance=%v sub=%d plan=%d needs_retry=%v",
+					user.ID, modelName, costMicroUSD, chargedCostMicroUSD, commitDecision.BlockReason,
 					commitDecision.Allowed, commitDecision.FallbackToBalance,
 					commitDecision.SubscriptionID, commitDecision.QuotaPlanID, commitDecision.NeedsRetry)
 			}
@@ -910,8 +1132,8 @@ func ChatCompletionProxyHandler(c *fiber.Ctx) error {
 		// 形成"已交付服务但无扣费、无待对账记录"的财务黑洞。改为重试 3 次 + 失败后写日志放大警报，
 		// 让 admin 看 [BILLING-LOST-DEBT] 必要时按 ApiLog 手工补账。
 		if !failedRequest && commitDecision.NeedsRetry {
-			log.Printf("[BILLING-DB-RETRY] user=%d model=%s cost_micro=%d sub-load failed, recording for manual reconcile",
-				user.ID, modelName, costMicroUSD)
+			log.Printf("[BILLING-DB-RETRY] user=%d model=%s raw_cost_micro=%d charged_cost_micro=%d sub-load failed, recording for manual reconcile",
+				user.ID, modelName, costMicroUSD, chargedCostMicroUSD)
 			relatedID := uint(0)
 			relatedType := ""
 			if apiLogPersisted {
@@ -927,8 +1149,8 @@ func ChatCompletionProxyHandler(c *fiber.Ctx) error {
 				TokensTotal:     promptTokens + completionTokens, // cached/reasoning 是 prompt/completion 子集（cost 算法保持一致）
 				RelatedType:     relatedType,
 				RelatedID:       relatedID,
-				Description: fmt.Sprintf("[DB-RETRY] %s · %d+%d tokens · cost=%s 待对账（订阅 DB 加载失败）",
-					modelName, promptTokens, completionTokens, database.FormatMicroUSD(costMicroUSD)),
+				Description: fmt.Sprintf("[DB-RETRY] %s · %d+%d tokens · %s 待对账（订阅 DB 加载失败）",
+					modelName, promptTokens, completionTokens, FormatChargedCostForDescription(costMicroUSD, chargedCostMicroUSD)),
 			}
 			// 重试 3 次：每次新事务，失败 → 100ms backoff
 			var billErr error
@@ -944,8 +1166,8 @@ func ChatCompletionProxyHandler(c *fiber.Ctx) error {
 			}
 			if billErr != nil {
 				// 所有重试都失败 → 财务损失警报。admin 必须按 ApiLog（已写入）手工补账。
-				log.Printf("[BILLING-LOST-DEBT] user=%d model=%s cost_micro=%d api_log_id=%d UNRECOVERABLE — manual reconcile from ApiLog required: %v",
-					user.ID, modelName, costMicroUSD, apiLog.ID, billErr)
+				log.Printf("[BILLING-LOST-DEBT] user=%d model=%s raw_cost_micro=%d charged_cost_micro=%d api_log_id=%d UNRECOVERABLE — manual reconcile from ApiLog required: %v",
+					user.ID, modelName, costMicroUSD, chargedCostMicroUSD, apiLog.ID, billErr)
 			}
 			return // 不走 sub 账单 + 不走 balance fallback 扣费
 		}
@@ -980,24 +1202,28 @@ func ChatCompletionProxyHandler(c *fiber.Ctx) error {
 				SourceSubscriptionID: &subID,
 				RelatedType:          relatedType,
 				RelatedID:            relatedID,
-				Description:          fmt.Sprintf("%s · %s · %d tokens", productLabel, modelName, tokensTotal),
+				Description:          fmt.Sprintf("%s · %s · %d tokens · %s", productLabel, modelName, tokensTotal, FormatChargedCostForDescription(costMicroUSD, chargedCostMicroUSD)),
 			}); billErr != nil {
 				log.Printf("[BILLING-AUDIT-FAIL] user=%d sub=%d type=%s: %v", user.ID, subID, entryType, billErr)
 			}
 		}
 
-		if !commitOK && costMicroUSD > 0 {
+		if !commitOK && chargedCostMicroUSD > 0 {
 			// 三段消费 fallback 到余额。
+			//
+			// fix CRITICAL（多模型审计第二十五轮）：本路径下扣减用户余额必须使用 chargedCostMicroUSD（套餐口径）
+			// 而不是 raw costMicroUSD。否则模型权重对余额扣费失效，Haiku 多扣（weight=0.3）、Opus 少扣（weight=3.5），
+			// 违反三账分离原则（raw_cost 仅记账，charged_cost 才是用户实扣）。
 			deductQuotaAtomic := func() {
 				var balanceAfterMicroUSD int64
 				txErr := database.DB.Transaction(func(tx *gorm.DB) error {
-					if !TryConsumeBalanceTx(tx, user.ID, costMicroUSD, true /* forceTrack */) {
-						log.Printf("[BILLING-WINDOW-TRACK-FAIL] user=%d model=%s cost_micro=%d forceTrack failed (DB issue), continuing quota deduct", user.ID, modelName, costMicroUSD)
+					if !TryConsumeBalanceTx(tx, user.ID, chargedCostMicroUSD, true /* forceTrack */) {
+						log.Printf("[BILLING-WINDOW-TRACK-FAIL] user=%d model=%s charged_cost_micro=%d forceTrack failed (DB issue), continuing quota deduct", user.ID, modelName, chargedCostMicroUSD)
 					}
 
 					res := tx.Model(&database.User{}).
 						Where("id = ?", user.ID).
-						UpdateColumn("quota", gorm.Expr("quota - ?", costMicroUSD))
+						UpdateColumn("quota", gorm.Expr("quota - ?", chargedCostMicroUSD))
 					if res.Error != nil {
 						return fmt.Errorf("quota deduct: %w", res.Error)
 					}
@@ -1020,21 +1246,21 @@ func ChatCompletionProxyHandler(c *fiber.Ctx) error {
 					if err := database.WriteBillingEntry(tx, database.BillingEntryInput{
 						UserID:          user.ID,
 						EntryType:       database.BillingTypeApiConsumeBalance,
-						AmountUSD:       -costMicroUSD,
+						AmountUSD:       -chargedCostMicroUSD,
 						BalanceAfterUSD: balanceAfterMicroUSD,
 						ModelName:       modelName,
 						TokensTotal:     tokensTotal,
 						RelatedType:     relatedType,
 						RelatedID:       relatedID,
-						Description:     fmt.Sprintf("余额扣费 · %s · %d tokens", modelName, tokensTotal),
+						Description:     fmt.Sprintf("余额扣费 · %s · %d tokens · %s", modelName, tokensTotal, FormatChargedCostForDescription(costMicroUSD, chargedCostMicroUSD)),
 					}); err != nil {
 						return fmt.Errorf("write billing: %w", err)
 					}
 					return nil
 				})
 				if txErr != nil {
-					log.Printf("[BILLING-CRITICAL] user=%d model=%s cost_micro=%d QUOTA-DEDUCT-TX-FAILED reason=balance-fallback: %v",
-						user.ID, modelName, costMicroUSD, txErr)
+					log.Printf("[BILLING-CRITICAL] user=%d model=%s raw_cost_micro=%d charged_cost_micro=%d QUOTA-DEDUCT-TX-FAILED reason=balance-fallback: %v",
+						user.ID, modelName, costMicroUSD, chargedCostMicroUSD, txErr)
 					return
 				}
 				RefreshUserAuth(user.ID)
@@ -1045,8 +1271,8 @@ func ChatCompletionProxyHandler(c *fiber.Ctx) error {
 				// 订阅在 commit 阶段被并发耗尽 + 余额消费禁用 → 上游已交付服务但平台无路扣费。
 				// 原实现仅 log，留下"已服务但无账"黑洞。改为写 api_usage_pending_reconcile 待对账，
 				// AmountUSD=0（确实没扣 quota）+ Description 标注 cost 让 admin 决策补扣或免扣。
-				log.Printf("[BILLING-PENDING-DEBT] user=%d model=%s cost_micro=%d UNAUTHORIZED-FALLBACK reason=subscription_drained_during_request balance_consume_disabled — recording for admin reconcile",
-					user.ID, modelName, costMicroUSD)
+				log.Printf("[BILLING-PENDING-DEBT] user=%d model=%s raw_cost_micro=%d charged_cost_micro=%d UNAUTHORIZED-FALLBACK reason=subscription_drained_during_request balance_consume_disabled — recording for admin reconcile",
+					user.ID, modelName, costMicroUSD, chargedCostMicroUSD)
 				relatedID := uint(0)
 				relatedType := ""
 				if apiLogPersisted {
@@ -1062,8 +1288,8 @@ func ChatCompletionProxyHandler(c *fiber.Ctx) error {
 					TokensTotal:     promptTokens + completionTokens, // cached/reasoning 是 prompt/completion 子集（cost 算法保持一致）
 					RelatedType:     relatedType,
 					RelatedID:       relatedID,
-					Description: fmt.Sprintf("[UNAUTHORIZED-FALLBACK] %s · %d+%d tokens · cost=%s 待对账（订阅 commit 期被耗尽 + 余额消费禁用）",
-						modelName, promptTokens, completionTokens, database.FormatMicroUSD(costMicroUSD)),
+					Description: fmt.Sprintf("[UNAUTHORIZED-FALLBACK] %s · %d+%d tokens · %s 待对账（订阅 commit 期被耗尽 + 余额消费禁用）",
+						modelName, promptTokens, completionTokens, FormatChargedCostForDescription(costMicroUSD, chargedCostMicroUSD)),
 				}
 				var billErr error
 				for attempt := 1; attempt <= 3; attempt++ {
@@ -1076,8 +1302,8 @@ func ChatCompletionProxyHandler(c *fiber.Ctx) error {
 					}
 				}
 				if billErr != nil {
-					log.Printf("[BILLING-LOST-DEBT] user=%d model=%s cost_micro=%d api_log_id=%d UNRECOVERABLE — manual reconcile from ApiLog required: %v",
-						user.ID, modelName, costMicroUSD, apiLog.ID, billErr)
+					log.Printf("[BILLING-LOST-DEBT] user=%d model=%s raw_cost_micro=%d charged_cost_micro=%d api_log_id=%d UNRECOVERABLE — manual reconcile from ApiLog required: %v",
+						user.ID, modelName, costMicroUSD, chargedCostMicroUSD, apiLog.ID, billErr)
 				}
 			} else {
 				deductQuotaAtomic()
@@ -1085,23 +1311,26 @@ func ChatCompletionProxyHandler(c *fiber.Ctx) error {
 		}
 
 		// 子 token UsedQuota 累加（详见原注释 — 选择"无条件累加 + precheck 拦截"模型）
-		if isSubToken && costMicroUSD > 0 && status >= 200 && status < 400 {
+		//
+		// fix CRITICAL（多模型审计第二十五轮）：子 token quota 必须按 chargedCostMicroUSD 累加，
+		// 不能用 raw costMicroUSD —— 否则 used_quota 会绕过模型权重，让 quota_limit 失去对应模型权重的语义。
+		if isSubToken && chargedCostMicroUSD > 0 && status >= 200 && status < 400 {
 			res := database.DB.Model(&database.AccessToken{}).
 				Where("id = ?", subToken.ID).
-				UpdateColumn("used_quota", gorm.Expr("used_quota + ?", costMicroUSD))
+				UpdateColumn("used_quota", gorm.Expr("used_quota + ?", chargedCostMicroUSD))
 			if res.Error != nil {
-				log.Printf("[SUB-TOKEN-CRITICAL] token_id=%d cost_micro=%d UsedQuota-UPDATE-FAILED: %v", subToken.ID, costMicroUSD, res.Error)
+				log.Printf("[SUB-TOKEN-CRITICAL] token_id=%d charged_cost_micro=%d UsedQuota-UPDATE-FAILED: %v", subToken.ID, chargedCostMicroUSD, res.Error)
 			} else if res.RowsAffected == 0 {
-				log.Printf("[SUB-TOKEN-CRITICAL] token_id=%d cost_micro=%d token-not-found-at-commit", subToken.ID, costMicroUSD)
+				log.Printf("[SUB-TOKEN-CRITICAL] token_id=%d charged_cost_micro=%d token-not-found-at-commit", subToken.ID, chargedCostMicroUSD)
 			} else {
-				if subToken.QuotaLimit > 0 && subToken.UsedQuota+costMicroUSD > subToken.QuotaLimit {
-					log.Printf("[SUB-TOKEN-OVERLIMIT] token_id=%d cost_micro=%d used-quota-exceeded-limit", subToken.ID, costMicroUSD)
+				if subToken.QuotaLimit > 0 && subToken.UsedQuota+chargedCostMicroUSD > subToken.QuotaLimit {
+					log.Printf("[SUB-TOKEN-OVERLIMIT] token_id=%d charged_cost_micro=%d used-quota-exceeded-limit", subToken.ID, chargedCostMicroUSD)
 				}
 				// clone-on-write 防 data race
 				authTokenMutex.Lock()
 				if existing, ok := AuthTokenCache[token]; ok {
 					updated := *existing
-					updated.UsedQuota += costMicroUSD
+					updated.UsedQuota += chargedCostMicroUSD
 					AuthTokenCache[token] = &updated
 				}
 				authTokenMutex.Unlock()
@@ -1131,6 +1360,7 @@ func ChatCompletionProxyHandler(c *fiber.Ctx) error {
 	if ct := httpResp.Header.Get("Content-Type"); ct != "" {
 		c.Set("Content-Type", ct)
 	}
+	setModelAuditHeaders(c, modelName, modelName, fallbackUserOptIn, "")
 
 	// Non-Stream handling
 	if !isStream || statusCode >= 300 {
@@ -1159,25 +1389,12 @@ func ChatCompletionProxyHandler(c *fiber.Ctx) error {
 			bodyCopy = generic
 			c.Set("Content-Type", "application/json")
 		}
-		if statusCode >= 200 && statusCode < 300 && isClaudeCountTokensPath(path) {
+		if statusCode >= 200 && statusCode < 300 && isCountTokensRequest {
 			inputTokens := int(gjson.GetBytes(bodyCopy, "input_tokens").Int())
 			if inputTokens < 0 {
 				inputTokens = 0
 			}
-			if err := database.DB.Create(&database.ApiLog{
-				UserID:       user.ID,
-				TokenName:    HashTokenForLog(token),
-				ModelName:    modelName,
-				PromptTokens: inputTokens,
-				Cost:         0,
-				Latency:      time.Since(startTime).Milliseconds(),
-				Status:       statusCode,
-				IPAddress:    clientIP,
-				RequestPath:  sanitizeError(path, 160),
-				CreatedAt:    time.Now(),
-			}).Error; err != nil {
-				log.Printf("[BILLING-CRITICAL] user=%d model=%s count_tokens api_log create failed: %v", user.ID, modelName, err)
-			}
+			deductQuota(inputTokens, 0, 0, 0, 0, 0, 0, statusCode)
 			return c.Send(bodyCopy)
 		}
 
@@ -1631,6 +1848,9 @@ func checkedCostMicroUSD(t1 int, p1 float64, t2 int, p2 float64, t3 int, p3 floa
 	}
 	if rounded < 0 {
 		return 0, false
+	}
+	if rounded == 0 && sum > 0 {
+		return 1, true
 	}
 	return int64(rounded), true
 }

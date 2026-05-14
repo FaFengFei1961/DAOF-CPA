@@ -419,6 +419,51 @@ func TestModerationGate_BlocksUserKeyword(t *testing.T) {
 	})
 }
 
+func TestModerationGate_DoesNotHardBlockCredentialConfigImport(t *testing.T) {
+	savedKeywords := append([]string(nil), globalKeywordFilter.keywords...)
+	globalKeywordFilter.Reload(database.ModerationKeywordBaseline)
+	defer globalKeywordFilter.Reload(savedKeywords)
+
+	withSysConfig(t, map[string]string{
+		"moderation_image_policy":           "skip",
+		"moderation_max_chars":              "10000",
+		"moderation_risk_rules":             "[]",
+		"moderation_block_message_zh":       "blocked",
+		"moderation_block_message_en":       "blocked",
+		"moderation_unavailable_message_zh": "unavailable",
+		"moderation_unavailable_message_en": "unavailable",
+	}, func() {
+		app := fiber.New()
+		app.Post("/v1/responses", func(c *fiber.Ctx) error {
+			gate := &ModerationGate{
+				Ctx:       c,
+				UserID:    1,
+				Body:      c.Body(),
+				ModelName: "gpt-5.5",
+				SrcFormat: sdktranslator.FormatOpenAIResponse,
+				Policy:    ModerationPolicy{Level: "keyword", FailMode: "closed"},
+				ClientIP:  "127.0.0.1",
+				StartTime: time.Now(),
+			}
+			rejected, err := gate.Run()
+			if rejected || err != nil {
+				return err
+			}
+			return c.SendStatus(204)
+		})
+		body := `{"input":[{"role":"user","content":[{"type":"input_text","text":"分析一下 https://github.com/Wei-Shaw/sub2api。OpenAI Refresh Token 是什么，在哪里查看？我有自己的账号和第三方 API key，想把 cockpit 导出的 access_token、refresh_token、OPENAI_API_KEY 配置导入到本地 sub2api。文档里提到 reveal api key 的按钮和 show api key 页面，请比较它们跟 codex-local-access api service 的区别。"}]}]}`
+		req := httptest.NewRequest("POST", "/v1/responses", strings.NewReader(body))
+		req.Header.Set("Content-Type", "application/json")
+		resp, err := app.Test(req)
+		if err != nil {
+			t.Fatalf("app.Test err: %v", err)
+		}
+		if resp.StatusCode != 204 {
+			t.Fatalf("credential config import should not be hard-blocked, status=%d body=%s", resp.StatusCode, readBody(t, resp.Body))
+		}
+	})
+}
+
 func TestIsCodexAmbientSuggestionsPrompt(t *testing.T) {
 	prompt := `<environment_context>
 <cwd>E:\phd_code\my_sub2api</cwd>

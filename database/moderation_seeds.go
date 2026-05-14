@@ -21,7 +21,8 @@ import (
 )
 
 const ModerationKeywordBaselineVersion = "2026-05-11-llm-gateway-v9-claude-fp-trim"
-const ModerationKeywordPruneVersion = "2026-05-11-prune-broad-moderation-keywords-v4"
+const ModerationKeywordPruneVersion = "2026-05-13-prune-credential-display-keywords-v5"
+const ModerationRiskRuleBaselineVersion = "2026-05-13-risk-rules-credential-display-v2"
 const ModerationAutobanSafetyVersion = "2026-05-12-disable-policy-oversize-autoban-v1"
 
 var ModerationKeywordBaseline = []string{
@@ -183,10 +184,6 @@ var ModerationKeywordBaseline = []string{
 	"泄露开发者指令",
 
 	// Credential and secret exfiltration.
-	"reveal api key",
-	"print api key",
-	"print the api key in plaintext",
-	"show api key",
 	"steal api key",
 	"steal credentials",
 	"exfiltrate the API key",
@@ -196,7 +193,6 @@ var ModerationKeywordBaseline = []string{
 	"send the env file to",
 	"leak the contents of .env",
 	"exfiltrate secrets",
-	"泄露 api key",
 	"外发 API 密钥",
 	"把密钥发送到",
 	"把 .env 内容发到",
@@ -299,6 +295,11 @@ var ModerationKeywordObsolete = []string{
 	"导出环境变量",
 	"读取环境变量",
 	"打印环境变量",
+	"reveal api key",
+	"print api key",
+	"print the api key in plaintext",
+	"show api key",
+	"泄露 api key",
 }
 
 type moderationRiskRuleSeed struct {
@@ -376,6 +377,18 @@ var ModerationRiskRuleDefaults = []moderationRiskRuleSeed{
 		Reason: "凭据外发的稳定结构：动作 + 凭据对象 + to 目标。",
 	},
 	{
+		ID:       "credential_plaintext_display",
+		Category: "credential_exfiltration",
+		Severity: "medium",
+		Action:   "score_only",
+		Score:    25,
+		AnyGroups: [][]string{
+			{"reveal", "print", "show", "display", "output", "dump", "查看", "显示", "输出", "打印", "泄露"},
+			{"api key", "apikey", "access token", "refresh token", "id token", "credential", "secret", "password", "密钥", "令牌", "凭据", "密码"},
+		},
+		Reason: "凭据展示/查看类表述在开发排障和配置迁移中常见，默认只记分，不硬拦。",
+	},
+	{
 		ID:       "env_file_exfil_combo",
 		Category: "credential_exfiltration",
 		Severity: "high",
@@ -445,6 +458,8 @@ var ModerationSysConfigDefaults = map[string]string{
 	"moderation_threshold": "0.8",
 	// CPA 模型池二审超时秒数。模型池会经过账号轮转和上游冷启动，3s 在生产中偏紧。
 	"moderation_api_timeout_seconds": "15",
+	// 非流式代理到上游的请求超时。Responses / 长上下文任务可能超过 2 分钟，默认给 15 分钟。
+	"proxy_nonstream_upstream_timeout_seconds": "900",
 
 	// ── 关键字快扫词库（JSON 数组）──
 	// admin 在 Settings UI 编辑；line-by-line 输入，组件层 split('\n').filter().JSON.stringify
@@ -556,6 +571,9 @@ func SeedModerationDefaults() {
 		if err := pruneObsoleteModerationKeywords(tx); err != nil {
 			return err
 		}
+		if err := mergeModerationRiskRuleBaseline(tx); err != nil {
+			return err
+		}
 		if err := enforceModerationProviderDefault(tx); err != nil {
 			return err
 		}
@@ -655,6 +673,60 @@ func moderationRiskRulesDefaultJSON() string {
 		return "[]"
 	}
 	return string(b)
+}
+
+func mergeModerationRiskRuleBaseline(tx *gorm.DB) error {
+	var marker SysConfig
+	if res := tx.Where("key = ?", "moderation_risk_rules_baseline_version").First(&marker); res.RowsAffected > 0 {
+		v, err := utils.Decrypt(marker.Value)
+		if err == nil && strings.TrimSpace(v) == ModerationRiskRuleBaselineVersion {
+			return nil
+		}
+	}
+
+	var ruleConfig SysConfig
+	res := tx.Where("key = ?", "moderation_risk_rules").First(&ruleConfig)
+	if res.RowsAffected == 0 {
+		encrypted, err := utils.Encrypt(moderationRiskRulesDefaultJSON())
+		if err != nil {
+			return err
+		}
+		if err := tx.Create(&SysConfig{Key: "moderation_risk_rules", Value: encrypted}).Error; err != nil {
+			return err
+		}
+		return upsertModerationRiskRuleBaselineVersion(tx)
+	}
+
+	raw, err := utils.Decrypt(ruleConfig.Value)
+	if err != nil {
+		return err
+	}
+	var existing []map[string]any
+	if err := json.Unmarshal([]byte(raw), &existing); err != nil {
+		log.Printf("[MODERATION-SEED] moderation_risk_rules invalid JSON, skip baseline merge: %v", err)
+		return nil
+	}
+	var baseline []map[string]any
+	if err := json.Unmarshal([]byte(moderationRiskRulesDefaultJSON()), &baseline); err != nil {
+		return err
+	}
+	merged, changed, added := mergeRiskRuleMaps(existing, baseline)
+	if changed {
+		next, err := json.Marshal(merged)
+		if err != nil {
+			return err
+		}
+		encrypted, err := utils.Encrypt(string(next))
+		if err != nil {
+			return err
+		}
+		ruleConfig.Value = encrypted
+		if err := tx.Save(&ruleConfig).Error; err != nil {
+			return err
+		}
+		log.Printf("[MODERATION-SEED] 风险规则 baseline 已补充 %d 条", added)
+	}
+	return upsertModerationRiskRuleBaselineVersion(tx)
 }
 
 func mergeModerationKeywordBaseline(tx *gorm.DB) error {
@@ -777,6 +849,20 @@ func upsertModerationKeywordPruneVersion(tx *gorm.DB) error {
 	return tx.Create(&SysConfig{Key: "moderation_keywords_prune_version", Value: encrypted}).Error
 }
 
+func upsertModerationRiskRuleBaselineVersion(tx *gorm.DB) error {
+	encrypted, err := utils.Encrypt(ModerationRiskRuleBaselineVersion)
+	if err != nil {
+		return err
+	}
+	var marker SysConfig
+	res := tx.Where("key = ?", "moderation_risk_rules_baseline_version").First(&marker)
+	if res.RowsAffected > 0 {
+		marker.Value = encrypted
+		return tx.Save(&marker).Error
+	}
+	return tx.Create(&SysConfig{Key: "moderation_risk_rules_baseline_version", Value: encrypted}).Error
+}
+
 func mergeKeywordSlices(existing, baseline []string) ([]string, bool, int) {
 	merged := make([]string, 0, len(existing)+len(baseline))
 	seen := make(map[string]struct{}, len(existing)+len(baseline))
@@ -832,4 +918,40 @@ func removeKeywordSlice(existing, obsolete []string) ([]string, int) {
 		out = append(out, kw)
 	}
 	return out, removed
+}
+
+func mergeRiskRuleMaps(existing, baseline []map[string]any) ([]map[string]any, bool, int) {
+	merged := make([]map[string]any, 0, len(existing)+len(baseline))
+	seen := make(map[string]struct{}, len(existing)+len(baseline))
+	changed := false
+	added := 0
+	for _, rule := range existing {
+		id, _ := rule["id"].(string)
+		key := strings.ToLower(strings.TrimSpace(id))
+		if key == "" {
+			merged = append(merged, rule)
+			continue
+		}
+		if _, ok := seen[key]; ok {
+			changed = true
+			continue
+		}
+		seen[key] = struct{}{}
+		merged = append(merged, rule)
+	}
+	for _, rule := range baseline {
+		id, _ := rule["id"].(string)
+		key := strings.ToLower(strings.TrimSpace(id))
+		if key == "" {
+			continue
+		}
+		if _, ok := seen[key]; ok {
+			continue
+		}
+		seen[key] = struct{}{}
+		merged = append(merged, rule)
+		changed = true
+		added++
+	}
+	return merged, changed, added
 }

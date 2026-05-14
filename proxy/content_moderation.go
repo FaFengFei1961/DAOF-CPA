@@ -689,8 +689,12 @@ func parseCLIProxyModerationResponse(body []byte) (ModerationResult, error) {
 		if decision.Confidence > 1 {
 			decision.Confidence = 1
 		}
+		// fix CRITICAL（多模型审计第二十五轮）：分类器明确返回 decision=block 时必须 Flagged=true，
+		// 否则下游 evalThreshold 看 Flagged=false 后会用 HighestScore >= threshold 二次判断；
+		// 当 confidence < threshold 时（例如 0.6 < 0.8），明确说 block 的内容反而被放行（漏判）。
+		// 设计语义：上游硬拦截 > 本地阈值；上游已 Flagged 不应被本地 threshold 翻转。
 		return ModerationResult{
-			Flagged:      false,
+			Flagged:      true,
 			Categories:   map[string]float64{cat: decision.Confidence},
 			HighestCat:   cat,
 			HighestScore: decision.Confidence,

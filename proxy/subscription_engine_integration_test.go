@@ -195,6 +195,43 @@ func TestEngineIntegration_MultiWindowANDRollback(t *testing.T) {
 	}
 }
 
+func TestEngineIntegration_PrecheckLimitDetails(t *testing.T) {
+	setupEngineTestDB(t)
+	userID := uint(111)
+
+	snap := makeSnapshot([]map[string]any{
+		{
+			"id": 210, "model_match": `["gpt-*"]`, "limit_unit": "api_cost_usd", "limit_value": 10.0,
+			"window_seconds": 5 * 3600, "priority": 1, "extra_config": `{"bucket":"combo:all"}`,
+		},
+		{
+			"id": 211, "model_match": `["gpt-*"]`, "limit_unit": "api_cost_usd", "limit_value": 50.0,
+			"window_seconds": 7 * 86400, "priority": 2, "extra_config": `{"bucket":"combo:all"}`,
+		},
+	})
+	sub := seedSub(t, userID, snap, 1)
+
+	d := Decide(EngineRequest{UserID: userID, ModelName: "gpt-5.5", CostMicroUSD: 6 * database.MicroPerUSD})
+	if !d.Allowed || d.FallbackToBalance || d.SubscriptionID != sub.ID {
+		t.Fatalf("first request should consume subscription, got %+v", d)
+	}
+
+	FlushAllSubscriptionCache()
+	d = Decide(EngineRequest{UserID: userID, ModelName: "gpt-5.5", CostMicroUSD: 5 * database.MicroPerUSD, IsPrecheck: true})
+	if !d.Allowed || !d.FallbackToBalance {
+		t.Fatalf("precheck should fall back to balance after subscription window rejection, got %+v", d)
+	}
+	if d.BlockQuotaPlanID != 210 || d.BlockUnit != "api_cost_usd" {
+		t.Fatalf("unexpected block detail plan/unit: %+v", d)
+	}
+	if d.BlockConsumedValue != 6 || d.BlockDelta != 5 || d.BlockLimitValue != 10 || d.BlockRemaining != 4 {
+		t.Fatalf("unexpected block numbers: %+v", d)
+	}
+	if d.BlockWindowEndAt == nil {
+		t.Fatalf("expected window end in block detail: %+v", d)
+	}
+}
+
 func TestEngineIntegration_MixedAPICostAndRequestCountANDRollback(t *testing.T) {
 	setupEngineTestDB(t)
 	userID := uint(12)

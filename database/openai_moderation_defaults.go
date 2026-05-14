@@ -27,20 +27,28 @@ func EnforceOpenAIModelModerationDefaults() {
 			return err
 		}
 		for _, m := range models {
-			if !IsOpenAIModelID(m.ModelID) {
-				continue
-			}
+			updates := map[string]any{}
 			level := strings.ToLower(strings.TrimSpace(m.ModerationLevel))
 			failMode := strings.ToLower(strings.TrimSpace(m.ModerationFailMode))
-			if level == OpenAIModelModerationLevel && failMode == OpenAIModelModerationFailMode {
+
+			if IsOpenAIModelID(m.ModelID) &&
+				(level != OpenAIModelModerationLevel || failMode != OpenAIModelModerationFailMode) {
+				updates["moderation_level"] = OpenAIModelModerationLevel
+				updates["moderation_fail_mode"] = OpenAIModelModerationFailMode
+			}
+
+			endpointPolicy := NormalizeEndpointPolicy(m.EndpointPolicy)
+			defaultEndpointPolicy := DefaultEndpointPolicyForModel(m.ModelID, endpointPolicy)
+			if endpointPolicy != defaultEndpointPolicy {
+				updates["endpoint_policy"] = defaultEndpointPolicy
+			}
+
+			if len(updates) == 0 {
 				continue
 			}
 			if err := tx.Model(&ChannelModel{}).
 				Where("id = ?", m.ID).
-				Updates(map[string]any{
-					"moderation_level":     OpenAIModelModerationLevel,
-					"moderation_fail_mode": OpenAIModelModerationFailMode,
-				}).Error; err != nil {
+				Updates(updates).Error; err != nil {
 				return err
 			}
 			changed++
@@ -52,7 +60,6 @@ func EnforceOpenAIModelModerationDefaults() {
 		return
 	}
 	if changed > 0 {
-		log.Printf("[MODERATION-SEED] OpenAI/Codex-family models forced to %s+%s: %d rows",
-			OpenAIModelModerationLevel, OpenAIModelModerationFailMode, changed)
+		log.Printf("[MODERATION-SEED] OpenAI/Codex-family moderation / endpoint defaults enforced: %d rows", changed)
 	}
 }

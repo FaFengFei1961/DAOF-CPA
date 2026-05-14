@@ -58,6 +58,17 @@ var allowedModerationFailModes = map[string]bool{
 	"closed": true,
 }
 
+// validateChannelModelEndpointPolicy 校验并规范化模型端点兼容策略。
+func validateChannelModelEndpointPolicy(cm *database.ChannelModel) (int, string, string) {
+	policy := database.NormalizeEndpointPolicy(cm.EndpointPolicy)
+	if !database.IsValidEndpointPolicy(policy) {
+		return 400, "ERR_INVALID_ENDPOINT_POLICY",
+			"endpoint_policy 取值非法（允许：all / no_chat_non_stream / responses_only）"
+	}
+	cm.EndpointPolicy = database.DefaultEndpointPolicyForModel(cm.ModelID, policy)
+	return 0, "", ""
+}
+
 // channelTargetsOfficialHost 判断 channel 是否指向某家官方 API。
 //
 // 空 BaseURL 视为"使用 SDK 默认 host"（默认即官方），返回 true。
@@ -317,6 +328,13 @@ func AddChannelModel(c *fiber.Ctx) error {
 			"message":      msg,
 		})
 	}
+	if status, code, msg := validateChannelModelEndpointPolicy(&body); status != 0 {
+		return c.Status(status).JSON(fiber.Map{
+			"success":      false,
+			"message_code": code,
+			"message":      msg,
+		})
+	}
 	// fix MAJOR R23-M7（codex 审查）：官方渠道 + level=off 通过 confirm 豁免必须留痕
 	if confirmOfficialNoMod && body.ModerationLevel == "off" && channelTargetsOfficialHost(&ch) {
 		auditOfficialNoModerationConfirmed(c, &ch, &body, "ADD")
@@ -397,6 +415,9 @@ func UpdateChannelModel(c *fiber.Ctx) error {
 	// fix CRITICAL R23：审核字段校验（更新路径）
 	// 仅当请求体显式包含 moderation_level 才更新（gjson 探测原始字段是否出现，避免 zero-value 覆盖）
 	rawBody := c.Body()
+	if gjson.GetBytes(rawBody, "endpoint_policy").Exists() {
+		chm.EndpointPolicy = body.EndpointPolicy
+	}
 	if gjson.GetBytes(rawBody, "moderation_level").Exists() {
 		chm.ModerationLevel = body.ModerationLevel
 	}
@@ -413,6 +434,13 @@ func UpdateChannelModel(c *fiber.Ctx) error {
 	}
 	confirmOfficialNoMod := gjson.GetBytes(rawBody, "confirm_official_no_moderation").Bool()
 	if status, code, msg := validateChannelModelModeration(&chm, &ch, confirmOfficialNoMod); status != 0 {
+		return c.Status(status).JSON(fiber.Map{
+			"success":      false,
+			"message_code": code,
+			"message":      msg,
+		})
+	}
+	if status, code, msg := validateChannelModelEndpointPolicy(&chm); status != 0 {
 		return c.Status(status).JSON(fiber.Map{
 			"success":      false,
 			"message_code": code,

@@ -7,6 +7,7 @@ import (
 	"net/http/httptest"
 	"strings"
 	"testing"
+	"time"
 
 	"daof-ai-hub/database"
 
@@ -15,6 +16,61 @@ import (
 	"gorm.io/driver/sqlite"
 	"gorm.io/gorm"
 )
+
+func TestNonStreamUpstreamTimeoutFromSysConfig(t *testing.T) {
+	SysConfigMutex.Lock()
+	old := SysConfigCache
+	SysConfigCache = map[string]string{}
+	SysConfigMutex.Unlock()
+	defer func() {
+		SysConfigMutex.Lock()
+		SysConfigCache = old
+		SysConfigMutex.Unlock()
+	}()
+
+	if got := nonStreamUpstreamTimeout(); got != defaultNonStreamUpstreamTimeout {
+		t.Fatalf("default timeout=%v want %v", got, defaultNonStreamUpstreamTimeout)
+	}
+
+	set := func(v string) {
+		SysConfigMutex.Lock()
+		SysConfigCache[proxyNonStreamUpstreamTimeoutKey] = v
+		SysConfigMutex.Unlock()
+	}
+
+	set("901")
+	if got := nonStreamUpstreamTimeout(); got != 901*time.Second {
+		t.Fatalf("configured timeout=%v want 901s", got)
+	}
+	set("1")
+	if got := nonStreamUpstreamTimeout(); got != minNonStreamUpstreamTimeout {
+		t.Fatalf("min-clamped timeout=%v want %v", got, minNonStreamUpstreamTimeout)
+	}
+	set("7200")
+	if got := nonStreamUpstreamTimeout(); got != maxNonStreamUpstreamTimeout {
+		t.Fatalf("max-clamped timeout=%v want %v", got, maxNonStreamUpstreamTimeout)
+	}
+	set("bad")
+	if got := nonStreamUpstreamTimeout(); got != defaultNonStreamUpstreamTimeout {
+		t.Fatalf("invalid timeout=%v want %v", got, defaultNonStreamUpstreamTimeout)
+	}
+}
+
+func TestDropDeprecatedClaudeTemperatureForOpus47(t *testing.T) {
+	payload := []byte(`{"model":"claude-opus-4-7","temperature":0.2,"top_p":0.9}`)
+	got := dropDeprecatedClaudeTemperature("claude-opus-4-7", payload)
+	if gjson.GetBytes(got, "temperature").Exists() {
+		t.Fatalf("temperature should be removed for claude-opus-4-7: %s", string(got))
+	}
+	if gjson.GetBytes(got, "top_p").Float() != 0.9 {
+		t.Fatalf("unrelated parameters should be preserved: %s", string(got))
+	}
+
+	kept := dropDeprecatedClaudeTemperature("claude-opus-4-6", payload)
+	if !gjson.GetBytes(kept, "temperature").Exists() {
+		t.Fatalf("temperature should be preserved for claude-opus-4-6: %s", string(kept))
+	}
+}
 
 func TestChatCompletionFailover(t *testing.T) {
 	// Initialize in-memory DB to prevent nil pointer panics on deductQuota
@@ -195,6 +251,73 @@ func TestStreamHandling(t *testing.T) {
 	}
 }
 
+func TestEndpointPolicyBlocksNonStreamingChatBeforeUpstream(t *testing.T) {
+	var err error
+	database.DB, err = gorm.Open(sqlite.Open("file:endpoint-policy-block?mode=memory&cache=shared"), &gorm.Config{})
+	if err != nil {
+		t.Fatalf("open in-memory db: %v", err)
+	}
+	if err := database.DB.AutoMigrate(&database.User{}, &database.ApiLog{}, &database.UserSubscription{},
+		&database.SubscriptionUsage{}, &database.Channel{}, &database.ChannelModel{}, &database.BillingEntry{}); err != nil {
+		t.Fatalf("migrate: %v", err)
+	}
+
+	user := database.User{ID: 51, Username: "endpoint-user", Token: "endpoint-token", Quota: 100 * database.MicroPerUSD, Status: 1, BalanceConsumeEnabled: true}
+	if err := database.DB.Create(&user).Error; err != nil {
+		t.Fatalf("create user: %v", err)
+	}
+
+	AuthCache = map[string]*database.User{user.Token: &user}
+	AuthTokenCache = map[string]*database.AccessToken{}
+	RouteCache = map[string][]*database.ChannelModel{}
+	ChannelMapCache = map[uint]*database.Channel{}
+
+	upstreamHits := 0
+	backend := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		upstreamHits++
+		w.WriteHeader(200)
+		w.Write([]byte(`{"choices":[{"message":{"content":"unexpected"}}],"usage":{"prompt_tokens":1,"completion_tokens":1}}`))
+	}))
+	defer backend.Close()
+
+	ChannelMapCache[1] = &database.Channel{ID: 1, Type: ChannelTypeCLIProxy, BaseURL: backend.URL, Key: "upstream-key"}
+	RouteCache["gpt-5.5"] = []*database.ChannelModel{{
+		ChannelID:       1,
+		Weight:          1,
+		InputPrice:      1,
+		OutputPrice:     1,
+		EndpointPolicy:  database.EndpointPolicyNoChatNonStream,
+		ModerationLevel: "off",
+	}}
+
+	app := fiber.New()
+	app.Post("/v1/chat/completions", ChatCompletionProxyHandler)
+
+	req := httptest.NewRequest("POST", "/v1/chat/completions", bytes.NewBufferString(`{"model":"gpt-5.5","messages":[{"role":"user","content":"hi"}],"stream":false}`))
+	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("Authorization", "Bearer endpoint-token")
+	resp, err := app.Test(req, -1)
+	if err != nil {
+		t.Fatalf("request failed: %v", err)
+	}
+	body, _ := io.ReadAll(resp.Body)
+	resp.Body.Close()
+	if resp.StatusCode != 400 {
+		t.Fatalf("status=%d want 400 body=%s", resp.StatusCode, string(body))
+	}
+	if !strings.Contains(string(body), "ERR_MODEL_ENDPOINT_UNSUPPORTED") {
+		t.Fatalf("response should explain endpoint policy, got %s", string(body))
+	}
+	if upstreamHits != 0 {
+		t.Fatalf("upstreamHits=%d want 0", upstreamHits)
+	}
+
+	var row database.ApiLog
+	if err := database.DB.Where("model_name = ? AND error_type = ?", "gpt-5.5", "unsupported_endpoint").First(&row).Error; err != nil {
+		t.Fatalf("expected unsupported_endpoint api log: %v", err)
+	}
+}
+
 func TestCLIProxyChannelPreservesClaudeMessagesTools(t *testing.T) {
 	var err error
 	database.DB, err = gorm.Open(sqlite.Open("file::memory:?cache=shared"), &gorm.Config{})
@@ -265,11 +388,11 @@ func TestCLIProxyChannelPreservesClaudeMessagesTools(t *testing.T) {
 	}
 }
 
-func TestCLIProxyChannelNormalizesClaudeCountTokensPath(t *testing.T) {
+func TestCLIProxyChatDropsDeprecatedClaudeOpus47Temperature(t *testing.T) {
 	var err error
-	database.DB, err = gorm.Open(sqlite.Open("file::memory:?cache=shared"), &gorm.Config{})
+	database.DB, err = gorm.Open(sqlite.Open("file:cliproxy-claude-temperature?mode=memory&cache=shared"), &gorm.Config{})
 	if err != nil {
-		t.Fatalf("Failed to connect to in-memory database: %v", err)
+		t.Fatalf("open in-memory db: %v", err)
 	}
 	if err := database.DB.AutoMigrate(&database.ApiLog{}, &database.UserSubscription{},
 		&database.Channel{}, &database.ChannelModel{}, &database.BillingEntry{}); err != nil {
@@ -277,7 +400,66 @@ func TestCLIProxyChannelNormalizesClaudeCountTokensPath(t *testing.T) {
 	}
 
 	AuthCache = map[string]*database.User{
-		"claude-token": &database.User{ID: 10, Quota: 100000000, Status: 1, BalanceConsumeEnabled: true},
+		"claude-temp-token": &database.User{ID: 91, Quota: 100000000, Status: 1, BalanceConsumeEnabled: true},
+	}
+	AuthTokenCache = map[string]*database.AccessToken{}
+	RouteCache = map[string][]*database.ChannelModel{}
+	ChannelMapCache = map[uint]*database.Channel{}
+
+	var gotBody string
+	backend := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		body, _ := io.ReadAll(r.Body)
+		gotBody = string(body)
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(200)
+		w.Write([]byte(`{"choices":[{"message":{"content":"ok"}}],"usage":{"prompt_tokens":2,"completion_tokens":3}}`))
+	}))
+	defer backend.Close()
+
+	ChannelMapCache[1] = &database.Channel{ID: 1, Type: ChannelTypeCLIProxy, BaseURL: backend.URL, Key: "cpa-key"}
+	RouteCache["claude-opus-4-7"] = []*database.ChannelModel{{ChannelID: 1, Weight: 1, InputPrice: 1, OutputPrice: 1, ModerationLevel: "off"}}
+
+	app := fiber.New()
+	app.Post("/v1/chat/completions", ChatCompletionProxyHandler)
+
+	payload := `{"model":"claude-opus-4-7","temperature":0.2,"messages":[{"role":"user","content":"hi"}]}`
+	req := httptest.NewRequest("POST", "/v1/chat/completions", bytes.NewBufferString(payload))
+	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("Authorization", "Bearer claude-temp-token")
+
+	resp, err := app.Test(req, -1)
+	if err != nil {
+		t.Fatalf("request failed: %v", err)
+	}
+	if resp.StatusCode != 200 {
+		body, _ := io.ReadAll(resp.Body)
+		t.Fatalf("expected 200, got %d body=%s", resp.StatusCode, string(body))
+	}
+	if gjson.Get(gotBody, "temperature").Exists() {
+		t.Fatalf("deprecated temperature should not be forwarded to CLIProxyAPI for claude-opus-4-7: %s", gotBody)
+	}
+	if gjson.Get(gotBody, "messages.0.content").String() != "hi" {
+		t.Fatalf("chat payload should otherwise be preserved: %s", gotBody)
+	}
+}
+
+func TestCLIProxyChannelNormalizesClaudeCountTokensPath(t *testing.T) {
+	var err error
+	database.DB, err = gorm.Open(sqlite.Open("file::memory:?cache=shared"), &gorm.Config{})
+	if err != nil {
+		t.Fatalf("Failed to connect to in-memory database: %v", err)
+	}
+	if err := database.DB.AutoMigrate(&database.User{}, &database.ApiLog{}, &database.UserSubscription{},
+		&database.Channel{}, &database.ChannelModel{}, &database.BillingEntry{}); err != nil {
+		t.Fatalf("migrate: %v", err)
+	}
+
+	user := &database.User{ID: 10, Username: "claude-count", Token: "claude-token", Quota: 100000000, Status: 1, BalanceConsumeEnabled: true}
+	if err := database.DB.Create(user).Error; err != nil {
+		t.Fatalf("seed user: %v", err)
+	}
+	AuthCache = map[string]*database.User{
+		"claude-token": user,
 	}
 	AuthTokenCache = map[string]*database.AccessToken{}
 	RouteCache = map[string][]*database.ChannelModel{}
@@ -321,8 +503,22 @@ func TestCLIProxyChannelNormalizesClaudeCountTokensPath(t *testing.T) {
 	if err := database.DB.Where("user_id = ? AND request_path = ?", 10, "/v1/v1/messages/count_tokens").First(&row).Error; err != nil {
 		t.Fatalf("expected api log for count_tokens: %v", err)
 	}
-	if row.Cost != 0 || row.PromptTokens != 42 {
-		t.Fatalf("count_tokens should log tokens without billing, got cost=%d prompt=%d", row.Cost, row.PromptTokens)
+	if row.Cost != 42000 || row.PromptTokens != 42 {
+		t.Fatalf("count_tokens should bill input tokens, got cost=%d prompt=%d", row.Cost, row.PromptTokens)
+	}
+	var fresh database.User
+	if err := database.DB.First(&fresh, 10).Error; err != nil {
+		t.Fatalf("load user: %v", err)
+	}
+	if fresh.Quota != 99958000 {
+		t.Fatalf("count_tokens should deduct quota, got %d", fresh.Quota)
+	}
+	var bill database.BillingEntry
+	if err := database.DB.Where("user_id = ? AND related_type = ?", 10, "api_log").First(&bill).Error; err != nil {
+		t.Fatalf("expected billing entry for count_tokens: %v", err)
+	}
+	if bill.AmountUSD != -42000 || bill.TokensTotal != 42 {
+		t.Fatalf("billing amount/tokens = %d/%d, want -42000/42", bill.AmountUSD, bill.TokensTotal)
 	}
 }
 
