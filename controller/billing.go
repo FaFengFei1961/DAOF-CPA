@@ -30,17 +30,14 @@ import (
 var allowedBillingTypes = map[string]bool{
 	database.BillingTypeTopup:                    true,
 	database.BillingTypePurchaseSub:              true,
-	database.BillingTypePurchaseAddon:            true,
 	database.BillingTypeBonusCredit:              true,
 	database.BillingTypeRefundSub:                true,
 	database.BillingTypeRefundTopup:              true,
 	database.BillingTypeAdminAdjust:              true,
 	database.BillingTypeAdminGrantSub:            true,
-	database.BillingTypeAdminGrantAddon:          true,
 	database.BillingTypeAdminRevokeGrant:         true,
 	database.BillingTypeApiConsumeBalance:        true,
 	database.BillingTypeApiUsageSub:              true,
-	database.BillingTypeApiUsageAddon:            true,
 	database.BillingTypeApiUsagePendingReconcile: true,
 }
 
@@ -370,8 +367,7 @@ func publicBillingDescription(r database.BillingEntry) string {
 	switch r.EntryType {
 	case database.BillingTypeAdminAdjust:
 		return userFriendlyAdminAdjustDescription(r.AmountUSD)
-	case database.BillingTypeAdminGrantSub, database.BillingTypeAdminGrantAddon,
-		database.BillingTypeAdminRevokeGrant:
+	case database.BillingTypeAdminGrantSub, database.BillingTypeAdminRevokeGrant:
 		return stripInternalBillingFragments(r.Description)
 	default:
 		return stripInternalBillingFragments(r.Description)
@@ -447,8 +443,6 @@ func localizeBillingType(t string) string {
 		return "充值"
 	case database.BillingTypePurchaseSub:
 		return "购买套餐"
-	case database.BillingTypePurchaseAddon:
-		return "购买增量包"
 	case database.BillingTypeBonusCredit:
 		return "奖励入账"
 	case database.BillingTypeRefundSub:
@@ -459,16 +453,12 @@ func localizeBillingType(t string) string {
 		return "管理员调整"
 	case database.BillingTypeAdminGrantSub:
 		return "管理员赠送订阅"
-	case database.BillingTypeAdminGrantAddon:
-		return "管理员赠送增量包"
 	case database.BillingTypeAdminRevokeGrant:
 		return "管理员收回赠送"
 	case database.BillingTypeApiConsumeBalance:
 		return "余额扣费"
 	case database.BillingTypeApiUsageSub:
 		return "套餐扣额度"
-	case database.BillingTypeApiUsageAddon:
-		return "增量包扣额度"
 	case database.BillingTypeApiUsagePendingReconcile:
 		return "待对账"
 	default:

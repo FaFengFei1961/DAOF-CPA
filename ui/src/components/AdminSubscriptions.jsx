@@ -247,7 +247,7 @@ const AdminSubscriptions = () => {
             type="button"
             onClick={() => setGrantModalOpen(true)}
             className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-sm bg-emerald-500/10 text-emerald-400 hover:bg-emerald-500/20 border border-emerald-500/30"
-            title={t('ADMIN_SUBS.GRANT_BTN_TITLE', '管理员赠送订阅 / 增量包给指定用户')}
+            title={t('ADMIN_SUBS.GRANT_BTN_TITLE', '管理员赠送订阅给指定用户')}
           >
             <Gift size={14} />
             {t('ADMIN_SUBS.GRANT_BTN', '赠送')}
@@ -391,11 +391,7 @@ const AdminSubscriptions = () => {
                             </span>
                           )}
                         </div>
-                        {sub.product_type && (
-                          <div className="text-xs text-on-surface-variant">
-                            {sub.product_type === 'addon' ? t('ADMIN_SUBS.TYPE_ADDON', '增量包') : t('ADMIN_SUBS.TYPE_SUB', '订阅')}
-                          </div>
-                        )}
+                        {/* Phase 8：addon 已移除，product_type 始终是 subscription，不再显示类型 chip */}
                       </td>
                       <td className="px-3 py-2 text-right font-mono text-on-surface">
                         ${sub.purchased_price_usd?.toFixed(2) || '0.00'}

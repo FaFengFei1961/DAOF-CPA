@@ -35,7 +35,7 @@ const getBalancePrefCacheKey = () => {
 };
 
 // 用户余额消费控制（参照 Claude Extra usage 面板）
-// 三段消费：订阅 → 增量包 → 余额（默认关闭，需在此开启 + 限额）
+// Phase 8：addon 移除后两段消费 — 订阅 → 余额（默认关闭，需在此开启 + 限额）
 const BalanceConsumePreferences = () => {
   const { t } = useTranslation();
   const confirm = useConfirm();
@@ -134,7 +134,7 @@ const BalanceConsumePreferences = () => {
             {t('BALANCE_CONSUME.TITLE', '余额消费控制')}
           </h3>
           <p className="text-xs text-on-surface-variant mt-0.5">
-            {t('BALANCE_CONSUME.DESC', '订阅和增量包用尽后，是否允许从美元余额继续扣费')}
+            {t('BALANCE_CONSUME.DESC', '订阅用尽后，是否允许从美元余额继续扣费')}
           </p>
         </div>
       </header>
@@ -145,7 +145,7 @@ const BalanceConsumePreferences = () => {
           <div id="balance-consume-enable-label" className="text-sm font-semibold text-on-surface">{t('BALANCE_CONSUME.ENABLED', '允许余额消费')}</div>
           <div className="text-[11px] text-on-surface-variant mt-0.5">
             {data.enabled
-              ? t('BALANCE_CONSUME.ENABLED_ON', '订阅和增量包用尽后自动从余额扣费')
+              ? t('BALANCE_CONSUME.ENABLED_ON', '订阅用尽后自动从余额扣费')
               : t('BALANCE_CONSUME.ENABLED_OFF', '订阅和增量包用尽后请求将被拒绝（402）')}
           </div>
         </div>

@@ -219,8 +219,8 @@ func InitDB() {
 	{
 		var violatingCount int64
 		DB.Raw(`SELECT COUNT(*) FROM billing_entries
-			WHERE entry_type IN ('api_usage_sub','api_usage_addon','api_usage_pending_reconcile',
-			                     'admin_grant_sub','admin_grant_addon','admin_revoke_grant')
+			WHERE entry_type IN ('api_usage_sub','api_usage_pending_reconcile',
+			                     'admin_grant_sub','admin_revoke_grant')
 			  AND amount_usd != 0`).Scan(&violatingCount)
 		if violatingCount > 0 {
 			log.Fatalf("[INVARIANT-VIOLATED] %d billing_entries 行 entry_type 为零金额类型但 amount_usd != 0；"+

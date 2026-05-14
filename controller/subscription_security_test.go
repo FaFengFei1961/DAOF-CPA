@@ -317,90 +317,9 @@ func TestSecurity_Purchase_RequiresFullPrice(t *testing.T) {
 
 // ─── R11 Major: addon 退款公式 = min(time_remain, quota_remain) ────
 
-// TestSecurity_AdminList_AddonRefund_UsesQuotaRatio 验证：
-// addon（增量包）退款建议金额取 min(剩余时间, 剩余 quota) 中较小者，防"用完即退"套利。
-//
-// 攻击场景（codex r11）：
-//
-//	用户买 $10 addon（10000 request_count / 7 days）→ 1 小时内用完 9000 request_count →
-//	时间剩余 99% → 错误公式建议 $9.9 退款 → 用户拿走 90% 服务+90% 退款。
-//
-// 修复后：addon 取 min(time=99%, quota=10%) = 10%，suggested = $1.0
-//
-// 此测试还间接验证 r13 修订（计算顺序：UsageMaxPct 必须先算）。
-func TestSecurity_AdminList_AddonRefund_UsesQuotaRatio(t *testing.T) {
-	setupSubTestDB(t)
-	admin := seedAdminUser(t)
-	user := seedTestUser(t, 100)
-
-	// 创建一个 plan + addon 套餐
-	plan := database.QuotaPlan{
-		Name: "addon_request_count", DisplayName: "Addon Request Count",
-		ModelMatch: `["*"]`, LimitUnit: "request_count", LimitValue: 10000,
-		Priority: 1, Enabled: boolPtr(true),
-	}
-	database.DB.Create(&plan)
-
-	now := time.Now()
-	endAt := now.Add(7 * 24 * time.Hour)
-	sub := database.UserSubscription{
-		UserID:    user.ID,
-		PackageID: 99,
-		Status:    "active",
-		StartAt:   now,
-		EndAt:     endAt,
-		// snapshot 标记 product_type=addon、price=$10、含 plan 元信息
-		PackageSnapshot: `{
-			"package_id":99,"package_name":"Test Addon","product_type":"addon",
-			"price_amount":10000000,
-			"plans":[{"id":` + itoaUint(plan.ID) + `,"name":"addon_request_count","limit_unit":"request_count","limit_value":10000}]
-		}`,
-		PurchasedUnitPriceUSD: 10 * database.MicroPerUSD, // $10
-	}
-	database.DB.Create(&sub)
-
-	// 模拟用户已用 9000/10000 request_count（90% 消耗）
-	usage := database.SubscriptionUsage{
-		SubscriptionID: sub.ID,
-		QuotaPlanID:    plan.ID,
-		ModelBucket:    "*",
-		WindowStartAt:  now,
-		WindowEndAt:    endAt,
-		ConsumedValue:  9000,
-		RequestCount:   100,
-	}
-	database.DB.Create(&usage)
-
-	// 调 admin list 获取 suggested_refund_usd
-	app := fiber.New(fiber.Config{DisableStartupMessage: true})
-	app.Use(func(c *fiber.Ctx) error {
-		c.Request().Header.SetCookie("daof_admin_token", admin.Token)
-		return c.Next()
-	})
-	app.Get("/admin/subs", AdminListSubscriptions)
-	code, resp := doJSON(t, app, "GET", "/admin/subs", nil)
-	if code != 200 {
-		t.Fatalf("admin list failed: code=%d body=%v", code, resp)
-	}
-	data, ok := resp["data"].([]any)
-	if !ok || len(data) == 0 {
-		t.Fatalf("expected 1 sub, got %v", resp["data"])
-	}
-	first, _ := data[0].(map[string]any)
-
-	// 关键：addon + 90% used → ratio 应取 min(99% 时间, 10% quota) = 10%
-	// suggested = price($10) * 10% = $1.0（容忍 ±$0.05 浮点）
-	suggested, _ := first["suggested_refund_usd"].(float64)
-	if suggested < 0.5 || suggested > 1.5 {
-		t.Errorf("addon suggested refund should be ~$1.0 (10%% quota remaining), got $%.2f", suggested)
-	}
-
-	// 验证 usage_max_pct 也正确填了（r13 顺序修复的副产物）
-	usagePct, _ := first["usage_max_pct"].(float64)
-	if usagePct < 89 || usagePct > 91 {
-		t.Errorf("usage_max_pct should be ~90%%, got %.2f", usagePct)
-	}
-}
+// Phase 8：addon（增量包）已移除，TestSecurity_AdminList_AddonRefund_UsesQuotaRatio
+// 测试整段删除 — 该测试针对的"addon 取 min(time, quota) 比例退款防套利"逻辑随
+// 业务下线一并移除（subscription.go 退款建议改为统一按时间比例）。
 
 // TestSecurity_AdminList_SubscriptionRefund_UsesTimeRatio 验证：
 // 普通 subscription 仍按时间比例退款，不读 quota——

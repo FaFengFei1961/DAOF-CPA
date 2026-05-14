@@ -6,7 +6,7 @@
 //   - admin 通过 POST /api/admin/subscriptions/grant 给目标用户免费开通某个产品
 //   - 复用 purchaseAsInstant 的事务骨架（lockUser、stack count 校验、snapshot、stack index）
 //   - **跳过 quota 扣款**：用户未付费，所以 user.Quota 不动
-//   - 账单类型：admin_grant_sub / admin_grant_addon（AmountUSD=0）
+//   - 账单类型：admin_grant_sub（AmountUSD=0）
 //   - 赠送的 UserSubscription 被标记 IsGranted=true → AdminRefundSubscription 拒绝退款
 //     （否则平台等于把套餐白送 + 退款双倍亏损）
 //
@@ -339,10 +339,8 @@ func AdminGrantSubscription(c *fiber.Ctx) error {
 			return fmt.Errorf("fetch fresh quota: %w", err)
 		}
 		baseEntryMicro := now.UnixMicro()
+		// Phase 8：addon 已移除，所有 admin grant 都走 admin_grant_sub
 		entryType := database.BillingTypeAdminGrantSub
-		if pkg.ProductType == "addon" {
-			entryType = database.BillingTypeAdminGrantAddon
-		}
 		for i, sub := range created {
 			subID := sub.ID
 			grantOccurredAt := time.UnixMicro(baseEntryMicro + int64(i))

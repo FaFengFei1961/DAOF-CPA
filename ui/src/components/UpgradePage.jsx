@@ -103,7 +103,7 @@ const UpgradePage = ({ onPurchaseSuccess }) => {
     params.set('pane', next);
     setSearchParams(params, { replace: true });
   }, [searchParams, setSearchParams]);
-  const [typeFilter, setTypeFilter] = useState('all');
+  // Phase 8：addon 已移除，所有套餐都是 subscription，typeFilter 整段去除
 
   // fix CRITICAL R23+2-F2（gemini 全方面审查）：用 authFetch 而不是原生 fetch，
   // 否则后端 getCurrentUserOptional 拿不到 token，老用户被识别为未登录新客。
@@ -245,34 +245,11 @@ const UpgradePage = ({ onPurchaseSuccess }) => {
       {/* "我的"分支：直接渲染 MySubscriptions 内容（无自身 hero） */}
       {pane === 'mine' && <MySubscriptions isAuthenticated={isLoggedIn()} embedded />}
 
-      {/* "商店"分支：保留原有的 类型 tab + 卡片网格 */}
+      {/* "商店"分支：套餐 grid（Phase 8 后只有 subscription 一种） */}
       {pane === 'store' && (<>
-      <div className="flex gap-2">
-        {[
-          { id: 'all', label: t('PRODUCTS.TAB_ALL', '全部') },
-          { id: 'subscription', label: t('PRODUCTS.TAB_SUBSCRIPTION', '订阅'), hint: t('PRODUCTS.SUBSCRIPTION_HINT', '周期套餐，每月刷新（先扣）') },
-          { id: 'addon', label: t('PRODUCTS.TAB_ADDON', '增量包'), hint: t('PRODUCTS.ADDON_HINT', '订阅用完后扣，临时补充') },
-        ].map(tab => {
-          const active = typeFilter === tab.id;
-          return (
-            <button
-              key={tab.id}
-              type="button"
-              onClick={() => setTypeFilter(tab.id)}
-              className={`flex-1 sm:flex-initial px-5 py-2.5 rounded-lg text-sm font-semibold border transition ${active
-                ? 'bg-primary text-on-primary border-primary'
-                : 'bg-surface-container text-on-surface-variant border-outline-variant hover:border-primary'}`}
-              title={tab.hint}
-            >
-              {tab.label}
-            </button>
-          );
-        })}
-      </div>
-
       {loading ? <div className="text-center py-20 text-on-surface-variant">{t('UPGRADE.LOADING', '加载中...')}</div>
         : (() => {
-          const filtered = typeFilter === 'all' ? pkgs : pkgs.filter(p => (p.product_type || 'subscription') === typeFilter);
+          const filtered = pkgs;
           if (filtered.length === 0) {
             return (
               <div className="fl-card p-16 text-center">

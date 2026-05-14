@@ -8,7 +8,7 @@ import { useModalA11y } from '../hooks/useModalA11y';
 /**
  * AdminGrantSubscriptionModal
  *
- * 管理员赠送订阅 / 增量包对话框。
+ * 管理员赠送订阅对话框。
  * 表单字段：
  *   - 用户选择（按 username / phone / github_id 搜索）
  *   - 套餐选择（来自 /api/admin/packages）
@@ -68,7 +68,7 @@ const AdminGrantSubscriptionModal = ({ open, onClose, onSuccess, prefillUser = n
     authFetch('/api/admin/packages')
       .then((j) => {
         if (j?.success) {
-          // 只保留启用的；ProductType 区分订阅 / 增量包
+          // 只保留启用的（Phase 8 后只剩 subscription 类）
           setPackages((j.data || []).filter((p) => p.enabled !== false));
         } else {
           toast.error(j?.message || t('ADMIN_GRANT.LOAD_PKG_FAIL', '套餐列表加载失败'));
@@ -188,7 +188,7 @@ const AdminGrantSubscriptionModal = ({ open, onClose, onSuccess, prefillUser = n
         <div className="flex items-center justify-between px-5 py-4 border-b border-outline-variant">
           <h3 id="grant-modal-title" className="text-lg font-semibold text-on-surface flex items-center gap-2">
             <Gift size={18} className="text-emerald-400" />
-            {t('ADMIN_GRANT.TITLE', '赠送订阅 / 增量包')}
+            {t('ADMIN_GRANT.TITLE', '赠送订阅')}
           </h3>
           <button
             type="button"
@@ -270,7 +270,7 @@ const AdminGrantSubscriptionModal = ({ open, onClose, onSuccess, prefillUser = n
           {/* 套餐选择 */}
           <div>
             <label htmlFor="grant-package" className="block text-sm text-on-surface mb-1">
-              {t('ADMIN_GRANT.PACKAGE', '套餐 / 增量包')} <span className="text-rose-400">*</span>
+              {t('ADMIN_GRANT.PACKAGE', '套餐')} <span className="text-rose-400">*</span>
             </label>
             <select
               id="grant-package"
@@ -282,7 +282,6 @@ const AdminGrantSubscriptionModal = ({ open, onClose, onSuccess, prefillUser = n
               <option value="">{loadingPackages ? t('ADMIN_GRANT.LOADING_PKG', '加载中...') : t('ADMIN_GRANT.SELECT_PKG', '请选择')}</option>
               {packages.map((p) => (
                 <option key={p.id} value={p.id}>
-                  {p.product_type === 'addon' ? '[增量包] ' : '[订阅] '}
                   {p.name} - ${p.price_amount?.toFixed(2)}
                 </option>
               ))}

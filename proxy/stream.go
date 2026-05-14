@@ -1172,15 +1172,12 @@ func ChatCompletionProxyHandler(c *fiber.Ctx) error {
 			return // 不走 sub 账单 + 不走 balance fallback 扣费
 		}
 
-		// 账单流水：命中订阅/增量包扣额度（不动 quota，AmountUSD=0，仅审计 token 数）
+		// 账单流水：命中订阅扣额度（不动 quota，AmountUSD=0，仅审计 token 数）
 		// 失败时仅日志，不影响请求 — 上游已成功，账单是审计层而非阻塞层。
+		// Phase 8：addon 已移除，所有命中订阅都走 api_usage_sub
 		if commitOK {
 			entryType := database.BillingTypeApiUsageSub
 			productLabel := "套餐"
-			if commitDecision.ProductType == "addon" {
-				entryType = database.BillingTypeApiUsageAddon
-				productLabel = "增量包"
-			}
 			subID := commitDecision.SubscriptionID
 			tokensTotal := promptTokens + completionTokens // cached/reasoning 是子集
 			// fix Major（codex 第十四轮）：失败 ApiLog 时 RelatedID 留空，避免账单挂死链

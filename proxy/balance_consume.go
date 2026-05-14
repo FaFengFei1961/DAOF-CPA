@@ -1,9 +1,9 @@
 // Package proxy / balance_consume.go
 //
-// 余额消费控制（三段消费模型的第三段）。
+// 余额消费控制（Phase 8 后两段消费模型的第二段）。
 //
-// 流程：订阅(subscription) → 增量包(addon) → 余额(user.Quota)。
-// 前两段都不可用时，subscription_engine 调 CheckBalanceConsumeAllowed 决定能否走余额。
+// 流程：订阅(subscription) → 余额(user.Quota)。addon（增量包）已在 Phase 8 移除。
+// 订阅不可用时，subscription_engine 调 CheckBalanceConsumeAllowed 决定能否走余额。
 //
 // 设计要点：
 //   - 默认关闭（user.BalanceConsumeEnabled=false），最严策略

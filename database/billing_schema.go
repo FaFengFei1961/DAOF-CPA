@@ -71,20 +71,23 @@ type BillingEntry struct {
 }
 
 // EntryType 常量集。新增类型时在此处加常量并更新 IsConsumeEntry / IsCreditEntry 的判定。
+//
+// Phase 8：彻底删除增量包（addon）相关 entry type — 平台只保留周期订阅模式：
+//   - BillingTypePurchaseAddon       (purchase_addon)
+//   - BillingTypeAdminGrantAddon     (admin_grant_addon)
+//   - BillingTypeApiUsageAddon       (api_usage_addon)
+// 三段消费引擎（订阅 → 增量包 → 余额）简化为两段（订阅 → 余额）。
 const (
 	BillingTypeTopup             = "topup"               // 充值入账
 	BillingTypePurchaseSub       = "purchase_sub"        // 购买周期套餐
-	BillingTypePurchaseAddon     = "purchase_addon"      // 购买增量包
 	BillingTypeBonusCredit       = "bonus_credit"        // 注册 / 邀请等奖励余额
 	BillingTypeRefundSub         = "refund_sub"          // 订阅退款
 	BillingTypeRefundTopup       = "refund_topup"        // 充值退款（reclaim_quota=true 时 AmountUSD<0）
 	BillingTypeAdminAdjust       = "admin_adjust"        // 管理员手动调整
 	BillingTypeAdminGrantSub     = "admin_grant_sub"     // 管理员赠送订阅（AmountUSD=0，不动钱）
-	BillingTypeAdminGrantAddon   = "admin_grant_addon"   // 管理员赠送增量包（AmountUSD=0，不动钱）
 	BillingTypeAdminRevokeGrant  = "admin_revoke_grant"  // 管理员收回赠送（AmountUSD=0，不动钱）
 	BillingTypeApiConsumeBalance = "api_consume_balance" // API 扣余额（quota-）
 	BillingTypeApiUsageSub       = "api_usage_sub"       // API 扣订阅额度（不动 quota）
-	BillingTypeApiUsageAddon     = "api_usage_addon"     // API 扣增量包额度（不动 quota）
 	// fix MAJOR R23+3-B5（codex 第四轮）：commit 阶段订阅 DB 加载失败时的"待对账"标记。
 	// 与 ApiUsageSub 区分：admin 看到这个类型知道"上游已服务但订阅状态当时不可读"，
 	// 需要人工介入对账（修复订阅状态后补扣 / 免扣）。
@@ -99,7 +102,7 @@ func (b *BillingEntry) IsCreditEntry() bool {
 // IsConsumeEntry 是否为消费类型（仅 API 扣费 + 购买；不含退款回收）
 func (b *BillingEntry) IsConsumeEntry() bool {
 	switch b.EntryType {
-	case BillingTypePurchaseSub, BillingTypePurchaseAddon, BillingTypeApiConsumeBalance:
+	case BillingTypePurchaseSub, BillingTypeApiConsumeBalance:
 		return true
 	}
 	return false
@@ -114,12 +117,12 @@ func (b *BillingEntry) IsConsumeEntry() bool {
 // 形成 fail-closed 假象（实际是 silent drop）。
 func IsKnownBillingType(t string) bool {
 	switch t {
-	case BillingTypeTopup, BillingTypePurchaseSub, BillingTypePurchaseAddon,
+	case BillingTypeTopup, BillingTypePurchaseSub,
 		BillingTypeBonusCredit, BillingTypeRefundSub, BillingTypeRefundTopup,
-		BillingTypeAdminAdjust, BillingTypeAdminGrantSub, BillingTypeAdminGrantAddon,
+		BillingTypeAdminAdjust, BillingTypeAdminGrantSub,
 		BillingTypeAdminRevokeGrant,
 		BillingTypeApiConsumeBalance,
-		BillingTypeApiUsageSub, BillingTypeApiUsageAddon,
+		BillingTypeApiUsageSub,
 		BillingTypeApiUsagePendingReconcile:
 		return true
 	}
@@ -127,24 +130,24 @@ func IsKnownBillingType(t string) bool {
 }
 
 // IsApiUsageType 是否为"仅审计 token 数、不动 quota"的 API 用量类型。
-// 这两种类型必须 AmountUSD == 0；非零即破坏汇总（错误计入 totalIn/totalOut）。
+// 该类型必须 AmountUSD == 0；非零即破坏汇总（错误计入 totalIn/totalOut）。
 func IsApiUsageType(t string) bool {
-	return t == BillingTypeApiUsageSub || t == BillingTypeApiUsageAddon
+	return t == BillingTypeApiUsageSub
 }
 
 // IsZeroAmountBillingType 是否为 AmountUSD 必须为 0 的类型（仅审计 / 占位 / 待对账）。
 //
 // fix Minor（codex 第十六轮）：把"零金额 invariant"独立成函数，让写路径能统一校验。
 // 包含：
-//   - api_usage_sub / api_usage_addon：扣订阅额度（不动 user.quota）
-//   - api_usage_pending_reconcile：commit 阶段订阅 DB 加载失败时的待对账标记，AmountUSD 必须 0
-//   - admin_grant_sub / admin_grant_addon：管理员赠送订阅，AmountUSD 必须 0
+//   - api_usage_sub：扣订阅额度（不动 user.quota）
+//   - api_usage_pending_reconcile：commit 阶段订阅 DB 加载失败时的待对账标记
+//   - admin_grant_sub：管理员赠送订阅，AmountUSD 必须 0
 //   - admin_revoke_grant：管理员收回赠送订阅，AmountUSD 必须 0
 func IsZeroAmountBillingType(t string) bool {
 	switch t {
-	case BillingTypeApiUsageSub, BillingTypeApiUsageAddon,
+	case BillingTypeApiUsageSub,
 		BillingTypeApiUsagePendingReconcile,
-		BillingTypeAdminGrantSub, BillingTypeAdminGrantAddon,
+		BillingTypeAdminGrantSub,
 		BillingTypeAdminRevokeGrant:
 		return true
 	}

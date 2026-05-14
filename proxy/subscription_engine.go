@@ -54,7 +54,7 @@ type EngineDecision struct {
 	BlockRemaining     float64
 	BlockWindowEndAt   *time.Time
 	BlockUnit          string
-	// ProductType 命中订阅时填 "subscription" 或 "addon"，便于账单区分扣自哪个产品类型。
+	// ProductType 命中订阅时填 "subscription"（addon 已在 Phase 8 移除）。
 	// 未命中（FallbackToBalance / 拒绝）时为空字符串。
 	ProductType string
 	// fix CRITICAL R23+2-C3（codex 全方面审查）：DB 加载订阅失败时不能 fallback 到余额，
@@ -75,11 +75,13 @@ type EngineRequest struct {
 	IsPrecheck   bool
 }
 
-// Decide 决策一次请求该走哪条路径（三段消费模型）：
+// Decide 决策一次请求该走哪条路径（Phase 8 后两段消费模型）：
 //
 //  1. 订阅 (subscription)  ─ 按 ConsumptionOrder FIFO
-//  2. 增量包 (addon)        ─ 订阅用尽后扣，组内 FIFO
-//  3. 余额 (user.Quota)     ─ 由用户 BalanceConsumeEnabled 控制 + 窗口限额
+//  2. 余额 (user.Quota)     ─ 由用户 BalanceConsumeEnabled 控制 + 窗口限额
+//
+// 注：addon（增量包）已在 Phase 8 移除；productPriority 仅保留 subscription
+// 分支，未知类型走 default fallback（兼容历史 snapshot 数据）。
 //
 // 注：fallback 到余额的实际限额检查在 relay/billing 扣 quota 路径里调
 // proxy.CheckBalanceConsumeAllowed；这里只决定方向（FallbackToBalance=true）。
@@ -181,15 +183,14 @@ func productTypeOfCached(cs *CachedSubscription) string {
 	return "subscription"
 }
 
-// productPriority 三段消费排序优先级（数字越小越先扣）。未来加新 type 在这里登记。
+// productPriority 消费排序优先级（数字越小越先扣）。
+// Phase 8：addon 移除后只剩 subscription 一种正常类型。
 func productPriority(productType string) int {
 	switch productType {
 	case "subscription":
 		return 1
-	case "addon":
-		return 2
 	default:
-		return 99 // 未知类型最后扣，并在日志里能看出来
+		return 99 // 未知类型（如历史 addon 残留）最后扣，日志可见
 	}
 }
 

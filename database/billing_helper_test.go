@@ -180,7 +180,6 @@ func TestBilling_EntryType_Helpers(t *testing.T) {
 	}{
 		{"topup", BillingTypeTopup, 10 * MicroPerUSD, true, false},
 		{"purchase_sub", BillingTypePurchaseSub, -10 * MicroPerUSD, false, true},
-		{"purchase_addon", BillingTypePurchaseAddon, -5 * MicroPerUSD, false, true},
 		{"api_consume_balance", BillingTypeApiConsumeBalance, -50_000, false, true}, // -$0.05
 		{"refund_sub", BillingTypeRefundSub, 8 * MicroPerUSD, true, false},
 		{"refund_topup_with_reclaim", BillingTypeRefundTopup, -10 * MicroPerUSD, false, false},

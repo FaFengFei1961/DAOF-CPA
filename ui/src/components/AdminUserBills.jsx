@@ -14,20 +14,18 @@ import { PAGE_SIZE_DEFAULT } from './common/constants';
 // fix MAJOR（codex 第十七轮）：补齐 admin_grant_* + api_usage_pending_reconcile，
 // 与后端 allowedBillingTypes 同步——否则 admin 默认隐藏 API 用量时
 // 这两类账单也会被排除掉。
+// Phase 8：addon 已移除，purchase_addon / admin_grant_addon / api_usage_addon 三类删除
 const TYPE_I18N = {
   topup:                       { i18n: 'BILL.T_TOPUP',          fallback: '充值' },
   purchase_sub:                { i18n: 'BILL.T_PURCHASE_SUB',   fallback: '购买套餐' },
-  purchase_addon:              { i18n: 'BILL.T_PURCHASE_ADDON', fallback: '购买增量包' },
   bonus_credit:                { i18n: 'BILL.T_BONUS',          fallback: '奖励入账' },
   refund_sub:                  { i18n: 'BILL.T_REFUND_SUB',     fallback: '订阅退款' },
   refund_topup:                { i18n: 'BILL.T_REFUND_TOPUP',   fallback: '充值退款' },
   admin_adjust:                { i18n: 'BILL.T_ADMIN_ADJUST',   fallback: '管理员调整' },
   admin_grant_sub:             { i18n: 'BILL.T_ADMIN_GRANT_SUB',   fallback: '管理员赠送订阅' },
-  admin_grant_addon:           { i18n: 'BILL.T_ADMIN_GRANT_ADDON', fallback: '管理员赠送增量包' },
   admin_revoke_grant:          { i18n: 'BILL.T_ADMIN_REVOKE_GRANT', fallback: '管理员收回赠送' },
   api_consume_balance:         { i18n: 'BILL.T_API_BALANCE',    fallback: '余额扣费' },
   api_usage_sub:               { i18n: 'BILL.T_API_SUB',        fallback: '套餐扣额度' },
-  api_usage_addon:             { i18n: 'BILL.T_API_ADDON',      fallback: '增量包扣额度' },
   api_usage_pending_reconcile: { i18n: 'BILL.T_API_PENDING',    fallback: '待对账' },
 };
 
@@ -54,9 +52,8 @@ const AdminUserBills = ({ userId, username, onClose }) => {
 
   const buildQuery = useCallback(() => {
     if (!hideUsage) return '';
-    // 仅在勾选"隐藏 API 用量"时排除 api_usage_*；其他全部展示（含 admin_grant_* 与 pending_reconcile）
-    const types = Object.keys(TYPE_I18N)
-      .filter((k) => k !== 'api_usage_sub' && k !== 'api_usage_addon');
+    // 仅在勾选"隐藏 API 用量"时排除 api_usage_sub；其他全部展示（含 admin_grant_* 与 pending_reconcile）
+    const types = Object.keys(TYPE_I18N).filter((k) => k !== 'api_usage_sub');
     return `types=${types.join(',')}`;
   }, [hideUsage]);
 
@@ -236,7 +233,7 @@ const SumCard = ({ label, value, color }) => (
 
 const AdminBillRow = ({ entry, t }) => {
   const isCredit = entry.amount_usd > 0;
-  const isUsage = entry.entry_type === 'api_usage_sub' || entry.entry_type === 'api_usage_addon';
+  const isUsage = entry.entry_type === 'api_usage_sub';
   const Icon = isUsage ? Activity : (isCredit ? ArrowDownCircle : ArrowUpCircle);
   const iconColor = isUsage
     ? 'text-slate-500'

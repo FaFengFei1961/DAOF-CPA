@@ -344,10 +344,8 @@ func purchaseAsInstant(c *fiber.Ctx, user *database.User, pkg *database.Package,
 		if err := tx.Select("id, quota").First(&freshUser, user.ID).Error; err != nil {
 			return fmt.Errorf("fetch fresh quota: %w", err)
 		}
+		// Phase 8：addon 已移除，所有套餐购买都走 purchase_sub
 		entryType := database.BillingTypePurchaseSub
-		if pkg.ProductType == "addon" {
-			entryType = database.BillingTypePurchaseAddon
-		}
 		// 计算购买扣款前的基线余额：freshUser.Quota 是事务内最终值。
 		balRollingMicro := freshUser.Quota + totalPriceMicro
 		// 关联券到第 1 份订阅（在写账单前完成，使描述能引用 used coupon）
@@ -1127,7 +1125,7 @@ type adminSubItem struct {
 	UserGithubID      string     `json:"user_github_id"`
 	PackageID         uint       `json:"package_id"`
 	PackageName       string     `json:"package_name"`        // 从 snapshot 提取（套餐改名/删除后仍准确）
-	ProductType       string     `json:"product_type"`        // subscription | addon
+	ProductType       string     `json:"product_type"`        // 始终是 subscription（addon 已移除）
 	PurchasedPriceUSD float64    `json:"purchased_price_usd"` // 从 snapshot 提取购买时价格
 	Status            string     `json:"status"`              // active | canceled | expired | refunded | paused | revoked
 	StartAt           time.Time  `json:"start_at"`
@@ -1338,9 +1336,6 @@ func AdminListSubscriptions(c *fiber.Ctx) error {
 			log.Printf("[ADMIN-SUBS] sub %d snapshot unmarshal failed: %v (PackageName/Price 退化为零值)", sub.ID, err)
 		}
 		// 计算消费率：取所有限额 plan 中 consumed/limit 最大的那个
-		// fix Major（自审第十三轮）：原顺序在 SuggestedRefundUSD 计算后才填 UsageMaxPct，
-		// 导致 addon 分支读到的恒为 0，min(time, quota) 永远等于 time，套利防护失效。
-		// 必须先算 UsageMaxPct，再算 suggested。
 		usages := usagesBySubID[sub.ID]
 		consumedByPlan := make(map[uint]float64, len(usages))
 		for _, u := range usages {
@@ -1377,22 +1372,10 @@ func AdminListSubscriptions(c *fiber.Ctx) error {
 			item.UsageDetailsJSON = string(b)
 		}
 
-		// fix Major（codex r11）：addon（增量包）不按时间退款——它是"1000 次调用 / 7 days"
-		// 或 token/API 等值额度包，用户 1 小时耗尽就该 0 退款。订阅(subscription) 才按时间。
-		// 增量包：取 min(剩余时间, 剩余 quota) 比例的更小者，防"耗尽即退"。
+		// Phase 8：addon 已移除，所有套餐都是 subscription，按时间比例退款
 		if sub.Status != "refunded" {
 			if item.PurchasedPriceUSD > 0 {
 				ratio := item.TimeRemainingPct / 100.0
-				if item.ProductType == "addon" {
-					// 增量包：取剩余 quota 比例（取所有 limit plan 中"剩余最少"的那个）
-					quotaRemainRatio := 1.0 - (item.UsageMaxPct / 100.0)
-					if quotaRemainRatio < 0 {
-						quotaRemainRatio = 0
-					}
-					if quotaRemainRatio < ratio {
-						ratio = quotaRemainRatio
-					}
-				}
 				suggested := item.PurchasedPriceUSD * ratio
 				item.SuggestedRefundUSD = float64(int(suggested*100)) / 100
 			}
@@ -1438,7 +1421,7 @@ func buildPackageSnapshotTx(db *gorm.DB, pkg *database.Package) (string, error) 
 		SchemaVersion        int        `json:"schema_version"`
 		PackageID            uint       `json:"package_id"`
 		PackageName          string     `json:"package_name"`
-		ProductType          string     `json:"product_type"` // subscription | addon（决定消费引擎排序）
+		ProductType          string     `json:"product_type"` // 始终是 subscription（addon 已移除）
 		PriceAmount          int64      `json:"price_amount"`
 		PriceCurrency        string     `json:"price_currency"`
 		BillingPeriodSeconds int        `json:"billing_period_seconds"`

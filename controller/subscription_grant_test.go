@@ -156,33 +156,7 @@ func TestGrant_RejectDeprecatedApplyBonus(t *testing.T) {
 	}
 }
 
-// TestGrant_AddonProductType 增量包写入 admin_grant_addon 类型。
-func TestGrant_AddonProductType(t *testing.T) {
-	setupSubTestDB(t)
-	admin := seedAdminUser(t)
-	user := seedTestUser(t, 0)
-	pkg := seedPackage(t, func(p *database.Package) {
-		p.ProductType = "addon"
-	})
-	app := newAdminGrantTestApp(admin)
-
-	code, _ := doJSON(t, app, "POST", "/admin/sub/grant", map[string]any{
-		"user_id":    user.ID,
-		"package_id": pkg.ID,
-		"quantity":   1,
-		"reason":     "增量包补偿",
-	})
-	if code != 200 {
-		t.Fatalf("expected 200, got %d", code)
-	}
-
-	var entries []database.BillingEntry
-	database.DB.Where("user_id = ? AND entry_type = ?",
-		user.ID, database.BillingTypeAdminGrantAddon).Find(&entries)
-	if len(entries) != 1 {
-		t.Errorf("got %d admin_grant_addon entries, want 1", len(entries))
-	}
-}
+// TestGrant_AddonProductType — Phase 8 移除增量包，本测试已无意义（删）
 
 // TestGrant_RejectSelf admin 不能给自己赠送。
 func TestGrant_RejectSelf(t *testing.T) {
