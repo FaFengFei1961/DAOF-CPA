@@ -48,7 +48,7 @@ const UserSidebar = () => {
   return (
     <nav
       aria-label="主导航"
-      className="hidden md:flex flex-col w-60 h-screen bg-surface-container/40 border-r border-outline-variant/40 fixed top-0 left-0 z-50"
+      className="hidden lg:flex flex-col w-60 h-screen bg-surface-container/40 border-r border-outline-variant/40 fixed top-0 left-0 z-50"
     >
       {/* Brand: Logo + 应用名 + 副标 */}
       <Link

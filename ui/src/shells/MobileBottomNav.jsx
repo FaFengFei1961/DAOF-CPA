@@ -30,7 +30,7 @@ const MobileBottomNav = () => {
     <>
       {/* 更多面板 */}
       {moreOpen && (
-        <div className="md:hidden fixed inset-0 z-[95]" role="presentation">
+        <div className="lg:hidden fixed inset-0 z-[95]" role="presentation">
           <button
             type="button"
             aria-label={t('COMMON.CLOSE', '关闭')}
@@ -88,7 +88,7 @@ const MobileBottomNav = () => {
       {/* 底部固定 6 格 */}
       <nav
         aria-label={t('MOBILE_NAV.BOTTOM_LABEL', '底部导航')}
-        className="md:hidden fixed bottom-0 left-0 right-0 h-[60px] bg-surface/95 backdrop-blur-md border-t border-outline-variant flex items-center justify-around z-[100] pb-1"
+        className="lg:hidden fixed bottom-0 left-0 right-0 h-[60px] bg-surface/95 backdrop-blur-md border-t border-outline-variant flex items-center justify-around z-[100] pb-1"
       >
         {mobileBottomNav.map(item => {
           const Icon = item.icon;
