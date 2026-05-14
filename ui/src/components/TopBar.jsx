@@ -1,7 +1,7 @@
 import React, { useState, useEffect } from 'react';
 import { useTranslation } from 'react-i18next';
-import { useNavigate } from 'react-router-dom';
-import { User, LogOut, Globe, Search } from 'lucide-react';
+import { useNavigate, Link } from 'react-router-dom';
+import { User, LogOut, Globe, Search, ShieldAlert } from 'lucide-react';
 import { useCurrency } from '../context/CurrencyContext';
 import { useConfirm } from '../context/ConfirmContext';
 import { logger } from '../utils/logger';
@@ -160,14 +160,28 @@ const TopBar = ({ isAuthenticated, onOpenAuth, isAdmin, profile }) => {
                 </span>
               </div>
             )}
-            <div className="flex items-center gap-2 px-2 h-8 rounded hover:bg-on-surface/[0.04] transition">
-              <span className="hidden sm:inline text-sm text-on-surface truncate max-w-[120px]">
-                {isAdmin ? t('TOPBAR.ADMIN') : profile?.username || ''}
-              </span>
-              <div className="w-6 h-6 rounded-full bg-primary text-on-primary flex items-center justify-center shrink-0">
-                <User size={12} />
+            {isAdmin ? (
+              // 重构后 admin 拆到 /admin/* 独立路由树。原"管理员"chip 仅文字无入口
+              // 导致 admin 登录后陷在用户视图出不去；改成显式 Link + ShieldAlert
+              // 强提示，与 AdminSidebar 顶部"返回用户视图"形成对称切换入口。
+              <Link
+                to="/admin"
+                className="flex items-center gap-1.5 h-8 px-2.5 rounded bg-fuchsia-500/15 text-fuchsia-300 border border-fuchsia-500/30 hover:bg-fuchsia-500/25 transition"
+                title={t('TOPBAR.ENTER_ADMIN', '进入管理后台')}
+              >
+                <ShieldAlert size={14} />
+                <span className="hidden sm:inline text-sm font-medium">{t('TOPBAR.ADMIN')}</span>
+              </Link>
+            ) : (
+              <div className="flex items-center gap-2 px-2 h-8 rounded hover:bg-on-surface/[0.04] transition">
+                <span className="hidden sm:inline text-sm text-on-surface truncate max-w-[120px]">
+                  {profile?.username || ''}
+                </span>
+                <div className="w-6 h-6 rounded-full bg-primary text-on-primary flex items-center justify-center shrink-0">
+                  <User size={12} />
+                </div>
               </div>
-            </div>
+            )}
             <button
               type="button"
               onClick={handleLogout}
