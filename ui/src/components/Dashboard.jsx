@@ -6,7 +6,7 @@ import { authFetch, isLoggedIn } from '../utils/authFetch';
 import { logger } from '../utils/logger';
 import { useAuth } from '../context/AuthContext';
 import { useCurrency } from '../context/CurrencyContext';
-import { groupModelsByProvider, inferModelProvider } from '../utils/modelProviders';
+import { groupModelsByProvider, hexA } from '../utils/modelProviders';
 import { usePublicPricing } from '../hooks/usePublicPricing';
 
 // Phase 0：Dashboard 现在自己拿 isAuthenticated（useAuth）+ navigate（useNavigate），
@@ -32,10 +32,18 @@ const Dashboard = () => {
   const [me, setMe] = useState(null);
   const [recentLogs, setRecentLogs] = useState([]);
   const [loadError, setLoadError] = useState(false);
+  // Phase 7.8 ccg P1-6：之前 isAuthenticated && me ? StatStrip : PublicHero —
+  // 已登录用户在 me 返回前 me=null，会先闪一下 PublicHero 营销 CTA。
+  // 加 meLoading 区分"未登录"与"登录中"，登录中走 skeleton 占位。
+  const [meLoading, setMeLoading] = useState(() => isAuthenticated && isLoggedIn());
   const { models, error: pricingError } = usePublicPricing();
 
   useEffect(() => {
-    if (!isAuthenticated || !isLoggedIn()) return undefined;
+    if (!isAuthenticated || !isLoggedIn()) {
+      setMeLoading(false);
+      return undefined;
+    }
+    setMeLoading(true);
 
     const ctrl = new AbortController();
     const swallow = (err) => {
@@ -54,11 +62,15 @@ const Dashboard = () => {
       if (ctrl.signal.aborted) return;
 
       const [meRes, logsRes] = results;
-      if (meRes?.success) setMe(meRes.data);
+      if (meRes?.success) {
+        setMe(meRes.data);
+        setLoadError(false);
+      }
       if (logsRes?.success) setRecentLogs(logsRes.data?.items || logsRes.data || []);
 
       const allFailed = results.every(r => r?.__failed || !r);
       if (allFailed && results.length > 0) setLoadError(true);
+      setMeLoading(false);
     };
 
     run();
@@ -75,10 +87,11 @@ const Dashboard = () => {
         </div>
       )}
 
-      {/* Phase 7.5：撤掉 540px 高 brand-color hero（"装饰为王"），改成 Stripe Dashboard 式
-          数据 strip："余额 / 最近请求 / 总 Token / 模型数"，首屏直接看到自己账户的真实数字。
-          未登录态走轻量 PublicHero 引导（< 140px 高，比原 hero 小 4 倍） */}
-      {isAuthenticated && me ? (
+      {/* Phase 7.5：撤掉 540px 高 brand-color hero，改 Stripe Dashboard 式数据 strip。
+          Phase 7.8 ccg P1-6：登录中显示 skeleton 占位，避免闪营销 CTA */}
+      {meLoading ? (
+        <StatStripSkeleton />
+      ) : isAuthenticated && me ? (
         <StatStrip me={me} recentLogs={recentLogs} formatCurrency={formatCurrency} t={t} />
       ) : (
         <PublicHero onNavigate={onNavigate} t={t} />
@@ -108,7 +121,13 @@ const Dashboard = () => {
 // ─── Stat Strip ─────────────────────────────────────────────────────────
 // Stripe Dashboard / Vercel 风格：4-up stat 横排，纯数据零装饰
 // 数字用 tabular-nums + bold；标签用 caption 全大写；hint 用次要色提示来源
+// Phase 7.8 ccg P0-2：StatStrip 文案 i18n 化
+//   - "Hi, ${username}" → t('DASH.HI', { name }) 模板
+//   - relativeTime 接 i18n.language 走 Intl.RelativeTimeFormat（支持 zh/en）
+//   - "近 8 条" 在 ccg 报告里被指出 misleading（实际只是 logs[0..7]，不是真"近 8"），
+//     文案改成 "近 N 条"明示数量
 const StatStrip = ({ me, recentLogs, formatCurrency, t }) => {
+  const { i18n } = useTranslation();
   const totalReqs = recentLogs.length;
   const totalTokens = recentLogs.reduce(
     (s, l) => s + (l.prompt_tokens || 0) + (l.completion_tokens || 0),
@@ -116,25 +135,28 @@ const StatStrip = ({ me, recentLogs, formatCurrency, t }) => {
   );
   const uniqueModels = new Set(recentLogs.map(l => l.model_name).filter(Boolean)).size;
   const lastTime = recentLogs[0]?.created_at;
-  const lastRel = lastTime ? relativeTime(lastTime) : '—';
+  const lastRel = lastTime ? relativeTime(lastTime, i18n.resolvedLanguage || i18n.language) : '—';
+  const recentHint = totalReqs > 0
+    ? t('DASH.STAT_RECENT_N', { n: totalReqs, defaultValue: '近 {{n}} 条' })
+    : t('DASH.STAT_NO_DATA', '暂无数据');
 
   return (
     <section className="fl-card grid grid-cols-2 md:grid-cols-4 divide-y md:divide-y-0 md:divide-x divide-outline-variant/30 overflow-hidden">
       <Stat
         label={t('DASH.STAT_BALANCE', '账户余额')}
         value={formatCurrency(me.quota ?? 0, 2)}
-        hint={`Hi, ${me.username}`}
+        hint={t('DASH.HI', { name: me.username, defaultValue: 'Hi, {{name}}' })}
         prominent
       />
       <Stat
         label={t('DASH.STAT_REQUESTS', '最近请求')}
         value={totalReqs.toLocaleString()}
-        hint={t('DASH.STAT_RECENT_HINT', '近 8 条')}
+        hint={recentHint}
       />
       <Stat
         label={t('DASH.STAT_TOKENS', 'Token 用量')}
         value={formatCompactNumber(totalTokens)}
-        hint={t('DASH.STAT_RECENT_HINT', '近 8 条')}
+        hint={recentHint}
       />
       <Stat
         label={t('DASH.STAT_LAST', '上次调用')}
@@ -144,6 +166,22 @@ const StatStrip = ({ me, recentLogs, formatCurrency, t }) => {
     </section>
   );
 };
+
+// 登录中骨架 — 4-up 灰条占位，避免闪 PublicHero 营销 CTA
+const StatStripSkeleton = () => (
+  <section
+    className="fl-card grid grid-cols-2 md:grid-cols-4 divide-y md:divide-y-0 md:divide-x divide-outline-variant/30 overflow-hidden"
+    aria-hidden="true"
+  >
+    {[0, 1, 2, 3].map(i => (
+      <div key={i} className="px-5 py-4">
+        <div className="h-2.5 w-16 rounded bg-on-surface/[0.08] animate-pulse" />
+        <div className={`mt-2 h-7 ${i === 0 ? 'w-28' : 'w-20'} rounded bg-on-surface/[0.10] animate-pulse`} />
+        <div className="mt-2 h-2 w-20 rounded bg-on-surface/[0.06] animate-pulse" />
+      </div>
+    ))}
+  </section>
+);
 
 const Stat = ({ label, value, hint, prominent = false }) => (
   <div className="px-5 py-4 min-w-0">
@@ -219,22 +257,29 @@ function formatCompactNumber(n) {
   return n.toLocaleString();
 }
 
-// 相对时间：刚刚 / N 分钟前 / N 小时前 / N 天前
-function relativeTime(ts) {
+// Phase 7.8 ccg P0-2：relativeTime 用 Intl.RelativeTimeFormat（ICU 国际化）
+// 之前硬编码中文 "刚刚 / N 分钟前 / N 天前" 在英文场景下时间戳依然中文，破坏多语言闭环。
+// Intl.RelativeTimeFormat 浏览器原生支持，0 依赖，自动按 locale 输出 "5 minutes ago" /
+// "5 分钟前" / "il y a 5 minutes" 等。
+function relativeTime(ts, locale) {
   const t = new Date(ts).getTime();
   if (isNaN(t)) return '—';
-  const diff = Date.now() - t;
-  if (diff < 60_000) return '刚刚';
-  if (diff < 3_600_000) return `${Math.floor(diff / 60_000)} 分钟前`;
-  if (diff < 86_400_000) return `${Math.floor(diff / 3_600_000)} 小时前`;
-  if (diff < 30 * 86_400_000) return `${Math.floor(diff / 86_400_000)} 天前`;
-  return new Date(ts).toLocaleDateString('zh-CN');
+  const diffSec = Math.round((t - Date.now()) / 1000); // 负数 = 过去
+  const lang = locale || (typeof navigator !== 'undefined' ? navigator.language : 'en');
+  const rtf = new Intl.RelativeTimeFormat(lang, { numeric: 'auto' });
+  const abs = Math.abs(diffSec);
+  if (abs < 60) return rtf.format(diffSec, 'second');
+  if (abs < 3600) return rtf.format(Math.round(diffSec / 60), 'minute');
+  if (abs < 86400) return rtf.format(Math.round(diffSec / 3600), 'hour');
+  if (abs < 30 * 86400) return rtf.format(Math.round(diffSec / 86400), 'day');
+  return new Date(ts).toLocaleDateString(lang);
 }
 
 // Phase 7.5+：撤掉 Phase 7 的横向滚动大色块卡（用户截图反馈"好难看"），改 Vercel 风
 // 紧凑 grid + 横排极简卡：每张卡 ~72px 高，去掉饱和色 hero 渐变，brand 色仅作图标
 // tint 出现，整体回归数据/控制台调性
 const ProviderModelSection = ({ group, formatCurrency, onSeeAll, onModelClick }) => {
+  const { t } = useTranslation();
   const Icon = group.provider.icon;
   const total = group.items.length;
   const items = group.items.slice(0, 6); // grid 6 张刚好覆盖 sm 2x3 / md 3x2 / lg 6x1
@@ -260,7 +305,7 @@ const ProviderModelSection = ({ group, formatCurrency, onSeeAll, onModelClick })
             onClick={onSeeAll}
             className="text-xs text-on-surface-variant hover:text-primary transition inline-flex items-center gap-0.5"
           >
-            {`查看全部 ${total} 个`}
+            {t('DASH.SEE_ALL_N', { n: total, defaultValue: '查看全部 {{n}} 个' })}
             <ChevronRight size={12} />
           </button>
         )}
@@ -281,6 +326,7 @@ const ProviderModelSection = ({ group, formatCurrency, onSeeAll, onModelClick })
 };
 
 const ModelCard = ({ model, provider, formatCurrency, onClick }) => {
+  const { t } = useTranslation();
   const Icon = provider.icon;
   const inPrice = parseFloat(model.min_input_price) || 0;
   const outPrice = parseFloat(model.min_output_price) || 0;
@@ -314,7 +360,7 @@ const ModelCard = ({ model, provider, formatCurrency, onClick }) => {
       <div className="shrink-0 text-right">
         {isFree ? (
           <span className="inline-flex items-center px-1.5 py-0.5 rounded text-[10px] font-bold bg-emerald-500/15 text-emerald-400 border border-emerald-500/30">
-            FREE
+            {t('DASH.FREE', 'FREE')}
           </span>
         ) : (
           <>
@@ -324,7 +370,7 @@ const ModelCard = ({ model, provider, formatCurrency, onClick }) => {
             </div>
             {outPrice > 0 && outPrice !== inPrice && (
               <div className="font-mono text-[10px] text-on-surface-variant tabular-nums">
-                out {formatCurrency(outPrice, 2)}
+                {t('DASH.OUT_PRICE', { price: formatCurrency(outPrice, 2), defaultValue: 'out {{price}}' })}
               </div>
             )}
           </>
@@ -380,14 +426,6 @@ function formatTime(s) {
   const pad = (n) => String(n).padStart(2, '0');
   const hm = `${pad(d.getHours())}:${pad(d.getMinutes())}`;
   return sameDay ? hm : `${pad(d.getMonth() + 1)}-${pad(d.getDate())} ${hm}`;
-}
-
-function hexA(hex, alpha) {
-  if (!hex || hex[0] !== '#') return `rgba(124, 92, 255, ${alpha})`;
-  const m = hex.match(/^#([0-9a-f]{6})$/i);
-  if (!m) return `rgba(124, 92, 255, ${alpha})`;
-  const n = parseInt(m[1], 16);
-  return `rgba(${(n >> 16) & 255}, ${(n >> 8) & 255}, ${n & 255}, ${alpha})`;
 }
 
 export default Dashboard;
