@@ -26,15 +26,39 @@ const TopBar = ({ isAuthenticated, onOpenAuth, isAdmin, profile }) => {
   const [searchQ, setSearchQ] = useState('');
   const [menuOpen, setMenuOpen] = useState(false);
   const menuRef = useRef(null);
+  const menuTriggerRef = useRef(null);
 
-  // 头像菜单点外部关闭（MS Store 行为）
+  // 头像菜单 a11y（Phase 7.8 ccg 共识 P0）：
+  // - 点外部关闭（mousedown）
+  // - Escape 键关闭 + 焦点回 trigger（WCAG 2.2 AA 强制）
+  // - 打开后自动 focus 第一个可交互项（菜单内首个 button），便于键盘用户立即操作
   useEffect(() => {
     if (!menuOpen) return;
     const onClick = (e) => {
       if (menuRef.current && !menuRef.current.contains(e.target)) setMenuOpen(false);
     };
+    const onKey = (e) => {
+      if (e.key === 'Escape') {
+        e.preventDefault();
+        setMenuOpen(false);
+        // 关闭后焦点回 trigger 按钮（screen reader 用户的"返回锚点"）
+        menuTriggerRef.current?.focus();
+      }
+    };
     document.addEventListener('mousedown', onClick);
-    return () => document.removeEventListener('mousedown', onClick);
+    document.addEventListener('keydown', onKey);
+    // 打开后自动聚焦菜单首项（rAF 等 DOM 渲染完成）
+    const focusId = requestAnimationFrame(() => {
+      const firstFocusable = menuRef.current?.querySelector(
+        'button:not([disabled]), a[href]'
+      );
+      firstFocusable?.focus();
+    });
+    return () => {
+      document.removeEventListener('mousedown', onClick);
+      document.removeEventListener('keydown', onKey);
+      cancelAnimationFrame(focusId);
+    };
   }, [menuOpen]);
 
   useEffect(() => {
@@ -79,15 +103,15 @@ const TopBar = ({ isAuthenticated, onOpenAuth, isAdmin, profile }) => {
   }, []);
 
   return (
-    <header className="h-12 flex items-center gap-2 px-3 sm:px-4 fl-mica w-full shrink-0 sticky top-0 z-40 border-b border-outline-variant/40">
+    <header className="h-12 flex items-center gap-2 px-3 sm:px-4 bg-surface/85 backdrop-blur-md w-full shrink-0 sticky top-0 z-40 border-b border-outline-variant/40">
       {/* 左：移动端 Logo */}
-      <div className="flex items-center gap-2 md:hidden shrink-0">
+      <div className="flex items-center gap-2 lg:hidden shrink-0">
         <img src="/daof_logo.png" alt="" className="w-7 h-7 rounded" />
         <span className="text-sm font-semibold text-on-surface">DAOF-CPA</span>
       </div>
 
       {/* 中：搜索框（MS Store 标志性元素） — acrylic 胶囊 + ⌘K 快捷键提示 */}
-      <form onSubmit={onSearchSubmit} className="hidden md:flex flex-1 max-w-2xl mx-auto relative">
+      <form onSubmit={onSearchSubmit} className="hidden lg:flex flex-1 max-w-2xl mx-auto relative">
         <label htmlFor="topbar-search" className="sr-only">
           {t('TOPBAR.SEARCH_PLACEHOLDER', '搜索模型、套餐')}
         </label>
@@ -101,7 +125,7 @@ const TopBar = ({ isAuthenticated, onOpenAuth, isAdmin, profile }) => {
           value={searchQ}
           onChange={(e) => setSearchQ(e.target.value)}
           placeholder={t('TOPBAR.SEARCH_PLACEHOLDER', '搜索模型、套餐')}
-          className="w-full h-9 fl-acrylic rounded-overlay pl-9 pr-14 text-sm text-on-surface placeholder:text-on-surface-variant outline-none focus:border-primary transition-colors"
+          className="w-full h-9 bg-surface-container/60 border border-outline-variant/60 rounded-overlay pl-9 pr-14 text-sm text-on-surface placeholder:text-on-surface-variant outline-none focus:border-primary focus:bg-surface-container transition-colors"
         />
         <kbd className="hidden lg:flex absolute right-3 top-1/2 -translate-y-1/2 items-center gap-0.5 h-5 px-1.5 rounded text-[10px] font-mono text-on-surface-variant bg-on-surface/5 border border-outline-variant/60 pointer-events-none">
           <span>⌘</span><span>K</span>
@@ -132,6 +156,7 @@ const TopBar = ({ isAuthenticated, onOpenAuth, isAdmin, profile }) => {
         {isAuthenticated || isAdmin ? (
           <div ref={menuRef} className="relative ml-1">
             <button
+              ref={menuTriggerRef}
               type="button"
               onClick={() => setMenuOpen(v => !v)}
               className="flex items-center gap-1.5 h-8 pl-1 pr-2 rounded hover:bg-on-surface/[0.04] transition"
