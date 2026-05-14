@@ -1,20 +1,11 @@
-import React, { useState } from 'react';
+import React, { useState, useMemo } from 'react';
 import { useTranslation } from 'react-i18next';
 import { Search, Server, Database, HelpCircle, ChevronRight } from 'lucide-react';
 import { useCurrency } from '../context/CurrencyContext';
 import { StorePage } from './store/StorePrimitives';
-import { groupModelsByProvider, inferModelProvider } from '../utils/modelProviders';
+import { groupModelsByProvider, inferModelProvider, brandFor, hexA } from '../utils/modelProviders';
 import { usePublicPricing } from '../hooks/usePublicPricing';
 import BillingRulesPanel from './BillingRulesPanel';
-
-// 把 PROVIDER_META.name → brand 系映射；MS Store 频道色统一
-// （PROVIDER_META 是 8 个 provider，brand 系是 5 类，多余的 fall-back 到 other）
-const PROVIDER_TO_BRAND = {
-  Anthropic: 'claude',
-  OpenAI: 'codex',
-  Google: 'gemini',
-};
-const brandFor = (providerName) => PROVIDER_TO_BRAND[providerName] || 'other';
 
 const PricingDash = () => {
     const { t } = useTranslation();
@@ -29,23 +20,26 @@ const PricingDash = () => {
         return t;
     };
 
-    const filteredModels = models.filter(m =>
-        m.model_id.toLowerCase().includes(searchTerm.toLowerCase())
-    );
-    const providerGroups = groupModelsByProvider(filteredModels);
+    // Phase 7.8 ccg P0-3：用 useMemo 缓存 filter + group 派生计算
+    // 之前每次 render 都全量 O(N) 遍历 + 重新分组，搜索框高频输入会造成 UI 掉帧
+    const filteredModels = useMemo(() => {
+        const q = searchTerm.toLowerCase();
+        return q ? models.filter(m => m.model_id.toLowerCase().includes(q)) : models;
+    }, [models, searchTerm]);
+    const providerGroups = useMemo(() => groupModelsByProvider(filteredModels), [filteredModels]);
 
     return (
             <StorePage
             icon={Server}
-            title={t('PRICING.TITLE') || '模型费率大盘'}
-            subtitle={t('PRICING.DESC') || '这里展示当前可用模型与公开计费费率。'}
+            title={t('PRICING.TITLE', '模型费率大盘')}
+            subtitle={t('PRICING.DESC', '这里展示当前可用模型与公开计费费率。')}
         >
             <div className="fl-card flex flex-col sm:flex-row gap-4 items-center justify-between p-4">
                 <div className="relative w-full sm:w-96">
                     <Search className="absolute left-3 top-1/2 -translate-y-1/2 text-on-surface-variant" size={18} />
                     <input
                         type="text"
-                        placeholder={t('PRICING.SEARCH_PLACEHOLDER') || '搜索模型名称 (如 gpt-4, claude)...'}
+                        placeholder={t('PRICING.SEARCH_PLACEHOLDER', '搜索模型名称 (如 gpt-4, claude)...')}
                         value={searchTerm}
                         onChange={(e) => setSearchTerm(e.target.value)}
                         className="w-full bg-surface-container-high border border-outline-variant text-on-surface text-sm rounded-lg focus:ring-1 focus:ring-blue-500 focus:border-primary block p-2.5 pl-10 "
@@ -62,19 +56,19 @@ const PricingDash = () => {
                         <thead>
                             <tr className="border-b border-outline-variant">
                                 <th className="px-4 py-3 text-[11px] font-semibold text-on-surface-variant uppercase tracking-wider">
-                                    {t('PRICING.COL_MODEL') || 'Model'}
+                                    {t('PRICING.COL_MODEL', 'Model')}
                                 </th>
                                 <th className="px-4 py-3 text-[11px] font-semibold text-on-surface-variant uppercase tracking-wider text-center w-[120px]">
                                     {t('PRICING.COL_MAX_CTX')}
                                 </th>
                                 <th className="px-4 py-3 text-[11px] font-semibold text-on-surface-variant uppercase tracking-wider text-right">
-                                    {t('PRICING.COL_INPUT') || 'Input ($/1M)'}
+                                    {t('PRICING.COL_INPUT', 'Input ($/1M)')}
                                 </th>
                                 <th className="px-4 py-3 text-[11px] font-semibold text-on-surface-variant uppercase tracking-wider text-right">
-                                    {t('PRICING.COL_OUTPUT') || 'Output ($/1M)'}
+                                    {t('PRICING.COL_OUTPUT', 'Output ($/1M)')}
                                 </th>
                                 <th className="px-4 py-3 text-[11px] font-semibold text-on-surface-variant uppercase tracking-wider text-right">
-                                    {t('PRICING.COL_CACHE') || 'Cached ($/1M)'}
+                                    {t('PRICING.COL_CACHE', 'Cached ($/1M)')}
                                 </th>
                             </tr>
                         </thead>
@@ -84,14 +78,14 @@ const PricingDash = () => {
                                     <td colSpan="5" className="p-12 text-center text-on-surface-variant">
                                         <div className="flex flex-col items-center justify-center space-y-3">
                                             <Database className="animate-pulse" size={32} />
-                                            <span>{t('PRICING.LOADING') || '聚合全网模型算力中...'}</span>
+                                            <span>{t('PRICING.LOADING', '聚合全网模型算力中...')}</span>
                                         </div>
                                     </td>
                                 </tr>
                             ) : filteredModels.length === 0 ? (
                                 <tr>
                                     <td colSpan="5" className="p-12 text-center text-on-surface-variant">
-                                        {searchTerm ? t('PRICING.NOT_FOUND') || '未找到该模型' : t('PRICING.EMPTY') || '暂无可用模型'}
+                                        {searchTerm ? t('PRICING.NOT_FOUND', '未找到该模型') : t('PRICING.EMPTY', '暂无可用模型')}
                                     </td>
                                 </tr>
                             ) : (
@@ -131,7 +125,7 @@ const PricingDash = () => {
             <div className="fl-card p-4 flex gap-3 text-on-surface-variant text-sm">
                 <HelpCircle className="mt-0.5 text-primary shrink-0" size={18} />
                 <p>
-                    {t('PRICING.FOOTER_HINT') || '费率均以 $ USD 每 100 万 (1M) Tokens 计算。当前系统智能汇率与计价单位可能在个人偏好设置中全局转换，但本质底座均按此标准比例消耗您的钱包余额。'}
+                    {t('PRICING.FOOTER_HINT', '费率均以 $ USD 每 100 万 (1M) Tokens 计算。当前系统智能汇率与计价单位可能在个人偏好设置中全局转换，但本质底座均按此标准比例消耗您的钱包余额。')}
                 </p>
             </div>
         </StorePage>
@@ -182,7 +176,7 @@ const PricingRow = ({ model: m, provider, formatCurrency, formatTokens, t }) => 
                 </div>
                 {m.context_threshold > 0 && (
                     <div className="flex items-center gap-1.5 cursor-help" title={t('PRICING.LONG_CONTEXT_HINT', { threshold: m.context_threshold })}>
-                        <span className="text-[10px] font-medium bg-amber-500/15 text-amber-300 rounded px-1.5 py-0.5 border border-amber-500/30">{`>${formatTokens(m.context_threshold)} `}{t('PRICING.TIER_TAG') || '阶梯'}</span>
+                        <span className="text-[10px] font-medium bg-amber-500/15 text-amber-300 rounded px-1.5 py-0.5 border border-amber-500/30">{`>${formatTokens(m.context_threshold)} `}{t('PRICING.TIER_TAG', '阶梯')}</span>
                         <span className="font-mono text-xs tabular-nums text-amber-300/90">{formatCurrency(m.min_high_in_price, 4)}</span>
                     </div>
                 )}
@@ -195,7 +189,7 @@ const PricingRow = ({ model: m, provider, formatCurrency, formatTokens, t }) => 
                 </div>
                 {m.context_threshold > 0 && (
                     <div className="flex items-center gap-1.5 cursor-help" title={t('PRICING.LONG_CONTEXT_HINT', { threshold: m.context_threshold })}>
-                        <span className="text-[10px] font-medium bg-amber-500/15 text-amber-300 rounded px-1.5 py-0.5 border border-amber-500/30">{`>${formatTokens(m.context_threshold)} `}{t('PRICING.TIER_TAG') || '阶梯'}</span>
+                        <span className="text-[10px] font-medium bg-amber-500/15 text-amber-300 rounded px-1.5 py-0.5 border border-amber-500/30">{`>${formatTokens(m.context_threshold)} `}{t('PRICING.TIER_TAG', '阶梯')}</span>
                         <span className="font-mono text-xs tabular-nums text-amber-300/90">{formatCurrency(m.min_high_out_price, 4)}</span>
                     </div>
                 )}
@@ -206,7 +200,7 @@ const PricingRow = ({ model: m, provider, formatCurrency, formatTokens, t }) => 
                 <div className="font-mono text-sm tabular-nums text-emerald-400">{m.min_cache_price > 0 ? formatCurrency(m.min_cache_price, 4) : '-'}</div>
                 {m.context_threshold > 0 && m.min_high_cache_price > 0 && (
                     <div className="flex items-center gap-1.5 cursor-help" title={t('PRICING.LONG_CONTEXT_HINT', { threshold: m.context_threshold })}>
-                        <span className="text-[10px] font-medium bg-amber-500/15 text-amber-300 rounded px-1.5 py-0.5 border border-amber-500/30">{`>${formatTokens(m.context_threshold)} `}{t('PRICING.TIER_TAG') || '阶梯'}</span>
+                        <span className="text-[10px] font-medium bg-amber-500/15 text-amber-300 rounded px-1.5 py-0.5 border border-amber-500/30">{`>${formatTokens(m.context_threshold)} `}{t('PRICING.TIER_TAG', '阶梯')}</span>
                         <span className="font-mono text-xs tabular-nums text-amber-300/90">{formatCurrency(m.min_high_cache_price, 4)}</span>
                     </div>
                 )}
@@ -224,13 +218,5 @@ const PricingRow = ({ model: m, provider, formatCurrency, formatTokens, t }) => 
         </td>
     </tr>
 );
-
-function hexA(hex, alpha) {
-    if (!hex || hex[0] !== '#') return `rgba(124, 92, 255, ${alpha})`;
-    const m = hex.match(/^#([0-9a-f]{6})$/i);
-    if (!m) return `rgba(124, 92, 255, ${alpha})`;
-    const n = parseInt(m[1], 16);
-    return `rgba(${(n >> 16) & 255}, ${(n >> 8) & 255}, ${n & 255}, ${alpha})`;
-}
 
 export default PricingDash;
