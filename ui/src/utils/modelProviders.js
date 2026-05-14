@@ -55,3 +55,31 @@ export const groupModelsByProvider = (models = []) => {
     }))
     .sort((a, b) => a.provider.order - b.provider.order || a.provider.name.localeCompare(b.provider.name));
 };
+
+// Phase 7.8 ccg P0-4：把以前在 Dashboard.jsx / PricingDash.jsx 各自重复的工具
+// 函数 + 映射收到这里集中维护。
+//
+// PROVIDER_TO_BRAND：把 inferModelProvider 给的 PROVIDER_META.name（Anthropic /
+// OpenAI / Google ...）映射到 brand chip 数据 attribute（claude / codex / gemini
+// / combo / other）。fl-brand-chip[data-brand=...] 用这个名字派生颜色。
+export const PROVIDER_TO_BRAND = {
+  Anthropic: 'claude',
+  OpenAI: 'codex',
+  Google: 'gemini',
+};
+
+export const brandFor = (providerName) => PROVIDER_TO_BRAND[providerName] || 'other';
+
+// hexA(hex, alpha) — 把 #rrggbb 转成 rgba(r, g, b, alpha) 字符串。
+// 之前 Dashboard.jsx + PricingDash.jsx + StorePrimitives.jsx 各自实现了一份，
+// 全部 fallback 都是 rgba(124, 92, 255)（旧 lavender 紫），现在 fallback 统一到
+// indigo (#6366f1) 与 Phase 7.7-2 主色一致；接受 #rgb 短写也能容错。
+export function hexA(hex, alpha = 1) {
+  const fallback = `rgba(99, 102, 241, ${alpha})`; // indigo
+  if (!hex || typeof hex !== 'string' || hex[0] !== '#') return fallback;
+  let s = hex.slice(1);
+  if (s.length === 3) s = s.split('').map(c => c + c).join('');
+  if (!/^[0-9a-fA-F]{6}$/.test(s)) return fallback;
+  const n = parseInt(s, 16);
+  return `rgba(${(n >> 16) & 255}, ${(n >> 8) & 255}, ${n & 255}, ${alpha})`;
+}
