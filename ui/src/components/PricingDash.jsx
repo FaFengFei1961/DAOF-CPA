@@ -1,6 +1,6 @@
 import React, { useState, useMemo } from 'react';
 import { useTranslation } from 'react-i18next';
-import { Search, Server, Database, HelpCircle, ChevronRight } from 'lucide-react';
+import { Search, Server, Database, ChevronRight } from 'lucide-react';
 import { useCurrency } from '../context/CurrencyContext';
 import { StorePage } from './store/StorePrimitives';
 import { groupModelsByProvider, inferModelProvider, brandFor, hexA } from '../utils/modelProviders';
@@ -122,12 +122,8 @@ const PricingDash = () => {
                 </div>
             </div>
             
-            <div className="fl-card p-4 flex gap-3 text-on-surface-variant text-sm">
-                <HelpCircle className="mt-0.5 text-primary shrink-0" size={18} />
-                <p>
-                    {t('PRICING.FOOTER_HINT', '费率均以 $ USD 每 100 万 (1M) Tokens 计算。当前系统智能汇率与计价单位可能在个人偏好设置中全局转换，但本质底座均按此标准比例消耗您的钱包余额。')}
-                </p>
-            </div>
+            {/* Phase 8：删 footer hint 长文 —— 计费规则已在上方 BillingRulesPanel
+                内完整说明，footer 重复就是冗余信息 */}
         </StorePage>
     );
 };

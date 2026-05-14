@@ -5,7 +5,6 @@ import toast from 'react-hot-toast';
 import { useConfirm } from '../context/ConfirmContext';
 import { authFetch, readAuthState } from '../utils/authFetch';
 import { isPageCacheFresh, readPageCache, writePageCache } from '../utils/pageCache';
-import BalanceConsumePreferences from './BalanceConsumePreferences';
 
 const PROFILE_CACHE_TTL_MS = 30000;
 const getProfileCacheKey = () => {
@@ -153,11 +152,9 @@ const AccountProfile = () => {
                     </div>
                 )}
 
-                {/* 通知偏好已迁移至独立的"通知偏好"二级 tab，避免账号档案与渠道偏好混杂 */}
-
-                {/* fix UX 反馈（用户 2026-05-10）：余额消费控制原嵌在"我的产品"列表里错位 + 冗余，已挪到此处。
-                    这是真正的账户配置项（开关 + 限额 + 重置窗口），与三段消费模型的第三段对应。 */}
-                <BalanceConsumePreferences />
+                {/* 通知偏好已迁移至独立的"通知偏好"二级 tab */}
+                {/* Phase 8：余额消费控制（BalanceConsumePreferences）也升级为独立 tab
+                    "消费偏好"，从账号 tab 抽出 — 它是消费控制规则不是账号信息，独立更合理 */}
 
                 {profile.role === 'admin' && (
                     <div className="bg-surface-container-high border border-red-900/30 rounded-xl p-6">

@@ -1,6 +1,6 @@
 import React, { useEffect, useState } from 'react';
 import { useTranslation } from 'react-i18next';
-import { useNavigate } from 'react-router-dom';
+import { Link, useNavigate } from 'react-router-dom';
 import { ShieldAlert } from 'lucide-react';
 import { useAuth } from '../context/AuthContext';
 import { useCurrency } from '../context/CurrencyContext';
@@ -113,6 +113,9 @@ const Dashboard = () => {
 
 // ─── StatStrip ──────────────────────────────────────────────────────────
 // 4-up 数据条：余额 / 最近请求 / Token 用量 / 上次调用
+//
+// Phase 8：明示是"近 8 条快照"，不是真正的总统计 — 跟 /stats 数据看板的
+// "24h/7d/30d 真聚合"区分；底部加"详细统计"链接引导用户去 /stats 看完整数据
 const StatStrip = ({ me, recentLogs, formatCurrency, i18n, t }) => {
   const totalReqs = recentLogs.length;
   const totalTokens = recentLogs.reduce(
@@ -121,33 +124,40 @@ const StatStrip = ({ me, recentLogs, formatCurrency, i18n, t }) => {
   );
   const lastTime = recentLogs[0]?.created_at;
   const lastRel = lastTime ? relativeTime(lastTime, i18n.resolvedLanguage || i18n.language) : '—';
-  const recentHint = totalReqs > 0
-    ? t('DASH.STAT_RECENT_N', { n: totalReqs, defaultValue: '近 {{n}} 条' })
+  const snapshotHint = totalReqs > 0
+    ? t('DASH.STAT_SNAPSHOT_N', { n: totalReqs, defaultValue: '近 {{n}} 条快照' })
     : t('DASH.STAT_NO_DATA', '暂无数据');
 
   return (
-    <section className="fl-card grid grid-cols-2 md:grid-cols-4 divide-y md:divide-y-0 md:divide-x divide-outline-variant/30 overflow-hidden">
-      <Stat
-        label={t('DASH.STAT_BALANCE', '账户余额')}
-        value={me ? formatCurrency(me.quota ?? 0, 2) : '—'}
-        hint={me?.username || ''}
-        prominent
-      />
-      <Stat
-        label={t('DASH.STAT_REQUESTS', '最近请求')}
-        value={totalReqs.toLocaleString()}
-        hint={recentHint}
-      />
-      <Stat
-        label={t('DASH.STAT_TOKENS', 'Token 用量')}
-        value={formatCompactNumber(totalTokens)}
-        hint={recentHint}
-      />
-      <Stat
-        label={t('DASH.STAT_LAST', '上次调用')}
-        value={lastRel}
-        hint={lastTime ? '' : t('DASH.STAT_NO_DATA', '暂无数据')}
-      />
+    <section>
+      <div className="fl-card grid grid-cols-2 md:grid-cols-4 divide-y md:divide-y-0 md:divide-x divide-outline-variant/30 overflow-hidden">
+        <Stat
+          label={t('DASH.STAT_BALANCE', '账户余额')}
+          value={me ? formatCurrency(me.quota ?? 0, 2) : '—'}
+          hint={me?.username || ''}
+          prominent
+        />
+        <Stat
+          label={t('DASH.STAT_REQUESTS', '最近请求')}
+          value={totalReqs.toLocaleString()}
+          hint={snapshotHint}
+        />
+        <Stat
+          label={t('DASH.STAT_TOKENS', 'Token 用量')}
+          value={formatCompactNumber(totalTokens)}
+          hint={snapshotHint}
+        />
+        <Stat
+          label={t('DASH.STAT_LAST', '上次调用')}
+          value={lastRel}
+          hint={lastTime ? '' : t('DASH.STAT_NO_DATA', '暂无数据')}
+        />
+      </div>
+      <div className="text-[11px] text-on-surface-variant mt-2 px-1">
+        <Link to="/stats" className="hover:text-primary hover:underline">
+          {t('DASH.STAT_FULL_LINK', '查看完整用量统计 (24h / 7d / 30d) →')}
+        </Link>
+      </div>
     </section>
   );
 };

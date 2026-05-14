@@ -9,7 +9,6 @@ import { authFetch, readAuthState } from '../utils/authFetch';
 import { isPageCacheFresh, readPageCache, writePageCache } from '../utils/pageCache';
 import Pagination from './common/Pagination';
 import { useCurrency } from '../context/CurrencyContext';
-import BillingRulesPanel from './BillingRulesPanel';
 
 // EntryType → 显示元数据。每种类型一个图标 + 颜色 + 中文标签。
 // label 通过 i18n 拿，未配置时显示 fallback。
@@ -272,7 +271,8 @@ const BillsPage = () => {
         </div>
       )}
 
-      <BillingRulesPanel compact />
+      {/* Phase 8：删 BillingRulesPanel —— 计费规则统一在 /pricing 一站式呈现，
+          /bills 只看历史交易，不重复展示规则 */}
 
       {/* 筛选 */}
       <section className="rounded-xl bg-surface-container/40 border border-outline-variant/40 p-4 space-y-3">

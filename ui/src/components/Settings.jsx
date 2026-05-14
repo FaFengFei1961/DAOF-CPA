@@ -1,9 +1,10 @@
 import React, { useState, useEffect } from 'react';
 import { useTranslation } from 'react-i18next';
-import { Monitor, User, Bell, Package as PackageIcon } from 'lucide-react';
+import { Monitor, User, Bell, Package as PackageIcon, Wallet } from 'lucide-react';
 import AccountProfile from './AccountProfile';
 import UserCoupons from './UserCoupons';
 import NotificationPreferences from './NotificationPreferences';
+import BalanceConsumePreferences from './BalanceConsumePreferences';
 import { useTheme } from '../context/ThemeContext';
 
 /**
@@ -38,6 +39,7 @@ const Settings = ({ initialTab }) => {
   const userTabs = [
     { id: 'general',            label: t('SETTINGS.TAB_GENERAL', '外观'), icon: Monitor },
     { id: 'account',            label: t('SETTINGS.TAB_ACCOUNT', '账号'), icon: User },
+    { id: 'consume_prefs',      label: t('SETTINGS.TAB_CONSUME_PREFS', '消费偏好'), icon: Wallet },
     { id: 'notification_prefs', label: t('SETTINGS.TAB_NOTIFICATION_PREFS', '通知偏好'), icon: Bell },
     { id: 'my_coupons',         label: t('SETTINGS.TAB_MY_COUPONS', '我的优惠券'), icon: PackageIcon },
   ];
@@ -169,6 +171,21 @@ const Settings = ({ initialTab }) => {
 
         {/* ─── 账号 ───────────────────── */}
         {activeTab === 'account' && <AccountProfile />}
+
+        {activeTab === 'consume_prefs' && (
+          <div className="w-full">
+            <header className="mb-8 border-b border-outline-variant pb-6">
+              <h1 className="text-xl md:text-2xl font-bold tracking-tight text-on-surface flex items-center gap-3">
+                <Wallet size={22} className="text-primary" />
+                {t('SETTINGS.TAB_CONSUME_PREFS', '消费偏好')}
+              </h1>
+              <p className="text-on-surface-variant mt-2 text-sm">
+                {t('SETTINGS.CONSUME_PREFS_DESC', '订阅用尽后是否允许从美元余额继续扣费 + 周期限额控制')}
+              </p>
+            </header>
+            <BalanceConsumePreferences />
+          </div>
+        )}
 
         {/* ─── 通知偏好 ─────────────────── */}
         {activeTab === 'notification_prefs' && (
