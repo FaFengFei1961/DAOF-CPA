@@ -220,33 +220,36 @@ const UpgradePage = ({ onPurchaseSuccess }) => {
     <div className="w-full">
       <StorePage>
 
-      {/* 一级 tab：我的 / 商店（segmented control） */}
-      <div className="inline-flex rounded-overlay border border-outline-variant bg-surface-container p-0.5 self-start">
-        {[
-          { id: 'mine', label: t('PRODUCTS.PANE_MINE', '我的') },
-          { id: 'store', label: t('PRODUCTS.PANE_STORE', '商店') },
-        ].map(p => {
-          const active = pane === p.id;
-          return (
-            <button
-              key={p.id}
-              type="button"
-              onClick={() => setPaneAndUrl(p.id)}
-              className={`px-6 py-2 rounded-control text-sm font-semibold transition ${active
-                ? 'bg-primary text-on-primary'
-                : 'text-on-surface-variant hover:text-on-surface'}`}
-            >
-              {p.label}
-            </button>
-          );
-        })}
-      </div>
+      {/* Phase 8：未登录态隐藏"我的/商店"切换（强制 store 分支显示套餐），
+          已登录才出现 segmented control 让用户在"我的订阅"和"套餐商店"之间切 */}
+      {isAuthenticated && (
+        <div className="inline-flex rounded-overlay border border-outline-variant bg-surface-container p-0.5 self-start">
+          {[
+            { id: 'mine', label: t('PRODUCTS.PANE_MINE', '我的') },
+            { id: 'store', label: t('PRODUCTS.PANE_STORE', '商店') },
+          ].map(p => {
+            const active = pane === p.id;
+            return (
+              <button
+                key={p.id}
+                type="button"
+                onClick={() => setPaneAndUrl(p.id)}
+                className={`px-6 py-2 rounded-control text-sm font-semibold transition ${active
+                  ? 'bg-primary text-on-primary'
+                  : 'text-on-surface-variant hover:text-on-surface'}`}
+              >
+                {p.label}
+              </button>
+            );
+          })}
+        </div>
+      )}
 
-      {/* "我的"分支：直接渲染 MySubscriptions 内容（无自身 hero） */}
-      {pane === 'mine' && <MySubscriptions isAuthenticated={isLoggedIn()} embedded />}
+      {/* "我的"分支：仅已登录可见 */}
+      {isAuthenticated && pane === 'mine' && <MySubscriptions isAuthenticated={isLoggedIn()} embedded />}
 
-      {/* "商店"分支：套餐 grid（Phase 8 后只有 subscription 一种） */}
-      {pane === 'store' && (<>
+      {/* "商店"分支：套餐 grid（未登录或已登录选 store 都展示） */}
+      {(!isAuthenticated || pane === 'store') && (<>
       {loading ? <div className="text-center py-20 text-on-surface-variant">{t('UPGRADE.LOADING', '加载中...')}</div>
         : (() => {
           const filtered = pkgs;

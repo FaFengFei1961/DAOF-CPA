@@ -7,6 +7,7 @@ import { useCurrency } from '../context/CurrencyContext';
 import { authFetch, isLoggedIn } from '../utils/authFetch';
 import { logger } from '../utils/logger';
 import MySubscriptions from './MySubscriptions';
+import UpgradePage from './UpgradePage';
 
 /**
  * Dashboard — 综合信息控制台（Phase 8 重做）
@@ -75,6 +76,8 @@ const Dashboard = () => {
   }
 
   // ─── 未登录 ───────────────────────────────────────────────────────────
+  // SignInBanner 提示登录可看个人数据 + 下方直接展示套餐 grid（套餐定价是公开
+  // 信息，让访客看到平台提供什么；点购买时再弹登录）
   if (!isAuthenticated) {
     return (
       <div className="space-y-6 py-6">
@@ -90,6 +93,7 @@ const Dashboard = () => {
             {t('DASH.SIGN_IN_ACTION', '登录')}
           </button>
         </section>
+        <UpgradePage />
       </div>
     );
   }
