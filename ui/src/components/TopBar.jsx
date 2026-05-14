@@ -1,5 +1,6 @@
 import React, { useState, useEffect } from 'react';
 import { useTranslation } from 'react-i18next';
+import { useNavigate } from 'react-router-dom';
 import { User, LogOut, Globe, Search } from 'lucide-react';
 import { useCurrency } from '../context/CurrencyContext';
 import { useConfirm } from '../context/ConfirmContext';
@@ -16,9 +17,10 @@ import NotificationCenter from './NotificationCenter';
  *  - 控件统一 32px 高，rounded (8px)，hover 时 subtle bg
  *  - 移动端：左侧露 logo + 应用名，右侧只保留头像 / 登录
  */
-const TopBar = ({ isAuthenticated, onOpenAuth, isAdmin, profile, onNavigate }) => {
+const TopBar = ({ isAuthenticated, onOpenAuth, isAdmin, profile }) => {
   const confirm = useConfirm();
   const { t, i18n } = useTranslation();
+  const navigate = useNavigate();
   const { displayCurrency, toggleCurrency, formatCurrency } = useCurrency();
   const [locales, setLocales] = useState([]);
   const [searchQ, setSearchQ] = useState('');
@@ -49,9 +51,7 @@ const TopBar = ({ isAuthenticated, onOpenAuth, isAdmin, profile, onNavigate }) =
     e.preventDefault();
     const q = searchQ.trim();
     if (!q) return;
-    // 跳到 pricing 页（带 query），后续 PricingDash 自己读 hash
-    window.location.hash = `#pricing?q=${encodeURIComponent(q)}`;
-    onNavigate?.('pricing');
+    navigate(`/pricing?q=${encodeURIComponent(q)}`);
   };
 
   // ⌘K / Ctrl+K：聚焦搜索框，对齐 Microsoft Store 的全局搜索快捷键
@@ -101,7 +101,6 @@ const TopBar = ({ isAuthenticated, onOpenAuth, isAdmin, profile, onNavigate }) =
         {/* 通知中心：所有人都看得到（未登录时点开会引导登录） */}
         <NotificationCenter
           isAuthenticated={isAuthenticated || isAdmin}
-          onNavigate={onNavigate}
           onSignIn={onOpenAuth}
         />
 

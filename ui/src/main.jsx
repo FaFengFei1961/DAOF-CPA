@@ -1,13 +1,16 @@
-import { StrictMode } from 'react'
+import { StrictMode, Suspense } from 'react'
 import { createRoot } from 'react-dom/client'
 import './index.css'
-import { Suspense } from 'react'
 import App from './App.jsx'
 import './i18n.js'
 import './fluent-reveal.js'
 
 import { CurrencyProvider } from './context/CurrencyContext.jsx'
 import { ThemeProvider } from './context/ThemeContext.jsx'
+import { redirectLegacyHash } from './utils/hashRedirect.js'
+
+// Phase 0：旧 hash 路由兼容（必须在 BrowserRouter 挂载前执行）
+redirectLegacyHash();
 
 createRoot(document.getElementById('root')).render(
   <StrictMode>

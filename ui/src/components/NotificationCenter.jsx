@@ -1,5 +1,6 @@
 import React, { useState, useEffect, useCallback, useRef } from 'react';
 import { useTranslation } from 'react-i18next';
+import { useNavigate } from 'react-router-dom';
 import { ArrowLeft, Bell, ExternalLink, X } from 'lucide-react';
 import toast from 'react-hot-toast';
 import { authFetch, isLoggedIn } from '../utils/authFetch';
@@ -14,8 +15,9 @@ const SEVERITY_COLOR = {
 // 通知中心。挂在 TopBar 作为下拉面板。
 // 未登录 → 显示空态 + "登录后查看通知"引导按钮，不发请求
 // 已登录 → 拉 /api/notifications，每 60s 自动刷新
-const NotificationCenter = ({ trigger, onNavigate, isAuthenticated, onSignIn }) => {
+const NotificationCenter = ({ isAuthenticated, onSignIn }) => {
   const { t } = useTranslation();
+  const navigate = useNavigate();
   const [open, setOpen] = useState(false);
   const [notifs, setNotifs] = useState([]);
   const [unread, setUnread] = useState(0);
@@ -128,21 +130,12 @@ const NotificationCenter = ({ trigger, onNavigate, isAuthenticated, onSignIn }) 
         setSelectedNotif(null);
         return;
       }
-      // fix Critical Codex UX 审查（第二十五轮 #2）：解析 action_url 时保留 query/hash 提示，
-      // 让后端发的深链如 "/upgrade?pane=mine" 能正确切到 UpgradePage 的"我的" 一级 tab。
-      // 形如 "/upgrade" → onNavigate('upgrade')；
-      //     "/upgrade?pane=mine" → onNavigate('upgrade')，同时把 ?pane=mine 写到 location.hash
-      //     "/tickets" → onNavigate('tickets')
-      if (onNavigate) {
-        const path = n.action_url.replace(/^\/+/, '');
-        const [pathOnly, query] = path.split('?');
-        const view = pathOnly.split('/')[0] || 'dashboard';
-        // 把 query 透传给目标 view（如 UpgradePage 读 pane）
-        if (query) {
-          window.location.hash = `#${view}?${query}`;
-        }
-        onNavigate(view);
-      } else {
+      // Phase 0：用 react-router 的 navigate 直接 path 跳，保留 query / hash。
+      // 后端发的 action_url 如 "/upgrade?pane=mine"、"/tickets" 等。
+      try {
+        navigate(n.action_url);
+      } catch {
+        // 极端情况：action_url 不是合法 path → fallback location.href
         window.location.href = n.action_url;
       }
       setOpen(false);
