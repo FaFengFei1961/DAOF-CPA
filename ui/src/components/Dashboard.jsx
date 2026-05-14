@@ -24,7 +24,7 @@ const VIEW_TO_PATH = {
 
 const Dashboard = () => {
   const { t } = useTranslation();
-  const { isAuthenticated } = useAuth();
+  const { isAuthenticated, openLogin } = useAuth();
   const navigate = useNavigate();
   const onNavigate = (view) => navigate(VIEW_TO_PATH[view] || `/${view}`);
   const { formatCurrency } = useCurrency();
@@ -87,14 +87,14 @@ const Dashboard = () => {
         </div>
       )}
 
-      {/* Phase 7.5：撤掉 540px 高 brand-color hero，改 Stripe Dashboard 式数据 strip。
-          Phase 7.8 ccg P1-6：登录中显示 skeleton 占位，避免闪营销 CTA */}
+      {/* Phase 8：登录态 → StatStrip；登录中 → skeleton；未登录 → 极简 sign-in
+          banner（不再用 PublicHero 营销 CTA + 大渐变 logo 锚） */}
       {meLoading ? (
         <StatStripSkeleton />
       ) : isAuthenticated && me ? (
         <StatStrip me={me} recentLogs={recentLogs} formatCurrency={formatCurrency} t={t} />
       ) : (
-        <PublicHero onNavigate={onNavigate} t={t} />
+        <SignInBanner onSignIn={openLogin} t={t} />
       )}
 
       {providerGroups.length > 0 && (
@@ -145,7 +145,7 @@ const StatStrip = ({ me, recentLogs, formatCurrency, t }) => {
       <Stat
         label={t('DASH.STAT_BALANCE', '账户余额')}
         value={formatCurrency(me.quota ?? 0, 2)}
-        hint={t('DASH.HI', { name: me.username, defaultValue: 'Hi, {{name}}' })}
+        hint={me.username}
         prominent
       />
       <Stat
@@ -199,53 +199,22 @@ const Stat = ({ label, value, hint, prominent = false }) => (
   </div>
 );
 
-// ─── Public Hero ────────────────────────────────────────────────────────
-// 未登录态：左侧 H1 + 副标 + 双 CTA；右侧渐变品牌锚（subtle Mica + 大字体 logo
-// 替代之前的"大紫色块装饰"）。整体高度 ~180px 比纯文字横条更有视觉重量。
-const PublicHero = ({ onNavigate, t }) => (
-  <section className="fl-card relative overflow-hidden grid grid-cols-1 md:grid-cols-[1fr_auto] items-center gap-6 px-6 sm:px-8 py-8 sm:py-10">
-    {/* 左：标题 + CTA */}
-    <div className="min-w-0">
-      <div className="text-[11px] uppercase tracking-[0.12em] font-semibold text-primary mb-2">
-        DAOF · CPA
-      </div>
-      <h1 className="text-2xl sm:text-[34px] font-bold tracking-tight text-on-surface leading-[1.15]">
-        {t('DASH.PUBLIC_HERO_TITLE', '一个 sk- token 接入主流模型')}
-      </h1>
-      <p className="text-sm sm:text-base text-on-surface-variant mt-3 max-w-2xl leading-relaxed">
-        {t('DASH.PUBLIC_HERO_SUB', 'OpenAI / Anthropic / Gemini 协议全兼容，按 token 计费，无月费门槛')}
-      </p>
-      <div className="flex items-center gap-2 mt-5">
-        <button
-          type="button"
-          onClick={() => onNavigate('upgrade')}
-          className="fl-btn fl-btn-prominent h-10 px-5"
-        >
-          {t('DASH.SEE_PLANS', '查看套餐')}
-        </button>
-        <button
-          type="button"
-          onClick={() => onNavigate('pricing')}
-          className="fl-btn fl-btn-subtle h-10 px-5"
-        >
-          {t('DASH.SEE_PRICING', '查看定价')}
-        </button>
-      </div>
-    </div>
-
-    {/* 右：subtle 品牌锚（不抢戏，用 primary 半透明 + logo） */}
-    <div className="hidden md:flex items-center justify-center shrink-0">
-      <div
-        className="w-32 h-32 rounded-2xl flex items-center justify-center"
-        style={{
-          background:
-            'radial-gradient(circle at 30% 30%, color-mix(in srgb, var(--color-primary) 20%, transparent), transparent 70%), color-mix(in srgb, var(--color-primary) 8%, transparent)',
-          border: '1px solid color-mix(in srgb, var(--color-primary) 25%, transparent)',
-        }}
-      >
-        <img src="/daof_logo.png" alt="" className="w-16 h-16 opacity-90" />
-      </div>
-    </div>
+// ─── SignInBanner ───────────────────────────────────────────────────────
+// 未登录态：单行信息条 — "登录后可查看账户用量与 API token"。
+// 不是营销 CTA，是状态说明。务实控制台风：用户没登录就告诉他登录后能看什么
+// 数据，不卖产品、不渐变 logo、不双 CTA、不"协议全兼容、无月费门槛"。
+const SignInBanner = ({ onSignIn, t }) => (
+  <section className="fl-card flex items-center gap-3 px-4 py-3">
+    <span className="text-sm text-on-surface-variant">
+      {t('DASH.SIGN_IN_HINT', '登录后可查看账户余额、用量统计与 API Token')}
+    </span>
+    <button
+      type="button"
+      onClick={onSignIn}
+      className="ml-auto text-sm font-medium text-primary hover:underline"
+    >
+      {t('DASH.SIGN_IN_ACTION', '登录')}
+    </button>
   </section>
 );
 
@@ -358,22 +327,16 @@ const ModelCard = ({ model, provider, formatCurrency, onClick }) => {
       </div>
 
       <div className="shrink-0 text-right">
-        {isFree ? (
-          <span className="inline-flex items-center px-1.5 py-0.5 rounded text-[10px] font-bold bg-emerald-500/15 text-emerald-400 border border-emerald-500/30">
-            {t('DASH.FREE', 'FREE')}
-          </span>
-        ) : (
-          <>
-            <div className="font-mono text-[13px] font-semibold text-on-surface tabular-nums leading-tight">
-              {formatCurrency(inPrice, 2)}
-              <span className="text-on-surface-variant font-normal">/M</span>
-            </div>
-            {outPrice > 0 && outPrice !== inPrice && (
-              <div className="font-mono text-[10px] text-on-surface-variant tabular-nums">
-                {t('DASH.OUT_PRICE', { price: formatCurrency(outPrice, 2), defaultValue: 'out {{price}}' })}
-              </div>
-            )}
-          </>
+        {/* Phase 8：去 FREE 绿色高亮 chip（营销吸睛）→ 直接 $0.00/M 跟其他价
+            一致呈现，由数字本身告诉用户"免费"，不需要装饰提示 */}
+        <div className="font-mono text-[13px] font-semibold text-on-surface tabular-nums leading-tight">
+          {formatCurrency(inPrice, 2)}
+          <span className="text-on-surface-variant font-normal">/M</span>
+        </div>
+        {!isFree && outPrice > 0 && outPrice !== inPrice && (
+          <div className="font-mono text-[10px] text-on-surface-variant tabular-nums">
+            {t('DASH.OUT_PRICE', { price: formatCurrency(outPrice, 2), defaultValue: 'out {{price}}' })}
+          </div>
         )}
       </div>
     </button>

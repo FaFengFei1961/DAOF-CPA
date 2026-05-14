@@ -5,7 +5,8 @@ import toast from 'react-hot-toast';
 import { QRCodeSVG } from 'qrcode.react';
 import { authFetch, readAuthState } from '../utils/authFetch';
 import { isPageCacheFresh, readPageCache, writePageCache } from '../utils/pageCache';
-import { StorePage, StoreHero, StoreSection } from './store/StorePrimitives';
+import { StorePage, StoreSection } from './store/StorePrimitives';
+import PageHeader from './ui/PageHeader';
 import Pagination from './common/Pagination';
 import { PAGE_SIZE_HISTORY } from './common/constants';
 
@@ -231,12 +232,12 @@ const Topup = ({ isAuthenticated }) => {
   return (
     <div className="max-w-3xl mx-auto py-6">
       <StorePage>
-        <StoreHero
+        {/* Phase 8：去 StoreHero（"即时到账"营销 badge + "扫码即时到账"营销
+            副标），改纯 PageHeader 信息标题 */}
+        <PageHeader
           icon={Wallet}
-          hue="#0891b2"
-          badge={t('TOPUP.BADGE_INSTANT', '即时到账')}
           title={t('TOPUP.TITLE', '余额充值')}
-          subtitle={t('TOPUP.SUBTITLE', '支付宝 / 微信扫码即时到账，按当前汇率自动入账 USD 余额')}
+          sub={t('TOPUP.SUB_PLAIN', '人民币按当前汇率换算入账 USD 余额')}
         />
 
       {/* 充值表单 */}
