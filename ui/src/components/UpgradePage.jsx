@@ -9,7 +9,7 @@ import { clearPageCache, isPageCacheFresh, readPageCache, writePageCache } from 
 import { useAuth } from '../context/AuthContext';
 import { useCurrency } from '../context/CurrencyContext';
 import { formatDuration } from './DurationInput';
-import { StorePage, StoreHero } from './store/StorePrimitives';
+import { StorePage } from './store/StorePrimitives';
 import MySubscriptions from './MySubscriptions';
 
 // 用户购买套餐入口页。展示元数据（图标 / 颜色 / 渐变 / 标签）来自 Package 表，admin 自由配置。
@@ -214,17 +214,11 @@ const UpgradePage = ({ onPurchaseSuccess }) => {
   };
 
   return (
-    <div className="w-full max-w-[1680px] mx-auto px-4 md:px-8 2xl:px-10 py-8">
+    /* Phase 8：去 max-w-[1680px] 内层 wrapper（让外层 UserShell main 容器统一
+       控制宽度），去 StoreHero 紫色营销头（"产品中心"标题 + badge + 长副标），
+       页面直接以 segmented control + 套餐 grid 开始 */
+    <div className="w-full">
       <StorePage>
-        <StoreHero
-          icon={Sparkles}
-          hue="#a855f7"
-          badge={pane === 'mine' ? t('PRODUCTS.BADGE_MINE', '我的产品') : t('PRODUCTS.BADGE_STORE', '商店')}
-          title={t('PRODUCTS.TITLE', '产品中心')}
-          subtitle={pane === 'mine'
-            ? t('MY_PRODUCTS.SUBTITLE', '订阅最先消耗；订阅用尽后扣增量包；都用完才走余额扣费（在账号设置中开启）。')
-            : t('PRODUCTS.SUBTITLE', '订阅周期套餐为主消费来源；增量包用于订阅用尽后的临时补充；余额扣费在账号设置中开启。')}
-        />
 
       {/* 一级 tab：我的 / 商店（segmented control） */}
       <div className="inline-flex rounded-overlay border border-outline-variant bg-surface-container p-0.5 self-start">

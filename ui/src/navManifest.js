@@ -15,12 +15,13 @@ import {
 } from 'lucide-react';
 
 // ─── User-side ───────────────────────────────────────────────────
+// Phase 8：删"产品中心"入口（套餐购买已合并到仪表盘首页）。/upgrade 路由
+// 保留兼容深链接（NotificationCenter action_url 等可能跳过来）。
 export const userNav = [
   { id: 'dashboard', path: '/',         icon: Home,         labelKey: 'MENU.DASHBOARD', labelFallback: '仪表盘' },
   { id: 'tokens',    path: '/tokens',   icon: KeySquare,    labelKey: 'MENU.TOKENS',    labelFallback: 'API 令牌' },
   { id: 'stats',     path: '/stats',    icon: BarChart2,    labelKey: 'MENU.STATS',     labelFallback: '数据看板' },
   { id: 'pricing',   path: '/pricing',  icon: CreditCard,   labelKey: 'MENU.PRICING',   labelFallback: '定价' },
-  { id: 'upgrade',   path: '/upgrade',  icon: Package,      labelKey: 'MENU.PRODUCTS',  labelFallback: '产品中心' },
   { id: 'topup',     path: '/topup',    icon: Wallet,       labelKey: 'MENU.TOPUP',     labelFallback: '充值' },
   { id: 'bills',     path: '/bills',    icon: Receipt,      labelKey: 'MENU.BILLS',     labelFallback: '账单' },
   { id: 'tickets',   path: '/tickets',  icon: MessageSquare,labelKey: 'MENU.TICKETS',   labelFallback: '工单' },
@@ -30,11 +31,11 @@ export const userBottomNav = [
   { id: 'settings',  path: '/settings', icon: SettingsIcon, labelKey: 'MENU.SETTINGS',  labelFallback: '系统设置' },
 ];
 
-// ─── Mobile bottom nav (6 grid + more panel) ────────────────────
+// ─── Mobile bottom nav (5 grid + more panel) ────────────────────
+// Phase 8：移动端底栏同步删"产品中心"
 export const mobileBottomNav = [
   { id: 'dashboard', path: '/',        icon: Home,         labelKey: 'MENU.DASHBOARD', labelFallback: '仪表盘' },
   { id: 'tokens',    path: '/tokens',  icon: KeySquare,    labelKey: 'MENU.TOKENS',    labelFallback: 'API 令牌' },
-  { id: 'upgrade',   path: '/upgrade', icon: Package,      labelKey: 'MENU.PRODUCTS',  labelFallback: '产品中心' },
   { id: 'topup',     path: '/topup',   icon: CreditCard,   labelKey: 'MENU.TOPUP',     labelFallback: '充值' },
   { id: 'tickets',   path: '/tickets', icon: MessageSquare,labelKey: 'MENU.TICKETS',   labelFallback: '工单' },
 ];
