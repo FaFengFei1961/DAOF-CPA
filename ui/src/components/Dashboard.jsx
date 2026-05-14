@@ -1,14 +1,7 @@
 import React, { useEffect, useMemo, useState } from 'react';
 import { useTranslation } from 'react-i18next';
 import { useNavigate } from 'react-router-dom';
-import {
-  ArrowUpRight,
-  ChevronRight,
-  CreditCard,
-  KeyRound,
-  Layers,
-  Sparkles as SparkIcon,
-} from 'lucide-react';
+import { ChevronRight } from 'lucide-react';
 import { authFetch, isLoggedIn } from '../utils/authFetch';
 import { logger } from '../utils/logger';
 import { useAuth } from '../context/AuthContext';
@@ -73,13 +66,6 @@ const Dashboard = () => {
   }, [isAuthenticated]);
 
   const providerGroups = useMemo(() => groupModelsByProvider(models), [models]);
-  const sortedModels = useMemo(
-    () => providerGroups.flatMap(group => group.items),
-    [providerGroups]
-  );
-
-  const heroModel = sortedModels[0];
-  const heroProvider = heroModel ? inferModelProvider(heroModel.model_id) : { name: 'AI', hue: '#7c5cff', icon: SparkIcon };
 
   return (
     <div className="space-y-8">
@@ -89,45 +75,14 @@ const Dashboard = () => {
         </div>
       )}
 
-      <section className="grid grid-cols-1 lg:grid-cols-3 gap-3 h-auto lg:h-[540px]">
-        <HeroFeatured
-          provider={heroProvider}
-          authed={isAuthenticated}
-          me={me}
-          formatCurrency={formatCurrency}
-          onPrimary={() => onNavigate(isAuthenticated ? 'tokens' : 'pricing')}
-          t={t}
-        />
-
-        <div className="lg:col-span-1 grid grid-rows-[1.5fr_1fr] gap-3 lg:h-full">
-          <HeroBlock
-            hue="#a855f7"
-            title={t('DASH.UPGRADE_TITLE', '订阅套餐')}
-            sub={t('DASH.UPGRADE_SUB', '月度 / 季度灵活组合，按 token 或消息计费')}
-            actionLabel={t('DASH.SEE_PLANS', '查看套餐')}
-            onClick={() => onNavigate('upgrade')}
-            icon={Layers}
-          />
-          <div className="grid grid-cols-2 gap-3">
-            <HeroBlock
-              compact
-              hue="#0891b2"
-              title={t('DASH.PRICING_TITLE', '定价')}
-              sub={t('DASH.PRICING_SUB', '逐字 token')}
-              icon={CreditCard}
-              onClick={() => onNavigate('pricing')}
-            />
-            <HeroBlock
-              compact
-              hue="#059669"
-              title={isAuthenticated ? t('DASH.MY_TOKENS', '我的 Token') : t('DASH.GET_TOKEN', '获取 Token')}
-              sub={isAuthenticated ? t('DASH.MANAGE_KEYS', '管理 API Key') : t('DASH.SIGN_IN_FIRST', '需要登录')}
-              icon={KeyRound}
-              onClick={() => onNavigate(isAuthenticated ? 'tokens' : 'pricing')}
-            />
-          </div>
-        </div>
-      </section>
+      {/* Phase 7.5：撤掉 540px 高 brand-color hero（"装饰为王"），改成 Stripe Dashboard 式
+          数据 strip："余额 / 最近请求 / 总 Token / 模型数"，首屏直接看到自己账户的真实数字。
+          未登录态走轻量 PublicHero 引导（< 140px 高，比原 hero 小 4 倍） */}
+      {isAuthenticated && me ? (
+        <StatStrip me={me} recentLogs={recentLogs} formatCurrency={formatCurrency} t={t} />
+      ) : (
+        <PublicHero onNavigate={onNavigate} t={t} />
+      )}
 
       {providerGroups.length > 0 && (
         <div className="space-y-8">
@@ -150,82 +105,112 @@ const Dashboard = () => {
   );
 };
 
-const HeroFeatured = ({ provider, authed, me, formatCurrency, onPrimary, t }) => {
-  const Icon = provider.icon;
+// ─── Stat Strip ─────────────────────────────────────────────────────────
+// Stripe Dashboard / Vercel 风格：4-up stat 横排，纯数据零装饰
+// 数字用 tabular-nums + bold；标签用 caption 全大写；hint 用次要色提示来源
+const StatStrip = ({ me, recentLogs, formatCurrency, t }) => {
+  const totalReqs = recentLogs.length;
+  const totalTokens = recentLogs.reduce(
+    (s, l) => s + (l.prompt_tokens || 0) + (l.completion_tokens || 0),
+    0
+  );
+  const uniqueModels = new Set(recentLogs.map(l => l.model_name).filter(Boolean)).size;
+  const lastTime = recentLogs[0]?.created_at;
+  const lastRel = lastTime ? relativeTime(lastTime) : '—';
+
   return (
-    <div
-      className="lg:col-span-2 fl-hero p-8 sm:p-10 flex flex-col h-full min-h-[480px]"
-      style={{
-        '--hero-bg-1': darkenHex(provider.hue, 0.45),
-        '--hero-bg-2': provider.hue,
-        '--hero-bg-3': darkenHex(provider.hue, 0.7),
-      }}
-    >
-      <div className="flex items-center gap-2">
-        <span className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded text-[11px] font-semibold uppercase tracking-wider bg-white/15 backdrop-blur-sm">
-          <Icon size={12} /> {provider.name}
-        </span>
-        <span className="text-[11px] uppercase tracking-wider fl-hero-text-secondary">
-          {t('DASH.FEATURED', '今日推荐')}
-        </span>
-      </div>
+    <section className="fl-card grid grid-cols-2 md:grid-cols-4 divide-y md:divide-y-0 md:divide-x divide-outline-variant/30 overflow-hidden">
+      <Stat
+        label={t('DASH.STAT_BALANCE', '账户余额')}
+        value={formatCurrency(me.quota ?? 0, 2)}
+        hint={`Hi, ${me.username}`}
+        prominent
+      />
+      <Stat
+        label={t('DASH.STAT_REQUESTS', '最近请求')}
+        value={totalReqs.toLocaleString()}
+        hint={t('DASH.STAT_RECENT_HINT', '近 8 条')}
+      />
+      <Stat
+        label={t('DASH.STAT_TOKENS', 'Token 用量')}
+        value={formatCompactNumber(totalTokens)}
+        hint={t('DASH.STAT_RECENT_HINT', '近 8 条')}
+      />
+      <Stat
+        label={t('DASH.STAT_LAST', '上次调用')}
+        value={lastRel}
+        hint={uniqueModels ? t('DASH.STAT_MODELS', { n: uniqueModels, defaultValue: '{{n}} 个模型' }) : '—'}
+      />
+    </section>
+  );
+};
 
-      <div className="flex-1 min-h-[80px]" />
-
-      <div className="space-y-4">
-        <div className="w-20 h-20 sm:w-24 sm:h-24 rounded-2xl flex items-center justify-center bg-white/15 backdrop-blur-md shadow-2xl">
-          <Icon size={40} className="text-white" />
-        </div>
-        <div>
-          <h1 className="text-3xl sm:text-5xl font-semibold tracking-tight leading-tight text-white">
-            {authed && me ? `Hi, ${me.username}` : 'DAOF-CPA'}
-          </h1>
-          <p className="text-sm sm:text-base fl-hero-text-secondary mt-2 max-w-xl">
-            {authed
-              ? t('DASH.SUB_AUTHED', { balance: formatCurrency(me?.quota ?? 0, 2), defaultValue: '余额 {{balance}} · 一个 sk- token 接入主流模型' })
-              : t('DASH.SUB_PUBLIC', '一个 sk- token 接入主流模型，OpenAI / Anthropic / Gemini 协议全兼容')}
-          </p>
-        </div>
-        <button
-          type="button"
-          onClick={onPrimary}
-          className="inline-flex items-center justify-center gap-1.5 h-9 px-5 rounded text-sm font-semibold bg-white text-zinc-900 hover:bg-white/90 active:scale-[0.98] transition"
-        >
-          {authed ? t('DASH.MANAGE_TOKENS', '管理 Token') : t('DASH.GET_STARTED', '开始使用')}
-          <ArrowUpRight size={14} />
-        </button>
-      </div>
+const Stat = ({ label, value, hint, prominent = false }) => (
+  <div className="px-5 py-4 min-w-0">
+    <div className="text-[10px] uppercase tracking-[0.08em] text-on-surface-variant font-semibold">
+      {label}
     </div>
-  );
-};
-
-const HeroBlock = ({ title, sub, actionLabel, onClick, icon, hue = '#7c5cff', compact = false }) => {
-  const BlockIcon = icon;
-  return (
-    <button
-      type="button"
-      onClick={onClick}
-      className="fl-hero p-4 sm:p-5 text-left flex flex-col justify-between h-full min-h-[120px]"
-      style={{
-        '--hero-bg-1': darkenHex(hue, 0.5),
-        '--hero-bg-2': hue,
-        '--hero-bg-3': darkenHex(hue, 0.75),
-      }}
+    <div
+      className={`font-bold text-on-surface tabular-nums tracking-tight mt-1.5 truncate ${
+        prominent ? 'text-3xl' : 'text-2xl'
+      }`}
     >
-      <BlockIcon size={compact ? 18 : 22} className="text-white" />
-      <div>
-        <div className={`font-semibold text-white ${compact ? 'text-sm' : 'text-lg sm:text-xl'}`}>{title}</div>
-        <div className={`fl-hero-text-secondary mt-0.5 ${compact ? 'text-[11px]' : 'text-xs sm:text-sm'}`}>{sub}</div>
-        {actionLabel && !compact && (
-          <div className="mt-3 inline-flex items-center gap-1 text-sm font-medium text-white">
-            {actionLabel}
-            <ArrowUpRight size={14} />
-          </div>
-        )}
-      </div>
-    </button>
-  );
-};
+      {value}
+    </div>
+    <div className="text-[11px] text-on-surface-variant mt-1 truncate">{hint}</div>
+  </div>
+);
+
+// ─── Public Hero ────────────────────────────────────────────────────────
+// 未登录态：单行卡 + CTA，去掉大紫色块装饰；信息密度优先
+const PublicHero = ({ onNavigate, t }) => (
+  <section className="fl-card flex flex-col sm:flex-row items-start sm:items-center gap-4 p-5 sm:p-6">
+    <div className="flex-1 min-w-0">
+      <h1 className="text-xl sm:text-2xl font-bold tracking-tight text-on-surface">
+        {t('DASH.PUBLIC_HERO_TITLE', '一个 sk- token 接入主流模型')}
+      </h1>
+      <p className="text-sm text-on-surface-variant mt-1.5 max-w-2xl">
+        {t('DASH.PUBLIC_HERO_SUB', 'OpenAI / Anthropic / Gemini 协议全兼容，按 token 计费，无月费门槛')}
+      </p>
+    </div>
+    <div className="flex items-center gap-2 shrink-0">
+      <button
+        type="button"
+        onClick={() => onNavigate('upgrade')}
+        className="fl-btn fl-btn-prominent h-10 px-5"
+      >
+        {t('DASH.SEE_PLANS', '查看套餐')}
+      </button>
+      <button
+        type="button"
+        onClick={() => onNavigate('pricing')}
+        className="fl-btn fl-btn-subtle h-10 px-5"
+      >
+        {t('DASH.SEE_PRICING', '查看定价')}
+      </button>
+    </div>
+  </section>
+);
+
+// 数字紧凑表示：1234 → 1.2k；1234567 → 1.23M
+function formatCompactNumber(n) {
+  if (!n) return '0';
+  if (n >= 1_000_000) return (n / 1_000_000).toFixed(2) + 'M';
+  if (n >= 1_000) return (n / 1_000).toFixed(1) + 'k';
+  return n.toLocaleString();
+}
+
+// 相对时间：刚刚 / N 分钟前 / N 小时前 / N 天前
+function relativeTime(ts) {
+  const t = new Date(ts).getTime();
+  if (isNaN(t)) return '—';
+  const diff = Date.now() - t;
+  if (diff < 60_000) return '刚刚';
+  if (diff < 3_600_000) return `${Math.floor(diff / 60_000)} 分钟前`;
+  if (diff < 86_400_000) return `${Math.floor(diff / 3_600_000)} 小时前`;
+  if (diff < 30 * 86_400_000) return `${Math.floor(diff / 86_400_000)} 天前`;
+  return new Date(ts).toLocaleDateString('zh-CN');
+}
 
 // Phase 7：MS Store 风格 — section title + horizontal scroll + store-card
 // 改造前：3 列 grid，所有模型一次性铺满，视觉密度过高
