@@ -1,5 +1,4 @@
 import React, { useMemo, useState, useRef, useEffect, useCallback } from 'react';
-import { useTranslation } from 'react-i18next';
 import { createPortal } from 'react-dom';
 
 const BLOCKS_COUNT = 60;
@@ -100,7 +99,6 @@ const formatDateTime = (ts) => {
 };
 
 export function HealthMonitor({ logs, summary }) {
-    const { t } = useTranslation();
     const [activeTooltip, setActiveTooltip] = useState(null);
     const gridRef = useRef(null);
 

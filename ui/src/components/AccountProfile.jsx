@@ -20,7 +20,7 @@ const AccountProfile = () => {
     const cachedProfile = readPageCache(profileCacheKey);
     const [profile, setProfile] = useState(() => cachedProfile);
     const [loading, setLoading] = useState(() => !cachedProfile);
-    const [copied, setCopied] = useState(false);
+    // copied/handleCopy state 已不被任何 JSX 引用，移除（Phase 6 死代码清理）
 
     // Admin form state
     const [adminForm, setAdminForm] = useState(() => ({
@@ -59,13 +59,7 @@ const AccountProfile = () => {
             .catch(() => setLoading(false));
     }, [profileCacheKey]);
 
-    const handleCopy = () => {
-        if(profile && profile.token) {
-            navigator.clipboard.writeText(profile.token);
-            setCopied(true);
-            setTimeout(() => setCopied(false), 2000);
-        }
-    };
+
 
     const handleAdminUpdate = async (e) => {
         e.preventDefault();

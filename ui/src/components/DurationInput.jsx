@@ -111,6 +111,7 @@ const DurationInput = ({ value, onChange, className = '', selectClass = '', allo
 };
 
 // 把秒数格式化为人类可读，如 "30 天" / "12 小时"
+// eslint-disable-next-line react-refresh/only-export-components
 export const formatDuration = (sec) => {
   const n = Math.floor(Number(sec) || 0);
   if (n <= 0) return '0';

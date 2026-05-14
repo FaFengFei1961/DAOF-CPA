@@ -1,10 +1,12 @@
 import React, { useState, useEffect, useCallback } from 'react';
 import { useTranslation } from 'react-i18next';
+import { useSearchParams } from 'react-router-dom';
 import { ShoppingCart, Check, Layers, Sparkles, Cpu, Zap, Activity, Package as PackageIcon, BrainCircuit, Bot } from 'lucide-react';
 import toast from 'react-hot-toast';
 import { useConfirm } from '../context/ConfirmContext';
 import { authFetch, isLoggedIn, readAuthState } from '../utils/authFetch';
 import { clearPageCache, isPageCacheFresh, readPageCache, writePageCache } from '../utils/pageCache';
+import { useAuth } from '../context/AuthContext';
 import { useCurrency } from '../context/CurrencyContext';
 import { formatDuration } from './DurationInput';
 import { StorePage, StoreHero } from './store/StorePrimitives';
@@ -107,12 +109,15 @@ const groupStorePackages = (packages) => {
     .sort((a, b) => a.order - b.order);
 };
 
-const UpgradePage = ({ onPurchaseSuccess, isAuthenticated = true, onSignIn }) => {
+const UpgradePage = ({ onPurchaseSuccess }) => {
   // 注：套餐列表 /api/packages 完全公开，未登录也能看价格；
   // 仅"购买"动作需要登录（已在 purchase() 内 isLoggedIn() 校验）。
+  // Phase 0：从 useAuth 自取 isAuthenticated + openLogin（替代 prop 注入）
   const { t } = useTranslation();
   const confirm = useConfirm();
   const { formatCurrency } = useCurrency();
+  const { isAuthenticated, openLogin } = useAuth();
+  const onSignIn = openLogin;
   const couponCacheKey = React.useMemo(getCouponCacheKey, [isAuthenticated]);
   const [pkgs, setPkgs] = useState(() => readPageCache(PACKAGE_CACHE_KEY) || []);
   const [coupons, setCoupons] = useState(() => (isAuthenticated ? readPageCache(couponCacheKey) : null) || []); // 用户可用券（仅登录用户）
@@ -120,15 +125,26 @@ const UpgradePage = ({ onPurchaseSuccess, isAuthenticated = true, onSignIn }) =>
   const [purchasing, setPurchasing] = useState(null);
   // 选中的券：key=packageId, value=couponId（用户在卡片上为每个 package 单独选）
   const [selectedCouponByPkg, setSelectedCouponByPkg] = useState({});
-  // fix Critical Codex UX 审查（第二十五轮 #2）：从 hash query 读 ?pane=mine|store。
-  // 通知系统的"查看订阅"链接走 /upgrade?pane=mine 深链跳转，需自动切到我的 tab。
+  // fix CRITICAL（Phase 5 codex 审查）：旧 hash 路由切到 React Router BrowserRouter 后，
+  // hashRedirect 把 #upgrade?pane=mine 改写成 /upgrade?pane=mine。原从 location.hash 读
+  // pane 在新架构永远拿不到值，导致通知"查看订阅"深链失效。改用 React Router 的
+  // useSearchParams 从 location.search 读，URL 同步通过 setSearchParams 写。
+  const [searchParams, setSearchParams] = useSearchParams();
+  const paneFromUrl = searchParams.get('pane');
   const [pane, setPane] = useState(() => {
-    const rawHash = window.location.hash.replace('#', '');
-    const query = rawHash.split('?')[1] || '';
-    const paneFromUrl = new URLSearchParams(query).get('pane');
     if (paneFromUrl === 'mine' || paneFromUrl === 'store') return paneFromUrl;
     return isLoggedIn() ? 'mine' : 'store';
   });
+  // URL 主导：URL 变化时同步 pane（前进/后退、外部带 ?pane= 进站）
+  useEffect(() => {
+    if (paneFromUrl === 'mine' || paneFromUrl === 'store') setPane(paneFromUrl);
+  }, [paneFromUrl]);
+  const setPaneAndUrl = useCallback((next) => {
+    setPane(next);
+    const params = new URLSearchParams(searchParams);
+    params.set('pane', next);
+    setSearchParams(params, { replace: true });
+  }, [searchParams, setSearchParams]);
   const [typeFilter, setTypeFilter] = useState('all');
 
   // fix CRITICAL R23+2-F2（gemini 全方面审查）：用 authFetch 而不是原生 fetch，
@@ -223,7 +239,8 @@ const UpgradePage = ({ onPurchaseSuccess, isAuthenticated = true, onSignIn }) =>
       if (json.success) {
         toast.success(t('UPGRADE.PURCHASE_OK', '🎉 购买成功'));
         // fix Major Codex UX 审查（第二十五轮）：原注释承诺"切到 mine"实际只 load/callback，没切。
-        setPane('mine');
+        // Phase 5：用 setPaneAndUrl 同步 URL 让"购买成功 → 切到我的"也写到 URL（可分享/书签）
+        setPaneAndUrl('mine');
         clearPageCache('subscriptions:');
         clearPageCache('billing:');
         clearPageCache('user-coupons:');
@@ -262,7 +279,7 @@ const UpgradePage = ({ onPurchaseSuccess, isAuthenticated = true, onSignIn }) =>
             <button
               key={p.id}
               type="button"
-              onClick={() => setPane(p.id)}
+              onClick={() => setPaneAndUrl(p.id)}
               className={`px-6 py-2 rounded-control text-sm font-semibold transition ${active
                 ? 'bg-primary text-on-primary'
                 : 'text-on-surface-variant hover:text-on-surface'}`}

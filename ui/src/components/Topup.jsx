@@ -25,7 +25,7 @@ const getTopupHistoryCacheKey = (page) => {
   return `topup:history:${isAdmin ? 'admin' : userToken || 'guest'}:${page}`;
 };
 
-const Topup = ({ isAuthenticated, onNavigate }) => {
+const Topup = ({ isAuthenticated }) => {
   const { t } = useTranslation();
 
   const [opts, setOpts] = useState(() => readPageCache(TOPUP_OPTIONS_CACHE_KEY));

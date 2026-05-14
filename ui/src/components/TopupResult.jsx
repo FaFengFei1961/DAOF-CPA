@@ -1,19 +1,17 @@
 import React from 'react';
 import { useTranslation } from 'react-i18next';
+import { useNavigate, useSearchParams } from 'react-router-dom';
 import { CheckCircle2, Clock, XCircle, AlertTriangle } from 'lucide-react';
 
 // 支付完成跳转后的落地页。仅展示状态，不会主动加额度（加额度只在后端 notify 路径）。
-const TopupResult = ({ onNavigate }) => {
+// Phase 0：从 React Router 的 useSearchParams 读 query（旧 hash redirect 已把
+// /#topup_result?status=success 改写为 /topup-result?status=success）。
+const TopupResult = () => {
   const { t } = useTranslation();
-
-  // 同步跳转 URL 形如 /#topup_result?status=success&out_trade_no=xxx
-  // → 从 hash 中切出 query 段；fallback 到 location.search 兼容直接访问
-  const hash = window.location.hash || '';
-  const qIdx = hash.indexOf('?');
-  const queryStr = qIdx >= 0 ? hash.slice(qIdx + 1) : window.location.search.replace(/^\?/, '');
-  const params = new URLSearchParams(queryStr);
-  const status = params.get('status') || 'pending';
-  const outTradeNo = params.get('out_trade_no') || '';
+  const navigate = useNavigate();
+  const [searchParams] = useSearchParams();
+  const status = searchParams.get('status') || 'pending';
+  const outTradeNo = searchParams.get('out_trade_no') || '';
 
   // fix Critical Codex UX 审查（第二十五轮 #3）：return 路径**不加额度**（详见后端 controller/topup.go），
   // 余额到账走异步 notify 路径。原 success 文案"余额已到账"承诺过早，与真实流程不符。
@@ -61,7 +59,7 @@ const TopupResult = ({ onNavigate }) => {
         )}
         <button
           type="button"
-          onClick={() => onNavigate?.('topup')}
+          onClick={() => navigate('/topup')}
           className="h-10 px-6 bg-primary text-on-primary rounded-lg text-sm font-semibold hover:opacity-90"
         >
           {t('TOPUP.BACK_TO_TOPUP', '返回充值')}

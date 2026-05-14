@@ -1,5 +1,6 @@
 import React, { useEffect, useMemo, useState } from 'react';
 import { useTranslation } from 'react-i18next';
+import { useNavigate } from 'react-router-dom';
 import {
   ArrowUpRight,
   ChevronRight,
@@ -10,12 +11,29 @@ import {
 } from 'lucide-react';
 import { authFetch, isLoggedIn } from '../utils/authFetch';
 import { logger } from '../utils/logger';
+import { useAuth } from '../context/AuthContext';
 import { useCurrency } from '../context/CurrencyContext';
 import { groupModelsByProvider, inferModelProvider } from '../utils/modelProviders';
 import { usePublicPricing } from '../hooks/usePublicPricing';
 
-const Dashboard = ({ isAuthenticated, onNavigate }) => {
+// Phase 0：Dashboard 现在自己拿 isAuthenticated（useAuth）+ navigate（useNavigate），
+// 不再依赖父组件 prop 注入。view-id → path 简单映射。
+const VIEW_TO_PATH = {
+  dashboard: '/',
+  tokens:    '/tokens',
+  stats:     '/stats',
+  pricing:   '/pricing',
+  upgrade:   '/upgrade',
+  topup:     '/topup',
+  bills:     '/bills',
+  tickets:   '/tickets',
+};
+
+const Dashboard = () => {
   const { t } = useTranslation();
+  const { isAuthenticated } = useAuth();
+  const navigate = useNavigate();
+  const onNavigate = (view) => navigate(VIEW_TO_PATH[view] || `/${view}`);
   const { formatCurrency } = useCurrency();
 
   const [me, setMe] = useState(null);
