@@ -124,6 +124,13 @@
     font-size: var(--font-body1);
     /* Fluent 推荐字重渐变：UI 默认 400，标题 600，键值 mono */
     font-feature-settings: "ss01", "cv11";
+    /*
+     * Phase 7.5：Stripe / Vercel / Linear 全用 tabular-nums 做默认数字呈现 —
+     * 所有数字等宽对齐（金额/计数/时间/Token 数列对齐自然干净）；
+     * slashed-zero 让 0/O 在 API key、订单号场景里可区分。
+     * Segoe UI Variable / SF / Inter 都支持，向下兼容浏览器自动忽略。
+     */
+    font-variant-numeric: tabular-nums slashed-zero;
     overflow-x: hidden;
     overflow-y: scroll;
     -webkit-font-smoothing: antialiased;
