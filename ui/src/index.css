@@ -79,7 +79,31 @@
   --font-large-title: 40px;
   --font-display: 68px;
 
-  --font-sans: "Segoe UI Variable Display", "Segoe UI Variable", "Segoe UI", -apple-system, system-ui, sans-serif;
+  /*
+   * Phase 7.7：字体栈彻底重做 — 最大单项视觉提升
+   *
+   * 旧栈：Segoe UI Variable / Segoe UI fallback → Windows 中文落到 Microsoft
+   * YaHei，屏幕渲染极丑。
+   *
+   * 新栈（按 OS 优雅退化）：
+   *   - macOS：-apple-system / SF Pro Text → PingFang SC（Apple 中文，最美）
+   *   - Windows：Segoe UI Variable → fallback 直接到 PingFang SC（如果系统装了
+   *     Apple Cloud / WeChat 会带）→ Source Han Sans / Noto Sans SC（Google
+   *     开源中文）→ 最差才到 Microsoft YaHei
+   *   - Linux：system-ui → Noto Sans CJK SC
+   *   - emoji 单独栈避免方框
+   *
+   * Inter 作为西文 fallback 而不是主字体（避免引入 web font 加载延迟，
+   * 用 system Inter 如果用户系统装了，否则走 system-ui）。
+   */
+  --font-sans:
+    -apple-system, BlinkMacSystemFont,
+    "SF Pro Text", "Segoe UI Variable Text", "Segoe UI",
+    "Inter", "Helvetica Neue", Helvetica, Arial,
+    "PingFang SC", "Hiragino Sans GB",
+    "Source Han Sans SC", "Noto Sans SC", "Noto Sans CJK SC",
+    "Microsoft YaHei", sans-serif,
+    "Apple Color Emoji", "Segoe UI Emoji", "Noto Color Emoji";
 }
 
 @layer base {
@@ -137,21 +161,11 @@
     -moz-osx-font-smoothing: grayscale;
     transition: background-color 0.2s ease, color 0.2s ease;
     /*
-     * Mica 装饰渐变：模拟 Win11 桌面壁纸透出 acrylic 卡片的微弱色相变化。
-     * 浅色 / 深色模式各自的 fixed 渐变层，给 acrylic 一个真正"透出底色"的对象。
-     * 性能：fixed 不重绘，scroll 时仅 transform 移动，对 60fps 无影响。
+     * Phase 7.7：撤掉 Mica 多层 radial-gradient 装饰背景。
+     * Linear / Vercel / Stripe / Anthropic Console 都是纯单色背景让卡片自己
+     * 浮起来，渐变背景在 SaaS 控制台里反而显"花哨而不专业"。
+     * 装饰性 mica 留给 fl-mica / fl-acrylic 工具类按需启用，body 不强加。
      */
-    background-image:
-      radial-gradient(ellipse 80% 50% at 0% 0%, color-mix(in srgb, var(--color-primary) 6%, transparent) 0%, transparent 60%),
-      radial-gradient(ellipse 60% 40% at 100% 100%, color-mix(in srgb, var(--color-primary) 5%, transparent) 0%, transparent 60%);
-    background-attachment: fixed;
-  }
-  .dark body {
-    background-image:
-      radial-gradient(ellipse 80% 50% at 0% 0%, color-mix(in srgb, var(--color-primary) 12%, transparent) 0%, transparent 60%),
-      radial-gradient(ellipse 60% 40% at 100% 100%, color-mix(in srgb, var(--color-primary) 8%, transparent) 0%, transparent 60%),
-      radial-gradient(ellipse 50% 30% at 50% 100%, color-mix(in srgb, var(--color-primary) 4%, transparent) 0%, transparent 60%);
-    background-attachment: fixed;
   }
 
   /* Fluent 焦点环：所有可交互元素统一 2px primary outline */
