@@ -571,3 +571,188 @@
     margin-top: 24px;
   }
 }
+
+/*
+ * ─── Phase 7: Microsoft Store 视觉语言 ────────────────────────────────
+ *
+ * 把 daof-cpa 的 4 个产品线（Claude / Codex / Gemini / Combo）做成 MS Store
+ * 里的"游戏 / 应用 / 影视"频道，每个产品线一种 brand accent 色。
+ * Hero / 套餐卡 / 上游账号面板都按对应色派生。
+ */
+
+/* 产品线 brand accent — 同时存深浅两版（rgb 三元组方便 alpha 混合） */
+:root {
+  /* Claude — 深紫，Anthropic brand 色系 */
+  --brand-claude: 168 85 247;        /* #A855F7 */
+  --brand-claude-soft: 124 58 237;   /* #7C3AED */
+  /* Codex — 翠绿，OpenAI codex hint */
+  --brand-codex: 16 185 129;         /* #10B981 */
+  --brand-codex-soft: 5 150 105;     /* #059669 */
+  /* Gemini — 琥珀，Google brand 色派生 */
+  --brand-gemini: 245 158 11;        /* #F59E0B */
+  --brand-gemini-soft: 217 119 6;    /* #D97706 */
+  /* Combo — 青蓝，跨产品组合 */
+  --brand-combo: 14 165 233;         /* #0EA5E9 */
+  --brand-combo-soft: 2 132 199;     /* #0284C7 */
+  /* Other — 中性灰 */
+  --brand-other: 148 163 184;        /* #94A3B8 */
+  --brand-other-soft: 100 116 139;   /* #64748B */
+}
+
+/* Hero 套色变体 — 在 .fl-hero 基础上覆盖背景渐变（保留 reveal 光晕） */
+.fl-hero-claude {
+  --hero-bg-1: rgb(var(--brand-claude-soft) / 1);
+  --hero-bg-2: rgb(var(--brand-claude) / 0.85);
+  --hero-bg-3: rgb(76 29 149 / 1);
+}
+.fl-hero-codex {
+  --hero-bg-1: rgb(6 78 59 / 1);
+  --hero-bg-2: rgb(var(--brand-codex) / 0.65);
+  --hero-bg-3: rgb(4 47 46 / 1);
+}
+.fl-hero-gemini {
+  --hero-bg-1: rgb(var(--brand-gemini-soft) / 0.95);
+  --hero-bg-2: rgb(var(--brand-gemini) / 0.8);
+  --hero-bg-3: rgb(120 53 15 / 1);
+}
+.fl-hero-combo {
+  --hero-bg-1: rgb(var(--brand-combo-soft) / 1);
+  --hero-bg-2: rgb(var(--brand-combo) / 0.75);
+  --hero-bg-3: rgb(7 89 133 / 1);
+}
+.fl-hero-other {
+  --hero-bg-1: rgb(30 41 59 / 1);
+  --hero-bg-2: rgb(51 65 85 / 0.85);
+  --hero-bg-3: rgb(15 23 42 / 1);
+}
+
+/* Brand chip — 产品线徽章（套餐卡角标 / sidebar group label） */
+.fl-brand-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 2px 8px;
+  border-radius: 9999px;
+  font-size: 11px;
+  font-weight: 600;
+  letter-spacing: 0.02em;
+  border: 1px solid currentColor;
+  background-color: rgb(var(--brand) / 0.15);
+  color: rgb(var(--brand) / 1);
+}
+.fl-brand-chip[data-brand="claude"]  { --brand: var(--brand-claude); }
+.fl-brand-chip[data-brand="codex"]   { --brand: var(--brand-codex); }
+.fl-brand-chip[data-brand="gemini"]  { --brand: var(--brand-gemini); }
+.fl-brand-chip[data-brand="combo"]   { --brand: var(--brand-combo); }
+.fl-brand-chip[data-brand="other"]   { --brand: var(--brand-other); }
+
+/* Card brand band — 卡片顶部 4px 高亮色条（标识产品线） */
+.fl-brand-band {
+  position: relative;
+}
+.fl-brand-band::before {
+  content: "";
+  position: absolute;
+  top: 0;
+  left: 0;
+  right: 0;
+  height: 3px;
+  background: rgb(var(--brand) / 1);
+  border-top-left-radius: inherit;
+  border-top-right-radius: inherit;
+  z-index: 2;
+}
+.fl-brand-band[data-brand="claude"]  { --brand: var(--brand-claude); }
+.fl-brand-band[data-brand="codex"]   { --brand: var(--brand-codex); }
+.fl-brand-band[data-brand="gemini"]  { --brand: var(--brand-gemini); }
+.fl-brand-band[data-brand="combo"]   { --brand: var(--brand-combo); }
+.fl-brand-band[data-brand="other"]   { --brand: var(--brand-other); }
+
+/*
+ * fl-h-scroll — Microsoft Store 横向滚动 card group 容器
+ *
+ * 用法：
+ *   <div class="fl-h-scroll">
+ *     <article class="fl-h-scroll-item">...</article>
+ *     <article class="fl-h-scroll-item">...</article>
+ *   </div>
+ *
+ * - scroll-snap 让滚动停在 card 边缘（MS Store 行为）
+ * - 隐藏滚动条，用上下方按钮控制（或 trackpad 横滑）
+ * - 项之间 gap 16px，左右 page padding 由父级 PageContainer 提供
+ */
+.fl-h-scroll {
+  display: flex;
+  gap: 16px;
+  overflow-x: auto;
+  overflow-y: hidden;
+  scroll-snap-type: x proximity;
+  scrollbar-width: none;
+  -ms-overflow-style: none;
+  scroll-padding-left: 4px;
+  padding-bottom: 8px; /* 给 hover lift 留空间 */
+}
+.fl-h-scroll::-webkit-scrollbar {
+  display: none;
+}
+.fl-h-scroll > * {
+  scroll-snap-align: start;
+  flex-shrink: 0;
+}
+
+/*
+ * fl-store-card — MS Store 风格商品卡（hero-mini 版）
+ *
+ * 用法：
+ *   <article class="fl-store-card fl-hero-claude">
+ *     <div class="fl-store-card-icon">...</div>
+ *     <div class="fl-store-card-meta">...</div>
+ *   </article>
+ *
+ * 与 fl-card 的区别：
+ * - 默认带 brand 色 hero 背景（不是 surface-container）
+ * - hover 时 lift 4px + 强阴影（MS Store 实测）
+ * - 内置 padding + 固定宽度（h-scroll 友好）
+ */
+.fl-store-card {
+  position: relative;
+  display: flex;
+  flex-direction: column;
+  width: 280px;
+  min-height: 180px;
+  padding: 20px;
+  border-radius: var(--radius-overlay);
+  border: 1px solid rgba(255, 255, 255, 0.08);
+  color: white;
+  background:
+    radial-gradient(120% 100% at 100% 0%, var(--hero-bg-2, #4c1d95) 0%, transparent 60%),
+    radial-gradient(120% 100% at 0% 100%, var(--hero-bg-3, #1e1b4b) 0%, transparent 70%),
+    var(--hero-bg-1, #2a1a4f);
+  box-shadow:
+    inset 0 1px 0 rgba(255, 255, 255, 0.18),
+    0 1px 2px rgba(0, 0, 0, 0.3);
+  transition: transform 0.2s cubic-bezier(0.16, 1, 0.3, 1),
+              box-shadow 0.2s cubic-bezier(0.16, 1, 0.3, 1);
+  cursor: pointer;
+  text-decoration: none;
+}
+.fl-store-card:hover {
+  transform: translateY(-4px);
+  box-shadow:
+    inset 0 1px 0 rgba(255, 255, 255, 0.18),
+    0 16px 32px -8px rgba(0, 0, 0, 0.5),
+    0 6px 12px -2px rgba(0, 0, 0, 0.3);
+}
+.fl-store-card-meta {
+  margin-top: auto;
+}
+.fl-store-card-title {
+  font-size: 18px;
+  font-weight: 600;
+  letter-spacing: -0.01em;
+  margin-bottom: 4px;
+}
+.fl-store-card-sub {
+  font-size: 13px;
+  color: rgba(255, 255, 255, 0.72);
+}
