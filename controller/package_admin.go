@@ -10,6 +10,7 @@ import (
 	"log"
 	"math"
 	"strconv"
+	"strings"
 	"time"
 
 	"daof-ai-hub/database"
@@ -94,6 +95,48 @@ type packageWithPlans struct {
 type packagePlanItem struct {
 	database.PackagePlan
 	Plan database.QuotaPlan `json:"plan"`
+}
+
+type publicPackagePlanItem struct {
+	ID        uint            `json:"id"`
+	SortOrder int             `json:"sort_order"`
+	Plan      publicPlanBrief `json:"plan"`
+}
+
+type publicPlanBrief struct {
+	Name          string  `json:"name"`
+	DisplayName   string  `json:"display_name"`
+	Description   string  `json:"description"`
+	LimitValue    float64 `json:"limit_value"`
+	LimitUnit     string  `json:"limit_unit"`
+	LimitLabel    string  `json:"limit_label"`
+	WindowSeconds int     `json:"window_seconds"`
+}
+
+func publicPlanBriefFrom(plan database.QuotaPlan) publicPlanBrief {
+	label := publicQuotaUnitLabel(plan.LimitUnit)
+	return publicPlanBrief{
+		Name:          plan.Name,
+		DisplayName:   plan.DisplayName,
+		Description:   plan.Description,
+		LimitValue:    plan.LimitValue,
+		LimitUnit:     label,
+		LimitLabel:    label,
+		WindowSeconds: plan.WindowSeconds,
+	}
+}
+
+func publicQuotaUnitLabel(unit string) string {
+	switch strings.ToLower(strings.TrimSpace(unit)) {
+	case "api_cost_usd":
+		return "API 等值额度"
+	case "request_count":
+		return "次调用"
+	case "input_tokens", "output_tokens", "total_tokens", "weighted_tokens":
+		return "Tokens"
+	default:
+		return "额度"
+	}
 }
 
 type packageResponse struct {
@@ -561,7 +604,7 @@ func DeletePackage(c *fiber.Ctx) error {
 func ListPublicPackages(c *fiber.Ctx) error {
 	type pubItem struct {
 		packageResponse
-		Plans []packagePlanItem `json:"plans"`
+		Plans []publicPackagePlanItem `json:"plans"`
 	}
 
 	var pkgs []database.Package
@@ -612,10 +655,14 @@ func ListPublicPackages(c *fiber.Ctx) error {
 
 	out := make([]pubItem, 0, len(pkgs))
 	for _, p := range pkgs {
-		items := []packagePlanItem{}
+		items := []publicPackagePlanItem{}
 		for _, pp := range ppsByPkg[p.ID] {
 			if plan, ok := planMap[pp.QuotaPlanID]; ok {
-				items = append(items, packagePlanItem{PackagePlan: pp, Plan: plan})
+				items = append(items, publicPackagePlanItem{
+					ID:        pp.ID,
+					SortOrder: pp.SortOrder,
+					Plan:      publicPlanBriefFrom(plan),
+				})
 			}
 		}
 		out = append(out, pubItem{packageResponse: packageResponseFrom(p), Plans: items})

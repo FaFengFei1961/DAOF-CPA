@@ -13,6 +13,55 @@ import (
 
 // ─── Helper 函数单元测试 ─────────────────────────────────────────────
 
+// TestParseRMBStringToFen 边界覆盖：易付通回调金额字符串解析必须严格，
+// 任何浮点歧义或非法格式都应拒绝（fix CRITICAL P1-5 + P2-2）。
+func TestParseRMBStringToFen(t *testing.T) {
+	cases := []struct {
+		name string
+		in   string
+		want int64
+		ok   bool
+	}{
+		// === valid ===
+		{"int only", "12", 1200, true},
+		{"one decimal", "12.3", 1230, true},
+		{"two decimals", "12.34", 1234, true},
+		{"zero", "0", 0, true},
+		{"zero with decimals", "0.00", 0, true},
+		{"large int", "999999", 99999900, true},
+		{"trim whitespace", "  12.34  ", 1234, true},
+
+		// === invalid: format ===
+		{"empty", "", 0, false},
+		{"all whitespace", "   ", 0, false},
+		{"trailing dot (rejected by P2-2)", "12.", 0, false},
+		{"leading dot", ".5", 0, false},
+		{"only dot", ".", 0, false},
+		{"three decimals", "12.345", 0, false},
+		{"two dots", "12.3.4", 0, false},
+
+		// === invalid: characters ===
+		{"alpha", "abc", 0, false},
+		{"alpha in int", "12a", 0, false},
+		{"alpha in frac", "12.a", 0, false},
+		{"negative", "-12", 0, false},
+		{"plus sign", "+12", 0, false},
+		{"comma", "12,34", 0, false},
+		{"scientific", "1e2", 0, false},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			got, ok := parseRMBStringToFen(tc.in)
+			if ok != tc.ok {
+				t.Fatalf("ok=%v, want %v (input=%q)", ok, tc.ok, tc.in)
+			}
+			if ok && got != tc.want {
+				t.Fatalf("got=%d, want %d (input=%q)", got, tc.want, tc.in)
+			}
+		})
+	}
+}
+
 func TestSafeExchangeRate_Defaults(t *testing.T) {
 	setupSubTestDB(t) // 清空 SysConfigCache
 	rate := safeExchangeRate()

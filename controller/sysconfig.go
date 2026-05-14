@@ -173,6 +173,7 @@ func validateSysConfigPayload(payload map[string]string) (string, string, bool) 
 		max int
 	}{
 		{"moderation_api_timeout_seconds", 1, 120},
+		{"proxy_nonstream_upstream_timeout_seconds", 30, 3600},
 		{"moderation_max_chars", 1024, 8 * 1024 * 1024},
 		{"moderation_chunk_chars", 1024, 256 * 1024},
 		{"moderation_max_chunks", 1, 128},
@@ -209,6 +210,11 @@ func validateSysConfigPayload(payload map[string]string) (string, string, bool) 
 	if raw, ok := payload["moderation_risk_rules"]; ok {
 		if _, err := proxy.ParseModerationRiskRules(raw); err != nil {
 			return "ERR_INVALID_PARAMS", "moderation_risk_rules JSON 或规则格式不合法: " + err.Error(), false
+		}
+	}
+	if raw, ok := payload["upstream_account_cost_presets_json"]; ok {
+		if _, err := parseUpstreamAccountCostPresets(raw); err != nil {
+			return "ERR_INVALID_JSON", "upstream_account_cost_presets_json JSON 或规则格式不合法: " + err.Error(), false
 		}
 	}
 

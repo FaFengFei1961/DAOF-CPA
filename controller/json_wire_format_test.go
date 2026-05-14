@@ -13,6 +13,7 @@ package controller
 
 import (
 	"encoding/json"
+	"io"
 	"net/http/httptest"
 	"strconv"
 	"strings"
@@ -198,6 +199,35 @@ func TestWireFormat_AdminListPackages(t *testing.T) {
 	}
 	if _, ok := row["active_subs_count"]; !ok {
 		t.Fatalf("list row missing active_subs_count: %v", row)
+	}
+}
+
+func TestWireFormat_PublicPackagesHideInternalQuotaUnit(t *testing.T) {
+	setupSubTestDB(t)
+	seedPackage(t)
+	if err := database.DB.Model(&database.QuotaPlan{}).Where("name = ?", "test_plan_request_count").
+		Updates(map[string]any{
+			"limit_unit":  "api_cost_usd",
+			"limit_value": 125,
+		}).Error; err != nil {
+		t.Fatalf("update plan: %v", err)
+	}
+
+	app := fiber.New()
+	app.Get("/api/packages", ListPublicPackages)
+	req := httptest.NewRequest("GET", "/api/packages", nil)
+	resp, err := app.Test(req, -1)
+	if err != nil {
+		t.Fatalf("request: %v", err)
+	}
+	body, _ := io.ReadAll(resp.Body)
+	resp.Body.Close()
+	text := string(body)
+	if strings.Contains(text, "api_cost_usd") || strings.Contains(text, "model_match") || strings.Contains(text, "weight_factor") {
+		t.Fatalf("public package response leaks internal quota fields: %s", text)
+	}
+	if !strings.Contains(text, "API 等值额度") {
+		t.Fatalf("public package response should include user-facing quota label: %s", text)
 	}
 }
 

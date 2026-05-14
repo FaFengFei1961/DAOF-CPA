@@ -8,6 +8,7 @@ import (
 	"errors"
 	"fmt"
 	"log"
+	"math"
 	"strconv"
 	"strings"
 	"time"
@@ -756,7 +757,20 @@ func AdminRefundSubscription(c *fiber.Ctx) error {
 			"message_code": "ERR_INVALID_AMOUNT",
 		})
 	}
-	refundAmountMicro, ok := database.USDToMicro(req.AmountUSD)
+	// fix CRITICAL（多模型审计第二十五轮）：admin 客户端 float 输入易产生精度漂移
+	// （例如显示 $13.89 但实际 13.890000000000001）。原实现用 +1000 micro_usd（$0.001）
+	// 容差兜底，但这等价于让 admin 可以多退 $0.001，违反"退款≤已收"铁律。
+	// 改为：入口先 round 到 2 位小数（USD 业务最小单位 = 美分）再转 micro，
+	// 从根源消除浮点误差。下方 cap 检查使用严格 `>`，无任何容差。
+	refundAmountUSD := math.Round(req.AmountUSD*100) / 100
+	if refundAmountUSD <= 0 {
+		return c.Status(400).JSON(fiber.Map{
+			"success":      false,
+			"message":      "amount_usd 取整后必须 > 0（最小退款单位 $0.01）",
+			"message_code": "ERR_INVALID_AMOUNT",
+		})
+	}
+	refundAmountMicro, ok := database.USDToMicro(refundAmountUSD)
 	if !ok {
 		return c.Status(400).JSON(fiber.Map{
 			"success":      false,
@@ -800,8 +814,9 @@ func AdminRefundSubscription(c *fiber.Ctx) error {
 		})
 	}
 	purchasedPriceMicro := sub.PurchasedUnitPriceUSD
-	// 容差 1000 micro_usd = $0.001 防 admin 客户端浮点输入误差
-	if refundAmountMicro > purchasedPriceMicro+1000 {
+	// fix CRITICAL（多模型审计第二十五轮）：严格 `>`，无容差。配合上方 round2 入口处理浮点。
+	// 任何 admin 想退超过实际支付的金额都必须明确出错（"退款≤已收"铁律不容许灰色地带）。
+	if refundAmountMicro > purchasedPriceMicro {
 		return c.Status(400).JSON(fiber.Map{
 			"success": false,
 			"message": fmt.Sprintf("退款金额超过用户实际支付金额 $%s",

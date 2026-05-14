@@ -48,6 +48,18 @@ var SubscriptionSysConfigDefaults = map[string]string{
 	"addon_default_period_seconds":        "604800",  // 增量包默认有效期 7 天
 	"subscription_default_period_seconds": "2592000", // 订阅默认周期 30 天
 
+	// ── 公开透明计费规则（三账：raw_cost / charged_cost / platform_cost_estimate）──
+	"billing_rules_version":              "default-2026-05-13",
+	"billing_model_weights_json":         `[{"pattern":"*haiku*","weight":0.3,"label":"Claude Haiku","reason":"低成本/轻量模型"},{"pattern":"*sonnet*","weight":1,"thinking_weight":1.5,"label":"Claude Sonnet","reason":"Claude 基准模型；thinking 启用时加权"},{"pattern":"*opus*","weight":3.5,"thinking_weight":5,"label":"Claude Opus","reason":"高成本/高额度消耗模型"},{"pattern":"*gemini*flash*","weight":0.4,"label":"Gemini Flash","reason":"低成本快速模型"},{"pattern":"*gemini*pro*","weight":0.9,"label":"Gemini Pro","reason":"Gemini 主力模型"},{"pattern":"*gpt*mini*","weight":0.5,"label":"GPT mini","reason":"低成本模型"},{"pattern":"*o1*","weight":2.5,"label":"OpenAI reasoning","reason":"高推理成本模型"},{"pattern":"*o3*","weight":3.5,"label":"OpenAI reasoning","reason":"高推理成本模型"},{"pattern":"*gpt*","weight":1,"label":"GPT","reason":"OpenAI 基准模型"}]`,
+	"billing_health_multipliers_json":    `[{"pattern":"*","weight":1,"label":"Normal","reason":"默认无高峰加权"}]`,
+	"billing_provider_cost_factors_json": `{"anthropic":1,"openai":1,"gemini":1,"google-cli":1,"codex":1,"cliproxy":1,"unknown":1}`,
+	"upstream_account_cost_presets_json": `[{"id":"claude-pro","label":"Claude Pro","provider":"anthropic","plan_name":"Claude Pro","monthly_cost_usd":20,"estimated_monthly_capacity_usd":0,"notes":"仅填官方月费；容量需按本平台实测填写。"},{"id":"claude-max-5x","label":"Claude Max 5x","provider":"anthropic","plan_name":"Claude Max 5x","monthly_cost_usd":100,"estimated_monthly_capacity_usd":0,"notes":"仅填官方月费；容量需按本平台实测填写。"},{"id":"claude-max-20x","label":"Claude Max 20x","provider":"anthropic","plan_name":"Claude Max 20x","monthly_cost_usd":200,"estimated_monthly_capacity_usd":0,"notes":"仅填官方月费；容量需按本平台实测填写。"},{"id":"chatgpt-plus","label":"ChatGPT Plus / Codex","provider":"codex","plan_name":"ChatGPT Plus","monthly_cost_usd":20,"estimated_monthly_capacity_usd":0,"notes":"仅填官方月费；容量需按本平台实测填写。"},{"id":"chatgpt-pro-100","label":"ChatGPT Pro 100 / Codex","provider":"codex","plan_name":"ChatGPT Pro 100","monthly_cost_usd":100,"estimated_monthly_capacity_usd":0,"notes":"仅填官方月费；容量需按本平台实测填写。"},{"id":"chatgpt-pro-200","label":"ChatGPT Pro 200 / Codex","provider":"codex","plan_name":"ChatGPT Pro 200","monthly_cost_usd":200,"estimated_monthly_capacity_usd":0,"notes":"仅填官方月费；容量需按本平台实测填写。"},{"id":"google-ai-pro","label":"Google AI Pro","provider":"gemini","plan_name":"Google AI Pro","monthly_cost_usd":20,"estimated_monthly_capacity_usd":0,"notes":"仅填官方月费；容量需按本平台实测填写。"},{"id":"google-ai-ultra","label":"Google AI Ultra","provider":"gemini","plan_name":"Google AI Ultra","monthly_cost_usd":250,"estimated_monthly_capacity_usd":0,"notes":"仅填官方月费；容量需按本平台实测填写。"}]`,
+
+	// ── CLIProxyAPI usage queue 同步（上游账号归因 / 毛利核算基础）──
+	"cliproxy_usage_sync_enabled":          "true",
+	"cliproxy_usage_sync_interval_seconds": "60",
+	"cliproxy_usage_sync_batch_size":       "100",
+
 	// ── 注册自动发券 ──
 	"signup_coupon_template_id": "0", // 0/空 = 不自动发券
 }

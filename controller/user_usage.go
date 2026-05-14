@@ -650,52 +650,106 @@ func GetUsersUsageEvents(c *fiber.Ctx) error {
 	}
 
 	type eventOut struct {
-		ID                 uint    `json:"id"`
-		UserID             uint    `json:"user_id"`
-		Username           string  `json:"username"`
-		TokenName          string  `json:"token_name"`
-		ModelName          string  `json:"model_name"`
-		PromptTokens       int     `json:"prompt_tokens"`
-		CompletionTokens   int     `json:"completion_tokens"`
-		ReasoningTokens    int     `json:"reasoning_tokens"`
-		CachedTokens       int     `json:"cached_tokens"`
-		CacheWriteTokens   int     `json:"cache_write_tokens"`
-		CacheWrite5mTokens int     `json:"cache_write_5m_tokens"`
-		CacheWrite1hTokens int     `json:"cache_write_1h_tokens"`
-		TotalTokens        int     `json:"total_tokens"`
-		Cost               float64 `json:"cost"`
-		Latency            int64   `json:"latency_ms"`
-		Status             int     `json:"status"`
-		IPAddress          string  `json:"ip_address"`
-		RequestPath        string  `json:"request_path"`
-		ErrorType          string  `json:"error_type"`
-		ErrorMessage       string  `json:"error_message"`
-		CreatedAt          string  `json:"created_at"`
+		ID                     uint    `json:"id"`
+		UserID                 uint    `json:"user_id"`
+		Username               string  `json:"username"`
+		TokenName              string  `json:"token_name"`
+		ModelName              string  `json:"model_name"`
+		RequestedModel         string  `json:"requested_model"`
+		ServedModel            string  `json:"served_model"`
+		PromptTokens           int     `json:"prompt_tokens"`
+		CompletionTokens       int     `json:"completion_tokens"`
+		ReasoningTokens        int     `json:"reasoning_tokens"`
+		CachedTokens           int     `json:"cached_tokens"`
+		CacheWriteTokens       int     `json:"cache_write_tokens"`
+		CacheWrite5mTokens     int     `json:"cache_write_5m_tokens"`
+		CacheWrite1hTokens     int     `json:"cache_write_1h_tokens"`
+		TotalTokens            int     `json:"total_tokens"`
+		Cost                   float64 `json:"cost"`
+		RawCost                float64 `json:"raw_cost"`
+		ChargedCost            float64 `json:"charged_cost"`
+		PlatformCostEstimate   float64 `json:"platform_cost_estimate"`
+		ModelWeight            float64 `json:"model_weight"`
+		HealthMultiplier       float64 `json:"health_multiplier"`
+		BillingRulesVersion    string  `json:"billing_rules_version"`
+		PrecheckInputTokens    int     `json:"precheck_input_tokens"`
+		PrecheckOutputTokens   int     `json:"precheck_output_tokens"`
+		PrecheckRawCost        float64 `json:"precheck_raw_cost"`
+		PrecheckChargedCost    float64 `json:"precheck_charged_cost"`
+		PrecheckQuotaPlanID    uint    `json:"precheck_quota_plan_id"`
+		PrecheckQuotaLimit     float64 `json:"precheck_quota_limit"`
+		PrecheckQuotaUsed      float64 `json:"precheck_quota_used"`
+		PrecheckQuotaRemaining float64 `json:"precheck_quota_remaining"`
+		PrecheckWindowEndAt    string  `json:"precheck_window_end_at"`
+		BlockReason            string  `json:"block_reason"`
+		FallbackUserOptIn      bool    `json:"fallback_user_opt_in"`
+		FallbackReason         string  `json:"fallback_reason"`
+		UpstreamProvider       string  `json:"upstream_provider"`
+		UpstreamAuthIndex      string  `json:"upstream_auth_index"`
+		UpstreamAuthType       string  `json:"upstream_auth_type"`
+		UpstreamSource         string  `json:"upstream_source"`
+		UpstreamRequestID      string  `json:"upstream_request_id"`
+		UpstreamUsageRecordID  uint    `json:"upstream_usage_record_id"`
+		UpstreamUsageMatch     string  `json:"upstream_usage_match"`
+		Latency                int64   `json:"latency_ms"`
+		Status                 int     `json:"status"`
+		IPAddress              string  `json:"ip_address"`
+		RequestPath            string  `json:"request_path"`
+		ErrorType              string  `json:"error_type"`
+		ErrorMessage           string  `json:"error_message"`
+		CreatedAt              string  `json:"created_at"`
 	}
 	out := make([]eventOut, 0, len(logs))
 	for _, l := range logs {
 		out = append(out, eventOut{
-			ID:                 l.ID,
-			UserID:             l.UserID,
-			Username:           usernames[l.UserID],
-			TokenName:          l.TokenName,
-			ModelName:          l.ModelName,
-			PromptTokens:       l.PromptTokens,
-			CompletionTokens:   l.CompletionTokens,
-			ReasoningTokens:    l.ReasoningTokens,
-			CachedTokens:       l.CachedTokens,
-			CacheWriteTokens:   l.CacheWriteTokens,
-			CacheWrite5mTokens: l.CacheWrite5mTokens,
-			CacheWrite1hTokens: l.CacheWrite1hTokens,
-			TotalTokens:        l.PromptTokens + l.CompletionTokens,
-			Cost:               database.MicroToUSD(l.Cost),
-			Latency:            l.Latency,
-			Status:             l.Status,
-			IPAddress:          l.IPAddress,
-			RequestPath:        l.RequestPath,
-			ErrorType:          l.ErrorType,
-			ErrorMessage:       l.ErrorMessage,
-			CreatedAt:          l.CreatedAt.Format(time.RFC3339),
+			ID:                     l.ID,
+			UserID:                 l.UserID,
+			Username:               usernames[l.UserID],
+			TokenName:              l.TokenName,
+			ModelName:              l.ModelName,
+			RequestedModel:         firstNonEmpty(l.RequestedModel, l.ModelName),
+			ServedModel:            firstNonEmpty(l.ServedModel, l.ModelName),
+			PromptTokens:           l.PromptTokens,
+			CompletionTokens:       l.CompletionTokens,
+			ReasoningTokens:        l.ReasoningTokens,
+			CachedTokens:           l.CachedTokens,
+			CacheWriteTokens:       l.CacheWriteTokens,
+			CacheWrite5mTokens:     l.CacheWrite5mTokens,
+			CacheWrite1hTokens:     l.CacheWrite1hTokens,
+			TotalTokens:            l.PromptTokens + l.CompletionTokens,
+			Cost:                   database.MicroToUSD(l.Cost),
+			RawCost:                database.MicroToUSD(l.Cost),
+			ChargedCost:            database.MicroToUSD(effectiveChargedCost(l)),
+			PlatformCostEstimate:   database.MicroToUSD(l.PlatformCostEstimate),
+			ModelWeight:            effectivePositive(l.ModelWeight, 1),
+			HealthMultiplier:       effectivePositive(l.HealthMultiplier, 1),
+			BillingRulesVersion:    l.BillingRulesVersion,
+			PrecheckInputTokens:    l.PrecheckInputTokens,
+			PrecheckOutputTokens:   l.PrecheckOutputTokens,
+			PrecheckRawCost:        database.MicroToUSD(l.PrecheckRawCost),
+			PrecheckChargedCost:    database.MicroToUSD(l.PrecheckChargedCost),
+			PrecheckQuotaPlanID:    l.PrecheckQuotaPlanID,
+			PrecheckQuotaLimit:     database.MicroToUSD(l.PrecheckQuotaLimit),
+			PrecheckQuotaUsed:      database.MicroToUSD(l.PrecheckQuotaUsed),
+			PrecheckQuotaRemaining: database.MicroToUSD(l.PrecheckQuotaRemaining),
+			PrecheckWindowEndAt:    formatOptionalTime(l.PrecheckWindowEndAt),
+			BlockReason:            l.BlockReason,
+			FallbackUserOptIn:      l.FallbackUserOptIn,
+			FallbackReason:         l.FallbackReason,
+			UpstreamProvider:       l.UpstreamProvider,
+			UpstreamAuthIndex:      l.UpstreamAuthIndex,
+			UpstreamAuthType:       l.UpstreamAuthType,
+			UpstreamSource:         l.UpstreamSource,
+			UpstreamRequestID:      l.UpstreamRequestID,
+			UpstreamUsageRecordID:  l.UpstreamUsageRecordID,
+			UpstreamUsageMatch:     l.UpstreamUsageMatch,
+			Latency:                l.Latency,
+			Status:                 l.Status,
+			IPAddress:              l.IPAddress,
+			RequestPath:            l.RequestPath,
+			ErrorType:              l.ErrorType,
+			ErrorMessage:           l.ErrorMessage,
+			CreatedAt:              l.CreatedAt.Format(time.RFC3339),
 		})
 	}
 
@@ -739,4 +793,34 @@ func sortUserUsageRows(rows []UserUsageRow, key string) {
 	default: // cost_desc
 		sort.SliceStable(rows, func(i, j int) bool { return rows[i].Cost > rows[j].Cost })
 	}
+}
+
+func firstNonEmpty(values ...string) string {
+	for _, v := range values {
+		if strings.TrimSpace(v) != "" {
+			return v
+		}
+	}
+	return ""
+}
+
+func formatOptionalTime(t *time.Time) string {
+	if t == nil || t.IsZero() {
+		return ""
+	}
+	return t.Format(time.RFC3339)
+}
+
+func effectiveChargedCost(l database.ApiLog) int64 {
+	if l.ChargedCost == 0 && l.Cost > 0 {
+		return l.Cost
+	}
+	return l.ChargedCost
+}
+
+func effectivePositive(v, fallback float64) float64 {
+	if v > 0 {
+		return v
+	}
+	return fallback
 }

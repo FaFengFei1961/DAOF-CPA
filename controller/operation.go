@@ -17,6 +17,16 @@ func LogOperationBy(operatorID, targetUserID uint, operatorRole, actionType, ipA
 // LogOperationByTx 在给定的数据库事务内记录操作。
 // 如果日志记录失败，它会记录错误并返回该错误，允许调用者回滚事务。
 func LogOperationByTx(tx *gorm.DB, operatorID, targetUserID uint, operatorRole, actionType, ipAddress string, details string) error {
+	_, err := LogOperationByTxReturning(tx, operatorID, targetUserID, operatorRole, actionType, ipAddress, details)
+	return err
+}
+
+// LogOperationByTxReturning 与 LogOperationByTx 行为一致，但额外返回插入行的主键 ID。
+//
+// 设计原因（fix MAJOR 多模型审计第二十五轮）：
+//   admin 调额场景需要先写 OperationLog 拿到主键 ID，再把 BillingEntry.RelatedID 关联到它，
+//   保证账务流水与审计日志双向可追溯（之前 RelatedID=0 让链路断流，admin 改额无法 join 回审计）。
+func LogOperationByTxReturning(tx *gorm.DB, operatorID, targetUserID uint, operatorRole, actionType, ipAddress string, details string) (uint, error) {
 	row := database.OperationLog{
 		TargetUserID: targetUserID,
 		OperatorID:   operatorID,
@@ -28,9 +38,9 @@ func LogOperationByTx(tx *gorm.DB, operatorID, targetUserID uint, operatorRole, 
 	if err := tx.Create(&row).Error; err != nil {
 		// 审计断流是高优告警——必须冒泡到运维日志，而非沉默吞咽
 		stdlog.Printf("[AUDIT-LOG-FAILED] action=%s target_user=%d operator=%d err=%v", actionType, targetUserID, operatorID, err)
-		return err
+		return 0, err
 	}
-	return nil
+	return row.ID, nil
 }
 
 // GetUserOperations 获取特定目标用户的所有操作审计日志

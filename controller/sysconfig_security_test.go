@@ -218,6 +218,20 @@ func TestSecurity_ValidateSysConfigPayload_ModerationProvider(t *testing.T) {
 	}
 }
 
+func TestSecurity_ValidateSysConfigPayload_UpstreamAccountCostPresets(t *testing.T) {
+	valid := `[{"id":"google-ai-pro","label":"Google AI Pro","provider":"gemini","plan_name":"Google AI Pro","monthly_cost_usd":20,"estimated_monthly_capacity_usd":0}]`
+	code, _, ok := validateSysConfigPayload(map[string]string{"upstream_account_cost_presets_json": valid})
+	if !ok || code != "" {
+		t.Fatalf("valid upstream_account_cost_presets_json rejected: code=%q ok=%v", code, ok)
+	}
+
+	invalid := `[{"id":"bad","label":"Bad","provider":"codex","monthly_cost_usd":-1}]`
+	code, _, ok = validateSysConfigPayload(map[string]string{"upstream_account_cost_presets_json": invalid})
+	if ok || code != "ERR_INVALID_JSON" {
+		t.Fatalf("invalid upstream_account_cost_presets_json accepted: code=%q ok=%v", code, ok)
+	}
+}
+
 func TestSecurity_ValidateSysConfigPayload_SignupCouponTemplate(t *testing.T) {
 	setupSubTestDB(t)
 

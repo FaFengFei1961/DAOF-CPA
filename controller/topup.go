@@ -319,10 +319,14 @@ func YifutNotify(c *fiber.Ctx) error {
 		return c.SendString("success") // 仍返回 success，避免易付通持续重试
 	}
 
-	// 金额双校验：回调 money 必须等于本地 money_rmb
-	// 用字符串精确比较优先，浮点兜底（处理 "1" vs "1.00" 这种尾零差异）
-	gotMoney, err := strconv.ParseFloat(params["money"], 64)
-	if err != nil {
+	// 金额双校验：回调 money（RMB 元字符串）必须精确等于本地 money_rmb（fen 整数）。
+	//
+	// fix CRITICAL（多模型审计第二十五轮）：原实现 ParseFloat + approxEqual(0.001) 容差，
+	// float64 精度问题让攻击者可提交差 0.09 分的金额仍通过校验，等价绕过精确金额校验。
+	// 改为：把回调字符串当作"元.分"格式，按整数 fen 解析（小数点切两段拼接 → int64），
+	// 与本地 order.MoneyRMB（fen）做严格 == 比较，彻底消除浮点误差与人为容差。
+	gotFen, ok := parseRMBStringToFen(params["money"])
+	if !ok {
 		log.Printf("[TOPUP-NOTIFY] bad money=%s out_trade_no=%s", params["money"], logKey)
 		return c.Status(400).SendString("bad_money")
 	}
@@ -332,11 +336,9 @@ func YifutNotify(c *fiber.Ctx) error {
 		log.Printf("[TOPUP-NOTIFY] order not found out_trade_no=%s", logKey)
 		return c.Status(404).SendString("order_not_found")
 	}
-	// 收紧到 0.001 元（防 0.01 容差被极端伪造金额场景利用）
-	// gotMoney 是 RMB 元（float），order.MoneyRMB 是 fen（int64）
-	if !approxEqual(gotMoney, database.FenToRMB(order.MoneyRMB), 0.001) {
-		log.Printf("[TOPUP-NOTIFY] money mismatch out_trade_no=%s callback=%v local_fen=%d",
-			logKey, gotMoney, order.MoneyRMB)
+	if gotFen != order.MoneyRMB {
+		log.Printf("[TOPUP-NOTIFY] money mismatch out_trade_no=%s callback_fen=%d local_fen=%d",
+			logKey, gotFen, order.MoneyRMB)
 		return c.Status(400).SendString("money_mismatch")
 	}
 
@@ -1080,6 +1082,66 @@ func round2(v float64) float64 {
 	s := fmt.Sprintf("%.2f", v)
 	r, _ := strconv.ParseFloat(s, 64)
 	return r
+}
+
+// parseRMBStringToFen 把 "12.34" / "12" / "12.3" 这类 RMB 元字符串解析为 fen 整数。
+//
+// 设计原因（fix CRITICAL 多模型审计第二十五轮）：
+//   - 易付通回调金额是字符串，原实现 ParseFloat + approxEqual(0.001) 容差有精度漏洞
+//   - 直接整数化后与 order.MoneyRMB（fen int64）做严格 == 比较彻底消除浮点误差
+//
+// 规则：
+//   - 至多 2 位小数；超过返回 false
+//   - 拒绝负数 / 空 / 非数字字符 / 多个小数点 / 尾随小数点（"12."）
+//   - "12" → 1200; "12.3" → 1230; "12.34" → 1234; "12.345" → false; "12." → false; ".5" → false
+func parseRMBStringToFen(s string) (int64, bool) {
+	s = strings.TrimSpace(s)
+	if s == "" || strings.HasPrefix(s, "-") {
+		return 0, false
+	}
+	// 分离整数 / 小数部分
+	intPart := s
+	fracPart := ""
+	if idx := strings.Index(s, "."); idx >= 0 {
+		intPart = s[:idx]
+		fracPart = s[idx+1:]
+		if strings.Contains(fracPart, ".") {
+			return 0, false
+		}
+		// fix MINOR（多模型审计第二十五轮 P2）：拒绝尾随小数点（"12."）
+		// 严格金额格式：要么没小数点，要么小数点后必须有 1-2 位数字
+		if fracPart == "" {
+			return 0, false
+		}
+	}
+	if intPart == "" {
+		return 0, false
+	}
+	// 整数部分必须全数字
+	for _, ch := range intPart {
+		if ch < '0' || ch > '9' {
+			return 0, false
+		}
+	}
+	// 小数部分至多 2 位且全数字
+	if len(fracPart) > 2 {
+		return 0, false
+	}
+	for _, ch := range fracPart {
+		if ch < '0' || ch > '9' {
+			return 0, false
+		}
+	}
+	// 补齐到 2 位（"3" → "30"）
+	for len(fracPart) < 2 {
+		fracPart += "0"
+	}
+	combined := intPart + fracPart
+	v, err := strconv.ParseInt(combined, 10, 64)
+	if err != nil {
+		return 0, false
+	}
+	return v, true
 }
 
 // proratedTopupRefundMicro 返回"累计退款到 refundedFen 时"应累计扣回的 micro_usd。

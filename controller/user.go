@@ -210,6 +210,15 @@ func UpdateUser(c *fiber.Ctx) error {
 		}).Error; err != nil {
 			return fmt.Errorf("update user: %w", err)
 		}
+		// fix Major（codex 第十五轮）：审计入事务，并填真实 admin id（旧实现 operatorID=0 + tx 外）
+		// 这把"用户更新 + 账单 + 审计"绑成同一原子单元；任一失败一起回滚，admin 必可追溯。
+		//
+		// fix MAJOR（多模型审计第二十五轮）：先写 OperationLog 拿到 ID，再让 BillingEntry.RelatedID
+		// 关联到具体审计行（旧实现写 0 让账务追溯断流）。顺序：log → billing。
+		opLogID, err := LogOperationByTxReturning(tx, adminID, user.ID, "admin", "UPDATE", c.IP(), changelog)
+		if err != nil {
+			return fmt.Errorf("write audit: %w", err)
+		}
 		// 用事务内 before 判断是否真改了 quota（admin 看到的旧值与 DB 实际可能不同）
 		if before.Quota != reqQuotaMicro {
 			if err := database.WriteBillingEntry(tx, database.BillingEntryInput{
@@ -218,16 +227,11 @@ func UpdateUser(c *fiber.Ctx) error {
 				AmountUSD:       reqQuotaMicro - before.Quota,
 				BalanceAfterUSD: reqQuotaMicro,
 				RelatedType:     "operation_log",
-				RelatedID:       0,
-				Description:     fmt.Sprintf("管理员调整额度 · admin#%d · %s", adminID, changelog),
+				RelatedID:       opLogID,
+				Description:     userFriendlyAdminAdjustDescription(reqQuotaMicro - before.Quota),
 			}); err != nil {
 				return fmt.Errorf("write billing: %w", err)
 			}
-		}
-		// fix Major（codex 第十五轮）：审计入事务，并填真实 admin id（旧实现 operatorID=0 + tx 外）
-		// 这把"用户更新 + 账单 + 审计"绑成同一原子单元；任一失败一起回滚，admin 必可追溯。
-		if err := LogOperationByTx(tx, adminID, user.ID, "admin", "UPDATE", c.IP(), changelog); err != nil {
-			return fmt.Errorf("write audit: %w", err)
 		}
 		return nil
 	})
@@ -388,23 +392,13 @@ func BulkAdjustQuota(c *fiber.Ctx) error {
 				return fmt.Errorf("re-select: %w", err)
 			}
 
-			// 写 BillingEntry(admin_adjust)：delta = after - before（都是事务内值，原子一致）
+			// fix MAJOR（多模型审计第二十五轮）：先写 OperationLog 拿到 ID，再让
+			// BillingEntry.RelatedID 关联到具体审计行（旧实现写 0 让账务追溯断流）。
+			// 顺序：log → billing；同事务原子，任一失败一起回滚。
 			delta := after.Quota - before.Quota
 			adminID := uint(0)
 			if op != nil {
 				adminID = op.ID
-			}
-			desc := fmt.Sprintf("管理员批量%s · admin#%d", req.Mode, adminID)
-			if err := database.WriteBillingEntry(tx, database.BillingEntryInput{
-				UserID:          u.ID,
-				EntryType:       database.BillingTypeAdminAdjust,
-				AmountUSD:       delta,
-				BalanceAfterUSD: after.Quota,
-				RelatedType:     "operation_log",
-				RelatedID:       0,
-				Description:     desc,
-			}); err != nil {
-				return fmt.Errorf("write billing: %w", err)
 			}
 
 			// audit 日志字段：old/new/amount/delta 用 USD float（前端 formatCurrency 消费）；
@@ -424,7 +418,24 @@ func BulkAdjustQuota(c *fiber.Ctx) error {
 					"delta_micro":  delta,
 				},
 			})
-			return LogOperationByTx(tx, adminID, u.ID, "admin", "BULK_QUOTA", c.IP(), string(change))
+			opLogID, err := LogOperationByTxReturning(tx, adminID, u.ID, "admin", "BULK_QUOTA", c.IP(), string(change))
+			if err != nil {
+				return err
+			}
+
+			// 写 BillingEntry(admin_adjust)：delta = after - before（都是事务内值，原子一致）
+			if err := database.WriteBillingEntry(tx, database.BillingEntryInput{
+				UserID:          u.ID,
+				EntryType:       database.BillingTypeAdminAdjust,
+				AmountUSD:       delta,
+				BalanceAfterUSD: after.Quota,
+				RelatedType:     "operation_log",
+				RelatedID:       opLogID,
+				Description:     userFriendlyAdminAdjustDescription(delta),
+			}); err != nil {
+				return fmt.Errorf("write billing: %w", err)
+			}
+			return nil
 		})
 		if err != nil {
 			log.Printf("[BULK-QUOTA] user=%d failed: %v (collected as partial failure)", u.ID, err)

@@ -14,6 +14,7 @@ import (
 	"encoding/csv"
 	"fmt"
 	"log"
+	"regexp"
 	"strconv"
 	"strings"
 	"time"
@@ -129,7 +130,7 @@ func MyBillingEntries(c *fiber.Ctx) error {
 	if err != nil {
 		return c.Status(401).JSON(fiber.Map{"success": false, "message_code": "ERR_NO_AUTH"})
 	}
-	return listBillingEntries(c, user.ID)
+	return listBillingEntries(c, user.ID, false)
 }
 
 // AdminListUserBilling admin 看任意用户。路径参数 :id。
@@ -138,10 +139,10 @@ func AdminListUserBilling(c *fiber.Ctx) error {
 	if err != nil || id <= 0 {
 		return c.Status(400).JSON(fiber.Map{"success": false, "message_code": "ERR_INVALID_PARAMS"})
 	}
-	return listBillingEntries(c, uint(id))
+	return listBillingEntries(c, uint(id), true)
 }
 
-func listBillingEntries(c *fiber.Ctx, userID uint) error {
+func listBillingEntries(c *fiber.Ctx, userID uint, includeInternal bool) error {
 	f, err := parseBillingFilters(c, userID)
 	if err != nil {
 		return c.Status(400).JSON(fiber.Map{"success": false, "message": err.Error(), "message_code": "ERR_INVALID_FILTER"})
@@ -169,6 +170,15 @@ func listBillingEntries(c *fiber.Ctx, userID uint) error {
 		Find(&rows).Error; err != nil {
 		log.Printf("[BILLING-LIST] find failed user=%d: %v", userID, err)
 		return c.Status(500).JSON(fiber.Map{"success": false, "message_code": "ERR_DB_QUERY"})
+	}
+	if !includeInternal {
+		for i := range rows {
+			rows[i].UserID = 0
+			rows[i].Description = publicBillingDescription(rows[i])
+			rows[i].RelatedType = ""
+			rows[i].RelatedID = 0
+			rows[i].SourceSubscriptionID = nil
+		}
 	}
 
 	return c.JSON(fiber.Map{
@@ -259,7 +269,7 @@ func MyBillingExport(c *fiber.Ctx) error {
 	if err != nil {
 		return c.Status(401).JSON(fiber.Map{"success": false, "message_code": "ERR_NO_AUTH"})
 	}
-	return exportBillingCSV(c, user.ID)
+	return exportBillingCSV(c, user.ID, false)
 }
 
 // AdminUserBillingExport admin 导出任意用户账单为 CSV
@@ -268,13 +278,13 @@ func AdminUserBillingExport(c *fiber.Ctx) error {
 	if err != nil || id <= 0 {
 		return c.Status(400).JSON(fiber.Map{"success": false, "message_code": "ERR_INVALID_PARAMS"})
 	}
-	return exportBillingCSV(c, uint(id))
+	return exportBillingCSV(c, uint(id), true)
 }
 
 // exportBillingCSV 导出 CSV。设上限 10000 行避免 OOM；超出建议用筛选条件缩小范围。
 const csvExportMaxRows = 10000
 
-func exportBillingCSV(c *fiber.Ctx, userID uint) error {
+func exportBillingCSV(c *fiber.Ctx, userID uint, includeInternal bool) error {
 	f, err := parseBillingFilters(c, userID)
 	if err != nil {
 		return c.Status(400).JSON(fiber.Map{"success": false, "message": err.Error(), "message_code": "ERR_INVALID_FILTER"})
@@ -312,6 +322,14 @@ func exportBillingCSV(c *fiber.Ctx, userID uint) error {
 	}
 
 	for _, r := range rows {
+		description := r.Description
+		relatedType := r.RelatedType
+		relatedID := r.RelatedID
+		if !includeInternal {
+			description = publicBillingDescription(r)
+			relatedType = ""
+			relatedID = 0
+		}
 		// fix Major（codex+claude 第十四轮）：所有可能含用户/admin 输入的字符串字段必须经过 csvSanitize
 		// 防 Excel 公式注入。数字/枚举字段不需要（来源受控）。
 		// 金额 micro_usd → USD 字符串（6 位小数无损）；原币 RMB → fen → 元字符串（2 位小数）
@@ -332,9 +350,9 @@ func exportBillingCSV(c *fiber.Ctx, userID uint) error {
 			strconv.Itoa(r.TokensTotal),
 			csvSanitize(r.CurrencyOriginal),
 			amountOriginalStr,
-			csvSanitize(r.Description),
-			csvSanitize(r.RelatedType),
-			strconv.Itoa(int(r.RelatedID)),
+			csvSanitize(description),
+			csvSanitize(relatedType),
+			strconv.Itoa(int(relatedID)),
 		}
 		if err := w.Write(record); err != nil {
 			// fix Minor: 流式写入失败时无法回传 4xx（headers 已发），至少日志记录受影响行数
@@ -344,6 +362,50 @@ func exportBillingCSV(c *fiber.Ctx, userID uint) error {
 		}
 	}
 	return nil
+}
+
+var adminMarkerRE = regexp.MustCompile(`(^| · )admin#\d+($| · )`)
+
+func publicBillingDescription(r database.BillingEntry) string {
+	switch r.EntryType {
+	case database.BillingTypeAdminAdjust:
+		return userFriendlyAdminAdjustDescription(r.AmountUSD)
+	case database.BillingTypeAdminGrantSub, database.BillingTypeAdminGrantAddon,
+		database.BillingTypeAdminRevokeGrant:
+		return stripInternalBillingFragments(r.Description)
+	default:
+		return stripInternalBillingFragments(r.Description)
+	}
+}
+
+func stripInternalBillingFragments(desc string) string {
+	desc = strings.TrimSpace(desc)
+	if desc == "" {
+		return desc
+	}
+	if idx := strings.Index(desc, " · ["); idx >= 0 {
+		desc = desc[:idx]
+	}
+	desc = adminMarkerRE.ReplaceAllString(desc, " · ")
+	desc = strings.Trim(desc, " ·")
+	return desc
+}
+
+func userFriendlyAdminAdjustDescription(deltaMicro int64) string {
+	if deltaMicro > 0 {
+		return "管理员调整额度 · 余额增加 $" + formatAbsMicroUSD(deltaMicro)
+	}
+	if deltaMicro < 0 {
+		return "管理员调整额度 · 余额减少 $" + formatAbsMicroUSD(deltaMicro)
+	}
+	return "管理员调整额度 · 余额未变化"
+}
+
+func formatAbsMicroUSD(v int64) string {
+	if v < 0 {
+		v = -v
+	}
+	return fmt.Sprintf("%.2f", database.MicroToUSD(v))
 }
 
 // csvSanitize 防 CSV 注入：以 = + - @ \t \r 开头的单元格在 Excel/Sheets 中会被解析为公式。
