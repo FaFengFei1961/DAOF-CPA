@@ -85,6 +85,13 @@ type ChannelModel struct {
 	Weight                 int     `gorm:"default:1" json:"weight"` // 同模型多渠道的路由比重
 	Status                 int     `gorm:"default:1" json:"status"` // 针对当前渠道的此模型一键封锁
 
+	// EndpointPolicy 控制该渠道模型可接受的客户端端点形态。
+	//
+	//   "all"                - 不限制端点
+	//   "no_chat_non_stream" - 禁止非流式 /v1/chat/completions（gpt-5.5 + CLIProxyAPI 当前需要）
+	//   "responses_only"     - 仅允许 /v1/responses
+	EndpointPolicy string `gorm:"size:32;default:'all'" json:"endpoint_policy"`
+
 	// 风控配置（per channel + per model 粒度）
 	//
 	// fix CRITICAL R23（codex 第二十三轮）：御三家中 OpenAI 最易因 jailbreak 封号；Claude 自带强拒答 +
@@ -131,25 +138,86 @@ type AccessToken struct {
 
 // ApiLog 记录每一条流过系统的对话指纹
 type ApiLog struct {
-	ID                 uint      `gorm:"primaryKey" json:"id"`
-	UserID             uint      `gorm:"index;not null" json:"user_id"`
-	TokenName          string    `json:"token_name"`
-	ModelName          string    `gorm:"index" json:"model_name"`
-	PromptTokens       int       `json:"prompt_tokens"`
-	CompletionTokens   int       `json:"completion_tokens"`
-	CachedTokens       int       `json:"cached_tokens"`      // cache read tokens
-	CacheWriteTokens   int       `json:"cache_write_tokens"` // cache creation/write tokens
-	CacheWrite5mTokens int       `gorm:"column:cache_write_5m_tokens" json:"cache_write_5m_tokens"`
-	CacheWrite1hTokens int       `gorm:"column:cache_write_1h_tokens" json:"cache_write_1h_tokens"`
-	ReasoningTokens    int       `json:"reasoning_tokens"`
-	Cost               int64     `json:"cost"`                               // 单次调用成本（micro_usd, USD * 1e6）
-	Latency            int64     `gorm:"default:0" json:"latency"`           // ms延迟 (Parity)
-	Status             int       `gorm:"default:200" json:"status"`          // 状态码或结果记录 (Parity)
-	IPAddress          string    `gorm:"index;default:''" json:"ip_address"` // 请求来源IP (Parity)
-	RequestPath        string    `gorm:"size:160;default:''" json:"request_path"`
-	ErrorType          string    `gorm:"size:64;default:''" json:"error_type"`
-	ErrorMessage       string    `gorm:"size:512;default:''" json:"error_message"`
-	CreatedAt          time.Time `gorm:"index" json:"created_at"`
+	ID                     uint       `gorm:"primaryKey" json:"id"`
+	UserID                 uint       `gorm:"index;not null" json:"user_id"`
+	TokenName              string     `json:"token_name"`
+	ModelName              string     `gorm:"index" json:"model_name"`
+	RequestedModel         string     `gorm:"index;size:160;default:''" json:"requested_model"`
+	ServedModel            string     `gorm:"index;size:160;default:''" json:"served_model"`
+	PromptTokens           int        `json:"prompt_tokens"`
+	CompletionTokens       int        `json:"completion_tokens"`
+	CachedTokens           int        `json:"cached_tokens"`      // cache read tokens
+	CacheWriteTokens       int        `json:"cache_write_tokens"` // cache creation/write tokens
+	CacheWrite5mTokens     int        `gorm:"column:cache_write_5m_tokens" json:"cache_write_5m_tokens"`
+	CacheWrite1hTokens     int        `gorm:"column:cache_write_1h_tokens" json:"cache_write_1h_tokens"`
+	ReasoningTokens        int        `json:"reasoning_tokens"`
+	Cost                   int64      `json:"cost"`                                    // 原始 API 等值成本（micro_usd, USD * 1e6）
+	ChargedCost            int64      `gorm:"default:0" json:"charged_cost"`           // 套餐/credits 扣减成本（micro_usd），余额扣费仍使用 Cost
+	PlatformCostEstimate   int64      `gorm:"default:0" json:"platform_cost_estimate"` // 平台真实账号成本估算（micro_usd，仅毛利分析）
+	ModelWeight            float64    `gorm:"default:1" json:"model_weight"`           // 公开模型权重
+	HealthMultiplier       float64    `gorm:"default:1" json:"health_multiplier"`      // 公开高峰/健康系数
+	BillingRulesVersion    string     `gorm:"size:64;default:''" json:"billing_rules_version"`
+	PrecheckInputTokens    int        `gorm:"default:0" json:"precheck_input_tokens"`    // 预检估算输入 tokens（失败请求不计入用量）
+	PrecheckOutputTokens   int        `gorm:"default:0" json:"precheck_output_tokens"`   // 预检预留输出 tokens
+	PrecheckRawCost        int64      `gorm:"default:0" json:"precheck_raw_cost"`        // 预检 API 等值成本（micro_usd）
+	PrecheckChargedCost    int64      `gorm:"default:0" json:"precheck_charged_cost"`    // 预检套餐/credits 扣减成本（micro_usd）
+	PrecheckQuotaPlanID    uint       `gorm:"default:0" json:"precheck_quota_plan_id"`   // 触发预检拒绝的 quota_plan
+	PrecheckQuotaLimit     int64      `gorm:"default:0" json:"precheck_quota_limit"`     // 当前窗口限额（micro_usd，仅 api_cost_usd 计划）
+	PrecheckQuotaUsed      int64      `gorm:"default:0" json:"precheck_quota_used"`      // 当前窗口已用（micro_usd，仅 api_cost_usd 计划）
+	PrecheckQuotaRemaining int64      `gorm:"default:0" json:"precheck_quota_remaining"` // 当前窗口剩余（micro_usd，仅 api_cost_usd 计划）
+	PrecheckWindowEndAt    *time.Time `json:"precheck_window_end_at"`                    // 当前窗口结束时间
+	BlockReason            string     `gorm:"size:96;default:''" json:"block_reason"`    // 机器可读阻断原因
+	FallbackUserOptIn      bool       `gorm:"default:false" json:"fallback_user_opt_in"`
+	FallbackReason         string     `gorm:"size:160;default:''" json:"fallback_reason"`
+	UpstreamProvider       string     `gorm:"index;size:64;default:''" json:"upstream_provider"`   // CPA usage/provider 归因
+	UpstreamAuthIndex      string     `gorm:"index;size:64;default:''" json:"upstream_auth_index"` // CPA 稳定账号索引（不可逆）
+	UpstreamAuthType       string     `gorm:"size:64;default:''" json:"upstream_auth_type"`        // oauth/api_key 等
+	UpstreamSource         string     `gorm:"size:255;default:''" json:"upstream_source"`          // CPA source（admin-only，可辅助定位）
+	UpstreamRequestID      string     `gorm:"index;size:64;default:''" json:"upstream_request_id"` // CPA 内部 request_id
+	UpstreamUsageRecordID  uint       `gorm:"index;default:0" json:"upstream_usage_record_id"`     // 对应 upstream_usage_records.id
+	UpstreamUsageMatch     string     `gorm:"size:64;default:''" json:"upstream_usage_match"`      // exact_tokens / single_candidate_zero_usage
+	UpstreamUsageSyncedAt  *time.Time `json:"upstream_usage_synced_at"`
+	Latency                int64      `gorm:"default:0" json:"latency"`           // ms延迟 (Parity)
+	Status                 int        `gorm:"default:200" json:"status"`          // 状态码或结果记录 (Parity)
+	IPAddress              string     `gorm:"index;default:''" json:"ip_address"` // 请求来源IP (Parity)
+	RequestPath            string     `gorm:"size:160;default:''" json:"request_path"`
+	ErrorType              string     `gorm:"size:64;default:''" json:"error_type"`
+	ErrorMessage           string     `gorm:"size:512;default:''" json:"error_message"`
+	CreatedAt              time.Time  `gorm:"index" json:"created_at"`
+}
+
+// UpstreamUsageRecord 保存从 CLIProxyAPI usage queue 拉取到的原始用量事实。
+//
+// /v0/management/usage-queue 是 pop 语义：读出来后 CPA 队列就没了。
+// 所以 DAOFA 必须先落库，再尝试匹配 api_logs；匹配不上也不能丢，后续可人工/任务补对账。
+type UpstreamUsageRecord struct {
+	ID                  uint      `gorm:"primaryKey" json:"id"`
+	Provider            string    `gorm:"index;size:64;default:''" json:"provider"`
+	Model               string    `gorm:"index;size:160;default:''" json:"model"`
+	Alias               string    `gorm:"index;size:160;default:''" json:"alias"`
+	Endpoint            string    `gorm:"size:160;default:''" json:"endpoint"`
+	AuthType            string    `gorm:"size:64;default:''" json:"auth_type"`
+	AuthIndex           string    `gorm:"index;size:64;default:''" json:"auth_index"`
+	Source              string    `gorm:"size:255;default:''" json:"source"`
+	APIKeyHash          string    `gorm:"size:64;default:''" json:"api_key_hash"`
+	RequestID           string    `gorm:"index;size:64;default:''" json:"request_id"`
+	Timestamp           time.Time `gorm:"index" json:"timestamp"`
+	Latency             int64     `gorm:"default:0" json:"latency_ms"`
+	InputTokens         int       `gorm:"default:0" json:"input_tokens"`
+	OutputTokens        int       `gorm:"default:0" json:"output_tokens"`
+	ReasoningTokens     int       `gorm:"default:0" json:"reasoning_tokens"`
+	CachedTokens        int       `gorm:"default:0" json:"cached_tokens"`
+	CacheReadTokens     int       `gorm:"default:0" json:"cache_read_tokens"`
+	CacheCreationTokens int       `gorm:"default:0" json:"cache_creation_tokens"`
+	TotalTokens         int       `gorm:"default:0" json:"total_tokens"`
+	Failed              bool      `gorm:"default:false" json:"failed"`
+	Status              int       `gorm:"default:0" json:"status"`
+	FailBody            string    `gorm:"size:512;default:''" json:"fail_body"`
+	MatchedApiLogID     uint      `gorm:"index;default:0" json:"matched_api_log_id"`
+	MatchStatus         string    `gorm:"index;size:64;default:'pending'" json:"match_status"`
+	MatchReason         string    `gorm:"size:255;default:''" json:"match_reason"`
+	CreatedAt           time.Time `json:"created_at"`
+	UpdatedAt           time.Time `json:"updated_at"`
 }
 
 // OperationLog 追踪并记录所有涉及风险的用户干预操作

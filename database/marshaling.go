@@ -60,12 +60,56 @@ func (a AccessToken) MarshalJSON() ([]byte, error) {
 
 func (l ApiLog) MarshalJSON() ([]byte, error) {
 	type apiLogAlias ApiLog
+	chargedCost := l.ChargedCost
+	if chargedCost == 0 && l.Cost > 0 {
+		chargedCost = l.Cost
+	}
+	modelWeight := l.ModelWeight
+	if modelWeight == 0 {
+		modelWeight = 1
+	}
+	healthMultiplier := l.HealthMultiplier
+	if healthMultiplier == 0 {
+		healthMultiplier = 1
+	}
+	requestedModel := l.RequestedModel
+	if requestedModel == "" {
+		requestedModel = l.ModelName
+	}
+	servedModel := l.ServedModel
+	if servedModel == "" {
+		servedModel = l.ModelName
+	}
 	return json.Marshal(&struct {
 		*apiLogAlias
-		Cost float64 `json:"cost"`
+		Cost                   float64 `json:"cost"`
+		RawCost                float64 `json:"raw_cost"`
+		ChargedCost            float64 `json:"charged_cost"`
+		PlatformCostEstimate   float64 `json:"platform_cost_estimate"`
+		PrecheckRawCost        float64 `json:"precheck_raw_cost"`
+		PrecheckChargedCost    float64 `json:"precheck_charged_cost"`
+		PrecheckQuotaLimit     float64 `json:"precheck_quota_limit"`
+		PrecheckQuotaUsed      float64 `json:"precheck_quota_used"`
+		PrecheckQuotaRemaining float64 `json:"precheck_quota_remaining"`
+		ModelWeight            float64 `json:"model_weight"`
+		HealthMultiplier       float64 `json:"health_multiplier"`
+		RequestedModel         string  `json:"requested_model"`
+		ServedModel            string  `json:"served_model"`
 	}{
-		apiLogAlias: (*apiLogAlias)(&l),
-		Cost:        MicroToUSD(l.Cost),
+		apiLogAlias:            (*apiLogAlias)(&l),
+		Cost:                   MicroToUSD(l.Cost),
+		RawCost:                MicroToUSD(l.Cost),
+		ChargedCost:            MicroToUSD(chargedCost),
+		PlatformCostEstimate:   MicroToUSD(l.PlatformCostEstimate),
+		PrecheckRawCost:        MicroToUSD(l.PrecheckRawCost),
+		PrecheckChargedCost:    MicroToUSD(l.PrecheckChargedCost),
+		PrecheckQuotaLimit:     MicroToUSD(l.PrecheckQuotaLimit),
+		PrecheckQuotaUsed:      MicroToUSD(l.PrecheckQuotaUsed),
+		PrecheckQuotaRemaining: MicroToUSD(l.PrecheckQuotaRemaining),
+		ModelWeight:            modelWeight,
+		HealthMultiplier:       healthMultiplier,
+		RequestedModel:         requestedModel,
+		ServedModel:            servedModel,
 	})
 }
 

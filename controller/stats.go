@@ -234,7 +234,10 @@ func GetStats(c *fiber.Ctx) error {
 			"token_stats": tokenStats,
 			"model_stats": modelStats,
 			"recent_logs": map[string]interface{}{
-				"logs":  recentLogs,
+				// fix CRITICAL（多模型审计第二十五轮）：用户侧 recent_logs 也走 PublicApiLog
+				// 白名单，不能直接序列化 []database.ApiLog（避免 platform_cost_estimate /
+				// upstream_* 字段泄漏到普通用户）。
+				"logs":  database.ApiLogsToPublic(recentLogs),
 				"total": logsTotal,
 				"page":  page,
 				"limit": limit,

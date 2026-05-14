@@ -51,6 +51,9 @@ func main() {
 	// 1.97 启动 SMS 限流 map sweeper（每 5 分钟清理过期条目，防内存无界增长）
 	controller.StartSMSSweeper()
 
+	// 1.98 启动 CLIProxyAPI usage queue 同步器（账号归因 / 毛利核算基础）
+	controller.StartCLIProxyUsageSyncCron()
+
 	// 2. 创建极速 Fiber 实例
 	app := fiber.New(fiber.Config{
 		DisableStartupMessage: false,
@@ -180,6 +183,7 @@ func main() {
 	api.Post("/auth/complete-profile", middleware.SetupGuard, authLimiter, controller.CompleteProfile)
 	api.Get("/models", middleware.SetupGuard, controller.GetPublicModels)
 	api.Get("/pricing", middleware.SetupGuard, controller.GetPublicPricing)
+	api.Get("/billing/rules", middleware.SetupGuard, controller.GetPublicBillingRules)
 
 	// ==========================================
 	// 用户业务私域接口
@@ -239,6 +243,13 @@ func main() {
 	adminApi.Get("/users-usage", controller.GetUsersUsage)
 	adminApi.Get("/users-usage/timeseries", controller.GetUsersUsageTimeseries)
 	adminApi.Get("/users-usage/events", controller.GetUsersUsageEvents)
+	adminApi.Get("/upstream-account-cost-presets", controller.ListUpstreamAccountCostPresets)
+	adminApi.Get("/upstream-accounts", controller.ListUpstreamAccountCosts)
+	adminApi.Post("/upstream-accounts", controller.CreateUpstreamAccountCost)
+	adminApi.Post("/upstream-accounts/bulk", controller.BulkUpsertUpstreamAccountCosts)
+	adminApi.Put("/upstream-accounts/:id", controller.UpdateUpstreamAccountCost)
+	adminApi.Delete("/upstream-accounts/:id", controller.DeleteUpstreamAccountCost)
+	adminApi.Get("/upstream-margin", controller.GetUpstreamMarginReport)
 	adminApi.Post("/users/bulk-quota", controller.BulkAdjustQuota)
 	adminApi.Post("/users/bulk-delete", controller.BulkDeleteUsers)
 	adminApi.Put("/users/:id", controller.UpdateUser)
@@ -265,6 +276,7 @@ func main() {
 
 	// CLIProxyAPI 安全代理（Management Key 仅在服务端持有，绝不下发前端）
 	adminApi.Get("/cliproxy/usage", controller.ProxyCLIProxyUsage)
+	adminApi.Post("/cliproxy/usage/sync", controller.SyncCLIProxyUsage)
 
 	// 号池额度监控（admin 全量明细 + 立即刷新）
 	adminApi.Get("/credits-pool", controller.GetAdminCreditsPool)
@@ -546,6 +558,7 @@ func main() {
 		proxy.StopCreditsPool()
 		proxy.StopPrefCacheJanitor()
 		controller.StopSMSSweeper()
+		controller.StopCLIProxyUsageSyncCron()
 		proxy.StopModerationAuditWorker() // 关 moderation 审计队列 + 等 drain（防丢审计事件）
 		proxy.StopDispatchPool()
 		log.Println("[SHUTDOWN] complete")

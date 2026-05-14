@@ -5,6 +5,7 @@ import { useCurrency } from '../context/CurrencyContext';
 import { StorePage } from './store/StorePrimitives';
 import { groupModelsByProvider, inferModelProvider } from '../utils/modelProviders';
 import { usePublicPricing } from '../hooks/usePublicPricing';
+import BillingRulesPanel from './BillingRulesPanel';
 
 const PricingDash = () => {
     const { t } = useTranslation();
@@ -43,12 +44,7 @@ const PricingDash = () => {
                 </div>
             </div>
 
-            <div className="fl-card p-4 text-sm text-on-surface-variant leading-relaxed">
-                <div className="text-on-surface font-semibold mb-2">{t('PRICING.RULES_TITLE', '计费规则')}</div>
-                <p>
-                    {t('PRICING.RULES_BODY', '费用 = 标准输入 × 输入价 + 缓存读 × 缓存命中价 + 缓存写入 × 缓存写入价 + 输出/思考 × 输出价。长上下文阶梯只按 prompt/input tokens 是否达到阈值触发，输出 tokens 不会把请求推入阶梯。Claude 自动缓存默认按 5 分钟写入价；若上游返回 1 小时缓存写入 tokens，则按 1 小时写入价单独计费。Gemini 显式 cachedContents 存储费当前未启用。')}
-                </p>
-            </div>
+            <BillingRulesPanel />
 
             <div className="bg-surface border border-outline-variant rounded-2xl overflow-hidden shadow-xl">
                 <div className="overflow-x-auto">

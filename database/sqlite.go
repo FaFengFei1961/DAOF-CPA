@@ -65,7 +65,7 @@ func InitDB() {
 
 	// 初始化并迁移基础数据表
 	err = DB.AutoMigrate(
-		&User{}, &Channel{}, &ChannelModel{}, &SysConfig{}, &AccessToken{}, &ApiLog{}, &OperationLog{},
+		&User{}, &Channel{}, &ChannelModel{}, &SysConfig{}, &AccessToken{}, &ApiLog{}, &UpstreamUsageRecord{}, &OperationLog{},
 		// 套餐订阅系统
 		&QuotaPlan{}, &Package{}, &PackagePlan{},
 		&UserSubscription{}, &SubscriptionUsage{}, &Notification{},
@@ -77,6 +77,8 @@ func InitDB() {
 		&Ticket{}, &TicketMessage{},
 		// CPA 凭证元数据本地缓存（增量同步，避免每次查 quota 都下载凭证文件）
 		&CPACredential{},
+		// CPA usage auth_index → 真实账号成本映射（毛利核算基础）
+		&UpstreamAccountCost{},
 		// 账单流水（统一事实表，所有金钱进出落库）
 		&BillingEntry{},
 		// 优惠券系统（admin 创建模板 → 发给用户 → 购买时使用）
@@ -130,6 +132,11 @@ func InitDB() {
 	// 高频查询：ApiLog 按 user_id + id desc 翻页
 	mustExecIndex("idx_apilog_user_id_desc", `CREATE INDEX IF NOT EXISTS idx_apilog_user_id_desc
 		ON api_logs(user_id, id DESC)`)
+	// CPA usage queue 对账：按模型/时间窗口找未归因 ApiLog
+	mustExecIndex("idx_apilog_upstream_match", `CREATE INDEX IF NOT EXISTS idx_apilog_upstream_match
+		ON api_logs(upstream_usage_record_id, model_name, created_at)`)
+	mustExecIndex("idx_upusage_match_status", `CREATE INDEX IF NOT EXISTS idx_upusage_match_status
+		ON upstream_usage_records(match_status, timestamp)`)
 	// fix Major M7（claude perf 第十五轮）：cron 清理按 created_at < cutoff 扫描，
 	// 没有该索引会全表扫；百万行级别下 100ms+ 阻塞写事务。
 	mustExecIndex("idx_apilog_created_at", `CREATE INDEX IF NOT EXISTS idx_apilog_created_at

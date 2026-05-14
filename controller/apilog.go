@@ -40,10 +40,13 @@ func GetLogs(c *fiber.Ctx) error {
 		return c.Status(500).JSON(fiber.Map{"success": false, "message_code": "ERR_DB_QUERY"})
 	}
 
+	// fix CRITICAL（多模型审计第二十五轮）：用户接口必须使用 PublicApiLog 白名单，
+	// 否则 ApiLog.MarshalJSON 会把 platform_cost_estimate / upstream_provider /
+	// upstream_auth_index 等内部字段直接吐给普通用户，违反"CPA 池细节不可见"原则。
 	return c.JSON(fiber.Map{
 		"success": true,
 		"data": map[string]interface{}{
-			"logs":  logs,
+			"logs":  database.ApiLogsToPublic(logs),
 			"total": total,
 			"page":  page,
 			"limit": limit,
