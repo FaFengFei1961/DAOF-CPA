@@ -1,7 +1,7 @@
 import React, { useEffect, useMemo, useState } from 'react';
 import { useTranslation } from 'react-i18next';
 import { useNavigate } from 'react-router-dom';
-import { ChevronRight } from 'lucide-react';
+import { ChevronRight, ShieldAlert } from 'lucide-react';
 import { authFetch, isLoggedIn } from '../utils/authFetch';
 import { logger } from '../utils/logger';
 import { useAuth } from '../context/AuthContext';
@@ -24,7 +24,7 @@ const VIEW_TO_PATH = {
 
 const Dashboard = () => {
   const { t } = useTranslation();
-  const { isAuthenticated, openLogin } = useAuth();
+  const { isAuthenticated, isAdmin, openLogin } = useAuth();
   const navigate = useNavigate();
   const onNavigate = (view) => navigate(VIEW_TO_PATH[view] || `/${view}`);
   const { formatCurrency } = useCurrency();
@@ -87,9 +87,11 @@ const Dashboard = () => {
         </div>
       )}
 
-      {/* Phase 8：登录态 → StatStrip；登录中 → skeleton；未登录 → 极简 sign-in
-          banner（不再用 PublicHero 营销 CTA + 大渐变 logo 锚） */}
-      {meLoading ? (
+      {/* Phase 8：四个分支 — admin 没有 quota/me，单独显示入口提示；
+          普通用户登录中 → skeleton；登录完 → StatStrip；未登录 → SignInBanner */}
+      {isAdmin ? (
+        <AdminBanner onEnter={() => navigate('/admin')} t={t} />
+      ) : meLoading ? (
         <StatStripSkeleton />
       ) : isAuthenticated && me ? (
         <StatStrip me={me} recentLogs={recentLogs} formatCurrency={formatCurrency} t={t} />
@@ -200,9 +202,7 @@ const Stat = ({ label, value, hint, prominent = false }) => (
 );
 
 // ─── SignInBanner ───────────────────────────────────────────────────────
-// 未登录态：单行信息条 — "登录后可查看账户用量与 API token"。
-// 不是营销 CTA，是状态说明。务实控制台风：用户没登录就告诉他登录后能看什么
-// 数据，不卖产品、不渐变 logo、不双 CTA、不"协议全兼容、无月费门槛"。
+// 未登录态：单行信息条 — 不卖产品、不渐变 logo、不双 CTA。
 const SignInBanner = ({ onSignIn, t }) => (
   <section className="fl-card flex items-center gap-3 px-4 py-3">
     <span className="text-sm text-on-surface-variant">
@@ -214,6 +214,25 @@ const SignInBanner = ({ onSignIn, t }) => (
       className="ml-auto text-sm font-medium text-primary hover:underline"
     >
       {t('DASH.SIGN_IN_ACTION', '登录')}
+    </button>
+  </section>
+);
+
+// ─── AdminBanner ────────────────────────────────────────────────────────
+// admin 登录态：admin 没有 quota/me，不应该显示 StatStrip 也不该显示 "请
+// 登录"。给一个中性入口提示条，引导去管理控制台。
+const AdminBanner = ({ onEnter, t }) => (
+  <section className="fl-card flex items-center gap-3 px-4 py-3">
+    <ShieldAlert size={16} className="text-on-surface-variant shrink-0" />
+    <span className="text-sm text-on-surface-variant">
+      {t('DASH.ADMIN_HINT', '当前为管理员模式，可前往管理控制台查看渠道、用户与计费')}
+    </span>
+    <button
+      type="button"
+      onClick={onEnter}
+      className="ml-auto text-sm font-medium text-primary hover:underline"
+    >
+      {t('DASH.ADMIN_ENTER', '进入控制台')}
     </button>
   </section>
 );

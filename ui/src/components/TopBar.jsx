@@ -145,7 +145,7 @@ const TopBar = ({ isAuthenticated, onOpenAuth, isAdmin, profile }) => {
         {isAdmin && (
           <Link
             to="/admin"
-            className="flex items-center gap-1.5 h-8 px-2.5 rounded bg-fuchsia-500/15 text-fuchsia-300 border border-fuchsia-500/30 hover:bg-fuchsia-500/25 transition"
+            className="flex items-center gap-1.5 h-8 px-2.5 rounded border border-outline-variant text-on-surface-variant hover:bg-on-surface/[0.04] hover:text-on-surface transition"
             title={t('TOPBAR.ENTER_ADMIN', '进入管理后台')}
           >
             <ShieldAlert size={14} />
