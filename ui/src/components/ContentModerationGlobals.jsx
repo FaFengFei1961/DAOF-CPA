@@ -12,7 +12,7 @@ import { authFetch } from '../utils/authFetch';
  * 真实的"哪个渠道哪个模型走哪种风控"在 ChannelManagement → 模型编辑里设置。
  *
  * 包括：
- *   - CPA 模型池审核配置（model / threshold）
+ *   - 上游模型池审核配置（model / threshold）
  *   - 关键字词库（textarea，前端 split('\n') ↔ JSON 数组）
  *   - 缓存参数（TTL / 容量 / HMAC secret 重置）
  *   - 长 prompt 限制（max_chars / chunk_chars / max_chunks）
@@ -246,16 +246,16 @@ const ContentModerationGlobals = ({ configs, handleChange }) => {
         const messages = {
             ok: t('MODERATION.TEST_OK', '已连通：测试文本通过审核'),
             flagged: t('MODERATION.TEST_FLAGGED', '已连通，但无害测试文本被判定命中，请检查兼容服务或阈值'),
-            not_configured: t('MODERATION.TEST_NOT_CONFIGURED', '请先保存 CPA 地址和审核模型后再测试'),
+            not_configured: t('MODERATION.TEST_NOT_CONFIGURED', '请先保存上游地址和审核模型后再测试'),
             config_invalid: t('MODERATION.TEST_CONFIG_INVALID', 'Endpoint 不合法，请检查后保存'),
             auth_failed: t('MODERATION.TEST_AUTH_FAILED', '审核 provider 鉴权失败，请检查同地址 cliproxy 渠道 API key 或模型权限'),
             rate_limited: t('MODERATION.TEST_RATE_LIMITED', '审核 provider 返回限流，请稍后重试，或切换更充足的模型'),
             billing_or_quota: t('MODERATION.TEST_BILLING', '审核 provider quota 或计费异常，请检查该模型的可用额度'),
             timeout: t('MODERATION.TEST_TIMEOUT', '审核请求超时，请检查网络、代理或 endpoint 可达性'),
-            network_error: t('MODERATION.TEST_NETWORK', '无法连接审核 provider，请检查 CPA、网络或 DNS'),
+            network_error: t('MODERATION.TEST_NETWORK', '无法连接审核 provider，请检查上游、网络或 DNS'),
             api_5xx: t('MODERATION.TEST_5XX', '审核 provider 上游暂时异常，请稍后重试'),
             input_too_long: t('MODERATION.TEST_INPUT_TOO_LONG', '测试文本被当前长度限制拒绝，请检查长 Prompt 限制配置'),
-            api_error: t('MODERATION.TEST_API_ERROR', '审核调用失败，请检查 CPA 地址、模型名和调用权限'),
+            api_error: t('MODERATION.TEST_API_ERROR', '审核调用失败，请检查上游地址、模型名和调用权限'),
         };
         return messages[result.status] || result.message || t('MODERATION.TEST_UNKNOWN', '测试失败，请检查配置');
     };
@@ -413,7 +413,7 @@ const ContentModerationGlobals = ({ configs, handleChange }) => {
                             {t('MODERATION.SECTION_API', '智能审核 Provider')}
                         </h3>
                         <p className="text-[11px] text-on-surface-variant mt-1">
-                            {t('MODERATION.TEST_SAVED_HINT', '审核统一走 CPA 模型池。刚改过配置请先点击页面底部「保存」。')}
+                            {t('MODERATION.TEST_SAVED_HINT', '审核统一走上游模型池。刚改过配置请先点击页面底部「保存」。')}
                         </p>
                     </div>
                     <button
@@ -441,7 +441,7 @@ const ContentModerationGlobals = ({ configs, handleChange }) => {
                                         {t('MODERATION.TEST_MODEL', '模型')}：{testResult.model || '-'}
                                     </span>
                                     <span className="min-w-0 break-words">
-                                        {t('MODERATION.TEST_ROUTE', '路由')}：{t('MODERATION.PROVIDER_CLIPROXY_MODEL', 'CPA 模型池')}
+                                        {t('MODERATION.TEST_ROUTE', '路由')}：{t('MODERATION.PROVIDER_CLIPROXY_MODEL', '上游模型池')}
                                     </span>
                                     <span className="min-w-0 break-words">
                                         {t('MODERATION.TEST_ENDPOINT', 'Endpoint')}：{testResult.endpoint || '-'}
@@ -514,10 +514,10 @@ const ContentModerationGlobals = ({ configs, handleChange }) => {
                             {t('MODERATION.PROVIDER', '审核供应商')}
                         </span>
                         <div className="w-full rounded-lg border border-outline bg-surface-container-high px-3 py-2 text-on-surface">
-                            {t('MODERATION.PROVIDER_CLIPROXY_MODEL', 'CPA 模型池')}
+                            {t('MODERATION.PROVIDER_CLIPROXY_MODEL', '上游模型池')}
                         </div>
                         <p className="text-[11px] text-on-surface-variant mt-1">
-                            {t('MODERATION.PROVIDER_HINT', '审核统一走 CPA 模型池，优先复用同地址 cliproxy 渠道的 API key。')}
+                            {t('MODERATION.PROVIDER_HINT', '审核统一走上游模型池，优先复用同地址 cliproxy 渠道的 API key。')}
                         </p>
                     </div>
                     <div>
@@ -533,7 +533,7 @@ const ContentModerationGlobals = ({ configs, handleChange }) => {
                             className="w-full bg-surface-container-high border border-outline rounded-lg px-3 py-2 text-on-surface outline-none focus:border-primary"
                         />
                         <p className="text-[11px] text-on-surface-variant mt-1">
-                            {t('MODERATION.MODEL_HINT', '推荐使用 gpt-5.4-mini 做默认二审；也可以换成 CPA 模型池里额度更宽裕的模型。')}
+                            {t('MODERATION.MODEL_HINT', '推荐使用 gpt-5.4-mini 做默认二审；也可以换成 上游模型池里额度更宽裕的模型。')}
                         </p>
                     </div>
                     <div>
@@ -573,7 +573,7 @@ const ContentModerationGlobals = ({ configs, handleChange }) => {
                             className="w-full bg-surface-container-high border border-outline rounded-lg px-3 py-2 text-on-surface outline-none focus:border-primary"
                         />
                         <p className="text-[11px] text-on-surface-variant mt-1">
-                            {t('MODERATION.API_TIMEOUT_HINT', 'CPA 模型池二审的总等待时间。gpt-5.4-mini 实测常见 4-6 秒，默认 15 秒更稳。')}
+                            {t('MODERATION.API_TIMEOUT_HINT', '上游模型池二审的总等待时间。gpt-5.4-mini 实测常见 4-6 秒，默认 15 秒更稳。')}
                         </p>
                     </div>
                 </div>

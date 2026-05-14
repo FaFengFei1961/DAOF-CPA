@@ -8,6 +8,8 @@ import toast from 'react-hot-toast';
 import { authFetch, readAuthState } from '../utils/authFetch';
 import { isPageCacheFresh, readPageCache, writePageCache } from '../utils/pageCache';
 import Pagination from './common/Pagination';
+import { useCurrency } from '../context/CurrencyContext';
+import BillingRulesPanel from './BillingRulesPanel';
 
 // EntryType → 显示元数据。每种类型一个图标 + 颜色 + 中文标签。
 // label 通过 i18n 拿，未配置时显示 fallback。
@@ -31,10 +33,10 @@ const TYPE_META = {
   api_usage_pending_reconcile: { icon: Activity,        color: 'text-yellow-600',  bg: 'bg-yellow-50',  i18n: 'BILL.T_API_PENDING',        fallback: '待对账',           direction: 'neutral' },
 };
 
-const fmtUSD = (n) => {
-  if (n === undefined || n === null) return '$0.00';
+const formatSignedCurrency = (n, formatCurrency, decimals = 2) => {
+  if (n === undefined || n === null) return formatCurrency(0, decimals);
   const sign = n > 0 ? '+' : (n < 0 ? '-' : '');
-  return `${sign}$${Math.abs(n).toFixed(4).replace(/0+$/, '').replace(/\.$/, '.00')}`;
+  return `${sign}${formatCurrency(Math.abs(n), decimals)}`;
 };
 
 const fmtTime = (s) => {
@@ -61,11 +63,12 @@ const buildDefaultBillingQuery = (extra = {}) => {
   return params.toString();
 };
 
-const getBillingListCacheKey = (authKey, qs) => `billing:list:${authKey}:${qs}`;
+const getBillingListCacheKey = (authKey, qs) => `billing:list:v2:${authKey}:${qs}`;
 const getBillingSummaryCacheKey = (authKey, qs) => `billing:summary:${authKey}:${qs}`;
 
 const BillsPage = () => {
   const { t } = useTranslation();
+  const { formatCurrency } = useCurrency();
   const billingAuthKey = useRef(getBillingAuthKey()).current;
   const initialListCache = readPageCache(getBillingListCacheKey(
     billingAuthKey,
@@ -244,30 +247,32 @@ const BillsPage = () => {
         <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
           <SummaryCard
             label={t('BILL.SUM_IN', '入账')}
-            value={`$${(summary.total_in_usd || 0).toFixed(2)}`}
+            value={formatCurrency(summary.total_in_usd || 0, 2)}
             color="text-green-600"
             icon={ArrowDownCircle}
           />
           <SummaryCard
             label={t('BILL.SUM_OUT', '消费')}
-            value={`$${(summary.total_out_usd || 0).toFixed(2)}`}
+            value={formatCurrency(summary.total_out_usd || 0, 2)}
             color="text-rose-600"
             icon={ArrowUpCircle}
           />
           <SummaryCard
             label={t('BILL.SUM_NET', '净变动')}
-            value={`${summary.net_change_usd >= 0 ? '+' : ''}$${(summary.net_change_usd || 0).toFixed(2)}`}
+            value={formatSignedCurrency(summary.net_change_usd || 0, formatCurrency, 2)}
             color={summary.net_change_usd >= 0 ? 'text-green-600' : 'text-rose-600'}
             icon={Activity}
           />
           <SummaryCard
             label={t('BILL.SUM_BALANCE', '当前余额')}
-            value={`$${(summary.current_balance || 0).toFixed(2)}`}
+            value={formatCurrency(summary.current_balance || 0, 2)}
             color="text-on-surface"
             icon={Wallet}
           />
         </div>
       )}
+
+      <BillingRulesPanel compact />
 
       {/* 筛选 */}
       <section className="rounded-xl bg-surface-container/40 border border-outline-variant/40 p-4 space-y-3">
@@ -333,7 +338,7 @@ const BillsPage = () => {
           </div>
         ) : (
           <ul className="divide-y divide-outline-variant/30 rounded-xl border border-outline-variant/40 overflow-hidden bg-surface">
-            {entries.map((e) => <BillRow key={e.id} entry={e} t={t} />)}
+            {entries.map((e) => <BillRow key={e.id} entry={e} t={t} formatCurrency={formatCurrency} />)}
           </ul>
         )}
         {/* fix MAJOR（gemini 第十七轮）：用共用 Pagination 组件 */}
@@ -360,7 +365,7 @@ const SummaryCard = ({ label, value, color, icon: Icon }) => (
   </div>
 );
 
-const BillRow = ({ entry, t }) => {
+const BillRow = ({ entry, t, formatCurrency }) => {
   const meta = TYPE_META[entry.entry_type] || {
     icon: Activity, color: 'text-on-surface', bg: 'bg-surface-container/30',
     fallback: entry.entry_type, i18n: '',
@@ -370,7 +375,8 @@ const BillRow = ({ entry, t }) => {
   const isUsage = meta.direction === 'usage';
   const amountText = isUsage
     ? (entry.tokens_total > 0 ? `${entry.tokens_total.toLocaleString()} tok` : '—')
-    : fmtUSD(entry.amount_usd);
+    : formatSignedCurrency(entry.amount_usd, formatCurrency, 2);
+  const description = formatBillingDescription(entry, formatCurrency);
 
   return (
     <li className="flex items-center gap-3 px-4 py-3 hover:bg-on-surface/[0.02]">
@@ -387,7 +393,7 @@ const BillRow = ({ entry, t }) => {
           )}
         </div>
         <div className="text-xs text-on-surface/60 truncate">
-          {entry.description || '—'}
+          {description || '—'}
           {entry.amount_original && entry.currency_original && (
             <span className="ml-2">
               · {entry.currency_original} {Math.abs(entry.amount_original).toFixed(2)}
@@ -410,12 +416,33 @@ const BillRow = ({ entry, t }) => {
         </div>
         {!isUsage && (
           <div className="text-xs text-on-surface/50">
-            {t('BILL.BALANCE_AFTER', '余额')} ${(entry.balance_after_usd || 0).toFixed(2)}
+            {t('BILL.BALANCE_AFTER', '余额')} {formatCurrency(entry.balance_after_usd || 0, 2)}
           </div>
         )}
       </div>
     </li>
   );
+};
+
+const formatBillingDescription = (entry, formatCurrency) => {
+  const raw = String(entry.description || '').trim();
+  if (entry.entry_type === 'admin_adjust') {
+    const amount = Number(entry.amount_usd || 0);
+    if (amount > 0) return `管理员调整额度 · 余额增加 ${formatCurrency(Math.abs(amount), 2)}`;
+    if (amount < 0) return `管理员调整额度 · 余额减少 ${formatCurrency(Math.abs(amount), 2)}`;
+    return '管理员调整额度 · 余额未变化';
+  }
+  if (entry.entry_type === 'purchase_sub' || entry.entry_type === 'purchase_addon') {
+    return raw.replace(/ · USD\s+-?\d+(\.\d+)?$/i, ` · ${formatCurrency(Math.abs(Number(entry.amount_usd || 0)), 2)}`);
+  }
+  if (entry.entry_type === 'api_consume_balance') {
+    return raw.replace(/cost=\$?-?\d+(\.\d+)?/i, `cost=${formatCurrency(Math.abs(Number(entry.amount_usd || 0)), 2)}`);
+  }
+  return raw
+    .replace(/(^| · )admin#\d+($| · )/g, ' · ')
+    .replace(/ · \[.*$/g, '')
+    .replace(/^ · | · $/g, '')
+    .trim();
 };
 
 export default BillsPage;

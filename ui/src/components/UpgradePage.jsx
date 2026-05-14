@@ -28,7 +28,7 @@ const pickIcon = (key) => {
   return ICON_MAP[raw] || ICON_MAP[raw.toLowerCase()] || PackageIcon;
 };
 const UPGRADE_CACHE_TTL_MS = 60000;
-const PACKAGE_CACHE_KEY = 'upgrade:packages:v3';
+const PACKAGE_CACHE_KEY = 'upgrade:packages:v4';
 const STORE_GROUPS = [
   { id: 'claude', label: 'Claude', order: 10 },
   { id: 'codex', label: 'Codex', order: 20 },
@@ -79,6 +79,17 @@ const displayPackageDescription = (pkg) => String(pkg.description || '')
   .replaceAll('OpenAI / GPT', 'Codex / OpenAI')
   .replaceAll('Claude + GPT + Gemini', 'Claude + Codex + Gemini')
   .replaceAll('御三家', 'Combo');
+
+const formatPlanLimit = (plan) => {
+  const value = Number(plan?.limit_value || 0);
+  if (value <= 0) return '';
+  const unit = String(plan?.limit_label || plan?.limit_unit || '').trim();
+  const displayValue = Number.isInteger(value) ? String(value) : value.toFixed(2).replace(/0+$/, '').replace(/\.$/, '');
+  if (!unit) return displayValue;
+  if (unit === '次调用') return `${displayValue} 次调用`;
+  if (unit === 'Tokens') return `${displayValue} Tokens`;
+  return `${displayValue} ${unit}`;
+};
 
 const groupStorePackages = (packages) => {
   const grouped = new Map();
@@ -372,8 +383,8 @@ const UpgradePage = ({ onPurchaseSuccess, isAuthenticated = true, onSignIn }) =>
                             {String(p.plan?.display_name || p.plan?.name || '')
                               .replaceAll('GPT', 'Codex')
                               .replaceAll('御三家', 'Combo')}
-                            {p.plan?.limit_value > 0 && (
-                              <span className="text-outline"> · {p.plan.limit_value} {p.plan.limit_unit}</span>
+                            {formatPlanLimit(p.plan) && (
+                              <span className="text-outline"> · {formatPlanLimit(p.plan)}</span>
                             )}
                           </span>
                         </li>

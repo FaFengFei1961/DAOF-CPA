@@ -3,6 +3,7 @@ import { useTranslation } from 'react-i18next';
 import { Upload, Download, Trash2, Globe, FileJson, RefreshCw, Plus } from 'lucide-react';
 import toast from 'react-hot-toast';
 import { useConfirm } from '../context/ConfirmContext';
+import { authFetch } from '../utils/authFetch';
 
 const I18nManagement = () => {
     const confirm = useConfirm();
@@ -51,14 +52,12 @@ const I18nManagement = () => {
                 return;
             }
 
-            const response = await fetch(`/api/admin/i18n/${langId}`, {
+            // fix MAJOR（多模型审计第二十五轮 P2）：admin 写操作改 authFetch，统一鉴权 + 错误归一化
+            const data = await authFetch(`/api/admin/i18n/${langId}`, {
                 method: 'POST',
-                credentials: 'include',
-                headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify(jsonData)
+                body: jsonData,
             });
-            const data = await response.json();
-            
+
             if (data.success) {
                 toast.success(t('I18N_MGMT.UPLOAD_SUCCESS', { langId }));
                 fetchLocales();
@@ -79,12 +78,9 @@ const I18nManagement = () => {
         if (!(await confirm(t('I18N_MGMT.DELETE_CONFIRM', { langId })))) return;
 
         try {
-            const response = await fetch(`/api/admin/i18n/${langId}`, {
-                method: 'DELETE',
-                credentials: 'include'
-            });
-            const data = await response.json();
-            
+            // fix MAJOR（多模型审计第二十五轮 P2）：admin 写操作改 authFetch
+            const data = await authFetch(`/api/admin/i18n/${langId}`, { method: 'DELETE' });
+
             if (data.success) {
                 toast.success(t('I18N_MGMT.DELETE_SUCCESS'));
                 fetchLocales();

@@ -89,6 +89,7 @@ const ChannelManagement = () => {
         cached_input_price: 0, cache_write_input_price: 0, cache_write_1h_input_price: 0,
         context_price_threshold: 0, high_input_price: 0, high_cached_input_price: 0, high_output_price: 0,
         weight: 1, max_context_length: 0,
+        endpoint_policy: 'all',
         // fix CRITICAL R23：内容审核字段（per-channel-per-model 风控）
         moderation_level: 'off',          // off / keyword / moderation / strict
         moderation_fail_mode: 'open',     // open / closed
@@ -119,6 +120,14 @@ const ChannelManagement = () => {
             ? { ...form, moderation_level: 'strict', moderation_fail_mode: 'closed', confirm_official_no_moderation: false }
             : form
     );
+
+    const withEndpointPolicyDefaults = (form) => {
+        const id = String(form.model_id || '').trim().toLowerCase();
+        if (id === 'gpt-5.5' && (!form.endpoint_policy || form.endpoint_policy === 'all')) {
+            return { ...form, endpoint_policy: 'no_chat_non_stream' };
+        }
+        return { ...form, endpoint_policy: form.endpoint_policy || 'all' };
+    };
 
     const isOpenAIModel = useMemo(() => isOpenAIModelId(modelForm.model_id), [modelForm.model_id]);
 
@@ -165,6 +174,23 @@ const ChannelManagement = () => {
                 title={`${t('CHANNEL_MGMT.MOD.LEVEL', '审核等级')}: ${lvl} / ${t('CHANNEL_MGMT.MOD.FAIL_MODE', '失败模式')}: ${fm}`}
             >
                 {meta.txt}{lvl !== 'off' && fm === 'closed' ? '·🔒' : ''}
+            </span>
+        );
+    };
+
+    const EndpointPolicyBadge = ({ policy }) => {
+        const p = (policy || 'all').toLowerCase();
+        const map = {
+            all: { txt: t('CHANNEL_MGMT.ENDPOINT.BADGE_ALL', '端点: ALL'), cls: 'bg-zinc-500/10 border-zinc-500/30 text-zinc-400' },
+            no_chat_non_stream: { txt: t('CHANNEL_MGMT.ENDPOINT.BADGE_NO_CHAT_NS', '端点: 禁非流式 Chat'), cls: 'bg-amber-500/10 border-amber-500/30 text-amber-400' },
+            responses_only: { txt: t('CHANNEL_MGMT.ENDPOINT.BADGE_RESPONSES', '端点: Responses'), cls: 'bg-blue-500/10 border-blue-500/30 text-blue-400' },
+        };
+        const meta = map[p] || map.all;
+        return (
+            <span className={`inline-flex items-center gap-1 px-1.5 py-0.5 rounded border text-[10px] font-medium ${meta.cls}`}
+                title={`${t('CHANNEL_MGMT.ENDPOINT.POLICY', '允许的客户端端点')}: ${p}`}
+            >
+                {meta.txt}
             </span>
         );
     };
@@ -263,12 +289,13 @@ const ChannelManagement = () => {
         setInputCurrency('USD');
         if (model) {
             setCurrentModel(model);
-            setModelForm(withOpenAIModelModeration({
+            setModelForm(withEndpointPolicyDefaults(withOpenAIModelModeration({
                 ...model,
+                endpoint_policy: model.endpoint_policy || 'all',
                 moderation_level: model.moderation_level,
                 moderation_fail_mode: model.moderation_fail_mode,
                 confirm_official_no_moderation: false,
-            }));
+            })));
         } else {
             setCurrentModel(null);
             // 新建路径：根据渠道是否官方自动套推荐预设（admin 仍可在 UI 内修改）
@@ -284,11 +311,11 @@ const ChannelManagement = () => {
                     } catch { /* 非法 URL → 不当作官方 */ }
                 }
             }
-            setModelForm(withOpenAIModelModeration({
+            setModelForm(withEndpointPolicyDefaults(withOpenAIModelModeration({
                 ...initModelForm,
                 moderation_level: isOfficial ? 'moderation' : 'off',
                 moderation_fail_mode: isOfficial ? 'closed' : 'open',
-            }));
+            })));
         }
         setIsModelModalOpen(true);
     };
@@ -328,6 +355,7 @@ const ChannelManagement = () => {
                 high_output_price: inputCurrency === 'CNY' ? (parseFloat(modelForm.high_output_price) || 0) / exchangeRate : (parseFloat(modelForm.high_output_price) || 0),
                 weight: parseInt(modelForm.weight) || 1,
                 max_context_length: parseInt(modelForm.max_context_length) || 0,
+                endpoint_policy: modelForm.endpoint_policy || 'all',
                 // fix CRITICAL R23：审核字段透传（默认值在 initModelForm 已设；后端再做 enum 校验）
                 moderation_level: isOpenAIModel ? 'strict' : (modelForm.moderation_level || 'off'),
                 moderation_fail_mode: isOpenAIModel ? 'closed' : (modelForm.moderation_fail_mode || 'open'),
@@ -482,6 +510,7 @@ const ChannelManagement = () => {
                                             <div className="flex items-center gap-2 flex-wrap">
                                                 <span>{m.model_id}</span>
                                                 <ModerationBadge level={m.moderation_level} failMode={m.moderation_fail_mode} />
+                                                <EndpointPolicyBadge policy={m.endpoint_policy} />
                                             </div>
                                             <div className="flex items-center gap-2 mt-1">
                                                 <span className="text-xs text-on-surface-variant">{m.display_name}</span>
@@ -573,7 +602,7 @@ const ChannelManagement = () => {
                                         type="text"
                                         required
                                         value={modelForm.model_id}
-                                        onChange={e=>setModelForm(withOpenAIModelModeration({...modelForm, model_id: e.target.value}))}
+                                        onChange={e=>setModelForm(withEndpointPolicyDefaults(withOpenAIModelModeration({...modelForm, model_id: e.target.value})))}
                                         className="w-full bg-surface-container-high border border-outline-variant rounded-xl px-4 py-2.5 text-on-surface"
                                     />
                                 </div>
@@ -669,6 +698,29 @@ const ChannelManagement = () => {
                                         </div>
                                     )}
                                 </div>
+
+                                <fieldset className="border border-outline-variant rounded-xl p-4 mt-2">
+                                    <legend className="px-2 text-xs font-semibold text-on-surface flex items-center gap-2">
+                                        <Network size={13} className="text-on-surface-variant" />
+                                        {t('CHANNEL_MGMT.ENDPOINT.LEGEND', '端点兼容策略')}
+                                    </legend>
+                                    <label htmlFor="endpoint-policy" className="block text-xs font-medium text-on-surface-variant mb-1 mt-2">
+                                        {t('CHANNEL_MGMT.ENDPOINT.POLICY', '允许的客户端端点')}
+                                    </label>
+                                    <select
+                                        id="endpoint-policy"
+                                        value={modelForm.endpoint_policy || 'all'}
+                                        onChange={e=>setModelForm({...modelForm, endpoint_policy: e.target.value})}
+                                        className="w-full bg-surface-container-high border border-outline-variant rounded-xl px-4 py-2.5 text-on-surface"
+                                    >
+                                        <option value="all">{t('CHANNEL_MGMT.ENDPOINT.ALL', '全部允许')}</option>
+                                        <option value="no_chat_non_stream">{t('CHANNEL_MGMT.ENDPOINT.NO_CHAT_NON_STREAM', '禁止 Chat Completions 非流式')}</option>
+                                        <option value="responses_only">{t('CHANNEL_MGMT.ENDPOINT.RESPONSES_ONLY', '仅 Responses API')}</option>
+                                    </select>
+                                    <p className="mt-2 text-[11px] text-on-surface-variant leading-relaxed">
+                                        {t('CHANNEL_MGMT.ENDPOINT.HINT', '用于 gpt-5.5 等只在特定端点稳定工作的模型；不兼容请求会在平台侧直接返回明确错误。')}
+                                    </p>
+                                </fieldset>
 
                                 {/* fix CRITICAL R23: per-ChannelModel 内容审核策略 (codex 第二十三轮反馈) */}
                                 <fieldset className="border border-outline-variant rounded-xl p-4 mt-2">

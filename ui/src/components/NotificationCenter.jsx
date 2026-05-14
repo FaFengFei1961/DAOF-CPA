@@ -1,6 +1,6 @@
 import React, { useState, useEffect, useCallback, useRef } from 'react';
 import { useTranslation } from 'react-i18next';
-import { Bell, Check, X } from 'lucide-react';
+import { ArrowLeft, Bell, ExternalLink, X } from 'lucide-react';
 import toast from 'react-hot-toast';
 import { authFetch, isLoggedIn } from '../utils/authFetch';
 
@@ -19,6 +19,7 @@ const NotificationCenter = ({ trigger, onNavigate, isAuthenticated, onSignIn }) 
   const [open, setOpen] = useState(false);
   const [notifs, setNotifs] = useState([]);
   const [unread, setUnread] = useState(0);
+  const [selectedNotif, setSelectedNotif] = useState(null);
   const ref = useRef(null);
 
   const load = useCallback(async () => {
@@ -58,7 +59,10 @@ const NotificationCenter = ({ trigger, onNavigate, isAuthenticated, onSignIn }) 
   // 点外部关闭
   useEffect(() => {
     const handler = (e) => {
-      if (ref.current && !ref.current.contains(e.target)) setOpen(false);
+      if (ref.current && !ref.current.contains(e.target)) {
+        setOpen(false);
+        setSelectedNotif(null);
+      }
     };
     if (open) document.addEventListener('mousedown', handler);
     return () => document.removeEventListener('mousedown', handler);
@@ -110,12 +114,18 @@ const NotificationCenter = ({ trigger, onNavigate, isAuthenticated, onSignIn }) 
     }
   };
 
-  const handleClick = (n) => {
+  const openDetail = (n) => {
+    setSelectedNotif(n);
+    markRead(n);
+  };
+
+  const handleNavigate = (n) => {
     markRead(n);
     if (n.action_url) {
       if (!isSafeNavigateURL(n.action_url)) {
         // 不可信链接静默忽略；保留 markRead 的副作用
         setOpen(false);
+        setSelectedNotif(null);
         return;
       }
       // fix Critical Codex UX 审查（第二十五轮 #2）：解析 action_url 时保留 query/hash 提示，
@@ -136,6 +146,7 @@ const NotificationCenter = ({ trigger, onNavigate, isAuthenticated, onSignIn }) 
         window.location.href = n.action_url;
       }
       setOpen(false);
+      setSelectedNotif(null);
     }
   };
 
@@ -146,7 +157,12 @@ const NotificationCenter = ({ trigger, onNavigate, isAuthenticated, onSignIn }) 
           屏幕阅读器之前不知道这是个弹出面板。 */}
       <button
         type="button"
-        onClick={() => setOpen(v => !v)}
+        onClick={() => {
+          setOpen(v => {
+            if (v) setSelectedNotif(null);
+            return !v;
+          });
+        }}
         className="relative w-8 h-8 flex items-center justify-center rounded text-on-surface-variant hover:text-on-surface hover:bg-on-surface/[0.04] transition"
         aria-label={t('NOTIF.CENTER', '通知中心')}
         aria-haspopup="dialog"
@@ -166,15 +182,61 @@ const NotificationCenter = ({ trigger, onNavigate, isAuthenticated, onSignIn }) 
           id="notification-center-popover"
           role="dialog"
           aria-label={t('NOTIF.CENTER', '通知中心')}
-          className="absolute right-0 top-full mt-2 w-80 max-h-[500px] bg-surface-container border border-outline-variant rounded-xl shadow-xl shadow-black/40 z-50 flex flex-col overflow-hidden">
+          className="absolute right-0 top-full mt-2 w-96 max-w-[calc(100vw-2rem)] max-h-[560px] bg-surface-container border border-outline-variant rounded-xl shadow-xl shadow-black/40 z-50 flex flex-col overflow-hidden">
           <div className="p-3 border-b border-outline-variant/40 flex items-center justify-between">
-            <span className="text-sm font-semibold">{t('NOTIF.CENTER', '通知中心')}</span>
-            {unread > 0 && (
-              <button onClick={markAll} className="text-xs text-primary hover:underline">{t('NOTIF.MARK_ALL', '全部已读')}</button>
-            )}
+            <div className="min-w-0 flex items-center gap-2">
+              {selectedNotif && (
+                <button
+                  type="button"
+                  onClick={() => setSelectedNotif(null)}
+                  className="w-7 h-7 flex items-center justify-center rounded-md text-on-surface-variant hover:text-on-surface hover:bg-on-surface/[0.06]"
+                  aria-label={t('COMMON.PREV', '上一页')}
+                >
+                  <ArrowLeft size={15} />
+                </button>
+              )}
+              <span className="text-sm font-semibold truncate">
+                {selectedNotif ? t('NOTIF.DETAIL', '通知详情') : t('NOTIF.CENTER', '通知中心')}
+              </span>
+            </div>
+            <div className="flex items-center gap-2">
+              {!selectedNotif && unread > 0 && (
+                <button type="button" onClick={markAll} className="text-xs text-primary hover:underline">{t('NOTIF.MARK_ALL', '全部已读')}</button>
+              )}
+              <button
+                type="button"
+                onClick={() => { setOpen(false); setSelectedNotif(null); }}
+                className="w-7 h-7 flex items-center justify-center rounded-md text-on-surface-variant hover:text-on-surface hover:bg-on-surface/[0.06]"
+                aria-label={t('COMMON.CLOSE', '关闭')}
+              >
+                <X size={15} />
+              </button>
+            </div>
           </div>
           <div className="flex-1 overflow-y-auto">
-            {!isAuthenticated ? (
+            {selectedNotif ? (
+              <div className="p-4 flex flex-col gap-3">
+                <div className={`text-sm font-semibold break-words ${SEVERITY_COLOR[selectedNotif.severity] || 'text-on-surface'}`}>
+                  {selectedNotif.title}
+                </div>
+                <div className="text-[11px] text-outline">
+                  {new Date(selectedNotif.created_at).toLocaleString('zh-CN', { hour12: false })}
+                </div>
+                <div className="max-h-[360px] overflow-y-auto pr-1 text-sm leading-5 text-on-surface-variant whitespace-pre-wrap break-words">
+                  {selectedNotif.body || t('NOTIF.NO_BODY', '无正文')}
+                </div>
+                {selectedNotif.action_url && (
+                  <button
+                    type="button"
+                    onClick={() => handleNavigate(selectedNotif)}
+                    className="mt-1 inline-flex w-fit items-center gap-1.5 px-3 py-1.5 text-xs bg-primary text-on-primary rounded-md font-medium hover:opacity-90"
+                  >
+                    {selectedNotif.action_text || t('NOTIF.OPEN_ACTION', '打开链接')}
+                    <ExternalLink size={12} />
+                  </button>
+                )}
+              </div>
+            ) : !isAuthenticated ? (
               <div className="text-center py-10 px-4">
                 <div className="text-sm text-on-surface-variant mb-3">
                   {t('NOTIF.AUTH_REQUIRED', '登录后即可查看您的通知')}
@@ -201,24 +263,27 @@ const NotificationCenter = ({ trigger, onNavigate, isAuthenticated, onSignIn }) 
                     <div className="flex-1 min-w-0">
                       <button
                         type="button"
-                        onClick={() => handleClick(n)}
+                        onClick={() => openDetail(n)}
                         className="w-full text-left bg-transparent border-0 p-0 cursor-pointer"
+                        aria-label={t('NOTIF.OPEN_DETAIL', '查看通知详情')}
                       >
-                        <div className={`text-xs font-semibold ${SEVERITY_COLOR[n.severity] || 'text-on-surface'}`}>
+                        <div className={`text-xs font-semibold break-words ${SEVERITY_COLOR[n.severity] || 'text-on-surface'}`}>
                           {n.title}
                         </div>
-                        <div className="text-xs text-on-surface-variant mt-0.5 line-clamp-2">{n.body}</div>
+                        <div className="text-xs text-on-surface-variant mt-0.5 line-clamp-2 break-words">{n.body || t('NOTIF.NO_BODY', '无正文')}</div>
                         <div className="text-[10px] text-outline mt-1">
                           {new Date(n.created_at).toLocaleString('zh-CN', { hour12: false })}
                         </div>
+                        <div className="text-[11px] text-primary mt-1">{t('NOTIF.VIEW_FULL', '查看全文')}</div>
                       </button>
-                      {n.action_text && n.action_url && (
+                      {n.action_url && (
                         <button
                           type="button"
-                          onClick={() => handleClick(n)}
+                          onClick={() => handleNavigate(n)}
                           className="mt-2 inline-flex items-center gap-1 px-2 py-1 text-[11px] bg-primary text-on-primary rounded-md font-medium hover:opacity-90"
                         >
-                          {n.action_text} →
+                          {n.action_text || t('NOTIF.OPEN_ACTION', '打开链接')}
+                          <ExternalLink size={11} />
                         </button>
                       )}
                     </div>

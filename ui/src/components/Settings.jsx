@@ -581,7 +581,7 @@ const Settings = ({ isAdmin, isAuthenticated }) => {
         )}
 
         {/* =========================================================
-            号池监控（CPA 凭证额度采集看板）
+            号池监控（上游账号额度采集看板）
             ========================================================= */}
         {isAdmin && activeTab === 'credits_monitor' && (
            <CreditsMonitor />
@@ -711,7 +711,7 @@ const Settings = ({ isAdmin, isAuthenticated }) => {
 
         {/* =========================================================
             内容审核（per-ChannelModel 风控的全局共享层）
-            这里配置 CPA 模型池智能审核、关键字词库、缓存参数、长 prompt 限制、
+            这里配置上游模型池智能审核、关键字词库、缓存参数、长 prompt 限制、
             多模态图片策略、双语拒绝文案。
             具体每个渠道每个模型走哪种风控等级在 ChannelManagement → 模型编辑里设。
             ========================================================= */}
@@ -1118,14 +1118,14 @@ const Settings = ({ isAdmin, isAuthenticated }) => {
                 <Activity size={18} className="text-primary" />
                 <div>
                   <h3 className="text-sm font-semibold text-on-surface">号池额度采集器</h3>
-                  <p className="text-xs text-on-surface-variant mt-0.5">控制后台 goroutine 多久轮询一次 CPA 上所有凭证的剩余额度，决定<span className="text-primary font-mono"> 号池监控</span> 看板与用户首页号池卡片的数据新鲜度。</p>
+                  <p className="text-xs text-on-surface-variant mt-0.5">控制后台 goroutine 多久轮询一次上游账号池的剩余额度，决定<span className="text-primary font-mono"> 号池监控</span> 看板与用户首页号池卡片的数据新鲜度。</p>
                 </div>
               </div>
 
               <div className="flex flex-col md:flex-row md:items-center justify-between py-3 border-b border-outline-variant/20 gap-3">
                 <div className="flex flex-col gap-1 w-full md:w-2/3">
                   <span className="text-on-surface-variant font-medium text-sm">全量刷新周期</span>
-                  <span className="text-xs text-outline">每隔多少分钟把所有凭证的额度全量重新拉一遍。建议 10-30 分钟，过短会被上游限流。</span>
+                  <span className="text-xs text-outline">每隔多少分钟把所有上游账号的额度全量重新拉一遍。建议 10-30 分钟，过短会被上游限流。</span>
                 </div>
                 <div className="relative w-full md:w-32">
                   <input
@@ -1144,7 +1144,7 @@ const Settings = ({ isAdmin, isAuthenticated }) => {
               <div className="flex flex-col md:flex-row md:items-center justify-between py-3 border-b border-outline-variant/20 gap-3">
                 <div className="flex flex-col gap-1 w-full md:w-2/3">
                   <span className="text-on-surface-variant font-medium text-sm">失败重试次数</span>
-                  <span className="text-xs text-outline">单个凭证连续失败时最多重试几次后放弃，等下一轮全量周期。<span className="text-amber-400 font-mono">0</span> = 无限重试，仍带指数退避（封顶 60 分钟）防止雪崩。</span>
+                  <span className="text-xs text-outline">单个上游账号连续失败时最多重试几次后放弃，等下一轮全量周期。<span className="text-amber-400 font-mono">0</span> = 无限重试，仍带指数退避（封顶 60 分钟）防止雪崩。</span>
                 </div>
                 <div className="relative w-full md:w-32">
                   <input
@@ -1181,9 +1181,9 @@ const Settings = ({ isAdmin, isAuthenticated }) => {
 
               {/*
                 Antigravity GCP Project ID 字段已移除：
-                project_id 现在由 daof-ai-hub 自动从每个 CPA 凭证文件的
-                cloudaicompanionProject 字段提取并缓存到 cpa_credentials 表，
-                按凭证粒度独立管理（多账号自动支持），admin 零配置。
+                project_id 现在由 daof-ai-hub 自动从每个上游账号 OAuth 凭证文件的
+                cloudaicompanionProject 字段提取并缓存到内部 credential 表，
+                按账号粒度独立管理（多账号自动支持），admin 零配置。
               */}
             </div>
 

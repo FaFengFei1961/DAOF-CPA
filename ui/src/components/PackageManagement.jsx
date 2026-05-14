@@ -117,16 +117,14 @@ const PackageManagement = () => {
     setSaving(true);
     const isNew = !editing.id;
     try {
-      const res = await fetch(
+      // fix MAJOR（多模型审计第二十五轮 P2）：admin 写操作改 authFetch，统一鉴权 + 错误归一化
+      const json = await authFetch(
         isNew ? '/api/admin/packages' : `/api/admin/packages/${editing.id}`,
         {
           method: isNew ? 'POST' : 'PUT',
-          credentials: 'include',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify(editing),
+          body: editing,
         }
       );
-      const json = await res.json();
       if (json.success) {
         toast.success(isNew ? '已创建' : '已更新');
         setEditing(null);
@@ -144,8 +142,8 @@ const PackageManagement = () => {
   const remove = async (p) => {
     if (!(await confirm(`删除套餐「${p.name}」？`))) return;
     try {
-      const res = await fetch(`/api/admin/packages/${p.id}`, { method: 'DELETE', credentials: 'include' });
-      const json = await res.json();
+      // fix MAJOR（多模型审计第二十五轮 P2）：admin 写操作改 authFetch
+      const json = await authFetch(`/api/admin/packages/${p.id}`, { method: 'DELETE' });
       if (json.success) { toast.success('已删除'); load(); }
       else toast.error(json.message || '删除失败');
     } catch {

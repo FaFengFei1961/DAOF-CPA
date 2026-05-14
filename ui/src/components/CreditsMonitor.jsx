@@ -83,7 +83,7 @@ const QuotaBar = ({ remaining, label, resetsAt }) => {
   );
 };
 
-// ─── 单条凭证卡片（memo 化避免父组件 re-render 时全量重绘） ──────────
+// ─── 单条上游账号卡片（memo 化避免父组件 re-render 时全量重绘） ──────────
 const EntryCard = React.memo(function EntryCard({ entry }) {
   const meta = getProviderMeta(entry.provider);
   const Icon = meta.Icon;
@@ -154,7 +154,7 @@ const EntryCard = React.memo(function EntryCard({ entry }) {
           ))}
         </div>
       ) : !entry.last_error ? (
-        <div className="text-[11px] text-outline italic">暂无窗口数据（凭证有效但上游未返回额度细节）</div>
+        <div className="text-[11px] text-outline italic">暂无窗口数据（账号有效但上游未返回额度细节）</div>
       ) : null}
     </div>
   );
@@ -377,7 +377,7 @@ const CreditsMonitor = () => {
             号池监控
           </h1>
           <p className="text-on-surface-variant mt-2 text-sm">
-            CPA 上所有凭证的剩余额度与刷新状态。后台 goroutine 按 <span className="text-primary font-mono">credits_refresh_interval</span> 周期自动刷新；失败的会按 <span className="text-primary font-mono">credits_retry_interval</span> 进入重试队列（指数退避封顶 60 分钟）。
+            上游账号池的健康度与剩余额度监控。后台 goroutine 按 <span className="text-primary font-mono">credits_refresh_interval</span> 周期自动刷新；失败的会按 <span className="text-primary font-mono">credits_retry_interval</span> 进入重试队列（指数退避封顶 60 分钟）。
           </p>
         </div>
         <button
@@ -393,7 +393,7 @@ const CreditsMonitor = () => {
 
       <div className="grid grid-cols-2 md:grid-cols-4 gap-3 mb-8">
         <div className="rounded-xl bg-surface-container border border-outline-variant p-4">
-          <div className="text-xs text-on-surface-variant mb-1">凭证总数</div>
+          <div className="text-xs text-on-surface-variant mb-1">上游账号总数</div>
           <div className="text-2xl font-bold text-on-surface">{data.total_count || 0}</div>
         </div>
         <div className="rounded-xl bg-emerald-950/20 border border-emerald-900/40 p-4">
@@ -428,7 +428,7 @@ const CreditsMonitor = () => {
         <div className="text-center py-16 bg-surface-container border border-outline-variant rounded-2xl">
           <ServerCrash size={32} className="inline text-on-surface-variant mb-3" />
           <div className="text-on-surface-variant text-sm">
-            尚未采集到任何凭证。
+            尚未采集到任何上游账号。
             <br />
             请检查 CLIProxyAPI 连接配置（常规 tab）和后台日志。
           </div>
