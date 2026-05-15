@@ -247,6 +247,20 @@ func (e *errReclaimBlocked) Error() string {
 	return fmt.Sprintf("reclaim blocked by %d unrefunded subscriptions", len(e.ids))
 }
 
+// errRefundRefDuplicate 哨兵：同一 ExternalRefundRef 已有 TopupRefund 记录，拒绝重复提交。
+//
+// fix CRITICAL Sprint1-P0-6：旧实现退款幂等不成立 —— 同一 ExternalRefundRef 多次提交会让
+// TopupOrder.RefundedAmountRMB 累加（覆盖 RefundNo/OutRefundNo 字段），平台双扣余额但用户
+// 钱包只到账一次。新实现：每笔退款先 INSERT TopupRefund（unique on ExternalRefundRef），
+// 二次提交在 DB 层被拦截，整笔事务回滚。
+type errRefundRefDuplicate struct {
+	existing database.TopupRefund
+}
+
+func (e *errRefundRefDuplicate) Error() string {
+	return fmt.Sprintf("external_refund_ref already used by refund id=%d at %s", e.existing.ID, e.existing.CreatedAt.Format(time.RFC3339))
+}
+
 // notifyTimestampSkewSeconds 允许的回调时间戳与服务器时间最大漂移。
 // 防重放攻击：超出此范围的回调直接拒绝。
 const notifyTimestampSkewSeconds = 300
@@ -734,6 +748,18 @@ func AdminRefundTopup(c *fiber.Ctx) error {
 			return fmt.Errorf("lock user: %w", err)
 		}
 
+		// fix CRITICAL Sprint1-P0-6：先检查 ExternalRefundRef 唯一性
+		// 同一 ExternalRefundRef 已用过则拒绝。lockUserForUpdate 已串行化该用户所有退款，
+		// 避免两个 admin 同时拿同一 ref 进入此检查（DB unique 索引兜底跨用户场景）。
+		var existingRefund database.TopupRefund
+		err := tx.Where("external_refund_ref = ?", req.ExternalRefundRef).First(&existingRefund).Error
+		if err == nil {
+			return &errRefundRefDuplicate{existing: existingRefund}
+		}
+		if !errors.Is(err, gorm.ErrRecordNotFound) {
+			return fmt.Errorf("check refund ref uniqueness: %w", err)
+		}
+
 		// 守卫现在在锁后 + 事务内执行：检查到事务提交前，订阅状态都不会被并发改变
 		//
 		// fix MAJOR（codex 第二十轮）：此守卫原本要 block "reclaim 时用户还有未退款付费订阅"，
@@ -852,10 +878,33 @@ func AdminRefundTopup(c *fiber.Ctx) error {
 		}); err != nil {
 			return fmt.Errorf("write billing refund_topup: %w", err)
 		}
+		// fix CRITICAL Sprint1-P0-6：写 TopupRefund 事实表（唯一索引兜底幂等）
+		// 已在事务入口检查过 ExternalRefundRef 不存在，正常路径下 INSERT 必然成功；
+		// 极端并发场景（两个 admin 同时提交，pre-check 都通过但 INSERT 抢一个）由 DB 层
+		// unique 索引拒绝第二个，整个事务回滚 → 退款效果只发生一次。
+		refundRow := database.TopupRefund{
+			TopupOrderID:      order.ID,
+			ExternalRefundRef: req.ExternalRefundRef,
+			AmountFen:         refundFen,
+			AmountMicroUSD:    usdToReclaimMicro,
+			ReclaimQuota:      req.ReclaimQuota,
+			OperatorID:        op.ID,
+			Reason:            "",
+			CreatedAt:         time.Now(),
+		}
+		if err := tx.Create(&refundRow).Error; err != nil {
+			// unique 违反 = pre-check 后到 INSERT 之间另一事务抢先 → 拒绝当前请求
+			if strings.Contains(strings.ToLower(err.Error()), "unique") {
+				return &errRefundRefDuplicate{existing: refundRow}
+			}
+			return fmt.Errorf("insert topup_refund: %w", err)
+		}
+
 		auditDetails, _ := json.Marshal(map[string]any{
 			"type":                "REFUND_TOPUP",
 			"admin_id":            op.ID,
 			"order_id":            order.ID,
+			"refund_id":           refundRow.ID,
 			"out_trade_no":        freshOrder.OutTradeNo,
 			"amount_rmb":          fenToRMBFloat(refundFen),
 			"amount_fen":          refundFen,
@@ -870,6 +919,19 @@ func AdminRefundTopup(c *fiber.Ctx) error {
 			"success":      false,
 			"message":      "订单状态已变化，请刷新后重试",
 			"message_code": "ERR_REFUND_RACED",
+		})
+	}
+	// fix CRITICAL Sprint1-P0-6：external_refund_ref 重复提交（同一退款单号多次入账尝试）
+	var dup *errRefundRefDuplicate
+	if errors.As(txErr, &dup) {
+		log.Printf("[TOPUP-REFUND-MANUAL] DUPLICATE external_refund_ref=%q order=%s admin=%d existing_refund_id=%d",
+			req.ExternalRefundRef, order.OutTradeNo, op.ID, dup.existing.ID)
+		return c.Status(409).JSON(fiber.Map{
+			"success":               false,
+			"message":               "该退款单号已被使用过，无法重复入账。如需新一笔退款请使用不同的商户退款单号。",
+			"message_code":          "ERR_REFUND_REF_DUPLICATED",
+			"existing_refund_id":    dup.existing.ID,
+			"existing_refunded_at":  dup.existing.CreatedAt.Format(time.RFC3339),
 		})
 	}
 	// fix MAJOR M1：tx 内 fresh-based 校验失败 → 4xx 而非 500

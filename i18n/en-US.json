@@ -1364,6 +1364,7 @@
     "ERR_REFUND_AMOUNT_INVALID": "Refund amount is invalid or exceeds the remaining refundable amount (please refresh to view the latest).",
     "ERR_REFUND_GRANTED_SUB": "Granted subscriptions cannot be refunded.",
     "ERR_REFUND_RACED": "Order state has changed. Please refresh and retry.",
+    "ERR_REFUND_REF_DUPLICATED": "This refund reference has already been used. Please use a different merchant refund number for a new refund.",
     "ERR_REFUND_ZERO_PAID": "There is no paid amount available to refund.",
     "ERR_REVOKE_GRANTED_STATUS": "This granted entitlement cannot be revoked in its current status.",
     "ERR_REVOKE_NOT_GRANTED": "Only admin-granted subscriptions or add-ons can be revoked.",

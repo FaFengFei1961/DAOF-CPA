@@ -1364,6 +1364,7 @@
     "ERR_REFUND_AMOUNT_INVALID": "退款金额非法或超过当前剩余可退（请刷新后查看最新已退金额）。",
     "ERR_REFUND_GRANTED_SUB": "赠送订阅不支持退款。",
     "ERR_REFUND_RACED": "订单状态已变化，请刷新后重试。",
+    "ERR_REFUND_REF_DUPLICATED": "该退款单号已被使用过，无法重复入账。如需新一笔退款请使用不同的商户退款单号。",
     "ERR_REFUND_ZERO_PAID": "该记录没有可退的实付金额。",
     "ERR_REVOKE_GRANTED_STATUS": "该赠送权益当前状态不可收回。",
     "ERR_REVOKE_NOT_GRANTED": "只能收回管理员赠送的订阅。",

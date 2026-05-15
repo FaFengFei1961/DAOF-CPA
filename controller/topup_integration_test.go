@@ -458,6 +458,74 @@ func TestAdminRefund_MultiplePartialReclaimMatchesLockedAmount(t *testing.T) {
 	}
 }
 
+// TestAdminRefund_ExternalRefundRefIdempotent 验证 Sprint1-P0-6 修复：
+// 同一 external_refund_ref 多次提交必须被拒绝（DB unique 索引兜底）。
+//
+// 旧实现：每次提交累加 RefundedAmountRMB + 覆盖 RefundNo/OutRefundNo 字段，
+// 平台双扣余额但用户钱包只到账一次。
+// 新实现：TopupRefund 事实表 ExternalRefundRef 唯一索引 + 事务内 pre-check。
+func TestAdminRefund_ExternalRefundRefIdempotent(t *testing.T) {
+	setupSubTestDB(t)
+	admin := seedAdminUser(t)
+	user := seedTestUser(t, 100)
+	app := newAdminTopupTestApp(admin)
+
+	order := seedPaidTopupOrder(t, user.ID, 72.0)
+
+	// 第一次部分退款：¥36，external_refund_ref=DUP_REF
+	code1, resp1 := doJSON(t, app, "POST",
+		"/admin/topup/orders/"+itoaUint(order.ID)+"/refund",
+		map[string]any{"money_rmb": 36, "reclaim_quota": true, "external_refund_ref": "DUP_REF"})
+	if code1 != 200 {
+		t.Fatalf("first refund expected 200, got %d body=%v", code1, resp1)
+	}
+
+	// 第二次用同样的 external_refund_ref 提交：必须被 409 拒绝
+	code2, resp2 := doJSON(t, app, "POST",
+		"/admin/topup/orders/"+itoaUint(order.ID)+"/refund",
+		map[string]any{"money_rmb": 36, "reclaim_quota": true, "external_refund_ref": "DUP_REF"})
+	if code2 != 409 {
+		t.Fatalf("duplicate refund expected 409, got %d body=%v", code2, resp2)
+	}
+	if resp2["message_code"] != "ERR_REFUND_REF_DUPLICATED" {
+		t.Errorf("expected message_code=ERR_REFUND_REF_DUPLICATED, got %v", resp2["message_code"])
+	}
+
+	// 验证订单状态没有被二次提交污染
+	var fresh database.TopupOrder
+	database.DB.First(&fresh, order.ID)
+	if fresh.RefundedAmountRMB != 3600 {
+		t.Errorf("second submit should NOT accumulate RefundedAmountRMB: got %d, want 3600 (= first refund only)", fresh.RefundedAmountRMB)
+	}
+
+	// 验证 TopupRefund 表只有一行
+	var refundCount int64
+	database.DB.Model(&database.TopupRefund{}).Where("topup_order_id = ?", order.ID).Count(&refundCount)
+	if refundCount != 1 {
+		t.Errorf("TopupRefund rows should be 1, got %d", refundCount)
+	}
+
+	// 验证用户余额没有被双扣
+	var u database.User
+	database.DB.First(&u, user.ID)
+	wantQuota := 100*database.MicroPerUSD - (order.AmountUSD * 3600 / order.MoneyRMB)
+	if u.Quota != wantQuota {
+		t.Errorf("user quota=%d, want %d (only first refund applied, no double-deduct)", u.Quota, wantQuota)
+	}
+
+	// 用不同的 external_refund_ref 提交剩余 ¥36：必须成功
+	code3, resp3 := doJSON(t, app, "POST",
+		"/admin/topup/orders/"+itoaUint(order.ID)+"/refund",
+		map[string]any{"money_rmb": 36, "reclaim_quota": true, "external_refund_ref": "DIFFERENT_REF"})
+	if code3 != 200 {
+		t.Fatalf("different ref refund expected 200, got %d body=%v", code3, resp3)
+	}
+	database.DB.First(&fresh, order.ID)
+	if fresh.Status != "refunded" {
+		t.Errorf("order should be fully refunded after second valid ref, got status=%q", fresh.Status)
+	}
+}
+
 func TestAdminRefund_CASPreventDoubleRefund(t *testing.T) {
 	setupSubTestDB(t)
 	admin := seedAdminUser(t)

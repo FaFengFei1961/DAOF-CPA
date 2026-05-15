@@ -1,16 +1,20 @@
 // Package database / topup_schema.go
 //
-// 用户余额充值订单（对接易付通 V2 RSA 协议）。
+// 用户余额充值订单（对接易付通 V2 RSA 协议）+ 退款事实表。
 //
-// 状态机：
+// 状态机（TopupOrder）：
 //
 //	created  ── 本地下单成功，已生成支付信息，等待用户支付
 //	paid     ── 收到 notify_url 异步回调 trade_status=TRADE_SUCCESS，已加额度
 //	failed   ── 用户取消 / 超时 / 关单
 //	refunded ── admin 已发起退款（部分或全额）
 //
-// 金额本位：用户支付 RMB，但 amount_usd 列入额度（按下单时 exchange_rate 锁定）。
-// 这样不破坏现有 User.Quota 是 USD 的本位约定。
+// 金额本位：用户支付 RMB（fen int64），amount_usd 列入额度（micro_usd int64）。
+// 严禁 float64 参与金额计算。
+//
+// 退款事实表（TopupRefund）：fix CRITICAL Sprint1-P0-6
+// 每笔退款独立一行，external_refund_ref 唯一约束防同一退款重复入账。
+// TopupOrder.RefundedAmountRMB 是聚合视图，由 TopupRefund 累加而来（事务内同步）。
 package database
 
 import (
@@ -69,4 +73,45 @@ type TopupOrder struct {
 	CreatedAt time.Time  `gorm:"index" json:"created_at"`
 	PaidAt    *time.Time `json:"paid_at"`
 	UpdatedAt time.Time  `json:"updated_at"`
+}
+
+// TopupRefund 充值退款事实表。一笔退款一行，append-only。
+//
+// fix CRITICAL Sprint1-P0-6：旧实现的退款幂等不成立——同一 ExternalRefundRef 多次提交
+// 会让 TopupOrder.RefundedAmountRMB 累加（覆盖 RefundNo/OutRefundNo 字段），平台双扣余额
+// 用户钱包却只到账一次。
+//
+// 新实现：每次退款先 INSERT 本表，ExternalRefundRef 唯一约束在 DB 层拦截重复提交。
+// 业务字段加 `gorm:"<-:create"` 防 UPDATE 篡改（与 OperationLog append-only 同范式）。
+//
+// TopupOrder.RefundedAmountRMB 仍保留为聚合视图，由本表 SUM(amount_fen) 计算并在
+// 同事务内同步——但 DB 层真相在 TopupRefund，订单表仅做查询便利。
+type TopupRefund struct {
+	ID uint `gorm:"primaryKey" json:"id"`
+
+	// TopupOrderID 关联充值订单
+	TopupOrderID uint `gorm:"<-:create;index;not null" json:"topup_order_id"`
+
+	// ExternalRefundRef admin 在易付通后台填的商户退款单号，幂等键。
+	// 全局唯一防同一退款单号重复入账。size 与 TopupOrder.RefundNo 对齐。
+	ExternalRefundRef string `gorm:"<-:create;uniqueIndex;not null;size:128" json:"external_refund_ref"`
+
+	// AmountFen 本次退款 fen 金额（RMB × 100）。> 0。
+	AmountFen int64 `gorm:"<-:create;not null" json:"amount_fen"`
+
+	// AmountMicroUSD 等值 micro_usd（按订单入账时锁定的 RMB/USD 比例换算）。
+	// 仅当 reclaim_quota=true 时实际扣回额度；保留量统一记账。
+	AmountMicroUSD int64 `gorm:"<-:create;not null" json:"amount_micro_usd"`
+
+	// ReclaimQuota 退款是否扣回 user.quota。
+	// false = 退钱但保留额度（客服补偿场景）；true = 完整冲账。
+	ReclaimQuota bool `gorm:"<-:create;not null" json:"reclaim_quota"`
+
+	// OperatorID 操作 admin 用户 ID。
+	OperatorID uint `gorm:"<-:create;index;default:0" json:"operator_id"`
+
+	// Reason 退款原因 / admin 备注（可选）。
+	Reason string `gorm:"<-:create;type:text" json:"reason"`
+
+	CreatedAt time.Time `gorm:"<-:create;index" json:"created_at"`
 }
