@@ -54,6 +54,8 @@ ui/node_modules/
 ui/.vite/
 ui/dist/
 ui/scripts/visual_out/
+ui/playwright-report/
+ui/test-results/
 *.log
 
 # ─── 编辑器 ─────────────────────────────────────────
