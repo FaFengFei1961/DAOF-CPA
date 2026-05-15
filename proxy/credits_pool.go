@@ -101,6 +101,9 @@ var (
 	startOnce sync.Once
 	stopOnce  sync.Once
 
+	// 一次性 debug：只打一次 Claude usage 完整响应，用于排查 max_5x / max_20x 字段位置。
+	claudeUsageDebugOnce sync.Once
+
 	// CPA 通用代理调用：30s 超时，连接池避免高频刷新时端口耗尽
 	cpaHTTPClient = &http.Client{
 		Timeout: 30 * time.Second,
@@ -1182,6 +1185,16 @@ func fetchClaudeQuota(ctx context.Context, af authFileLite, entry *CreditEntry) 
 		return fmt.Errorf("Claude usage HTTP %d: %s", r.StatusCode, sanitizeError(string(r.Body), errorBodyMaxBytes))
 	}
 
+	// debug：第一次拉到 Claude usage 时打印完整响应（截 1000 字符），便于排查
+	// max_5x / max_20x 是否有可推断的 limit 字段。同一 auth_index 只打一次。
+	claudeUsageDebugOnce.Do(func() {
+		body := string(r.Body)
+		if len(body) > 1000 {
+			body = body[:1000] + "...[truncated]"
+		}
+		log.Printf("[CREDITS-DEBUG] Claude usage 完整响应 auth=%s: %s", af.AuthIndex, body)
+	})
+
 	var usage map[string]any
 	if err := json.Unmarshal(r.Body, &usage); err != nil {
 		// fix MEDIUM M19-3（codex 第十九轮）：%v 丢失原始 error 类型 → 上层 errors.Is/As 判断失效。
@@ -1356,6 +1369,47 @@ func fetchAntigravityQuota(ctx context.Context, af authFileLite, entry *CreditEn
 		})
 	}
 	entry.Models = allModelNames
+
+	// 拉 paidTier.id / currentTier.id 作为套餐级别（PRO / ULTRA / FREE / UNKNOWN）。
+	// 同步 jlcodes99/cockpit-tools quota.rs:fetch_project_id_with_context 的实现。
+	// 失败不影响 windows 主数据，仅 log。
+	caHeaders := map[string]string{
+		"Authorization":    "Bearer $TOKEN$",
+		"Content-Type":     "application/json",
+		"User-Agent":       "antigravity/1.11.5 windows/amd64",
+		"x-goog-api-client": "gl-node/22.10.0",
+	}
+	caPayload, _ := json.Marshal(map[string]any{
+		"metadata": map[string]any{
+			"ideName":       "antigravity",
+			"ideType":       "ANTIGRAVITY",
+			"ideVersion":    "1.11.5",
+			"pluginVersion": "1.0.0",
+			"platform":      "PLATFORM_WINDOWS",
+			"duetProject":   projectID,
+		},
+		"mode":                     "FULL_ELIGIBILITY_CHECK",
+		"cloudaicompanionProject":  projectID,
+	})
+	if r, err := cpaAPICall(ctx, af.AuthIndex, "POST",
+		"https://cloudcode-pa.googleapis.com/v1internal:loadCodeAssist",
+		caHeaders, string(caPayload)); err == nil && r.StatusCode == 200 {
+		var resp struct {
+			PaidTier    *struct{ ID string `json:"id"` } `json:"paidTier"`
+			CurrentTier *struct{ ID string `json:"id"` } `json:"currentTier"`
+		}
+		if json.Unmarshal(r.Body, &resp) == nil {
+			switch {
+			case resp.PaidTier != nil && resp.PaidTier.ID != "":
+				entry.PlanType = resp.PaidTier.ID
+			case resp.CurrentTier != nil && resp.CurrentTier.ID != "":
+				entry.PlanType = resp.CurrentTier.ID
+			}
+		}
+	} else if err != nil {
+		log.Printf("[CREDITS] Antigravity loadCodeAssist auth=%s 失败: %s", af.AuthIndex, sanitizeError(err.Error(), 200))
+	}
+
 	return nil
 }
 
