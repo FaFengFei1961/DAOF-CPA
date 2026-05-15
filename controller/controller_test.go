@@ -37,7 +37,7 @@ func initializeMegaTestDB() *fiber.App {
 		&database.UserSubscription{}, &database.SubscriptionUsage{},
 		&database.TopupOrder{}, &database.TopupRefund{}, &database.PaymentWebhookReceipt{}, &database.NotificationPreference{},
 		&database.Ticket{}, &database.TicketMessage{},
-		&database.BillingEntry{}, // C2/C3 fix：UpdateUser/purgeUserDependents 现在写/删账单
+		&database.BillingEntry{}, &database.BillingReconciliation{}, // C2/C3 fix + Sprint5-M8 对账事实表
 
 	)
 

@@ -492,6 +492,8 @@ func main() {
 	adminApi.Get("/billing/users/:id", controller.AdminListUserBilling)
 	adminApi.Get("/billing/users/:id/summary", controller.AdminUserBillingSummary)
 	adminApi.Get("/billing/users/:id/export", controller.AdminUserBillingExport)
+	// admin 对账（Sprint5-M8）：pending_reconcile / upstream_unmetered → 已对账
+	adminApi.Post("/billing/:id/reconcile", controller.AdminReconcileBillingEntry)
 	// 订阅退款（用户走客服工单提交申请；admin 协商金额后手动触发本接口）
 	adminApi.Post("/subscriptions/:id/refund", refundLimiter, controller.AdminRefundSubscription)
 	// 收回管理员赠送的订阅 / 增量包：只撤销权益，不退款、不改变 user.quota

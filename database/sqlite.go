@@ -82,8 +82,8 @@ func InitDB() {
 		&CPACredential{},
 		// CPA usage auth_index → 真实账号成本映射（毛利核算基础）
 		&UpstreamAccountCost{},
-		// 账单流水（统一事实表，所有金钱进出落库）
-		&BillingEntry{},
+		// 账单流水（统一事实表，所有金钱进出落库）+ 对账事实表（Sprint5-M8 状态机闭环）
+		&BillingEntry{}, &BillingReconciliation{},
 		// 优惠券系统（admin 创建模板 → 发给用户 → 购买时使用）
 		&CouponTemplate{}, &UserCoupon{},
 	)
