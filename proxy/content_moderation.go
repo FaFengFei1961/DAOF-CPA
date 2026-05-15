@@ -595,6 +595,10 @@ func callCLIProxyModelModeration(ctx context.Context, text string, cfg Moderatio
 	return res, nil
 }
 
+// getModerationCliproxyAPIKey 返回 cliproxy 审核服务调用的 API key。
+// 仅查两条路径：显式 SysConfig "moderation_cliproxy_api_key"，或精确匹配 baseURL 的
+// cliproxy channel key。两者皆无 → 返回空，由调用方按 fail-closed 拒绝审核。
+// 不再回退到管理面 key（项目未上线，禁止向后兼容）。
 func getModerationCliproxyAPIKey(baseURL string) string {
 	SysConfigMutex.RLock()
 	explicit := strings.TrimSpace(SysConfigCache["moderation_cliproxy_api_key"])
@@ -602,12 +606,7 @@ func getModerationCliproxyAPIKey(baseURL string) string {
 	if explicit != "" {
 		return explicit
 	}
-	if key := findCliproxyChannelAPIKey(baseURL); key != "" {
-		return key
-	}
-	// Backward compatibility for older deployments where the same key was used
-	// for both management and OpenAI-compatible model calls.
-	return strings.TrimSpace(getCliproxyKey())
+	return findCliproxyChannelAPIKey(baseURL)
 }
 
 func findCliproxyChannelAPIKey(baseURL string) string {

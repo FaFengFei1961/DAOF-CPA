@@ -287,14 +287,21 @@ type UpstreamUsageRecord struct {
 	UpdatedAt           time.Time `json:"updated_at"`
 }
 
-// OperationLog 追踪并记录所有涉及风险的用户干预操作
+// OperationLog 操作审计事实表。一旦写入不可修改、不可删除（append-only）。
+//
+// fix CRITICAL Sprint1-P0-7：所有业务字段加 `gorm:"<-:create"` 防止 GORM 层 UPDATE。
+// 配合：
+//  1. purgeUserDependents 不再删除 OperationLog（保留审计链）
+//  2. 未来可加 DB 层 BEFORE UPDATE/DELETE trigger 兜底
+//
+// CreatedAt 同样 `<-:create`，防止 admin 篡改时间戳掩盖追溯链。
 type OperationLog struct {
 	ID           uint      `gorm:"primaryKey" json:"id"`
-	TargetUserID uint      `gorm:"index;not null" json:"target_user_id"` // 被操作的用户
-	OperatorID   uint      `gorm:"index;default:0" json:"operator_id"`   // 发起操作的用户，0表示System
-	OperatorRole string    `json:"operator_role"`                        // "admin", "system", "user"
-	ActionType   string    `gorm:"index;not null" json:"action_type"`    // e.g. "BAN", "UPDATE_QUOTA", "DELETE", "FORCE_CREATE"
-	IPAddress    string    `json:"ip_address"`
-	Details      string    `gorm:"type:text" json:"details"` // JSON-encoded string or plain text detail
-	CreatedAt    time.Time `gorm:"index" json:"created_at"`
+	TargetUserID uint      `gorm:"<-:create;index;not null" json:"target_user_id"` // 被操作的用户
+	OperatorID   uint      `gorm:"<-:create;index;default:0" json:"operator_id"`   // 发起操作的用户，0表示System
+	OperatorRole string    `gorm:"<-:create" json:"operator_role"`                 // "admin", "system", "user"
+	ActionType   string    `gorm:"<-:create;index;not null" json:"action_type"`    // e.g. "BAN", "UPDATE_QUOTA", "DELETE", "FORCE_CREATE"
+	IPAddress    string    `gorm:"<-:create" json:"ip_address"`
+	Details      string    `gorm:"<-:create;type:text" json:"details"` // JSON-encoded string or plain text detail
+	CreatedAt    time.Time `gorm:"<-:create;index" json:"created_at"`
 }

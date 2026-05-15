@@ -708,11 +708,11 @@ func syncCPACredentials(ctx context.Context, authFiles []authFileLite) map[strin
 	// google `cloudcode-pa.googleapis.com` 的 project-scoped 端点（fetchAvailableModels /
 	// retrieveUserQuota），都依赖 cloudaicompanionProject 字段。
 	//
-	// fix Codex-M1：兼容 CPA 上不同版本对 gemini-cli 的命名（"gemini" / "gemini-cli" / "gemini_cli"）。
-	// 如果不兼容，CPA 返回 "gemini" 时不会下载 project_id，fetchGeminiCliQuota 永久报缺失。
+	// 仅接受 canonical provider 名（"antigravity" / "gemini-cli"）。CPA 必须使用规范名，
+	// 不再兼容 "gemini" / "gemini_cli" 等别名（项目未上线，禁止向后兼容）。
 	needsProjectID := func(p string) bool {
 		p = strings.ToLower(strings.TrimSpace(p))
-		return p == "antigravity" || p == "gemini-cli" || p == "gemini" || p == "gemini_cli"
+		return p == "antigravity" || p == "gemini-cli"
 	}
 
 	for _, af := range authFiles {
@@ -1030,17 +1030,17 @@ func refreshOneAuthCredits(ctx context.Context, af authFileLite) *CreditEntry {
 		return entry
 	}
 
+	// 仅接受 canonical provider 名。CPA 必须使用规范名，
+	// 不再兼容 "anthropic" / "gemini" 等别名（项目未上线，禁止向后兼容）。
 	var err error
 	switch af.Provider {
-	case "claude", "anthropic":
-		entry.Provider = "claude"
+	case "claude":
 		err = fetchClaudeQuota(ctx, af, entry)
 	case "antigravity":
 		err = fetchAntigravityQuota(ctx, af, entry)
 	case "codex":
 		err = fetchCodexQuota(ctx, af, entry)
-	case "gemini-cli", "gemini":
-		entry.Provider = "gemini-cli"
+	case "gemini-cli":
 		err = fetchGeminiCliQuota(ctx, af, entry)
 	case "kimi":
 		err = fetchKimiQuota(ctx, af, entry)
@@ -1277,21 +1277,21 @@ func claudeBuildWindow(def claudeWindowDef, raw map[string]any) CreditWindow {
 	return w
 }
 
-// parseUsedPercent 兼容两种 utilization 表示：
-//   - 0~100 百分数（Anthropic OAuth 实测返回 `2.0` 表示已用 2%）
-//   - 0~1 比例（防御兼容：`0.83` 表示已用 83%）
+// parseUsedPercent 解析 Anthropic OAuth usage 的 utilization 字段。
 //
-// 规则：
-//   - f ∈ [0, 1]   → 比例形态：1.0 = 100%（满）
-//   - f ∈ (1, 100] → 百分数形态：50 = 50%
-//   - f > 100      → 超限百分数（少见，clampPct 会兜底）
+// Anthropic API 契约：utilization 始终是 0-100 百分数（不是 0-1 比例）。
+// 例：utilization=2  → 已用 2%
+//     utilization=1  → 已用 1%（不是 100%！）
+//     utilization=99 → 已用 99%
+//
+// 与 CPAMC `parseClaudeUsagePayload` 直接 `normalizeNumberValue(utilization)`
+// 行为对齐（quotaConfigs.ts:924）。之前的 "f ≤ 1.0 视作比例 × 100" 启发式
+// 会把 utilization=1（=1%）误判为 100%，导致 5h 在 ≤1% 使用率下显示 0%
+// remaining，与 CPAMC / Anthropic 真实显示不一致。
 func parseUsedPercent(v any) float64 {
 	f, ok := v.(float64)
 	if !ok {
 		return 0
-	}
-	if f <= 1.0 {
-		return f * 100
 	}
 	return f
 }

@@ -737,18 +737,18 @@ func DeleteUser(c *fiber.Ctx) error {
 // 包含：
 //   - access_tokens（API 凭证）
 //   - api_logs（请求审计 — 注意：合规场景下可能需要保留，但 admin 主动删用户的语义就是"彻底"清除）
-//   - operation_logs（操作审计）
 //   - notifications（站内通知）
 //   - user_subscriptions + subscription_usages（订阅 + 用量）
+//
+// **不删除 operation_logs**（fix CRITICAL Sprint1-P0-7）：
+// 操作审计必须 append-only，即使用户被物理删除，审计链也必须可追溯。
+// 用户主表已做 PII 匿名化 + 软删除（参见上方 anonName 流程），
+// OperationLog.TargetUserID 仍指向被删用户 ID 但 User 表已无敏感字段。
 func purgeUserDependents(tx *gorm.DB, userID uint) error {
 	if err := tx.Unscoped().Where("user_id = ?", userID).Delete(&database.AccessToken{}).Error; err != nil {
 		return err
 	}
 	if err := tx.Unscoped().Where("user_id = ?", userID).Delete(&database.ApiLog{}).Error; err != nil {
-		return err
-	}
-	// OperationLog 列名是 target_user_id 而非 user_id
-	if err := tx.Unscoped().Where("target_user_id = ?", userID).Delete(&database.OperationLog{}).Error; err != nil {
 		return err
 	}
 	// 先删 broadcast_targets（外键于 notifications），再删 notifications

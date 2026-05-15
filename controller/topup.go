@@ -12,7 +12,7 @@
 // 安全要点：
 //   - 回调路径必须放公网；其他充值接口经 UserGuard / AdminGuard
 //   - 验签用 proxy.VerifyYifutRSA（平台公钥校验回调签名）
-//   - 金额双校验：回调 money == 本地 money_rmb（精度 0.001）
+//   - 金额双校验：回调 money（字符串解析为 fen int64）== 本地 money_rmb（严格相等，零容差）
 //   - timestamp 防重放：拒绝服务器时间漂移 ±300 秒之外的回调
 //   - 幂等：条件 UPDATE 'status=created → paid' 保证只加一次额度
 package controller
@@ -1065,14 +1065,6 @@ func csvContains(csv, val string) bool {
 		}
 	}
 	return false
-}
-
-func approxEqual(a, b, eps float64) bool {
-	d := a - b
-	if d < 0 {
-		d = -d
-	}
-	return d < eps
 }
 
 // isSafeReturnPath 校验 SysConfig.yifut_return_path 仅为站内绝对路径，

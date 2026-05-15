@@ -834,23 +834,30 @@ func TestGetModerationCliproxyAPIKey_PrefersMatchingChannelKey(t *testing.T) {
 	})
 }
 
-func TestGetModerationCliproxyAPIKey_ExplicitOverrideAndLegacyFallback(t *testing.T) {
+// TestGetModerationCliproxyAPIKey_ExplicitAndChannelLookup 验证审核 key 解析的两条
+// 合法路径：显式 SysConfig 优先；否则按 baseURL 精确匹配的 cliproxy channel key。
+// 不再回退到管理面 `cliproxy_key`（旧兼容已删除），两条都查不到必须返回空，
+// 让调用方按 fail-closed 拒绝审核。
+func TestGetModerationCliproxyAPIKey_ExplicitAndChannelLookup(t *testing.T) {
 	withChannelMapCache(t, map[uint]*database.Channel{}, func() {
+		// 显式 SysConfig 命中
 		withSysConfig(t, map[string]string{
 			"cliproxy_key":                "management-key",
 			"moderation_cliproxy_api_key": "explicit-model-key",
 		}, func() {
 			if got := getModerationCliproxyAPIKey("http://localhost:8317"); got != "explicit-model-key" {
-				t.Fatalf("explicit override got %q", got)
+				t.Fatalf("explicit override got %q want explicit-model-key", got)
 			}
 		})
 
+		// 没有显式 key + 没有 cliproxy channel → 返回空（fail-closed）
+		// 不再退到 cliproxy_key（管理面 key）
 		withSysConfig(t, map[string]string{
 			"cliproxy_key":                "legacy-shared-key",
 			"moderation_cliproxy_api_key": "",
 		}, func() {
-			if got := getModerationCliproxyAPIKey("http://localhost:8317"); got != "legacy-shared-key" {
-				t.Fatalf("legacy fallback got %q", got)
+			if got := getModerationCliproxyAPIKey("http://localhost:8317"); got != "" {
+				t.Fatalf("no explicit + no channel: got %q, want \"\" (legacy fallback removed)", got)
 			}
 		})
 	})

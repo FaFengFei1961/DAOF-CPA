@@ -3,20 +3,31 @@ package proxy
 import "testing"
 
 func TestClaudeBuildWindowTreatsUtilizationAsUsedPercent(t *testing.T) {
+	// Anthropic OAuth usage 契约：utilization 始终是 0-100 百分数。
+	// 与 CPAMC `parseClaudeUsagePayload` (quotaConfigs.ts:924) 行为对齐。
 	def := claudeWindowDef{Key: "five_hour", ID: "five-hour", Label: "5 小时限额"}
+
 	w := claudeBuildWindow(def, map[string]any{"utilization": 2.0})
 	if w.UsedPercent != 2 || w.RemainingPercent != 98 {
-		t.Fatalf("expected Claude utilization to mean 2%% used, got used=%.1f remaining=%.1f", w.UsedPercent, w.RemainingPercent)
+		t.Fatalf("expected utilization=2 to mean 2%% used, got used=%.1f remaining=%.1f", w.UsedPercent, w.RemainingPercent)
 	}
 
 	w = claudeBuildWindow(def, map[string]any{"utilization": 76.0})
 	if w.UsedPercent != 76 || w.RemainingPercent != 24 {
-		t.Fatalf("expected Claude utilization to mean 76%% used, got used=%.1f remaining=%.1f", w.UsedPercent, w.RemainingPercent)
+		t.Fatalf("expected utilization=76 to mean 76%% used, got used=%.1f remaining=%.1f", w.UsedPercent, w.RemainingPercent)
 	}
 
-	w = claudeBuildWindow(def, map[string]any{"utilization": 0.06})
-	if w.UsedPercent != 6 || w.RemainingPercent != 94 {
-		t.Fatalf("expected fractional utilization to be accepted as 6%% used, got used=%.1f remaining=%.1f", w.UsedPercent, w.RemainingPercent)
+	// 边界回归（防止再次出现"f ≤ 1.0 视作比例 × 100"启发式）：
+	// utilization=1.0 必须是 1% used，而不是 100% used。
+	// 这是原始 bug 的触发条件：5h 在 ≤1% 使用率下显示 0% remaining。
+	w = claudeBuildWindow(def, map[string]any{"utilization": 1.0})
+	if w.UsedPercent != 1 || w.RemainingPercent != 99 {
+		t.Fatalf("expected utilization=1 to mean 1%% used, got used=%.1f remaining=%.1f", w.UsedPercent, w.RemainingPercent)
+	}
+
+	w = claudeBuildWindow(def, map[string]any{"utilization": 0.5})
+	if w.UsedPercent != 0.5 || w.RemainingPercent != 99.5 {
+		t.Fatalf("expected utilization=0.5 to mean 0.5%% used, got used=%.1f remaining=%.1f", w.UsedPercent, w.RemainingPercent)
 	}
 }
 

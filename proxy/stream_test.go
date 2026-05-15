@@ -48,6 +48,53 @@ func TestCostCalculationZeroBias(t *testing.T) {
 	}
 }
 
+// TestCheckedCostMicroUSD_CeilDivPreventsFreeMicroService 验证 Sprint1-P0-4 修复：
+// pico_usd → micro_usd 转换使用 ceil-div，亚 1-micro 成本不会被截断到 0。
+//
+// 触发场景：低单价模型 × 少 token 请求。如 $0.1/Mtoken × 1 token = 0.1 micro_usd。
+// 旧 floor 实现：0 micro → "免费消耗"。
+// 新 ceil 实现：1 micro → 平台至少收 $1e-6。
+func TestCheckedCostMicroUSD_CeilDivPreventsFreeMicroService(t *testing.T) {
+	// 1 token × 1e8 pico = 1e8 pico_usd cost = 0.1 micro_usd
+	// floor → 0（bug）；ceil → 1（修复）
+	got, ok := checkedCostMicroUSD(1, int64(1e8), 0, 0, 0, 0, 0, 0, 0, 0, 0, 0)
+	if !ok {
+		t.Fatalf("checkedCostMicroUSD unexpected fail-closed")
+	}
+	if got != 1 {
+		t.Errorf("ceil-div should round up sub-1-micro cost to 1: got %d (was 0 before P0-4 fix)", got)
+	}
+
+	// 边界测试：精确整除时不要多进位（防御 ceil-div 实现 bug）
+	// 1 token × 1e9 pico = 1e9 pico = 精确 1 micro_usd
+	exact, ok := checkedCostMicroUSD(1, int64(1e9), 0, 0, 0, 0, 0, 0, 0, 0, 0, 0)
+	if !ok {
+		t.Fatalf("checkedCostMicroUSD unexpected fail-closed (exact-boundary case)")
+	}
+	if exact != 1 {
+		t.Errorf("exact integer division should not over-round: got %d, want 1", exact)
+	}
+
+	// 零成本仍是零（ceil(0/N) = 0，不能误进位）
+	zero, ok := checkedCostMicroUSD(0, int64(1e9), 0, 0, 0, 0, 0, 0, 0, 0, 0, 0)
+	if !ok {
+		t.Fatalf("checkedCostMicroUSD unexpected fail-closed (zero-cost case)")
+	}
+	if zero != 0 {
+		t.Errorf("zero pico cost should remain 0 micro: got %d", zero)
+	}
+
+	// 略超 1 micro 仍只进 1 位（验证 ceil 而非 floor 的反向：不应直接走 floor）
+	// 1 token × 1.5e9 pico = 1.5e9 pico = 1.5 micro_usd → ceil = 2
+	sesqui, ok := checkedCostMicroUSD(1, int64(1.5e9), 0, 0, 0, 0, 0, 0, 0, 0, 0, 0)
+	if !ok {
+		t.Fatalf("checkedCostMicroUSD unexpected fail-closed (1.5 micro case)")
+	}
+	if sesqui != 2 {
+		t.Errorf("1.5 micro pico cost should ceil to 2 micro: got %d", sesqui)
+	}
+}
+
 func TestCostCalculationOverflowDefense(t *testing.T) {
 	if strconv.IntSize < 64 {
 		t.Skip("requires 64-bit int tokens to exceed int64 micro_usd after division")
@@ -94,22 +141,6 @@ func TestNonStreamUpstreamTimeoutFromSysConfig(t *testing.T) {
 	set("bad")
 	if got := nonStreamUpstreamTimeout(); got != defaultNonStreamUpstreamTimeout {
 		t.Fatalf("invalid timeout=%v want %v", got, defaultNonStreamUpstreamTimeout)
-	}
-}
-
-func TestDropDeprecatedClaudeTemperatureForOpus47(t *testing.T) {
-	payload := []byte(`{"model":"claude-opus-4-7","temperature":0.2,"top_p":0.9}`)
-	got := dropDeprecatedClaudeTemperature("claude-opus-4-7", payload)
-	if gjson.GetBytes(got, "temperature").Exists() {
-		t.Fatalf("temperature should be removed for claude-opus-4-7: %s", string(got))
-	}
-	if gjson.GetBytes(got, "top_p").Float() != 0.9 {
-		t.Fatalf("unrelated parameters should be preserved: %s", string(got))
-	}
-
-	kept := dropDeprecatedClaudeTemperature("claude-opus-4-6", payload)
-	if !gjson.GetBytes(kept, "temperature").Exists() {
-		t.Fatalf("temperature should be preserved for claude-opus-4-6: %s", string(kept))
 	}
 }
 
@@ -429,7 +460,12 @@ func TestCLIProxyChannelPreservesClaudeMessagesTools(t *testing.T) {
 	}
 }
 
-func TestCLIProxyChatDropsDeprecatedClaudeOpus47Temperature(t *testing.T) {
+// TestCLIProxyChatPassesClaudeOpus47Temperature 验证 cliproxy 通道现在是完全 passthrough：
+// 客户端发的 temperature 字段会直接到上游，不再被网关删除。
+//
+// 网关侧不再做 deprecated 模型字段裁剪（dropDeprecatedClaudeTemperature shim 已删除）。
+// 如果 claude-opus-4-7 不支持 temperature，由 Anthropic 上游返回 4xx，客户端自行修正调用。
+func TestCLIProxyChatPassesClaudeOpus47Temperature(t *testing.T) {
 	var err error
 	database.DB, err = gorm.Open(sqlite.Open("file:cliproxy-claude-temperature?mode=memory&cache=shared"), &gorm.Config{})
 	if err != nil {
@@ -476,15 +512,24 @@ func TestCLIProxyChatDropsDeprecatedClaudeOpus47Temperature(t *testing.T) {
 		body, _ := io.ReadAll(resp.Body)
 		t.Fatalf("expected 200, got %d body=%s", resp.StatusCode, string(body))
 	}
-	if gjson.Get(gotBody, "temperature").Exists() {
-		t.Fatalf("deprecated temperature should not be forwarded to CLIProxyAPI for claude-opus-4-7: %s", gotBody)
+	// 验证：网关不再裁剪 temperature 字段，passthrough 透传到上游
+	if !gjson.Get(gotBody, "temperature").Exists() {
+		t.Fatalf("temperature should pass through to CLIProxyAPI (no gateway-side scrubbing): %s", gotBody)
+	}
+	if gjson.Get(gotBody, "temperature").Float() != 0.2 {
+		t.Fatalf("temperature value should match request, got %v: %s", gjson.Get(gotBody, "temperature").Float(), gotBody)
 	}
 	if gjson.Get(gotBody, "messages.0.content").String() != "hi" {
 		t.Fatalf("chat payload should otherwise be preserved: %s", gotBody)
 	}
 }
 
-func TestCLIProxyChannelNormalizesClaudeCountTokensPath(t *testing.T) {
+// TestCLIProxyChannelPassesClaudeCountTokensPath 验证 cliproxy 上游对 count_tokens
+// 是 passthrough：客户端发 /v1/messages/count_tokens，上游就收到完全一致的路径。
+//
+// 不再做旧 `/v1/v1/messages/count_tokens` → `/v1/messages/count_tokens` 的路径修正
+// （normalizeCLIProxyPath shim 已删除）。请求 /v1/v1/... 客户端应自行修正。
+func TestCLIProxyChannelPassesClaudeCountTokensPath(t *testing.T) {
 	var err error
 	database.DB, err = gorm.Open(sqlite.Open("file::memory:?cache=shared"), &gorm.Config{})
 	if err != nil {
@@ -519,10 +564,10 @@ func TestCLIProxyChannelNormalizesClaudeCountTokensPath(t *testing.T) {
 	RouteCache["claude-sonnet-4-6"] = []*database.ChannelModel{{ChannelID: 1, Weight: 1, InputPricePicoPerToken: pricePicoForTest(1000), OutputPricePicoPerToken: pricePicoForTest(1000)}}
 
 	app := fiber.New()
-	app.Post("/v1/v1/messages/count_tokens", ChatCompletionProxyHandler)
+	app.Post("/v1/messages/count_tokens", ChatCompletionProxyHandler)
 
 	payload := `{"model":"claude-sonnet-4-6","messages":[{"role":"user","content":"hi"}]}`
-	req := httptest.NewRequest("POST", "/v1/v1/messages/count_tokens", bytes.NewBufferString(payload))
+	req := httptest.NewRequest("POST", "/v1/messages/count_tokens", bytes.NewBufferString(payload))
 	req.Header.Set("Content-Type", "application/json")
 	req.Header.Set("Authorization", "Bearer claude-token")
 
@@ -535,13 +580,13 @@ func TestCLIProxyChannelNormalizesClaudeCountTokensPath(t *testing.T) {
 		t.Fatalf("expected 200, got %d body=%s", resp.StatusCode, string(body))
 	}
 	if gotPath != "/v1/messages/count_tokens" {
-		t.Fatalf("expected normalized upstream /v1/messages/count_tokens, got %q", gotPath)
+		t.Fatalf("expected passthrough upstream /v1/messages/count_tokens, got %q", gotPath)
 	}
 	if !strings.Contains(string(body), `"input_tokens":42`) {
 		t.Fatalf("unexpected count_tokens body: %s", string(body))
 	}
 	var row database.ApiLog
-	if err := database.DB.Where("user_id = ? AND request_path = ?", 10, "/v1/v1/messages/count_tokens").First(&row).Error; err != nil {
+	if err := database.DB.Where("user_id = ? AND request_path = ?", 10, "/v1/messages/count_tokens").First(&row).Error; err != nil {
 		t.Fatalf("expected api log for count_tokens: %v", err)
 	}
 	if row.Cost != 42000 || row.PromptTokens != 42 {

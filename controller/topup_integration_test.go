@@ -109,18 +109,6 @@ func TestProratedTopupRefundMicro_CumulativeExact(t *testing.T) {
 	}
 }
 
-func TestApproxEqual(t *testing.T) {
-	if !approxEqual(1.0, 1.0005, 0.001) {
-		t.Error("1.0 ~= 1.0005 within 0.001")
-	}
-	if approxEqual(1.0, 1.002, 0.001) {
-		t.Error("1.0 != 1.002 within 0.001")
-	}
-	if !approxEqual(-5.0, -5.0, 0.001) {
-		t.Error("same negative values should be equal")
-	}
-}
-
 func TestCsvContains(t *testing.T) {
 	if !csvContains("alipay,wxpay,qqpay", "wxpay") {
 		t.Error("expected wxpay found")
@@ -286,9 +274,6 @@ func TestYifutNotify_MoneyMismatch(t *testing.T) {
 		Status:               "created",
 	})
 
-	if approxEqual(50.0, 72.0, 0.001) {
-		t.Error("50 != 72 should not be approx equal")
-	}
 }
 
 // ─── MyTopupOrders ───────────────────────────────────────────────────

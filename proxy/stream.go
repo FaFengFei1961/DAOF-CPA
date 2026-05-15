@@ -77,26 +77,6 @@ func nonStreamUpstreamTimeout() time.Duration {
 	return timeout
 }
 
-func dropDeprecatedClaudeTemperature(modelName string, payload []byte) []byte {
-	if !isClaudeTemperatureDeprecatedModel(modelName) || !gjson.GetBytes(payload, "temperature").Exists() {
-		return payload
-	}
-	out, err := sjson.DeleteBytes(payload, "temperature")
-	if err != nil {
-		return payload
-	}
-	return out
-}
-
-func isClaudeTemperatureDeprecatedModel(modelName string) bool {
-	normalized := strings.ToLower(strings.TrimSpace(modelName))
-	if i := strings.Index(normalized, "("); i >= 0 {
-		normalized = strings.TrimSpace(normalized[:i])
-	}
-	normalized = strings.TrimSuffix(normalized, "-thinking")
-	return strings.HasPrefix(normalized, "claude-opus-4-7")
-}
-
 // truncForLog 把上游 body 截短供服务端日志使用，不让超大错误 body 撑爆 log。
 func truncForLog(b []byte, n int) string {
 	if len(b) <= n {
@@ -794,7 +774,7 @@ func ChatCompletionProxyHandler(c *fiber.Ctx) error {
 			// protocol and path so Claude Code tools, Codex responses, and OpenAI
 			// chat payloads are not cross-translated before reaching it.
 			targetFormat = srcFormat
-			upstreamURL += normalizeCLIProxyPath(pathSuffix)
+			upstreamURL += pathSuffix
 		case ChannelTypeOpenAI:
 			targetFormat = sdktranslator.FormatOpenAI
 			upstreamURL += pathSuffix
@@ -813,10 +793,6 @@ func ChatCompletionProxyHandler(c *fiber.Ctx) error {
 		if srcFormat != targetFormat {
 			finalPayload = sdktranslator.TranslateRequest(srcFormat, targetFormat, modelName, finalPayload, isStream)
 		}
-		if channelType == ChannelTypeAnthropic || channelType == ChannelTypeCLIProxy {
-			finalPayload = dropDeprecatedClaudeTemperature(modelName, finalPayload)
-		}
-
 		// 4. HTTP Client allocation
 		// fix Major（codex 第九轮）：fasthttp RequestCtx 不在客户端 RST 时被取消，
 		// 仅在 server.Shutdown 时取消。如果用 c.Context() 直接，stream timeout=0 + 客户端断开
@@ -1096,14 +1072,9 @@ func ChatCompletionProxyHandler(c *fiber.Ctx) error {
 		if reasoningTokens < 0 {
 			reasoningTokens = 0
 		}
-		bucketedCacheWriteTokens := cacheWrite5mTokens + cacheWrite1hTokens
-		if bucketedCacheWriteTokens > 0 {
-			cacheWriteTokens = bucketedCacheWriteTokens
-		} else if cacheWriteTokens > 0 {
-			// Legacy providers only expose a single creation counter. Treat it as the
-			// default Anthropic 5m cache tier so old payloads keep current behavior.
-			cacheWrite5mTokens = cacheWriteTokens
-		}
+		// Anthropic 协议 usage 必须按 5m / 1h 分桶给出 cache_creation_input_tokens 细分。
+		// 不接受 legacy "single counter" fallback：上游必须显式提供分桶，否则不计费 cache write。
+		cacheWriteTokens = cacheWrite5mTokens + cacheWrite1hTokens
 		if cachedTokens > promptTokens {
 			cachedTokens = promptTokens
 		}
@@ -1372,6 +1343,12 @@ func ChatCompletionProxyHandler(c *fiber.Ctx) error {
 			// fix CRITICAL（多模型审计第二十五轮）：本路径下扣减用户余额必须使用 chargedCostMicroUSD（套餐口径）
 			// 而不是 raw costMicroUSD。否则模型权重对余额扣费失效，Haiku 多扣（weight=0.3）、Opus 少扣（weight=3.5），
 			// 违反三账分离原则（raw_cost 仅记账，charged_cost 才是用户实扣）。
+			// fix CRITICAL Sprint1-P0-3：余额扣减必须 CAS 原子化
+			// 旧实现：`UPDATE quota = quota - ?` 无 WHERE quota >= ? 守卫 → 并发请求可把余额打负。
+			// 新实现：`WHERE id=? AND quota >= ?` 条件 UPDATE：
+			//   - 命中（RowsAffected==1）→ 正常扣费 + 写 api_consume_balance 账单
+			//   - 未命中（RowsAffected==0）→ 重查区分用户缺失 vs 余额不足；
+			//     余额不足时上游服务已交付，不打负余额，改写 api_usage_pending_reconcile 待对账。
 			deductQuotaAtomic := func() {
 				var balanceAfterMicroUSD int64
 				txErr := database.DB.Transaction(func(tx *gorm.DB) error {
@@ -1379,28 +1356,57 @@ func ChatCompletionProxyHandler(c *fiber.Ctx) error {
 						log.Printf("[BILLING-WINDOW-TRACK-FAIL] user=%d model=%s charged_cost_micro=%d forceTrack failed (DB issue), continuing quota deduct", user.ID, modelName, chargedCostMicroUSD)
 					}
 
+					// 原子 CAS：仅在余额 ≥ 扣费金额时执行 UPDATE
 					res := tx.Model(&database.User{}).
-						Where("id = ?", user.ID).
+						Where("id = ? AND quota >= ?", user.ID, chargedCostMicroUSD).
 						UpdateColumn("quota", gorm.Expr("quota - ?", chargedCostMicroUSD))
 					if res.Error != nil {
 						return fmt.Errorf("quota deduct: %w", res.Error)
 					}
-					if res.RowsAffected == 0 {
-						return fmt.Errorf("user row missing")
-					}
-					var freshUser database.User
-					if err := tx.Select("id, quota").First(&freshUser, user.ID).Error; err != nil {
-						return fmt.Errorf("re-select quota: %w", err)
-					}
-					balanceAfterMicroUSD = freshUser.Quota
 
-					tokensTotal := promptTokens + completionTokens // cached/reasoning 是子集
+					tokensTotal := promptTokens + completionTokens // cached/reasoning 是 prompt/completion 子集
 					relatedID := uint(0)
 					relatedType := ""
 					if apiLogPersisted {
 						relatedID = apiLog.ID
 						relatedType = "api_log"
 					}
+
+					if res.RowsAffected == 0 {
+						// CAS 失败：用户不存在 OR 余额不足。重查区分。
+						var u database.User
+						if err := tx.Select("id, quota").First(&u, user.ID).Error; err != nil {
+							return fmt.Errorf("user row missing: %w", err)
+						}
+						// 用户存在 → 余额不足。上游服务已交付，写 pending_reconcile，
+						// 不动 quota（保证余额永不为负），admin 人工对账或免扣。
+						log.Printf("[BILLING-INSUFFICIENT-BALANCE] user=%d model=%s charged_cost_micro=%d current_quota=%d — recording pending_reconcile (service already delivered)",
+							user.ID, modelName, chargedCostMicroUSD, u.Quota)
+						return database.WriteBillingEntry(tx, database.BillingEntryInput{
+							UserID:               user.ID,
+							EntryType:            database.BillingTypeApiUsagePendingReconcile,
+							BillingState:         database.BillingStatePendingReconcile,
+							AmountUSD:            0, // 未实际扣减
+							BalanceAfterUSD:      u.Quota,
+							ModelName:            modelName,
+							TokensTotal:          tokensTotal,
+							RequestID:            upstreamRequestID(relatedID),
+							EstimatedInputTokens: promptTokens,
+							EstimatedCostUSD:     chargedCostMicroUSD,
+							RelatedType:          relatedType,
+							RelatedID:            relatedID,
+							Description: fmt.Sprintf("[INSUFFICIENT-BALANCE] %s · %d tokens · %s 余额不足，已交付服务待对账",
+								modelName, tokensTotal, FormatChargedCostForDescription(costMicroUSD, chargedCostMicroUSD)),
+						})
+					}
+
+					// CAS 成功 → 余额已扣减，写正常 api_consume_balance 账单
+					var freshUser database.User
+					if err := tx.Select("id, quota").First(&freshUser, user.ID).Error; err != nil {
+						return fmt.Errorf("re-select quota: %w", err)
+					}
+					balanceAfterMicroUSD = freshUser.Quota
+
 					if err := database.WriteBillingEntry(tx, database.BillingEntryInput{
 						UserID:          user.ID,
 						EntryType:       database.BillingTypeApiConsumeBalance,
@@ -1834,10 +1840,30 @@ func ChatCompletionProxyHandler(c *fiber.Ctx) error {
 		}
 
 		if !sawUsageMetadata {
-			log.Printf("[BILLING-UNMETERED] user=%d model=%s stream upstream omitted usage metadata; delivered response not billed", user.ID, modelName)
+			// fix CRITICAL Sprint1-P0-5：上游 SSE 流结束但未给 usage metadata，
+			// 上游已向客户端交付内容，平台必须记账。旧实现 `deductQuota(..., 502, ...)` 走
+			// failedRequest 分支 cost=0 → "免费消耗"。改为写 pending_reconcile，与客户端
+			// 断连路径（line 1779-1801）口径一致：按 deliveredBytes 估算成本供 admin 对账。
+			log.Printf("[BILLING-PENDING] user=%d model=%s stream upstream omitted usage metadata after delivery; recording pending_reconcile (admin reconcile)", user.ID, modelName)
 			apiErrorType = "upstream_unmetered"
 			apiErrorMessage = "upstream stream omitted usage metadata"
-			deductQuota(promptTokens, completionTokens, cachedTokens, cacheWriteTokens, cacheWrite5mTokens, cacheWrite1hTokens, reasoningTokens, 502, deliveredBytes)
+			recordManualBillingState(manualBillingStateInput{
+				BillingState:          database.BillingStatePendingReconcile,
+				ReasonTag:             "UPSTREAM-NO-USAGE",
+				ErrorType:             apiErrorType,
+				ErrorMessage:          apiErrorMessage,
+				Status:                502,
+				PromptTokens:          promptTokens,
+				CompletionTokens:      completionTokens,
+				CachedTokens:          cachedTokens,
+				CacheWriteTokens:      cacheWriteTokens,
+				CacheWrite5mTokens:    cacheWrite5mTokens,
+				CacheWrite1hTokens:    cacheWrite1hTokens,
+				ReasoningTokens:       reasoningTokens,
+				DeliveredBytes:        deliveredBytes,
+				EstimatedInputTokens:  estimatePrecheckTokens(body),
+				EstimatedCostMicroUSD: estimateDeliveredCost(deliveredBytes),
+			})
 			return
 		}
 
@@ -2079,6 +2105,14 @@ func usageInt(usage gjson.Result, paths ...string) (int, bool) {
 //
 // 参数采用 (token, pricePicoPerToken) 6 对，与 deductQuota 费用项对齐。
 // 0 价格档位（如无 cached price）传 0/0 即可，对结果无贡献。
+//
+// fix CRITICAL Sprint1-P0-4：pico_usd → micro_usd 转换使用 **ceil-div**（正数向上取整）。
+// 旧实现 `total.Div(total, ...)` 是 floor，低价 × 小 token 请求（pico cost < 1e9）会被
+// 截断到 0 micro_usd，形成"免费消耗"。改为 ceil 后：
+//   - 0 pico → 0 micro_usd（保持）
+//   - 1..1e9 pico → 1 micro_usd（最小 1 micro 收费）
+//   - 1e9+k pico → 2 micro_usd（向上进位 1）
+// 平台侧永不少收。pico 是 1e-15 USD，1 micro_usd 进位上限约 1e-6 USD，单请求误差可忽略。
 func checkedCostMicroUSD(t1 int, p1 int64, t2 int, p2 int64, t3 int, p3 int64, t4 int, p4 int64, t5 int, p5 int64, t6 int, p6 int64) (int64, bool) {
 	total := new(big.Int)
 	add := func(tokens int, pricePico int64) bool {
@@ -2095,7 +2129,13 @@ func checkedCostMicroUSD(t1 int, p1 int64, t2 int, p2 int64, t3 int, p3 int64, t
 	if !add(t1, p1) || !add(t2, p2) || !add(t3, p3) || !add(t4, p4) || !add(t5, p5) || !add(t6, p6) {
 		return 0, false
 	}
-	total.Div(total, big.NewInt(database.PicoPerMicroUSD))
+	// Ceil-div：(total + divisor - 1) / divisor 对 total ≥ 0 等价于 ⌈total/divisor⌉
+	divisor := big.NewInt(database.PicoPerMicroUSD)
+	if total.Sign() > 0 {
+		adjustment := new(big.Int).Sub(divisor, big.NewInt(1))
+		total.Add(total, adjustment)
+	}
+	total.Quo(total, divisor)
 	if !total.IsInt64() {
 		return 0, false
 	}
