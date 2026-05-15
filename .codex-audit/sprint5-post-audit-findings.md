@@ -12,13 +12,47 @@
 | 严重度 | 数量 | 已修复 | 剩余 |
 |--------|------|--------|------|
 | CRITICAL | 2 | **2** (A-1, B-1) | 0 |
-| HIGH | 21 | **8** (A-2/3/4/5/6/7/8 + C-1/2/4 + D-1) | 13 |
-| MEDIUM | 39 | **6** (A-9/10 + B-4 + D-5) | 33 |
-| LOW | 18 | 0 | 18 |
+| HIGH | 21 | **19** (A-2/3/4/5/6/7/8 + C-1/2/4 + D-1/2/3/4 + E-1/2/3 + F-1 + G-1 + H-1) | 2 |
+| MEDIUM | 39 | **22** (A-9/10 + B-4/5 + D-5/6/7 + E-4/5/6/7/8 + F-2/3/4 + H-2/3/4/5/6/7/8/9 + J-1) | 17 |
+| LOW | 18 | **4** (H-10 + F-3/4 LOW 部分) | 14 |
 | NOTE | 13 | 0 | 13 |
-| **总计** | **93** | **17 (18%)** | **76** |
+| **总计** | **93** | **47 (51%)** | **46** |
 
-## 一·二、P0 第 1 批战报（2026-05-15）
+## 一·二、P1 第 2 批战报（2026-05-15）
+
+**3 个并行 codex 全部完成，零冲突，全验证绿。** 修复 30 项 finding，含 **8 HIGH + 18 MEDIUM + 4 LOW**。
+
+| codex | commit | 范围 | finding |
+|-------|--------|------|---------|
+| P1-α | `1106be1` | 熔断器 HTTP status 子类重写 + Yifut SSRF 名单 + Happy-Eyeballs | E-1~E-8, F-3, F-4（10 项）|
+| P1-β | `b21e413` | CPA SafeTransport + redirect 重新校验 + moderation secret 旋转 + 模型列表口径 | F-1, F-2, H-2, H-3, H-5, H-6（6 项）|
+| P1-γ | `c7062d5` | 鉴权剩余 + Webhook fail-fast + BillingState UI + 索引补齐 | D-2/3/4/6/7, G-1, H-1/4/7/8/9/10, B-5, J-1（14 项）|
+
+**验证全绿：** `go build ./...` 通过；`go test ./... -count=1` 全 package ok。
+
+**关键修复：**
+
+- **E 主题**：实现 `StatusAction` 枚举（Success / RetryableTransient / RateLimit / UpstreamFatal / ConfigError / ClientError / AuthError）集中处理 401/403/400/404/410/408/429 子类分类
+- **E-3**：`extendCircuitOpen` 改 `atomic.Pointer[circuitState]` 整体替换 → admin 快照原子一致
+- **E-6**：429 解析 Retry-After，建立 per-channel rate-limit cooldown
+- **E-7**：jitter 改 `mrand.Int64N` 替代时间戳取模
+- **F-1**：CPA HTTP client 全注入 SafeTransport + use-time URL 校验
+- **F-2**：`redirectGuard` 应用 4 处（CPA 两 client + FetchUpstreamModels + ProxyCLIProxyUsage）
+- **F-3**：用 `netip.Prefix` denylist（Azure Wireserver / CGNAT / IPv6 6to4 / Teredo / ULA 等）
+- **F-4**：**手写小 Happy-Eyeballs**（先全校验 DNS 再 50ms stagger 并发拨号）
+- **D-2**：tmp_token 用 `sync.Map` 存 sha256 JTI + `LoadOrStore` 单次消费 + 5min janitor
+- **D-3**：最后 active admin 保护 —— 同事务 count + 条件 UPDATE/DELETE 保证 ≥ 1，防系统永久锁死
+- **G-1**：`ValidateYifutNotifyCIDRConfig` 启动+保存期 fail-closed，删除运行时裸 IP fallback
+- **H-1**：admin 账单列表 LEFT JOIN `billing_reconciliations` 返回 `is_reconciled` + `reconcile_result`
+- **H-5**：公开模型列表 DB JOIN channels.status=1（避免耦合 proxy RouteCache）
+- **B-5**：`idx_billing_related_unique` partial unique `WHERE related_id > 0`
+- **J-1**：`idx_session_user_revoked` partial `WHERE revoked_at IS NULL`
+
+**新 message_code（全字面量，AST 可扫）：**
+- `ERR_TMP_TOKEN_ALREADY_USED`
+- `ERR_SETUP_NOT_ALLOWED`
+
+## 一·三、P0 第 1 批战报（2026-05-15）
 
 **4 个并行 codex 全部完成，零冲突，全验证绿。** 修复 17 项 finding，含 **2/2 CRITICAL + 11/21 HIGH + 4/39 MEDIUM**。
 
@@ -294,7 +328,7 @@
   ON billing_entries(related_type, related_id, entry_type)
   WHERE related_id > 0
   ```
-- **状态**：`pending`
+- **状态**：`done` (commit `c7062d5` / P1-γ)
 
 ## B-6 `[DESIGN]` `[HIGH]` UserSession.ExpiresAt `<-:create` 与滑动续期冲突
 
@@ -403,7 +437,7 @@
 - **问题**：tmp_token AES-GCM 无状态，只校验 TTL 不做撤销，15 min TTL 内可重放
 - **失效**：攻击者截获 tmp_token 可反复打 CompleteRisk/CompleteProfile，被 DB unique 拦但消耗 registerMu 锁 + DB 资源
 - **修复**：`sync.Map` 存已消费 jti（hash 后存），消费后立即标记，TTL 到期清理
-- **状态**：`pending`
+- **状态**：`done` (commit `c7062d5` / P1-γ)
 
 ## D-3 `[BUG]` `[HIGH]` 最后一个可用管理员保护 TOCTOU + 计数条件错
 
@@ -417,7 +451,7 @@
   1. 同一事务内锁目标 admin + active admin 集合；
   2. 所有保护 count 用 `role='admin' AND status=1 AND deleted_at IS NULL`；
   3. 条件 UPDATE/DELETE 保证"变更后 active admin 数 > 0"
-- **状态**：`pending`
+- **状态**：`done` (commit `c7062d5` / P1-γ) — 同事务 count + 条件 UPDATE/DELETE 保证 active admin ≥ 1
 
 ## D-4 `[BUG]` `[HIGH]` GodSetup 内网横向移动接管路径
 
@@ -426,7 +460,7 @@
 - **问题**：GodSetup `isInitialSetup=true` 路径允许任何能访问 /api/root/（受 LanGuard）的人绕过旧密码改 admin 密码
 - **场景**：内网横向移动者可无密码接管 admin
 - **修复**：限定只有首次 `/api/root/check-sys` 返回 `setup_required=true` 时才开放该路径（复用 SetupGuard 类似逻辑）
-- **状态**：`pending`
+- **状态**：`done` (commit `c7062d5` / P1-γ)
 
 ## D-5 `[BUG]` `[MEDIUM]` 封禁用户不撤销 UserSession
 
@@ -444,7 +478,7 @@
 - **问题**：若 token 不是 sessionID（IsSessionID=false），跳过 session 撤销直接 token 旋转；Session 表残留
 - **现状**：当前架构 admin cookie 存 sessionID，此路径基本不走，但有逻辑空白
 - **修复**：非 sessionID 路径也加 `RevokeSessionsForUser` 兜底
-- **状态**：`pending`
+- **状态**：`done` (commit `c7062d5` / P1-γ)
 
 ## D-7 `[BUG]` `[MEDIUM]` LookupUserBySession 把 last_used_at 写当鉴权硬依赖
 
@@ -453,7 +487,7 @@
 - **问题**：每次 UserGuard 验 session 都 UPDATE last_used_at，写失败直接返回 false
 - **失效**：DB 可读但短暂写锁/写故障时合法 session 被判 401；高频请求加剧 SQLite 写锁压力
 - **修复**：last_used_at 改 best-effort，失败仅 log；或节流刷新（每 N 分钟更新一次）
-- **状态**：`pending`
+- **状态**：`done` (commit `c7062d5` / P1-γ)
 
 ---
 
@@ -472,7 +506,7 @@
 - **问题**：MarkChannelFailure 在 401/403 时累加 `consecutiveFailures`，5 次后 channel 进入 open
 - **失效**：用户 key 过期/Tier 限制问题被误判为 channel 不健康，全平台用户被拒
 - **修复**：401/403 不触发跨请求 circuit breaker（可记 lastFailureNano 但不累加 consecutiveFailures）
-- **状态**：`pending`
+- **状态**：`done` (commit `1106be1` / P1-α)
 
 ## E-2 `[BUG]` `[HIGH]` 400 响应误调 MarkChannelSuccess（错误重置 half-open 探针）
 
@@ -481,7 +515,7 @@
 - **问题**：400 不该 retry 但 `break` 前调 `MarkChannelSuccess` → 重置 consecutive_failures + open_until
 - **失效**：channel 处于 half-open 时 probe 因请求格式问题收到 400 → 错误把 open 状态清零
 - **修复**：400 既不调 success 也不调 failure（请求侧错误，保持 circuit 状态不变）
-- **状态**：`pending`
+- **状态**：`done` (commit `1106be1` / P1-α)
 
 ## E-3 `[BUG]` `[HIGH]` extendCircuitOpen 多字段 Store 非原子（admin 快照不一致）
 
@@ -490,7 +524,7 @@
 - **问题**：`currentCooldownSec.Store(nextSec)` + `openUntilNano.Store(...)` 两次独立 atomic.Store
 - **失效**：GetChannelCircuitSnapshot 读取时可能看到 currentCooldownSec 已更新但 openUntilNano 未更新的中间态
 - **修复**：用 `atomic.Pointer[circuitState]` 整体替换或加 mutex
-- **状态**：`pending`
+- **状态**：`done` (commit `1106be1` / P1-α) — atomic.Pointer[circuitState] 整体替换
 
 ## E-4 `[BUG]` `[MEDIUM]` 408 (Gateway Timeout) 当成"成功"处理
 
@@ -499,7 +533,7 @@
 - **问题**：retry 条件只 `429/401/403/>=500`，408 不在其中；fallback 进 `MarkChannelSuccess`
 - **失效**：408 不切换其他 channel，half-open 探针被错误关闭为成功，客户端直接收 408
 - **修复**：408/504 归为 retryable transient，但不按长期故障熔断
-- **状态**：`pending`
+- **状态**：`done` (commit `1106be1` / P1-α)
 
 ## E-5 `[BUG]` `[MEDIUM]` 404/410 已路由模型不 retry 且 MarkChannelSuccess
 
@@ -508,7 +542,7 @@
 - **问题**：404/410 是 channel/model 配置错误（路径错、route cache 陈旧、模型部署被删），但被当成功
 - **失效**：有其他健康 channel 时仍直接给用户 404/410；该坏 channel 被记为成功
 - **修复**：路由命中的模型返回 404/410 归为 channel/model 配置错误，可 retry 其他 route；标记 channel_model unhealthy
-- **状态**：`pending`
+- **状态**：`done` (commit `1106be1` / P1-α)
 
 ## E-6 `[BUG]` `[MEDIUM]` 429 忽略 Retry-After，本地短退避累计熔断
 
@@ -517,7 +551,7 @@
 - **问题**：429 进故障分支，退避用本地指数 jitter（100ms-2s）；主代理未读 `Retry-After` header
 - **失效**：上游 `Retry-After: 60` 时仍 100ms 重试，快速累计 channel failure，临时限流升级为熔断
 - **修复**：解析 Retry-After，建立 per-channel rate-limit cooldown；429 不与 502/503 同等计入故障阈值
-- **状态**：`pending`
+- **状态**：`done` (commit `1106be1` / P1-α) — 解析 Retry-After per-channel cooldown
 
 ## E-7 `[BUG]` `[MEDIUM]` jitter 用时间戳取模分布不均
 
@@ -526,7 +560,7 @@
 - **问题**：`int64(time.Now().UnixNano()/1000) % (delay/2)` 在 Windows 100ns 精度下高并发同微秒入循环 → jitter 完全相同
 - **失效**：thundering herd 防御失效
 - **修复**：用 `math/rand/v2` 的 `mrand.Int64N(delay/2)`（crypto 安全且无锁）
-- **状态**：`pending`
+- **状态**：`done` (commit `1106be1` / P1-α) — 用 math/rand/v2 Int64N
 
 ## E-8 `[DEBT]` `[MEDIUM]` MarkChannelFailure 每次调 loadCircuitConfig 持 RLock
 
@@ -534,7 +568,7 @@
 - **文件**：`proxy/channel_circuit.go:138, 160`
 - **问题**：高错误率时每个失败请求竞争 SysConfigMutex.RLock；SyncCacheConfig 写锁期间所有阻塞
 - **修复**：用 `atomic.Pointer[circuitConfig]` 缓存配置，SyncCacheConfig 原子替换
-- **状态**：`pending`
+- **状态**：`done` (commit `1106be1` / P1-α) — atomic.Pointer[circuitConfig] 缓存
 
 ---
 
@@ -553,7 +587,7 @@
 - **问题**：保存 `cliproxy_url` 时校验 (`controller/sysconfig.go:338-347`)，但使用时 client 无 `DialContext` SafeTransport
 - **攻击场景**：`cliproxy_url` 校验时解析公网，DNS rebinding 后实际请求带 `Authorization` header 到 metadata/内网
 - **修复**：所有 CPA client 统一用 `proxy.SafeTransport()`；`getCliproxyURL()` 取出后再做 use-time URL 校验
-- **状态**：`pending`
+- **状态**：`done` (commit `b21e413` / P1-β)
 
 ## F-2 `[BUG]` `[MEDIUM]` HTTP 默认跟随 redirect 不重新校验 URL
 
@@ -561,7 +595,7 @@
 - **文件**：`proxy/stream.go:860-863` + `controller/channel_model.go:702-705` + `controller/cliproxy.go:48-51`（全无 `CheckRedirect`）
 - **攻击场景**：合法公网 BaseURL 上游返回 302 到 `http://127.0.0.1` 或 RFC1918 → SafeTransport 在 dial 层拦但仍允许 loopback/RFC1918
 - **修复**：设置 `CheckRedirect`，每跳重新跑 URL 策略；默认禁跨 host/scheme redirect
-- **状态**：`pending`
+- **状态**：`done` (commit `b21e413` / P1-β) — redirectGuard 应用 4 处
 
 ## F-3 `[BUG]` `[MEDIUM]` 易付通 SSRF 名单遗漏 Azure/CGNAT/IPv6 6to4
 
@@ -574,7 +608,7 @@
   - Teredo / benchmark / documentation ranges
 - **场景**：支付网关 client 连云控制面/保留网段
 - **修复**：用 `netip.Prefix` 显式维护 denylist
-- **状态**：`pending`
+- **状态**：`done` (commit `1106be1` / P1-α) — netip.Prefix denylist
 
 ## F-4 `[BUG]` `[MEDIUM]` safeDialContext 失去 Happy-Eyeballs
 
@@ -583,7 +617,7 @@
 - **问题**：所有 IP 安全验证后只用 `addrs[0]`（DNS 返回顺序），丢失 RFC 8305 并发尝试 v4/v6
 - **失效**：v6 连通性差的环境下连接超时后才 fallback，增加延迟
 - **修复**：安全验证通过后还原传入原始 `addr`（含域名）给 `d.DialContext`
-- **状态**：`pending`
+- **状态**：`done` (commit `1106be1` / P1-α) — 手写小 Happy-Eyeballs
 
 ---
 
@@ -601,7 +635,7 @@
 - **文件**：`controller/topup.go:1113-1116`
 - **问题**：`checkYifutNotifyIPAllowed` 解析失败时 fallback 裸 IP 比较 + log.Printf；运行时静默跳过，admin 配错全部 CIDR 时所有 webhook 被拒（fail-closed）但无告警
 - **修复**：启动时验证 CIDR 配置，格式错误 fatal；删除运行时 fallback 裸比较
-- **状态**：`pending`
+- **状态**：`done` (commit `c7062d5` / P1-γ) — ValidateYifutNotifyCIDRConfig fail-closed
 
 ## G-2 `[BUG]` `[MEDIUM]` AdminRefundSubscription 无幂等键
 
@@ -649,7 +683,7 @@
 - **问题**：`BillingEntry.BillingState` 是 `<-:create` append-only，对账后仍是 `pending_reconcile`；admin 列表 UI 持续显示"待对账"
 - **失效**：admin 重复对账（被 unique constraint 拒绝，但 UX 差）
 - **修复**：admin 列表 DTO 加 `is_reconciled` 字段，LEFT JOIN `billing_reconciliations`；或加 `BillingEntry.is_reconciled bool` 字段在 reconcile tx 内更新（不破坏 append-only 金额字段）
-- **状态**：`pending`
+- **状态**：`done` (commit `c7062d5` / P1-γ) — LEFT JOIN billing_reconciliations 返回 is_reconciled
 
 ## H-2 `[BUG]` `[MEDIUM]` CPA 号池冷启动盲区
 
@@ -664,7 +698,7 @@
       return false
   }
   ```
-- **状态**：`pending`
+- **状态**：`done` (commit `b21e413` / P1-β)
 
 ## H-3 `[BUG]` `[MEDIUM]` moderation_cache_secret 旋转不清内存 secret
 
@@ -672,7 +706,7 @@
 - **文件**：`proxy/content_moderation.go:293-305, 391-395` + `controller/sysconfig.go:404-409`
 - **问题**：`moderationCacheSecret` memoize，admin 改 SysConfig 只 flush 内容 LRU，secret 仍是旧值直到进程重启
 - **修复**：增加 `ResetModerationCacheSecret()`，在 secret 变更后清空 memoized + flush 内容缓存
-- **状态**：`pending`
+- **状态**：`done` (commit `b21e413` / P1-β) — ResetModerationCacheSecret
 
 ## H-4 `[BUG]` `[MEDIUM]` DeleteQuotaPlan 非事务 + 忽略 Count error
 
@@ -681,7 +715,7 @@
 - **问题**：`Count(&refCount)` 未检查 `.Error`；DB count 临时失败 → refCount=0 → delete 放行
 - **失效**：删除在用 QuotaPlan，PackagePlan 指向不存在 plan；用户买套餐时 `buildPackageSnapshotTx` fail-closed
 - **修复**：事务包 count+delete，检查 Count error 并 fail-closed；锁定 quota_plan 行或加 FK 约束
-- **状态**：`pending`
+- **状态**：`done` (commit `c7062d5` / P1-γ)
 
 ## H-5 `[BUG]` `[MEDIUM]` 公开模型列表与 RouteCache 口径不一致
 
@@ -690,7 +724,7 @@
 - **问题**：`/v1/models` 只查 `channel_models.status=1`，不 join `channels.status=1`
 - **失效**：admin 禁用 channel 但下属 model 仍 status=1 → 用户看见"可见但不可用"幽灵模型
 - **修复**：公开模型与价格聚合 JOIN `channels` 要求 `channels.status=1`，或直接基于 RouteCache 输出
-- **状态**：`pending`
+- **状态**：`done` (commit `b21e413` / P1-β) — DB JOIN channels.status=1
 
 ## H-6 `[BUG]` `[MEDIUM]` AddChannelModelsBatch 忽略 Find 错误
 
@@ -698,7 +732,7 @@
 - **文件**：`controller/channel_model.go:828-829`
 - **问题**：`Find(&existing)` 未检查 `.Error`，DB 读失败时 existing=空 → 批量插入含重复
 - **修复**：检查 .Error 直接 500；用 `ON CONFLICT DO NOTHING` 并返回真实 inserted 数
-- **状态**：`pending`
+- **状态**：`done` (commit `b21e413` / P1-β)
 
 ## H-7 `[BUG]` `[MEDIUM]` 批量发券单 tx 50,000 INSERT 风险
 
@@ -706,7 +740,7 @@
 - **文件**：`controller/coupon.go:508-679`
 - **问题**：单 tx 最多 500 用户 × 100 张 = 50,000 INSERT；SQLite 单写者串行；HTTP 客户端超时但 tx 仍可能提交
 - **修复**：限制降至 50 用户 × 10 张/批；或多事务批次（牺牲原子性）；至少 log 总耗时
-- **状态**：`pending`
+- **状态**：`done` (commit `c7062d5` / P1-γ)
 
 ## H-8 `[BUG]` `[MEDIUM]` billingSummary 缺 covering index
 
@@ -714,7 +748,7 @@
 - **文件**：`controller/billing.go:236` + `database/sqlite.go`
 - **问题**：聚合 SQL 仅单列索引可选，回表拿 amount_usd；10 万行用户每次 summary 全表用户过滤+行回查
 - **修复**：`CREATE INDEX idx_billing_summary ON billing_entries(user_id, entry_type, occurred_at, amount_usd)` covering
-- **状态**：`pending`
+- **状态**：`done` (commit `c7062d5` / P1-γ)
 
 ## H-9 `[BUG]` `[MEDIUM]` UpstreamUsageRecord.created_at 无索引
 
@@ -722,7 +756,7 @@
 - **文件**：`database/schema.go:286` + cron 路径
 - **问题**：仅 Timestamp 有索引，cron 按 created_at 清理会全表扫
 - **修复**：补 `idx_upusage_created_at` 或统一 cron 用 timestamp 字段
-- **状态**：`pending`
+- **状态**：`done` (commit `c7062d5` / P1-γ)
 
 ## H-10 `[BUG]` `[LOW]` 未读通知 partial index 未排除 revoked
 
@@ -731,7 +765,7 @@
 - **问题**：`idx_notif_user_unread` partial `WHERE read_at IS NULL`，未排除 `revoked_at IS NOT NULL`
 - **失效**：用户铃铛显示已撤回广播未读条数
 - **修复**：partial 改为 `WHERE read_at IS NULL AND revoked_at IS NULL`
-- **状态**：`pending`
+- **状态**：`done` (commit `c7062d5` / P1-γ) — DROP+CREATE partial index 加 revoked_at IS NULL
 
 ## H-11 `[BUG]` `[LOW]` NotificationPreference 首次保存 read-then-create unique 冲突
 
@@ -889,7 +923,7 @@
 - **文件**：`database/session_schema.go` + sqlite.go
 - **问题**：RevokeSessionsForUser `WHERE user_id=? AND revoked_at IS NULL` 走 user_id 单列索引另条件全扫
 - **修复**：补 partial index `WHERE revoked_at IS NULL`
-- **状态**：`pending`
+- **状态**：`done` (commit `c7062d5` / P1-γ)
 
 ---
 
