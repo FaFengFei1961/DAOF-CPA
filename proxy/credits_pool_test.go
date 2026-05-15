@@ -1,6 +1,9 @@
 package proxy
 
-import "testing"
+import (
+	"strings"
+	"testing"
+)
 
 func TestClaudeBuildWindowTreatsUtilizationAsUsedPercent(t *testing.T) {
 	// Anthropic OAuth usage 契约：utilization 始终是 0-100 百分数。
@@ -28,6 +31,70 @@ func TestClaudeBuildWindowTreatsUtilizationAsUsedPercent(t *testing.T) {
 	w = claudeBuildWindow(def, map[string]any{"utilization": 0.5})
 	if w.UsedPercent != 0.5 || w.RemainingPercent != 99.5 {
 		t.Fatalf("expected utilization=0.5 to mean 0.5%% used, got used=%.1f remaining=%.1f", w.UsedPercent, w.RemainingPercent)
+	}
+}
+
+// TestSanitizeError_RedactsAllSensitivePatterns 验证 Sprint2-M6 修复：
+// Cookie / Set-Cookie / URL query secrets / URL userinfo 必须与 Bearer/api_key 同入口清洗。
+// 否则 cliproxy_usage_sync.FailBody 等错误日志落库时会泄漏凭证。
+func TestSanitizeError_RedactsAllSensitivePatterns(t *testing.T) {
+	cases := []struct {
+		name      string
+		input     string
+		mustMiss  []string // 不能出现在输出中（原始敏感值）
+		mustHave  []string // 必须出现的脱敏标记
+	}{
+		{
+			name:     "bearer header",
+			input:    "request failed: Authorization: Bearer eyJhbGciOiJIUzI1NiJ9.payload.sig",
+			mustMiss: []string{"eyJhbGciOiJIUzI1NiJ9.payload.sig"},
+			mustHave: []string{"Bearer ***"},
+		},
+		{
+			name:     "set-cookie header",
+			input:    "upstream 401: Set-Cookie: session=abc123secret; Path=/; HttpOnly",
+			mustMiss: []string{"abc123secret"},
+			mustHave: []string{"Set-Cookie:", "***"},
+		},
+		{
+			name:     "cookie request header",
+			input:    "client: Cookie: auth=verysecretvalue; tracking=ok",
+			mustMiss: []string{"verysecretvalue"},
+			mustHave: []string{"Cookie:", "***"},
+		},
+		{
+			name:     "url query secrets",
+			input:    "GET https://api.example.com/x?api_key=sk-secret123&token=mytoken789 failed",
+			mustMiss: []string{"sk-secret123", "mytoken789"},
+			mustHave: []string{"api_key=***", "token=***"},
+		},
+		{
+			name:     "url userinfo",
+			input:    "dial https://admin:p4ssw0rd@host.example/path failed",
+			mustMiss: []string{"admin:p4ssw0rd", "p4ssw0rd"},
+			mustHave: []string{"https://***@host.example"},
+		},
+		{
+			name:     "jwt bare",
+			input:    "error: eyJaaaaaaaaaaa.bbbbbbbbbb.cccccccccccc invalid",
+			mustMiss: []string{"eyJaaaaaaaaaaa.bbbbbbbbbb.cccccccccccc"},
+			mustHave: []string{"[JWT]"},
+		},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			got := sanitizeError(tc.input, 1024)
+			for _, miss := range tc.mustMiss {
+				if strings.Contains(got, miss) {
+					t.Errorf("input=%q\noutput=%q\nshould NOT contain %q", tc.input, got, miss)
+				}
+			}
+			for _, have := range tc.mustHave {
+				if !strings.Contains(got, have) {
+					t.Errorf("input=%q\noutput=%q\nshould contain %q", tc.input, got, have)
+				}
+			}
+		})
 	}
 }
 

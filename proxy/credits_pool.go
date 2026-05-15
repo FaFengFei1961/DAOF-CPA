@@ -129,6 +129,17 @@ var (
 	// fix Sec-M1: bare JWT pattern (eyJ.<base64url>.<base64url>) 兜底——
 	// 上游错误体偶尔会裸吐 token 没带 key 名（HTTP 401 body 等），需要专门正则捕获。
 	jwtRe = regexp.MustCompile(`eyJ[A-Za-z0-9_-]{10,}\.[A-Za-z0-9_-]{10,}\.[A-Za-z0-9_-]{10,}`)
+	// fix CRITICAL Sprint2-M6：Cookie / Set-Cookie header 内容脱敏
+	// CPA 错误响应有时会原样回传客户端 Cookie，落库前必须清洗：
+	//   "Cookie: session=xxx; auth=yyy"  → "Cookie: ***"
+	//   "Set-Cookie: token=abc; Path=/" → "Set-Cookie: ***"
+	cookieRe = regexp.MustCompile(`(?i)(set-cookie|cookie)\s*:\s*[^\r\n]+`)
+	// URL query 中的敏感参数脱敏：
+	//   "?api_key=xxx&token=yyy"  → "?api_key=***&token=***"
+	urlQuerySecretRe = regexp.MustCompile(`(?i)([?&](?:api[_-]?key|access[_-]?token|refresh[_-]?token|id[_-]?token|secret|password|token|code|signature)=)[^&\s"'<>]+`)
+	// URL userinfo 段（user:pass@host）脱敏：
+	//   "https://user:secret@host" → "https://***@host"
+	urlUserinfoRe = regexp.MustCompile(`(?i)([a-z]{2,8}://)[^/@\s]+:[^/@\s]+@`)
 )
 
 // 单条错误响应 / 日志体最大字节，超出会被截断
@@ -327,6 +338,17 @@ func sanitizeError(s string, maxLen int) string {
 	s = bearerRe.ReplaceAllString(s, "Bearer ***")
 	s = apiKeyRe.ReplaceAllString(s, "$1=***")
 	s = jwtRe.ReplaceAllString(s, "[JWT]")
+	// fix CRITICAL Sprint2-M6：Cookie / Set-Cookie / URL query secrets / URL userinfo
+	// 一并清洗，与 Bearer/api_key 同一入口（cliproxy_usage_sync.FailBody 等所有错误日志都走这里）。
+	s = cookieRe.ReplaceAllStringFunc(s, func(match string) string {
+		// 保留 header name + 冒号，截断 value
+		if colonIdx := strings.Index(match, ":"); colonIdx >= 0 {
+			return match[:colonIdx+1] + " ***"
+		}
+		return "***"
+	})
+	s = urlQuerySecretRe.ReplaceAllString(s, "$1***")
+	s = urlUserinfoRe.ReplaceAllString(s, "$1***@")
 	if len(s) > maxLen {
 		s = s[:maxLen] + "...(truncated)"
 	}
