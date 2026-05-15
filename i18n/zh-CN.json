@@ -1081,6 +1081,7 @@
     "MY_TITLE": "我的订阅",
     "WINDOW_EXPIRED_TITLE": "已结束",
     "WINDOW_EXPIRED_HINT": "等待下次请求触发新窗口",
+    "WINDOW_NEXT_RESET": "下次重置",
     "WINDOW_LAST_USAGE": "上次窗口用量 {{used}} / {{limit}}",
     "WINDOW_ENDED_RELATIVE": "已结束 · {{relative}}",
     "MY_SUBTITLE": "订阅最先消耗；用尽后才走余额扣费（在账号设置中开启）。",

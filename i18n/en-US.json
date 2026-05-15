@@ -1081,6 +1081,7 @@
     "MY_TITLE": "My Subscriptions",
     "WINDOW_EXPIRED_TITLE": "Ended",
     "WINDOW_EXPIRED_HINT": "Waiting for next request to trigger a new window",
+    "WINDOW_NEXT_RESET": "Next reset",
     "WINDOW_LAST_USAGE": "Last window usage {{used}} / {{limit}}",
     "WINDOW_ENDED_RELATIVE": "Ended {{relative}}",
     "MY_SUBTITLE": "Subscriptions are consumed first; balance billing kicks in only after they are depleted (enable it in Account Settings).",
