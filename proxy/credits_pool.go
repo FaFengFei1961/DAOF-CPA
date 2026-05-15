@@ -101,23 +101,17 @@ var (
 	startOnce sync.Once
 	stopOnce  sync.Once
 
-	// CPA 通用代理调用：30s 超时，连接池避免高频刷新时端口耗尽
+	// CPA 通用代理调用统一走 SafeTransport，避免 DNS rebinding 绕过 URL 校验。
 	cpaHTTPClient = &http.Client{
-		Timeout: 30 * time.Second,
-		Transport: &http.Transport{
-			MaxIdleConns:        100,
-			MaxIdleConnsPerHost: 20,
-			MaxConnsPerHost:     50,
-			IdleConnTimeout:     90 * time.Second,
-		},
+		Timeout:       10 * time.Second,
+		Transport:     SafeTransport(),
+		CheckRedirect: redirectGuard,
 	}
-	// CPA auth-files 列表查询：相对轻量，单独 client
+	// CPA auth-files 列表/下载查询：同样必须走 SafeTransport + redirect 复校验。
 	cpaAuthFilesClient = &http.Client{
-		Timeout: 15 * time.Second,
-		Transport: &http.Transport{
-			MaxIdleConnsPerHost: 5,
-			IdleConnTimeout:     90 * time.Second,
-		},
+		Timeout:       30 * time.Second,
+		Transport:     SafeTransport(),
+		CheckRedirect: redirectGuard,
 	}
 
 	// Bearer token 脱敏正则
@@ -258,7 +252,11 @@ func IsCliproxyConfigured() bool {
 // PingCliproxy 同步探测 CPA 是否可达。返回 nil 表示连通；error 文本可直接展示给 admin。
 // 超时短（5s）便于 UI 等待；只 GET /v0/management/auth-files 头部，不读取 body。
 func PingCliproxy(ctx context.Context) error {
-	url := getCliproxyURL() + "/v0/management/auth-files"
+	baseURL, err := getValidatedCliproxyURL()
+	if err != nil {
+		return fmt.Errorf("cliproxy_url 安全校验失败: %w", err)
+	}
+	url := baseURL + "/v0/management/auth-files"
 	req, err := http.NewRequestWithContext(ctx, "GET", url, nil)
 	if err != nil {
 		return fmt.Errorf("构造请求失败: %w", err)
@@ -266,10 +264,9 @@ func PingCliproxy(ctx context.Context) error {
 	if k := getCliproxyKey(); k != "" {
 		req.Header.Set("Authorization", "Bearer "+k)
 	}
-	cli := &http.Client{Timeout: 5 * time.Second}
-	resp, err := cli.Do(req)
+	resp, err := cpaHTTPClient.Do(req)
 	if err != nil {
-		return fmt.Errorf("无法连接 CPA (%s): %w", getCliproxyURL(), err)
+		return fmt.Errorf("无法连接 CPA (%s): %w", baseURL, err)
 	}
 	defer resp.Body.Close()
 	if resp.StatusCode == 401 || resp.StatusCode == 403 {
@@ -292,6 +289,14 @@ func getCliproxyURL() string {
 		v = "http://127.0.0.1:8080"
 	}
 	return strings.TrimRight(v, "/")
+}
+
+func getValidatedCliproxyURL() (string, error) {
+	baseURL := getCliproxyURL()
+	if err := ValidateChannelURL(baseURL); err != nil {
+		return "", err
+	}
+	return baseURL, nil
 }
 
 func getCliproxyKey() string {
@@ -393,7 +398,12 @@ func validateAuthFilesResponse(authFiles []authFileLite) bool {
 	prevTotal := len(creditsCache)
 	creditsMu.RUnlock()
 
-	// 冷启动：creditsCache 为空 → 任何输入（含 0）都可信，正常初始化
+	// 冷启动 + 空响应保护：进程刚启动时内存 cache 为空，CPA 空响应不能被当作
+	// 权威快照提交，否则会把真实号池误初始化为空。
+	if prevTotal == 0 && validCount == 0 {
+		log.Printf("[CREDITS-ANOMALY] ABORT: cold start but auth-files is empty; refusing to commit empty snapshot")
+		return false
+	}
 	if prevTotal == 0 {
 		return true
 	}
@@ -655,7 +665,11 @@ type authFileLite struct {
 }
 
 func fetchAuthFiles(ctx context.Context) ([]authFileLite, error) {
-	url := getCliproxyURL() + "/v0/management/auth-files"
+	baseURL, err := getValidatedCliproxyURL()
+	if err != nil {
+		return nil, fmt.Errorf("cliproxy_url 安全校验失败: %w", err)
+	}
+	url := baseURL + "/v0/management/auth-files"
 	req, err := http.NewRequestWithContext(ctx, "GET", url, nil)
 	if err != nil {
 		return nil, fmt.Errorf("CPA auth-files NewRequest 失败: %w", err)
@@ -722,7 +736,11 @@ func fetchAuthFileContent(ctx context.Context, name string) ([]byte, error) {
 	if strings.TrimSpace(name) == "" {
 		return nil, fmt.Errorf("file name empty")
 	}
-	url := getCliproxyURL() + "/v0/management/auth-files/download?name=" + urlQueryEscape(name)
+	baseURL, err := getValidatedCliproxyURL()
+	if err != nil {
+		return nil, fmt.Errorf("cliproxy_url 安全校验失败: %w", err)
+	}
+	url := baseURL + "/v0/management/auth-files/download?name=" + urlQueryEscape(name)
 	req, err := http.NewRequestWithContext(ctx, "GET", url, nil)
 	if err != nil {
 		return nil, fmt.Errorf("download %s NewRequest: %w", name, err)
@@ -1063,6 +1081,10 @@ func cpaAPICall(ctx context.Context, authIndex, method, url string, headers map[
 	if authIndex == "" {
 		return nil, fmt.Errorf("auth_index empty")
 	}
+	baseURL, err := getValidatedCliproxyURL()
+	if err != nil {
+		return nil, fmt.Errorf("cliproxy_url 安全校验失败: %w", err)
+	}
 	payload := map[string]any{
 		"auth_index": authIndex,
 		"method":     method,
@@ -1074,7 +1096,7 @@ func cpaAPICall(ctx context.Context, authIndex, method, url string, headers map[
 	if err != nil {
 		return nil, fmt.Errorf("CPA api-call marshal payload: %w", err)
 	}
-	req, err := http.NewRequestWithContext(ctx, "POST", getCliproxyURL()+"/v0/management/api-call", bytes.NewReader(buf))
+	req, err := http.NewRequestWithContext(ctx, "POST", baseURL+"/v0/management/api-call", bytes.NewReader(buf))
 	if err != nil {
 		return nil, fmt.Errorf("CPA api-call NewRequest 失败: %w", err)
 	}

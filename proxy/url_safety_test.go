@@ -1,6 +1,9 @@
 package proxy
 
-import "testing"
+import (
+	"net/http"
+	"testing"
+)
 
 func TestValidateChannelURL(t *testing.T) {
 	cases := []struct {
@@ -40,5 +43,29 @@ func TestValidateChannelURL(t *testing.T) {
 				t.Errorf("expected no error for %q, got %v", tc.raw, err)
 			}
 		})
+	}
+}
+
+func TestRedirectGuard_BlocksMetadata(t *testing.T) {
+	req, err := http.NewRequest(http.MethodGet, "http://169.254.169.254/latest/meta-data/", nil)
+	if err != nil {
+		t.Fatalf("build request: %v", err)
+	}
+	if err := redirectGuard(req, nil); err == nil {
+		t.Fatal("expected metadata redirect target to be blocked")
+	}
+}
+
+func TestRedirectGuard_BlocksCrossHost(t *testing.T) {
+	prev, err := http.NewRequest(http.MethodGet, "https://api.example.com/v1/models", nil)
+	if err != nil {
+		t.Fatalf("build previous request: %v", err)
+	}
+	req, err := http.NewRequest(http.MethodGet, "https://other.example.com/v1/models", nil)
+	if err != nil {
+		t.Fatalf("build redirect request: %v", err)
+	}
+	if err := redirectGuard(req, []*http.Request{prev}); err == nil {
+		t.Fatal("expected cross-host redirect to be blocked")
 	}
 }

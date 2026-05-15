@@ -28,6 +28,7 @@ import (
 	"strconv"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"daof-ai-hub/database"
@@ -238,11 +239,12 @@ type moderationCacheEntry struct {
 }
 
 var (
-	moderationCacheMu       sync.Mutex
-	moderationCacheMap      = make(map[string]*moderationCacheEntry)
-	moderationCacheLRU      = list.New() // 队头 = 最近用过；队尾 = 最久没用
-	moderationCacheSecret   []byte
-	moderationCacheSecretMu sync.RWMutex
+	moderationCacheMu           sync.Mutex
+	moderationCacheMap          = make(map[string]*moderationCacheEntry)
+	moderationCacheLRU          = list.New() // 队头 = 最近用过；队尾 = 最久没用
+	moderationCacheSecret       []byte
+	moderationCacheSecretLoaded atomic.Bool
+	moderationCacheSecretMu     sync.RWMutex
 )
 
 // loadOrGenerateCacheSecret 解析审核 cache HMAC secret。secret 用于防侧信道：
@@ -291,6 +293,16 @@ func loadOrGenerateCacheSecret() []byte {
 }
 
 func moderationSecret() []byte {
+	if !moderationCacheSecretLoaded.Load() {
+		moderationCacheSecretMu.Lock()
+		if !moderationCacheSecretLoaded.Load() {
+			moderationCacheSecret = loadOrGenerateCacheSecret()
+			moderationCacheSecretLoaded.Store(true)
+		}
+		s := moderationCacheSecret
+		moderationCacheSecretMu.Unlock()
+		return s
+	}
 	moderationCacheSecretMu.RLock()
 	s := moderationCacheSecret
 	moderationCacheSecretMu.RUnlock()
@@ -299,10 +311,20 @@ func moderationSecret() []byte {
 	}
 	moderationCacheSecretMu.Lock()
 	defer moderationCacheSecretMu.Unlock()
-	if moderationCacheSecret == nil {
+	if !moderationCacheSecretLoaded.Load() || moderationCacheSecret == nil {
 		moderationCacheSecret = loadOrGenerateCacheSecret()
+		moderationCacheSecretLoaded.Store(true)
 	}
 	return moderationCacheSecret
+}
+
+// ResetModerationCacheSecret forces the next cache key calculation to reload
+// moderation_cache_secret from env/SysConfig after an admin rotation.
+func ResetModerationCacheSecret() {
+	moderationCacheSecretMu.Lock()
+	moderationCacheSecret = nil
+	moderationCacheSecretLoaded.Store(false)
+	moderationCacheSecretMu.Unlock()
 }
 
 // computeCacheKey HMAC-SHA256(secret, prompt + ":" + model + ":" + policyVer + ":" + threshold)
@@ -578,7 +600,10 @@ func callCLIProxyModelModeration(ctx context.Context, text string, cfg Moderatio
 	if model == "" {
 		model = defaultCLIProxyModerationModel
 	}
-	baseURL := getCliproxyURL()
+	baseURL, err := getValidatedCliproxyURL()
+	if err != nil {
+		return ModerationResult{}, fmt.Errorf("cliproxy_url safety validation failed: %w", err)
+	}
 	endpoint := baseURL + "/v1/chat/completions"
 	body, err := json.Marshal(buildCLIProxyModerationRequest(text, model))
 	if err != nil {

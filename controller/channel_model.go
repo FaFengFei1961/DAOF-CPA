@@ -16,6 +16,7 @@ import (
 
 	"github.com/gofiber/fiber/v2"
 	"github.com/tidwall/gjson"
+	"gorm.io/gorm/clause"
 )
 
 // ─── 内容审核字段校验（fix CRITICAL R23）──────────────────────────────────
@@ -281,7 +282,12 @@ func auditOfficialNoModerationConfirmed(c *fiber.Ctx, ch *database.Channel, cm *
 // GetPublicModels 兼容 OpenAI 标准的 /v1/models 接口
 func GetPublicModels(c *fiber.Ctx) error {
 	var uniqueModels []string
-	if err := database.DB.Model(&database.ChannelModel{}).Select("DISTINCT model_id").Where("status = ?", 1).Pluck("model_id", &uniqueModels).Error; err != nil {
+	if err := database.DB.Model(&database.ChannelModel{}).
+		Joins("JOIN channels ON channels.id = channel_models.channel_id").
+		Where("channel_models.status = ? AND channels.status = ?", 1, 1).
+		Distinct("channel_models.model_id").
+		Order("channel_models.model_id ASC").
+		Pluck("channel_models.model_id", &uniqueModels).Error; err != nil {
 		log.Printf("Get public models error: %v", err)
 		return c.Status(500).JSON(fiber.Map{
 			"error": fiber.Map{
@@ -332,6 +338,7 @@ func GetPublicPricing(c *fiber.Ctx) error {
 
 	var results []PricingResult
 	if err := database.DB.Model(&database.ChannelModel{}).
+		Joins("JOIN channels ON channels.id = channel_models.channel_id").
 		Select(`model_id,
 			COALESCE(MIN(NULLIF(input_price_pico_per_token, 0)), 0) / 1000000000.0 as min_input_price,
 			COALESCE(MIN(NULLIF(output_price_pico_per_token, 0)), 0) / 1000000000.0 as min_output_price,
@@ -343,8 +350,8 @@ func GetPublicPricing(c *fiber.Ctx) error {
 			COALESCE(MIN(NULLIF(high_cached_input_price_pico_per_token, 0)), 0) / 1000000000.0 as min_high_cache_price,
 			COALESCE(MIN(NULLIF(high_output_price_pico_per_token, 0)), 0) / 1000000000.0 as min_high_out_price,
 			MAX(max_context_length) as max_context_length`).
-		Where("status = ?", 1).
-		Group("model_id").
+		Where("channel_models.status = ? AND channels.status = ?", 1, 1).
+		Group("channel_models.model_id").
 		Scan(&results).Error; err != nil {
 		log.Printf("Failed to aggregate model pricing: %v", err)
 		return c.Status(500).JSON(fiber.Map{"success": false, "message": "Failed to aggregate models"})
@@ -672,8 +679,9 @@ func FetchUpstreamModels(c *fiber.Ctx) error {
 	// 防御被绕过——用户配置 BaseURL 为受控域名，校验时解析合法 IP，dial 时换成 169.254.169.254。
 	// 改用 net/http + safeDialContext，与 stream.go 同级保护。
 	httpClient := &http.Client{
-		Timeout:   15 * time.Second,
-		Transport: proxy.SafeTransport(),
+		Timeout:       15 * time.Second,
+		Transport:     proxy.SafeTransport(),
+		CheckRedirect: proxy.RedirectGuard,
 	}
 	method := http.MethodGet
 	headers := map[string]string{}
@@ -798,20 +806,31 @@ func AddChannelModelsBatch(c *fiber.Ctx) error {
 		modelIDs = append(modelIDs, m.ModelID)
 	}
 	var existing []database.ChannelModel
-	database.DB.Select("model_id").Where("channel_id = ? AND model_id IN ?", channelID, modelIDs).Find(&existing)
+	if err := database.DB.Select("model_id").Where("channel_id = ? AND model_id IN ?", channelID, modelIDs).Find(&existing).Error; err != nil {
+		return c.Status(500).JSON(fiber.Map{
+			"success":      false,
+			"message_code": "ERR_DB_QUERY",
+			"message":      err.Error(),
+		})
+	}
 	existSet := make(map[string]bool, len(existing))
 	for _, e := range existing {
 		existSet[e.ModelID] = true
 	}
 	filtered := make([]database.ChannelModel, 0, len(toInsert)-len(existing))
+	seenNew := make(map[string]bool, len(toInsert))
 	for _, m := range toInsert {
 		if !existSet[m.ModelID] {
+			if seenNew[m.ModelID] {
+				continue
+			}
+			seenNew[m.ModelID] = true
 			filtered = append(filtered, m)
 		}
 	}
 	inserted := int64(0)
 	if len(filtered) > 0 {
-		res := database.DB.Create(&filtered)
+		res := database.DB.Clauses(clause.OnConflict{DoNothing: true}).Create(&filtered)
 		if res.Error != nil {
 			log.Printf("[CHANNEL-MODEL-BATCH] insert failed channel=%d count=%d: %v", channelID, len(filtered), res.Error)
 			return c.Status(500).JSON(fiber.Map{

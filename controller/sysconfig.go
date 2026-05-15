@@ -353,6 +353,7 @@ func BatchUpdateSysConfigs(c *fiber.Ctx) error {
 	failedKeys := []string{}
 	skippedMasked := []string{}
 	updated := 0
+	moderationSecretChanged := false
 	err := database.DB.Transaction(func(tx *gorm.DB) error {
 		if err := tx.Where("key = ?", deprecatedBalanceConsumeDefaultLimitUSDKey).Delete(&database.SysConfig{}).Error; err != nil {
 			return fmt.Errorf("delete deprecated %s: %w", deprecatedBalanceConsumeDefaultLimitUSDKey, err)
@@ -387,6 +388,9 @@ func BatchUpdateSysConfigs(c *fiber.Ctx) error {
 				}
 			}
 			updated++
+			if k == "moderation_cache_secret" {
+				moderationSecretChanged = true
+			}
 		}
 		return nil
 	})
@@ -399,6 +403,9 @@ func BatchUpdateSysConfigs(c *fiber.Ctx) error {
 	}
 
 	proxy.SyncCacheConfig()
+	if moderationSecretChanged {
+		proxy.ResetModerationCacheSecret()
+	}
 
 	// fix MAJOR R23-M2（codex 审查）：moderation 配置变更后必须 reload 关键字过滤器
 	// 和清空 moderation policy / 内容缓存，否则要重启进程才生效。

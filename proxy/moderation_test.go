@@ -646,6 +646,41 @@ func TestInferSourceFormat(t *testing.T) {
 
 // ─── content_moderation：HMAC stable + chunk split ──────────────────────────
 
+func TestResetModerationCacheSecret_RereadsSecret(t *testing.T) {
+	t.Setenv("MODERATION_CACHE_SECRET", "")
+
+	SysConfigMutex.Lock()
+	oldSecret, hadSecret := SysConfigCache["moderation_cache_secret"]
+	SysConfigCache["moderation_cache_secret"] = "secret-one"
+	SysConfigMutex.Unlock()
+	ResetModerationCacheSecret()
+	t.Cleanup(func() {
+		SysConfigMutex.Lock()
+		if hadSecret {
+			SysConfigCache["moderation_cache_secret"] = oldSecret
+		} else {
+			delete(SysConfigCache, "moderation_cache_secret")
+		}
+		SysConfigMutex.Unlock()
+		ResetModerationCacheSecret()
+	})
+
+	key1 := computeCacheKey("prompt", "model", 0.5)
+
+	SysConfigMutex.Lock()
+	SysConfigCache["moderation_cache_secret"] = "secret-two"
+	SysConfigMutex.Unlock()
+	if keyStillCached := computeCacheKey("prompt", "model", 0.5); keyStillCached != key1 {
+		t.Fatal("secret changed before ResetModerationCacheSecret")
+	}
+
+	ResetModerationCacheSecret()
+	key2 := computeCacheKey("prompt", "model", 0.5)
+	if key2 == key1 {
+		t.Fatal("secret rotation did not change cache key after reset")
+	}
+}
+
 func TestSplitIntoChunks_RuneSafe(t *testing.T) {
 	// 中英混合 + emoji 测试 rune 边界不被切坏
 	input := "你好世界！abcdef🚀"

@@ -46,8 +46,9 @@ func ProxyCLIProxyUsage(c *fiber.Ctx) error {
 
 	// 构造安全代理请求 + SafeTransport 防 DNS rebinding
 	client := &http.Client{
-		Timeout:   15 * time.Second,
-		Transport: proxy.SafeTransport(),
+		Timeout:       15 * time.Second,
+		Transport:     proxy.SafeTransport(),
+		CheckRedirect: proxy.RedirectGuard,
 	}
 	req, err := http.NewRequestWithContext(c.Context(), "GET", targetURL, nil)
 	if err != nil {

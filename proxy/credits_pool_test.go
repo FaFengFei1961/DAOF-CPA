@@ -2,9 +2,33 @@ package proxy
 
 import (
 	"fmt"
+	"net/http"
 	"strings"
 	"testing"
 )
+
+func TestCPAClient_UsesSafeTransport(t *testing.T) {
+	if cpaHTTPClient.Transport != SafeTransport() {
+		t.Fatalf("cpaHTTPClient must use SafeTransport, got %#v", cpaHTTPClient.Transport)
+	}
+	if cpaAuthFilesClient.Transport != SafeTransport() {
+		t.Fatalf("cpaAuthFilesClient must use SafeTransport, got %#v", cpaAuthFilesClient.Transport)
+	}
+	if cpaHTTPClient.CheckRedirect == nil {
+		t.Fatal("cpaHTTPClient must install redirect guard")
+	}
+	if cpaAuthFilesClient.CheckRedirect == nil {
+		t.Fatal("cpaAuthFilesClient must install redirect guard")
+	}
+
+	req, err := http.NewRequest(http.MethodGet, "http://169.254.169.254/latest/meta-data/", nil)
+	if err != nil {
+		t.Fatalf("build request: %v", err)
+	}
+	if err := cpaHTTPClient.CheckRedirect(req, nil); err == nil {
+		t.Fatal("cpaHTTPClient redirect guard should block metadata redirects")
+	}
+}
 
 func TestClaudeBuildWindowTreatsUtilizationAsUsedPercent(t *testing.T) {
 	// Anthropic OAuth usage 契约：utilization 始终是 0-100 百分数。
@@ -114,15 +138,15 @@ func withCreditsCache(t *testing.T, snapshot map[string]*CreditEntry, fn func())
 	fn()
 }
 
-// TestValidateAuthFilesResponse_ColdStartAcceptsAnySize 冷启动（creditsCache 为空）时
-// 任何输入都可信，包括 0 条—— admin 刚启动还没添加凭证是合法状态。
-func TestValidateAuthFilesResponse_ColdStartAcceptsAnySize(t *testing.T) {
+// TestValidateAuthFilesResponse_ColdStartEmpty 冷启动（creditsCache 为空）时，
+// CPA 空响应不能被当作可信快照提交。
+func TestValidateAuthFilesResponse_ColdStartEmpty(t *testing.T) {
 	withCreditsCache(t, map[string]*CreditEntry{}, func() {
-		if !validateAuthFilesResponse(nil) {
-			t.Errorf("cold start with nil input should be accepted")
+		if validateAuthFilesResponse(nil) {
+			t.Errorf("cold start with nil input should ABORT")
 		}
-		if !validateAuthFilesResponse([]authFileLite{}) {
-			t.Errorf("cold start with empty input should be accepted")
+		if validateAuthFilesResponse([]authFileLite{}) {
+			t.Errorf("cold start with empty input should ABORT")
 		}
 		if !validateAuthFilesResponse([]authFileLite{
 			{ID: "a1", Provider: "claude"},
@@ -151,9 +175,9 @@ func TestValidateAuthFilesResponse_FullEmptyAbortsWhenCacheHasEntries(t *testing
 		}
 		// 全 malformed 也等价于 valid=0 → abort
 		if validateAuthFilesResponse([]authFileLite{
-			{ID: "", Provider: "claude"},     // missing ID
-			{ID: "a3", Provider: ""},          // missing provider
-			{ID: "   ", Provider: "   "},      // whitespace only
+			{ID: "", Provider: "claude"}, // missing ID
+			{ID: "a3", Provider: ""},     // missing provider
+			{ID: "   ", Provider: "   "}, // whitespace only
 		}) {
 			t.Errorf("all-malformed input should ABORT (valid_count=0)")
 		}

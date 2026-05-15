@@ -1,9 +1,14 @@
 package controller
 
 import (
+	"encoding/json"
+	"errors"
+	"net/http"
 	"testing"
 
 	"daof-ai-hub/database"
+
+	"gorm.io/gorm"
 )
 
 // TestChannelTargetsOfficialHost 覆盖 fix CRITICAL R23 的官方 host 检测：
@@ -213,5 +218,120 @@ func TestValidateChannelModelModeration_OpenAIModelForcedStrictClosed(t *testing
 		t.Fatalf("moderation=%s/%s want %s/%s",
 			cm.ModerationLevel, cm.ModerationFailMode,
 			database.OpenAIModelModerationLevel, database.OpenAIModelModerationFailMode)
+	}
+}
+
+func TestGetPublicModels_FiltersDisabledChannels(t *testing.T) {
+	app := initializeMegaTestDB()
+	if err := database.DB.Create(&database.Channel{ID: 11, Name: "enabled", Key: "x", Type: "openai", Status: 1}).Error; err != nil {
+		t.Fatalf("seed enabled channel: %v", err)
+	}
+	if err := database.DB.Create(&database.Channel{ID: 12, Name: "disabled", Key: "x", Type: "openai", Status: 2}).Error; err != nil {
+		t.Fatalf("seed disabled channel: %v", err)
+	}
+	if err := database.DB.Create(&database.ChannelModel{ChannelID: 11, ModelID: "visible-model", Status: 1}).Error; err != nil {
+		t.Fatalf("seed visible model: %v", err)
+	}
+	if err := database.DB.Create(&database.ChannelModel{ChannelID: 12, ModelID: "hidden-model", Status: 1}).Error; err != nil {
+		t.Fatalf("seed hidden model: %v", err)
+	}
+
+	resp := sendRequest(app, http.MethodGet, "/v1/models", nil, "")
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("status=%d want %d", resp.StatusCode, http.StatusOK)
+	}
+	defer resp.Body.Close()
+	var body struct {
+		Data []struct {
+			ID string `json:"id"`
+		} `json:"data"`
+	}
+	if err := json.NewDecoder(resp.Body).Decode(&body); err != nil {
+		t.Fatalf("decode response: %v", err)
+	}
+	seen := map[string]bool{}
+	for _, m := range body.Data {
+		seen[m.ID] = true
+	}
+	if !seen["visible-model"] {
+		t.Fatalf("visible model missing from public list: %#v", body.Data)
+	}
+	if seen["hidden-model"] {
+		t.Fatalf("disabled channel model leaked into public list: %#v", body.Data)
+	}
+}
+
+func TestAddChannelModelsBatch_DBError(t *testing.T) {
+	app := initializeMegaTestDB()
+	if err := database.DB.Create(&database.Channel{ID: 21, Name: "batch", Key: "x", Type: "local", Status: 1}).Error; err != nil {
+		t.Fatalf("seed channel: %v", err)
+	}
+
+	callbackName := "codex_force_channel_model_find_error"
+	database.DB.Callback().Query().Before("gorm:query").Register(callbackName, func(db *gorm.DB) {
+		table := db.Statement.Table
+		if table == "" && db.Statement.Schema != nil {
+			table = db.Statement.Schema.Table
+		}
+		if table == "channel_models" {
+			db.AddError(errors.New("forced channel_models query error"))
+		}
+	})
+	t.Cleanup(func() {
+		_ = database.DB.Callback().Query().Remove(callbackName)
+	})
+
+	resp := sendRequest(app, http.MethodPost, "/api/admin/channels/21/batch_models", map[string]any{"models": []string{"m1"}}, "")
+	if resp.StatusCode != http.StatusInternalServerError {
+		t.Fatalf("status=%d want %d", resp.StatusCode, http.StatusInternalServerError)
+	}
+	defer resp.Body.Close()
+	var body map[string]any
+	if err := json.NewDecoder(resp.Body).Decode(&body); err != nil {
+		t.Fatalf("decode response: %v", err)
+	}
+	if body["message_code"] != "ERR_DB_QUERY" {
+		t.Fatalf("message_code=%v want ERR_DB_QUERY", body["message_code"])
+	}
+}
+
+func TestAddChannelModelsBatch_DuplicateConflict(t *testing.T) {
+	app := initializeMegaTestDB()
+	if err := database.DB.Create(&database.Channel{ID: 22, Name: "batch", Key: "x", Type: "local", Status: 1}).Error; err != nil {
+		t.Fatalf("seed channel: %v", err)
+	}
+
+	resp := sendRequest(app, http.MethodPost, "/api/admin/channels/22/batch_models", map[string]any{"models": []string{"m1", "m1", "m2"}}, "")
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("first status=%d want %d", resp.StatusCode, http.StatusOK)
+	}
+	defer resp.Body.Close()
+	var first map[string]any
+	if err := json.NewDecoder(resp.Body).Decode(&first); err != nil {
+		t.Fatalf("decode first response: %v", err)
+	}
+	if first["inserted"].(float64) != 2 {
+		t.Fatalf("inserted=%v want 2", first["inserted"])
+	}
+
+	resp = sendRequest(app, http.MethodPost, "/api/admin/channels/22/batch_models", map[string]any{"models": []string{"m1", "m2"}}, "")
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("second status=%d want %d", resp.StatusCode, http.StatusOK)
+	}
+	defer resp.Body.Close()
+	var second map[string]any
+	if err := json.NewDecoder(resp.Body).Decode(&second); err != nil {
+		t.Fatalf("decode second response: %v", err)
+	}
+	if second["inserted"].(float64) != 0 {
+		t.Fatalf("second inserted=%v want 0", second["inserted"])
+	}
+
+	var count int64
+	if err := database.DB.Model(&database.ChannelModel{}).Where("channel_id = ?", 22).Count(&count).Error; err != nil {
+		t.Fatalf("count models: %v", err)
+	}
+	if count != 2 {
+		t.Fatalf("channel model count=%d want 2", count)
 	}
 }

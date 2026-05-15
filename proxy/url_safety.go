@@ -16,6 +16,7 @@ import (
 	"context"
 	"fmt"
 	"net"
+	"net/http"
 	"net/url"
 	"strings"
 )
@@ -134,4 +135,34 @@ func ValidateChannelURL(raw string) error {
 	}
 
 	return nil
+}
+
+// redirectGuard re-runs URL safety checks for every redirect target.
+// This blocks a public upstream from redirecting the client to cloud metadata
+// or other forbidden special-purpose destinations.
+func redirectGuard(req *http.Request, via []*http.Request) error {
+	if len(via) >= 10 {
+		return http.ErrUseLastResponse
+	}
+	if req == nil || req.URL == nil {
+		return fmt.Errorf("redirect blocked: missing target URL")
+	}
+	if err := ValidateChannelURL(req.URL.String()); err != nil {
+		return fmt.Errorf("redirect blocked: %w", err)
+	}
+	if len(via) > 0 {
+		prev := via[0].URL
+		if prev == nil {
+			return fmt.Errorf("redirect blocked: missing previous URL")
+		}
+		if req.URL.Host != prev.Host || req.URL.Scheme != prev.Scheme {
+			return fmt.Errorf("redirect blocked: cross-host/scheme not allowed (%s -> %s)", prev.Host, req.URL.Host)
+		}
+	}
+	return nil
+}
+
+// RedirectGuard exposes the shared redirect policy to controller-side clients.
+func RedirectGuard(req *http.Request, via []*http.Request) error {
+	return redirectGuard(req, via)
 }
