@@ -43,9 +43,11 @@ type TopupOrder struct {
 	MoneyRMB int64 `gorm:"not null" json:"money_rmb"`
 	// AmountUSD 入账的 USD 额度（micro_usd, USD * 1e6）。下单时按 exchange_rate 锁定；回调成功后加到 user.Quota。
 	AmountUSD int64 `gorm:"not null" json:"amount_usd"`
-	// ExchangeRateSnapshot 下单时使用的汇率（USD→RMB），float64 是因为汇率本身可能 7.2345 这种小数，
-	// 不直接进入金额计算，仅用于审计回溯（实际换算用 MoneyRMB / AmountUSD 持久化值）。
-	ExchangeRateSnapshot float64 `gorm:"not null" json:"exchange_rate_snapshot"`
+	// ExchangeRateRmbPerUsdMicros 下单时使用的汇率快照：RMB per USD × 1e6（int64 定点）。
+	// 例：7.2 RMB/USD → 7_200_000；7.2345 → 7_234_500。
+	// fix CRITICAL Sprint4-M3：旧 ExchangeRateSnapshot float64 改为定点 int64，杜绝
+	// IEEE 754 噪声进入审计字段。仅用于审计回溯（实际换算用 MoneyRMB / AmountUSD 持久化值）。
+	ExchangeRateRmbPerUsdMicros int64 `gorm:"not null" json:"exchange_rate_rmb_per_usd_micros"`
 
 	// Name 商品名称（充值显示用，提交给易付通的 name 字段）
 	Name string `gorm:"size:127" json:"name"`

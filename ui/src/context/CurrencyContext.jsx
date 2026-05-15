@@ -22,10 +22,12 @@ export const CurrencyProvider = ({ children }) => {
             try {
                 const res = await fetch('/api/public-config');
                 const data = await res.json();
-                if (data.success && data.exchange_rate) {
-                    const parsed = parseFloat(data.exchange_rate);
-                    if (!isNaN(parsed) && parsed > 0) {
-                        setExchangeRate(parsed);
+                // fix Sprint4-M3：协议从 exchange_rate (float string) 改为
+                // exchange_rate_rmb_per_usd_micros (int64 string, RMB/USD × 1e6)
+                if (data.success && data.exchange_rate_rmb_per_usd_micros) {
+                    const micros = parseInt(data.exchange_rate_rmb_per_usd_micros, 10);
+                    if (Number.isFinite(micros) && micros > 0) {
+                        setExchangeRate(micros / 1_000_000);
                     }
                 }
             } catch {

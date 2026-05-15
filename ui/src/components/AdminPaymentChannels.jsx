@@ -10,9 +10,10 @@ const FIELDS = [
   { key: 'yifut_merchant_private_key', label: 'FIELD_PRIVATE_KEY',      type: 'pem-secret', hint: 'FIELD_PRIVATE_KEY_HINT' },
   { key: 'yifut_platform_public_key',  label: 'FIELD_PUBLIC_KEY',       type: 'pem',        hint: 'FIELD_PUBLIC_KEY_HINT' },
   { key: 'yifut_enabled_methods',      label: 'FIELD_ENABLED_METHODS',  type: 'methods' },
-  { key: 'yifut_preset_amounts_rmb',   label: 'FIELD_PRESETS',          type: 'text' },
-  { key: 'yifut_min_amount_rmb',       label: 'FIELD_MIN',              type: 'number' },
-  { key: 'yifut_max_amount_rmb',       label: 'FIELD_MAX',              type: 'number' },
+  // Sprint4-M3：金额单位改为 fen int（admin 配置时直接输入 fen 整数，杜绝 float）
+  { key: 'yifut_preset_amounts_fen',   label: 'FIELD_PRESETS',          type: 'text', hint: 'FIELD_PRESETS_FEN_HINT' },
+  { key: 'yifut_min_amount_fen',       label: 'FIELD_MIN',              type: 'number', hint: 'FIELD_FEN_HINT' },
+  { key: 'yifut_max_amount_fen',       label: 'FIELD_MAX',              type: 'number', hint: 'FIELD_FEN_HINT' },
   { key: 'yifut_product_name',         label: 'FIELD_PRODUCT_NAME',     type: 'text' },
 ];
 

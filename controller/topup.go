@@ -53,10 +53,12 @@ var allowedPayTypes = map[string]bool{
 
 // ─── 公开：用户充值入口 ────────────────────────────────────────
 
+// topupCreateRequest 充值下单请求。fix CRITICAL Sprint4-M3：amount 以 fen int64 上送，
+// 杜绝 float64 进入金额计算链路。前端在提交前将"元"输入 × 100 取整为 fen。
 type topupCreateRequest struct {
-	AmountRMB float64 `json:"amount_rmb"`
-	PayType   string  `json:"pay_type"` // alipay / wxpay 等
-	Device    string  `json:"device"`   // pc / mobile / wechat / alipay / jump（默认 pc）
+	AmountFen int64  `json:"amount_fen"` // RMB × 100，必须 > 0
+	PayType   string `json:"pay_type"`   // alipay / wxpay 等
+	Device    string `json:"device"`     // pc / mobile / wechat / alipay / jump（默认 pc）
 }
 
 // CreateTopup POST /api/topup/create
@@ -78,19 +80,19 @@ func CreateTopup(c *fiber.Ctx) error {
 		return c.Status(503).JSON(fiber.Map{"success": false, "message_code": "ERR_PAYMENT_UNAVAILABLE"})
 	}
 
-	// 排除 NaN / Infinity / 负数等病态浮点（HTML number input 仍可能传入 1e308 / -5）
-	if math.IsNaN(req.AmountRMB) || math.IsInf(req.AmountRMB, 0) || req.AmountRMB <= 0 {
+	// fen int64 不会有 NaN/Inf，仅需 > 0 校验
+	if req.AmountFen <= 0 {
 		return c.Status(400).JSON(fiber.Map{"success": false, "message_code": "ERR_AMOUNT_INVALID"})
 	}
-	// 金额范围
-	minRMB := readFloatConfig("yifut_min_amount_rmb", 1.0)
-	maxRMB := readFloatConfig("yifut_max_amount_rmb", 10000.0)
-	if req.AmountRMB < minRMB || req.AmountRMB > maxRMB {
+	// 金额范围（fen int64）
+	minFen := readInt64Config("yifut_min_amount_fen", 100)        // 默认 ¥1.00
+	maxFen := readInt64Config("yifut_max_amount_fen", 1_000_000)  // 默认 ¥10,000.00
+	if req.AmountFen < minFen || req.AmountFen > maxFen {
 		return c.Status(400).JSON(fiber.Map{
 			"success":      false,
 			"message_code": "ERR_AMOUNT_OUT_OF_RANGE",
-			"min":          minRMB,
-			"max":          maxRMB,
+			"min_fen":      minFen,
+			"max_fen":      maxFen,
 		})
 	}
 
@@ -108,14 +110,11 @@ func CreateTopup(c *fiber.Ctx) error {
 		device = "pc"
 	}
 
-	// 汇率快照：USD = RMB / exchange_rate
-	exchangeRate := safeExchangeRate()
-	amountUSDFloat := round2(req.AmountRMB / exchangeRate)
-	amountUSDMicro, ok := database.USDToMicro(amountUSDFloat)
-	if !ok {
-		return c.Status(400).JSON(fiber.Map{"success": false, "message_code": "ERR_INVALID_AMOUNT"})
-	}
-	moneyRMBFen, ok := database.RMBToFen(round2(req.AmountRMB))
+	// fix CRITICAL Sprint4-M3：用 big.Int 整数算术做 fen → micro_usd 转换，杜绝 float64。
+	// 公式：usd_micro = fen × 1e10 / rate_rmb_per_usd_micros
+	//   （rate 单位是 micro_usd 域：7.2 RMB/USD → 7_200_000）
+	rateRmbPerUsdMicros := safeExchangeRateRmbPerUsdMicros()
+	amountUSDMicro, ok := usdMicroFromFenAndRate(req.AmountFen, rateRmbPerUsdMicros)
 	if !ok {
 		return c.Status(400).JSON(fiber.Map{"success": false, "message_code": "ERR_INVALID_AMOUNT"})
 	}
@@ -125,7 +124,7 @@ func CreateTopup(c *fiber.Ctx) error {
 		log.Printf("[TOPUP] generate out_trade_no failed user=%d: %v", user.ID, err)
 		return c.Status(500).JSON(fiber.Map{"success": false, "message_code": "ERR_INTERNAL"})
 	}
-	moneyStr := proxy.FormatMoneyRMB(req.AmountRMB)
+	moneyStr := proxy.FormatMoneyFen(req.AmountFen)
 	productName := readStringConfig("yifut_product_name", "DAOF-CPA 余额充值")
 
 	// notify/return 路径硬编码，绝不从 SysConfig 读（防 admin 误改导致回调指向任意路径）
@@ -140,17 +139,17 @@ func CreateTopup(c *fiber.Ctx) error {
 
 	// 1. 先建本地订单（status=created）
 	order := database.TopupOrder{
-		OutTradeNo:           outTradeNo,
-		UserID:               user.ID,
-		PayType:              req.PayType,
-		Device:               device,
-		MoneyRMB:             moneyRMBFen,
-		AmountUSD:            amountUSDMicro,
-		ExchangeRateSnapshot: exchangeRate,
-		Name:                 productName,
-		ClientIP:             c.IP(),
-		Status:               "created",
-		CreatedAt:            time.Now(),
+		OutTradeNo:                  outTradeNo,
+		UserID:                      user.ID,
+		PayType:                     req.PayType,
+		Device:                      device,
+		MoneyRMB:                    req.AmountFen,
+		AmountUSD:                   amountUSDMicro,
+		ExchangeRateRmbPerUsdMicros: rateRmbPerUsdMicros,
+		Name:                        productName,
+		ClientIP:                    c.IP(),
+		Status:                      "created",
+		CreatedAt:                   time.Now(),
 	}
 	if err := database.DB.Create(&order).Error; err != nil {
 		log.Printf("[TOPUP] create local order failed user=%d: %v", user.ID, err)
@@ -563,23 +562,24 @@ func GetTopupOptions(c *fiber.Ctx) error {
 			methods = append(methods, m)
 		}
 	}
-	presets := []float64{}
-	for _, s := range strings.Split(readStringConfig("yifut_preset_amounts_rmb", "10,30,50,100,300,500"), ",") {
+	// fix CRITICAL Sprint4-M3：所有金额改为 fen int64 + 汇率改为 micros int64
+	presets := []int64{}
+	for _, s := range strings.Split(readStringConfig("yifut_preset_amounts_fen", "1000,3000,5000,10000,30000,50000"), ",") {
 		s = strings.TrimSpace(s)
-		if v, err := strconv.ParseFloat(s, 64); err == nil && v > 0 {
+		if v, err := strconv.ParseInt(s, 10, 64); err == nil && v > 0 {
 			presets = append(presets, v)
 		}
 	}
 	return c.JSON(fiber.Map{
 		"success": true,
 		"data": fiber.Map{
-			"configured":     cfg.IsConfigured(),
-			"methods":        methods,
-			"presets_rmb":    presets,
-			"min_amount_rmb": readFloatConfig("yifut_min_amount_rmb", 1.0),
-			"max_amount_rmb": readFloatConfig("yifut_max_amount_rmb", 10000.0),
-			"exchange_rate":  safeExchangeRate(),
-			"product_name":   readStringConfig("yifut_product_name", "DAOF-CPA 余额充值"),
+			"configured":                       cfg.IsConfigured(),
+			"methods":                          methods,
+			"presets_fen":                      presets,
+			"min_amount_fen":                   readInt64Config("yifut_min_amount_fen", 100),
+			"max_amount_fen":                   readInt64Config("yifut_max_amount_fen", 1_000_000),
+			"exchange_rate_rmb_per_usd_micros": safeExchangeRateRmbPerUsdMicros(),
+			"product_name":                     readStringConfig("yifut_product_name", "DAOF-CPA 余额充值"),
 		},
 	})
 }
@@ -635,10 +635,11 @@ func AdminListTopupOrders(c *fiber.Ctx) error {
 	})
 }
 
-// adminRefundRequest admin 退款请求体。前端传 RMB float（人友好），handler 内转 fen 入业务。
+// adminRefundRequest admin 退款请求体。fix CRITICAL Sprint4-M3：从 float64 RMB 改为
+// fen int64，杜绝 float 进入金额计算。0 = 全额退款。
 type adminRefundRequest struct {
-	MoneyRMB     float64 `json:"money_rmb"`     // RMB float, 0 = 全额
-	ReclaimQuota bool    `json:"reclaim_quota"` // true=退款+退货（扣回用户额度）；false=仅退款（保留额度）
+	MoneyFen     int64 `json:"money_fen"`     // RMB × 100，0 = 全额；> 0 = 显式部分退款
+	ReclaimQuota bool  `json:"reclaim_quota"` // true=退款+退货（扣回用户额度）；false=仅退款（保留额度）
 	// fix CRITICAL C3（codex 第二十轮）：手动退款工作流的对账锚点 —— **必填**。
 	// admin 必须先在易付通后台手动完成退款拿到商户退款单号，再在此填入。
 	// 写入 BillingEntry.Description + TopupOrder.RefundNo 供财务对账；
@@ -687,22 +688,17 @@ func AdminRefundTopup(c *fiber.Ctx) error {
 		})
 	}
 	req.ExternalRefundRef = cleanedRef
-	// fix MAJOR M1（codex 第二十轮）：仅对 NaN/Inf/负数做 tx 外快速失败；
+	// fix MAJOR M1（codex 第二十轮）：仅对负数做 tx 外快速失败；
 	// "0=全额"和"超额上限"判断必须在 tx 内基于 freshOrder.RefundedAmountRMB 做，
 	// 否则两个 admin 浏览器并发提交会用各自的旧 RefundedAmountRMB 算上限 → 进入 tx 后才发现累加越界
 	// 报 409 给用户，状态机语义不稳定。
-	if math.IsNaN(req.MoneyRMB) || math.IsInf(req.MoneyRMB, 0) || req.MoneyRMB < 0 {
+	//
+	// fix CRITICAL Sprint4-M3：DTO 改为 int64 fen，无需 NaN/Inf 防护。
+	if req.MoneyFen < 0 {
 		return c.Status(400).JSON(fiber.Map{"success": false, "message_code": "ERR_REFUND_AMOUNT_INVALID"})
 	}
-	// 转 fen 入业务（0 表示全额，tx 内用 freshOrder 校验上限）
-	requestedFen := int64(0)
-	if req.MoneyRMB > 0 {
-		fen, ok := database.RMBToFen(req.MoneyRMB)
-		if !ok {
-			return c.Status(400).JSON(fiber.Map{"success": false, "message_code": "ERR_REFUND_AMOUNT_INVALID"})
-		}
-		requestedFen = fen
-	}
+	// 0 = 全额（tx 内基于 freshOrder.MoneyRMB - RefundedAmountRMB 算）
+	requestedFen := req.MoneyFen
 
 	// fix CRITICAL（codex r11）：admin 退 TopupOrder 且 reclaim_quota=true 时，
 	// 如果用户已用这部分 USD 买了 active 订阅，会导致：
@@ -1091,6 +1087,20 @@ func readFloatConfig(key string, def float64) float64 {
 	return f
 }
 
+// readInt64Config 读取存为整数字符串的 SysConfig 项。
+// fix CRITICAL Sprint4-M3：fen / micros 等定点金额单位入口，杜绝 float 解析。
+func readInt64Config(key string, def int64) int64 {
+	v := readStringConfig(key, "")
+	if v == "" {
+		return def
+	}
+	i, err := strconv.ParseInt(v, 10, 64)
+	if err != nil {
+		return def
+	}
+	return i
+}
+
 // readMicroUSDConfig 读取存为 USD float string 的 SysConfig 项并转 micro_usd（int64）。
 // fix MAJOR M22-A1 Phase 1：DB schema 已切到 int64 micro_usd，admin SysConfig 仍存 USD 字符串
 // 便于人工配置；这里在边界做一次转换。NaN/Inf/parse 失败返回 defMicroUSD。
@@ -1110,14 +1120,39 @@ func readMicroUSDConfig(key string, defMicroUSD int64) int64 {
 	return micro
 }
 
-// safeExchangeRate 永远返回 >0 的汇率。SysConfig 配 "0" / 负数 / 缺失都回退默认。
-// 业务约定：1 USD = N RMB，N 默认 7.2。
-func safeExchangeRate() float64 {
-	rate := readFloatConfig("exchange_rate", 7.2)
+// safeExchangeRateRmbPerUsdMicros 永远返回 >0 的汇率（RMB per USD × 1e6）。
+// fix CRITICAL Sprint4-M3：从 float64 改为 int64 定点。
+// SysConfig 配 "0" / 负数 / 缺失都回退默认 7_200_000（= 7.2 RMB/USD）。
+func safeExchangeRateRmbPerUsdMicros() int64 {
+	rate := readInt64Config("exchange_rate_rmb_per_usd_micros", 7_200_000)
 	if rate <= 0 {
-		return 7.2
+		return 7_200_000
 	}
 	return rate
+}
+
+// usdMicroFromFenAndRate 把 RMB fen + 汇率（RMB/USD × 1e6）换算成 USD micro_usd。
+//
+// 公式：usd_micro = fen × 1e10 / rate_rmb_per_usd_micros
+// 推导：
+//   amount_rmb       = fen / 100                  (yuan)
+//   amount_rmb_micros = fen × 1e4                  (RMB × 1e6 微元)
+//   rate             = rate_micros / 1e6            (RMB/USD)
+//   amount_usd_micros = amount_rmb_micros / rate    = fen × 1e4 × 1e6 / rate_micros = fen × 1e10 / rate_micros
+//
+// floor 截断（保守入账：用户存 ¥72.5 / 7.2 ¥ rate → $10.069444 USD，floor 不多送）。
+// fix CRITICAL Sprint4-M3：用 big.Int 全整数运算，杜绝 float64 IEEE 754 噪声。
+func usdMicroFromFenAndRate(fen int64, rateRmbPerUsdMicros int64) (int64, bool) {
+	if fen <= 0 || rateRmbPerUsdMicros <= 0 {
+		return 0, false
+	}
+	// fen × 1e10 可达 9.2e18 > int64 上限（fen ≤ 9.2e8 即 ¥9.2M），用 big.Int 避免溢出
+	product := new(big.Int).Mul(big.NewInt(fen), big.NewInt(10_000_000_000))
+	result := new(big.Int).Quo(product, big.NewInt(rateRmbPerUsdMicros))
+	if !result.IsInt64() || result.Sign() <= 0 {
+		return 0, false
+	}
+	return result.Int64(), true
 }
 
 func csvContains(csv, val string) bool {

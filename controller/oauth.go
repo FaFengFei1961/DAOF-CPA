@@ -622,19 +622,20 @@ func GithubCallback(c *fiber.Ctx) error {
 	})
 }
 
-// GetPublicConfig 暴露不受查验的安全级别配置给前台
+// GetPublicConfig 暴露不受查验的安全级别配置给前台。
+// fix CRITICAL Sprint4-M3：exchange_rate 改为 int64 micros 字段名，杜绝 float 协议。
 func GetPublicConfig(c *fiber.Ctx) error {
 	proxy.SysConfigMutex.RLock()
 	clientID := proxy.SysConfigCache["github_client_id"]
 	serverAddress := proxy.SysConfigCache["server_address"]
-	exchangeRate := proxy.SysConfigCache["exchange_rate"]
+	rateStr := proxy.SysConfigCache["exchange_rate_rmb_per_usd_micros"]
 	proxy.SysConfigMutex.RUnlock()
 
 	return c.JSON(fiber.Map{
-		"success":          true,
-		"github_client_id": clientID,
-		"server_address":   serverAddress,
-		"exchange_rate":    exchangeRate,
+		"success":                          true,
+		"github_client_id":                 clientID,
+		"server_address":                   serverAddress,
+		"exchange_rate_rmb_per_usd_micros": rateStr,
 	})
 }
 

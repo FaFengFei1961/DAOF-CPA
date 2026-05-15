@@ -22,11 +22,13 @@ var TopupSysConfigDefaults = map[string]string{
 
 	// ── 通道开关与默认（V2 只支持 alipay/wxpay）──
 	"yifut_enabled_methods": "alipay,wxpay",
-	// 充值金额范围（RMB 元）
-	"yifut_min_amount_rmb": "1.00",
-	"yifut_max_amount_rmb": "10000.00",
-	// 默认预设档位（RMB CSV）
-	"yifut_preset_amounts_rmb": "10,30,50,100,300,500",
+	// 充值金额范围（fen 分，int64）。Sprint4-M3：彻底改为 fen int 输入，杜绝 float64。
+	"yifut_min_amount_fen": "100",     // ¥1.00
+	"yifut_max_amount_fen": "1000000", // ¥10,000.00
+	// 默认预设档位（fen CSV）
+	"yifut_preset_amounts_fen": "1000,3000,5000,10000,30000,50000",
+	// 汇率（RMB per USD × 1e6）。Sprint4-M3：从 float 7.2 改为 int64 定点 7_200_000。
+	"exchange_rate_rmb_per_usd_micros": "7200000",
 
 	// ── 商品名 / param 模板 ──
 	"yifut_product_name": "DAOF-CPA 余额充值",

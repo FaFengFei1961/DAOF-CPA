@@ -106,7 +106,7 @@ func TestWireFormat_AdminTopupOrders(t *testing.T) {
 		MoneyRMB:             7200,                      // ¥72.00
 		AmountUSD:            10 * database.MicroPerUSD, // $10
 		RefundedAmountRMB:    3600,                      // 已退 ¥36
-		ExchangeRateSnapshot: 7.2, Status: "paid",
+		ExchangeRateRmbPerUsdMicros: 7_200_000, Status: "paid",
 	})
 
 	out := runAdminGETAndDecode(t, admin, "/admin/topup/orders", "/admin/topup/orders?status=paid", AdminListTopupOrders)

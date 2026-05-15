@@ -131,7 +131,7 @@ func TestMarshalJSON_TopupOrder(t *testing.T) {
 		MoneyRMB:             7200,       // ¥72
 		AmountUSD:            10_000_000, // $10
 		RefundedAmountRMB:    1000,       // ¥10 退过
-		ExchangeRateSnapshot: 7.2,
+		ExchangeRateRmbPerUsdMicros: 7_200_000,
 	}
 	b, _ := json.Marshal(to)
 	s := string(b)

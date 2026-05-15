@@ -93,10 +93,13 @@ const AdminTopupOrders = () => {
     }
     setRefundingId(order.id);
     try {
+      // fix Sprint4-M3：协议从 money_rmb float 改为 money_fen int64（前端 × 100 转 fen）
+      // amount=0 表示全额退款，对应 money_fen=0
+      const moneyFen = inputStr === '' ? 0 : Math.round(amount * 100);
       const json = await authFetch(`/api/admin/topup/orders/${order.id}/refund`, {
         method: 'POST',
         body: {
-          money_rmb: amount,
+          money_fen: moneyFen,
           reclaim_quota: reclaimQuota,
           external_refund_ref: cleanedRef,
         },

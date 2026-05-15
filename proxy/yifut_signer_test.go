@@ -156,22 +156,25 @@ func TestParse_PEMWithoutHeaders(t *testing.T) {
 	}
 }
 
-// TestFormatMoneyRMB 金额格式不变（V1 V2 共用）
-func TestFormatMoneyRMB(t *testing.T) {
+// TestFormatMoneyFen 金额格式（Sprint4-M3：从 float64 RMB 改为 fen int64）。
+func TestFormatMoneyFen(t *testing.T) {
 	cases := []struct {
-		in   float64
+		in   int64
 		want string
 	}{
-		{1, "1.00"},
-		{1.5, "1.50"},
-		{0.01, "0.01"},
-		{100, "100.00"},
-		{99.99, "99.99"},
+		{100, "1.00"},       // ¥1
+		{150, "1.50"},       // ¥1.5
+		{1, "0.01"},         // ¥0.01（边界小额）
+		{10000, "100.00"},   // ¥100
+		{9999, "99.99"},     // ¥99.99
+		{0, "0.00"},         // 零金额（边界）
+		{100050, "1000.50"}, // ¥1000.50
+		{-150, "1.50"},      // 负数取绝对值（防御性）
 	}
 	for _, c := range cases {
-		got := FormatMoneyRMB(c.in)
+		got := FormatMoneyFen(c.in)
 		if got != c.want {
-			t.Errorf("FormatMoneyRMB(%v) = %q, want %q", c.in, got, c.want)
+			t.Errorf("FormatMoneyFen(%d) = %q, want %q", c.in, got, c.want)
 		}
 	}
 }

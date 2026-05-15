@@ -42,7 +42,7 @@ type TopupOrderView struct {
 	Device               string     `json:"device"`
 	MoneyRMB             float64    `json:"money_rmb"`
 	AmountUSD            float64    `json:"amount_usd"`
-	ExchangeRateSnapshot float64    `json:"exchange_rate_snapshot"`
+	ExchangeRateRmbPerUsdMicros int64 `json:"exchange_rate_rmb_per_usd_micros"`
 	Name                 string     `json:"name"`
 	ClientIP             string     `json:"client_ip"`
 	Param                string     `json:"param"`
@@ -159,7 +159,7 @@ func topupOrderViewFrom(o database.TopupOrder) TopupOrderView {
 		Device:               o.Device,
 		MoneyRMB:             fenToRMBFloat(o.MoneyRMB),
 		AmountUSD:            microUSDToFloat(o.AmountUSD),
-		ExchangeRateSnapshot: o.ExchangeRateSnapshot,
+		ExchangeRateRmbPerUsdMicros: o.ExchangeRateRmbPerUsdMicros,
 		Name:                 o.Name,
 		ClientIP:             o.ClientIP,
 		Param:                o.Param,

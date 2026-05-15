@@ -62,31 +62,49 @@ func TestParseRMBStringToFen(t *testing.T) {
 	}
 }
 
-func TestSafeExchangeRate_Defaults(t *testing.T) {
+// TestSafeExchangeRateRmbPerUsdMicros_Defaults Sprint4-M3：从 float64 改为 int64 定点。
+func TestSafeExchangeRateRmbPerUsdMicros_Defaults(t *testing.T) {
 	setupSubTestDB(t) // 清空 SysConfigCache
-	rate := safeExchangeRate()
-	if rate != 7.2 {
-		t.Errorf("expected 7.2 default, got %v", rate)
+	rate := safeExchangeRateRmbPerUsdMicros()
+	if rate != 7_200_000 {
+		t.Errorf("expected default 7_200_000 (7.2 RMB/USD × 1e6), got %d", rate)
 	}
 }
 
-func TestRound2(t *testing.T) {
+// TestUsdMicroFromFenAndRate 验证 fen → micro_usd 整数转换的 0 偏差性质。
+func TestUsdMicroFromFenAndRate(t *testing.T) {
 	cases := []struct {
-		in   float64
-		want float64
+		name     string
+		fen      int64
+		rate     int64
+		wantOK   bool
+		wantUsd  int64
 	}{
-		{1.006, 1.01},
-		{1.004, 1.0},
-		{0.0, 0.0},
-		{99.999, 100.0},
-		{72.0 / 7.2, 10.0},
-		{10.556, 10.56},
+		// 精确边界：¥72 / 7.2 = $10 整除
+		{"exact ¥72 → $10", 7200, 7_200_000, true, 10_000_000},
+		// 精确边界：¥36 / 7.2 = $5 整除
+		{"exact ¥36 → $5", 3600, 7_200_000, true, 5_000_000},
+		// 整除小额：¥1 / 7.2 ≈ $0.138888... → floor 138888 micro
+		{"¥1 → $0.138888", 100, 7_200_000, true, 138_888},
+		// ¥0.01（1 fen）/ 7.2 ≈ $0.001388... → floor 1388 micro
+		{"¥0.01 → $0.001388", 1, 7_200_000, true, 1388},
+		// 非法输入：fen <= 0
+		{"reject zero", 0, 7_200_000, false, 0},
+		{"reject negative", -100, 7_200_000, false, 0},
+		// 非法输入：rate <= 0
+		{"reject zero rate", 100, 0, false, 0},
+		{"reject negative rate", 100, -1_000_000, false, 0},
 	}
 	for _, tc := range cases {
-		got := round2(tc.in)
-		if got != tc.want {
-			t.Errorf("round2(%v) = %v want %v", tc.in, got, tc.want)
-		}
+		t.Run(tc.name, func(t *testing.T) {
+			got, ok := usdMicroFromFenAndRate(tc.fen, tc.rate)
+			if ok != tc.wantOK {
+				t.Fatalf("ok=%v want %v (fen=%d rate=%d)", ok, tc.wantOK, tc.fen, tc.rate)
+			}
+			if ok && got != tc.wantUsd {
+				t.Fatalf("got=%d want %d (fen=%d rate=%d)", got, tc.wantUsd, tc.fen, tc.rate)
+			}
+		})
 	}
 }
 
@@ -207,8 +225,9 @@ func TestCreateTopup_RejectsWhenUnconfigured(t *testing.T) {
 	app := newTopupTestApp(user)
 
 	// With empty SysConfigCache, yifut is unconfigured → 503
+	// fix Sprint4-M3：协议从 amount_rmb float → amount_fen int64
 	code, resp := doJSON(t, app, "POST", "/topup/create", map[string]any{
-		"amount_rmb": 10, "pay_type": "alipay",
+		"amount_fen": 1000, "pay_type": "alipay",
 	})
 	if code != 503 {
 		t.Errorf("expected 503 (unconfigured) got %d body=%v", code, resp)
@@ -241,7 +260,7 @@ func TestYifutNotify_DuplicateCallback(t *testing.T) {
 		UserID:               user.ID,
 		MoneyRMB:             7200,                      // ¥72.00 = 7200 fen
 		AmountUSD:            10 * database.MicroPerUSD, // $10
-		ExchangeRateSnapshot: 7.2,
+		ExchangeRateRmbPerUsdMicros: 7_200_000,
 		Status:               "paid", // already paid
 		PaidAt:               ptrTime(time.Now()),
 	}
@@ -270,7 +289,7 @@ func TestYifutNotify_MoneyMismatch(t *testing.T) {
 		UserID:               user.ID,
 		MoneyRMB:             7200,                      // ¥72.00 = 7200 fen
 		AmountUSD:            10 * database.MicroPerUSD, // $10
-		ExchangeRateSnapshot: 7.2,
+		ExchangeRateRmbPerUsdMicros: 7_200_000,
 		Status:               "created",
 	})
 
@@ -289,7 +308,7 @@ func TestMyTopupOrders_Pagination(t *testing.T) {
 			UserID:               user.ID,
 			MoneyRMB:             1000,      // ¥10 = 1000 fen
 			AmountUSD:            1_390_000, // $1.39 = 1_390_000 micro_usd
-			ExchangeRateSnapshot: 7.2,
+			ExchangeRateRmbPerUsdMicros: 7_200_000,
 			Status:               "paid",
 		})
 	}
@@ -329,10 +348,10 @@ func TestAdminListTopupOrders_StatusFilter(t *testing.T) {
 	app := newAdminTopupListApp(admin)
 
 	database.DB.Create(&database.TopupOrder{
-		OutTradeNo: "tp_a1", UserID: user.ID, MoneyRMB: 1000, Status: "paid", ExchangeRateSnapshot: 7.2,
+		OutTradeNo: "tp_a1", UserID: user.ID, MoneyRMB: 1000, Status: "paid", ExchangeRateRmbPerUsdMicros: 7_200_000,
 	})
 	database.DB.Create(&database.TopupOrder{
-		OutTradeNo: "tp_a2", UserID: user.ID, MoneyRMB: 2000, Status: "created", ExchangeRateSnapshot: 7.2,
+		OutTradeNo: "tp_a2", UserID: user.ID, MoneyRMB: 2000, Status: "created", ExchangeRateRmbPerUsdMicros: 7_200_000,
 	})
 
 	code, resp := doJSON(t, app, "GET", "/admin/topup/orders?status=paid", nil)
@@ -353,7 +372,7 @@ func TestAdminListTopupOrders_StatusFilter(t *testing.T) {
 
 // ─── AdminRefundTopup 额外场景 ───────────────────────────────────────
 
-func TestAdminRefund_UsesPersistedAmountWhenExchangeRateSnapshotCorrupted(t *testing.T) {
+func TestAdminRefund_UsesPersistedAmountWhenExchangeRateRmbPerUsdMicrosCorrupted(t *testing.T) {
 	setupSubTestDB(t)
 	admin := seedAdminUser(t)
 	user := seedTestUser(t, 100)
@@ -364,7 +383,7 @@ func TestAdminRefund_UsesPersistedAmountWhenExchangeRateSnapshotCorrupted(t *tes
 		UserID:               user.ID,
 		MoneyRMB:             7200,
 		AmountUSD:            10 * database.MicroPerUSD,
-		ExchangeRateSnapshot: 0, // corrupted
+		ExchangeRateRmbPerUsdMicros: 0, // corrupted
 		Status:               "paid",
 	}
 	database.DB.Create(&order)
@@ -393,7 +412,7 @@ func TestAdminRefund_PartialRefund(t *testing.T) {
 	// partial refund: ¥36 of ¥72
 	code, resp := doJSON(t, app, "POST",
 		"/admin/topup/orders/"+itoaUint(order.ID)+"/refund",
-		map[string]any{"money_rmb": 36, "reclaim_quota": true, "external_refund_ref": "rext_partial"})
+		map[string]any{"money_fen": 3600, "reclaim_quota": true, "external_refund_ref": "rext_partial"})
 	if code != 200 {
 		t.Fatalf("expected 200 got %d body=%v", code, resp)
 	}
@@ -422,13 +441,13 @@ func TestAdminRefund_MultiplePartialReclaimMatchesLockedAmount(t *testing.T) {
 
 	code1, resp1 := doJSON(t, app, "POST",
 		"/admin/topup/orders/"+itoaUint(order.ID)+"/refund",
-		map[string]any{"money_rmb": 50, "reclaim_quota": true, "external_refund_ref": "rext_split_1"})
+		map[string]any{"money_fen": 5000, "reclaim_quota": true, "external_refund_ref": "rext_split_1"})
 	if code1 != 200 {
 		t.Fatalf("first partial refund got %d body=%v", code1, resp1)
 	}
 	code2, resp2 := doJSON(t, app, "POST",
 		"/admin/topup/orders/"+itoaUint(order.ID)+"/refund",
-		map[string]any{"money_rmb": 50, "reclaim_quota": true, "external_refund_ref": "rext_split_2"})
+		map[string]any{"money_fen": 5000, "reclaim_quota": true, "external_refund_ref": "rext_split_2"})
 	if code2 != 200 {
 		t.Fatalf("second partial refund got %d body=%v", code2, resp2)
 	}
@@ -475,7 +494,7 @@ func TestAdminRefund_ExternalRefundRefIdempotent(t *testing.T) {
 	// 第一次部分退款：¥36，external_refund_ref=DUP_REF
 	code1, resp1 := doJSON(t, app, "POST",
 		"/admin/topup/orders/"+itoaUint(order.ID)+"/refund",
-		map[string]any{"money_rmb": 36, "reclaim_quota": true, "external_refund_ref": "DUP_REF"})
+		map[string]any{"money_fen": 3600, "reclaim_quota": true, "external_refund_ref": "DUP_REF"})
 	if code1 != 200 {
 		t.Fatalf("first refund expected 200, got %d body=%v", code1, resp1)
 	}
@@ -483,7 +502,7 @@ func TestAdminRefund_ExternalRefundRefIdempotent(t *testing.T) {
 	// 第二次用同样的 external_refund_ref 提交：必须被 409 拒绝
 	code2, resp2 := doJSON(t, app, "POST",
 		"/admin/topup/orders/"+itoaUint(order.ID)+"/refund",
-		map[string]any{"money_rmb": 36, "reclaim_quota": true, "external_refund_ref": "DUP_REF"})
+		map[string]any{"money_fen": 3600, "reclaim_quota": true, "external_refund_ref": "DUP_REF"})
 	if code2 != 409 {
 		t.Fatalf("duplicate refund expected 409, got %d body=%v", code2, resp2)
 	}
@@ -516,7 +535,7 @@ func TestAdminRefund_ExternalRefundRefIdempotent(t *testing.T) {
 	// 用不同的 external_refund_ref 提交剩余 ¥36：必须成功
 	code3, resp3 := doJSON(t, app, "POST",
 		"/admin/topup/orders/"+itoaUint(order.ID)+"/refund",
-		map[string]any{"money_rmb": 36, "reclaim_quota": true, "external_refund_ref": "DIFFERENT_REF"})
+		map[string]any{"money_fen": 3600, "reclaim_quota": true, "external_refund_ref": "DIFFERENT_REF"})
 	if code3 != 200 {
 		t.Fatalf("different ref refund expected 200, got %d body=%v", code3, resp3)
 	}
@@ -537,7 +556,7 @@ func TestAdminRefund_CASPreventDoubleRefund(t *testing.T) {
 	// first full refund
 	code1, _ := doJSON(t, app, "POST",
 		"/admin/topup/orders/"+itoaUint(order.ID)+"/refund",
-		map[string]any{"money_rmb": 72, "reclaim_quota": false, "external_refund_ref": "rext_cas1"})
+		map[string]any{"money_fen": 7200, "reclaim_quota": false, "external_refund_ref": "rext_cas1"})
 	if code1 != 200 {
 		t.Fatalf("first refund should succeed, got %d", code1)
 	}
@@ -545,7 +564,7 @@ func TestAdminRefund_CASPreventDoubleRefund(t *testing.T) {
 	// second attempt on now-refunded order
 	code2, resp2 := doJSON(t, app, "POST",
 		"/admin/topup/orders/"+itoaUint(order.ID)+"/refund",
-		map[string]any{"money_rmb": 72, "reclaim_quota": false, "external_refund_ref": "rext_cas2"})
+		map[string]any{"money_fen": 7200, "reclaim_quota": false, "external_refund_ref": "rext_cas2"})
 	if code2 != 400 {
 		t.Errorf("expected 400 (not paid), got %d body=%v", code2, resp2)
 	}
@@ -553,6 +572,7 @@ func TestAdminRefund_CASPreventDoubleRefund(t *testing.T) {
 
 // ─── GetTopupOptions ─────────────────────────────────────────────────
 
+// fix Sprint4-M3：协议改 exchange_rate float → exchange_rate_rmb_per_usd_micros int64
 func TestGetTopupOptions_Defaults(t *testing.T) {
 	setupSubTestDB(t)
 	user := seedTestUser(t, 0)
@@ -563,11 +583,18 @@ func TestGetTopupOptions_Defaults(t *testing.T) {
 		t.Fatalf("expected 200 got %d", code)
 	}
 	data, _ := resp["data"].(map[string]any)
-	if data["exchange_rate"] != 7.2 {
-		t.Errorf("expected default exchange_rate=7.2 got %v", data["exchange_rate"])
+	if data["exchange_rate_rmb_per_usd_micros"] != float64(7_200_000) {
+		t.Errorf("expected default 7_200_000 got %v", data["exchange_rate_rmb_per_usd_micros"])
 	}
 	if data["configured"] != false {
 		t.Errorf("expected configured=false when no yifut config")
+	}
+	// 验证 fen 单位的金额范围字段
+	if data["min_amount_fen"] != float64(100) {
+		t.Errorf("expected min_amount_fen=100 (¥1) got %v", data["min_amount_fen"])
+	}
+	if data["max_amount_fen"] != float64(1_000_000) {
+		t.Errorf("expected max_amount_fen=1_000_000 (¥10,000) got %v", data["max_amount_fen"])
 	}
 }
 

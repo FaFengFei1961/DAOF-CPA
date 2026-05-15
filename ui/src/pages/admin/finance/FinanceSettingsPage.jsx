@@ -21,17 +21,16 @@ const FinanceSettingsPage = () => {
 
   return (
     <>
-      <Section title={t('SETTINGS.EXCHANGE_RATE_TITLE', '汇率配置')} sub={t('SETTINGS.EXCHANGE_RATE_DESC', '人民币 → USD 汇率，影响充值入账金额计算')}>
+      <Section title={t('SETTINGS.EXCHANGE_RATE_TITLE', '汇率配置')} sub={t('SETTINGS.EXCHANGE_RATE_DESC_MICROS', '人民币 → USD 汇率（int64 定点：RMB/USD × 1e6，例 7200000 = 7.2）；杜绝 float 进入金额计算链路')}>
         <div className="flex flex-col md:flex-row md:items-center justify-between py-2 gap-4">
-          <span className="text-sm text-on-surface">{t('SETTINGS.EXCHANGE_RATE_TITLE', '汇率')}</span>
+          <span className="text-sm text-on-surface">{t('SETTINGS.EXCHANGE_RATE_MICROS_LABEL', '汇率 (RMB/USD × 1e6)')}</span>
           <div className="relative w-full md:w-auto">
-            <span className="absolute left-3 top-2.5 text-on-surface-variant text-sm pointer-events-none">￥</span>
             <input
-              type="number" step="0.01"
-              value={configs.exchange_rate || ''}
-              onChange={(e) => handleChange('exchange_rate', e.target.value)}
-              placeholder="7.25"
-              className="w-full md:w-32 bg-surface-container-high border border-outline rounded-control pl-8 pr-4 py-2 text-on-surface outline-none text-right focus:border-primary"
+              type="number" step="1" min="1000000" max="1000000000"
+              value={configs.exchange_rate_rmb_per_usd_micros || ''}
+              onChange={(e) => handleChange('exchange_rate_rmb_per_usd_micros', e.target.value)}
+              placeholder="7200000"
+              className="w-full md:w-48 bg-surface-container-high border border-outline rounded-control px-4 py-2 text-on-surface outline-none text-right focus:border-primary font-mono"
             />
           </div>
         </div>

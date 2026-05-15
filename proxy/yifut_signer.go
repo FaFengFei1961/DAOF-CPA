@@ -171,7 +171,14 @@ func VerifyYifutRSA(params map[string]string, pubKey *rsa.PublicKey) bool {
 
 // ─── 金额格式化（V2 下单/回调校验共用） ─────────────────────────────
 
-// FormatMoneyRMB 格式化金额："1" → "1.00"，最多 2 位小数。
-func FormatMoneyRMB(rmb float64) string {
-	return fmt.Sprintf("%.2f", rmb)
+// FormatMoneyFen 格式化 fen int64 为易付通要求的 "元.分" 字符串。
+// 例：7200 → "72.00"，1 → "0.01"，100050 → "1000.50"。
+// fix CRITICAL Sprint4-M3：旧 FormatMoneyRMB(rmb float64) 已删除，禁止 float 进入支付链路。
+func FormatMoneyFen(fen int64) string {
+	if fen < 0 {
+		fen = -fen
+	}
+	yuan := fen / 100
+	cent := fen % 100
+	return fmt.Sprintf("%d.%02d", yuan, cent)
 }

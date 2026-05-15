@@ -35,7 +35,7 @@ const DEFAULT_CONFIGS = {
   referee_bonus: '0',
   signup_coupon_template_id: '0',
   server_address: '',
-  exchange_rate: '',
+  exchange_rate_rmb_per_usd_micros: '',
   balance_consume_default_enabled: 'false',
   balance_consume_default_limit_usd: '0',
   balance_consume_default_window_secs: '2592000',

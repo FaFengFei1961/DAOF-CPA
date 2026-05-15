@@ -39,7 +39,7 @@ func seedPaidTopupOrder(t *testing.T, userID uint, rmb float64) *database.TopupO
 		UserID:               userID,
 		MoneyRMB:             rmbFen,
 		AmountUSD:            amountMicro,
-		ExchangeRateSnapshot: 7.2, // ¥7.2 = $1
+		ExchangeRateRmbPerUsdMicros: 7_200_000, // ¥7.2 = $1
 		Status:               "paid",
 	}
 	if err := database.DB.Create(&o).Error; err != nil {

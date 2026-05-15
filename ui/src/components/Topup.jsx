@@ -156,12 +156,14 @@ const Topup = ({ isAuthenticated }) => {
   }, [orderResult?.out_trade_no, t, historyPage]);
 
   const handleSubmit = async () => {
+    // fix Sprint4-M3：协议从 amount_rmb float 改为 amount_fen int64（杜绝 float 进金额链路）
     const amt = parseFloat(amount);
     if (isNaN(amt) || amt <= 0) {
       toast.error(t('TOPUP.ERR_AMOUNT', '金额不在允许范围内'));
       return;
     }
-    if (opts && (amt < opts.min_amount_rmb || amt > opts.max_amount_rmb)) {
+    const amountFen = Math.round(amt * 100);
+    if (opts && (amountFen < opts.min_amount_fen || amountFen > opts.max_amount_fen)) {
       toast.error(t('TOPUP.ERR_AMOUNT', '金额不在允许范围内'));
       return;
     }
@@ -176,7 +178,7 @@ const Topup = ({ isAuthenticated }) => {
       const json = await authFetch('/api/topup/create', {
         method: 'POST',
         body: {
-          amount_rmb: amt,
+          amount_fen: amountFen,
           pay_type: payType,
           device: detectDevice(),
         },
@@ -200,9 +202,12 @@ const Topup = ({ isAuthenticated }) => {
   };
 
   const usdEstimate = (() => {
+    // fix Sprint4-M3：opts.exchange_rate_rmb_per_usd_micros 是 int64（RMB/USD × 1e6）
     const amt = parseFloat(amount);
-    if (isNaN(amt) || !opts || opts.exchange_rate <= 0) return null;
-    return (amt / opts.exchange_rate).toFixed(2);
+    const rateMicros = opts?.exchange_rate_rmb_per_usd_micros;
+    if (isNaN(amt) || !rateMicros || rateMicros <= 0) return null;
+    // 预览用 float 估算（不入账，仅 UI 显示）；后端用 big.Int 整数算
+    return (amt * 1_000_000 / rateMicros).toFixed(2);
   })();
 
   const gatewayPayType = (orderResult?.gateway_pay_type || '').toLowerCase();
@@ -249,39 +254,42 @@ const Topup = ({ isAuthenticated }) => {
             {t('TOPUP.AMOUNT_LABEL', '充值金额（人民币）')}
           </label>
 
-          {/* 输入框始终显示，主元素 */}
+          {/* 输入框始终显示，主元素。
+              fix Sprint4-M3：opts.{min,max}_amount_fen 是 fen int，UI 显示需 /100 转元 */}
           <div className="flex items-center gap-2">
             <span className="text-lg text-on-surface-variant font-semibold" aria-hidden="true">¥</span>
             <TextInput
               id="topup-amount"
               type="number"
               step="0.01"
-              min={opts.min_amount_rmb}
-              max={opts.max_amount_rmb}
+              min={(opts.min_amount_fen / 100).toFixed(2)}
+              max={(opts.max_amount_fen / 100).toFixed(2)}
               value={amount}
               onChange={e => { setAmount(e.target.value); }}
-              placeholder={`${opts.min_amount_rmb} - ${opts.max_amount_rmb}`}
+              placeholder={`${(opts.min_amount_fen / 100).toFixed(2)} - ${(opts.max_amount_fen / 100).toFixed(2)}`}
               className="flex-1 font-mono"
             />
           </div>
 
-          {/* 预设档位（如果有）：点击同步到输入框 */}
-          {opts.presets_rmb.length > 0 && (
+          {/* 预设档位（如果有）：点击同步到输入框
+              fix Sprint4-M3：presets_fen 是 fen int 数组，UI 显示 /100 转元 */}
+          {opts.presets_fen.length > 0 && (
             <div className="flex flex-wrap gap-2">
-              {opts.presets_rmb.map(v => {
-                const active = parseFloat(amount) === v;
+              {opts.presets_fen.map(fen => {
+                const yuan = fen / 100;
+                const active = parseFloat(amount) === yuan;
                 return (
                   <button
-                    key={v}
+                    key={fen}
                     type="button"
-                    onClick={() => setAmount(String(v))}
+                    onClick={() => setAmount(String(yuan))}
                     className={`px-4 py-2 rounded-control text-sm font-semibold border transition ${
                       active
                         ? 'bg-primary text-on-primary border-primary'
                         : 'bg-surface-container text-on-surface-variant border-outline-variant hover:border-primary hover:text-primary'
                     }`}
                   >
-                    {t('TOPUP.PRESET_RMB', { amount: v, defaultValue: '¥{{amount}}' })}
+                    {t('TOPUP.PRESET_RMB', { amount: yuan, defaultValue: '¥{{amount}}' })}
                   </button>
                 );
               })}
@@ -291,8 +299,8 @@ const Topup = ({ isAuthenticated }) => {
           <div className="flex items-center justify-between text-xs">
             <span className="text-on-surface-variant">
               {t('TOPUP.RANGE_HINT', {
-                min: opts.min_amount_rmb,
-                max: opts.max_amount_rmb,
+                min: (opts.min_amount_fen / 100).toFixed(2),
+                max: (opts.max_amount_fen / 100).toFixed(2),
                 defaultValue: '可充值范围：¥{{min}} - ¥{{max}}',
               })}
             </span>
@@ -300,7 +308,7 @@ const Topup = ({ isAuthenticated }) => {
               <span className="text-primary font-semibold">
                 {t('TOPUP.ESTIMATED_USD', {
                   amount: usdEstimate,
-                  rate: opts.exchange_rate,
+                  rate: (opts.exchange_rate_rmb_per_usd_micros / 1_000_000).toFixed(4),
                   defaultValue: '预计入账 {{amount}} USD（汇率 {{rate}}）',
                 })}
               </span>
