@@ -1180,6 +1180,7 @@
     "ERR_BODY_TOO_LONG": "Body is too long.",
     "ERR_BUILD_REQUEST": "Failed to build upstream request.",
     "ERR_BUILD_SNAPSHOT": "Failed to build package snapshot.",
+    "ERR_BULK_GRANT_ABORTED": "Bulk coupon grant failed; the entire batch was rolled back (no coupons issued).",
     "ERR_BULK_LIMIT": "Bulk operation exceeds the per-request limit (max 500 users).",
     "ERR_BULK_PREVIEW_LIMIT": "Bulk preview supports at most 500 users",
     "ERR_BULK_QUOTA_ALL_FAILED": "Bulk quota adjustment failed for all users. Check the details.",

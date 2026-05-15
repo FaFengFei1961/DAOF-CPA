@@ -79,17 +79,20 @@ const BulkGrantCouponModal = ({ open, onClose, userIds, onSuccess }) => {
                 }
             });
 
+            // Sprint3-M5：后端改为单事务全原子。res.success=true ⇒ 全部成功；
+            // res.success=false ⇒ 整批已回滚（不会有部分成功状态）。
             if (res.success) {
-                toast.success(t('USER_MGMT.BULK_GRANT_SUCCESS', { success: res.summary?.success_count || 0, total: res.summary?.total_users || userIds.length }));
-                if (res.summary?.failed_count > 0 && Array.isArray(res.results)) {
-                    const failed = res.results.filter(r => !r.success).slice(0, 5);
-                    if (failed.length > 0) {
-                        toast.error(`失败示例: User ${failed.map(f => f.user_id).join(', ')}`);
-                    }
-                }
+                toast.success(t('USER_MGMT.BULK_GRANT_SUCCESS', {
+                    success: res.summary?.success_count || userIds.length,
+                    total: res.summary?.total_users || userIds.length
+                }));
                 onSuccess();
+            } else if (res.message_code === 'ERR_BULK_GRANT_ABORTED') {
+                // 整批回滚的错误：明确告知 admin 未发出任何券
+                const failedUser = res.failed_user_id ? ` (user_id=${res.failed_user_id})` : '';
+                toast.error(`${res.message || '批量发券失败'}${failedUser}`);
             } else {
-                toast.error(res.message || '批量发券失败');
+                toast.error(res.message || t('API.' + res.message_code, '批量发券失败'));
             }
         } catch (e) {
             toast.error('网络异常，批量发券失败');

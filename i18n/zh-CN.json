@@ -1180,6 +1180,7 @@
     "ERR_BODY_TOO_LONG": "内容过长。",
     "ERR_BUILD_REQUEST": "构建上游请求失败。",
     "ERR_BUILD_SNAPSHOT": "构建套餐快照失败。",
+    "ERR_BULK_GRANT_ABORTED": "批量发券失败，整批已回滚，未发出任何券（任一用户失败时全部回滚以保证一致性）。",
     "ERR_BULK_LIMIT": "批量操作超过单次限额（最多 500 个用户）。",
     "ERR_BULK_PREVIEW_LIMIT": "批量预检最多支持 500 个用户",
     "ERR_BULK_QUOTA_ALL_FAILED": "批量余额调整全部失败，请查看明细。",

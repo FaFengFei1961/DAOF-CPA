@@ -16,6 +16,7 @@ import (
 	"fmt"
 	"io"
 	"log"
+	"sort"
 	"strconv"
 	"strings"
 	"time"
@@ -434,9 +435,17 @@ type bulkGrantUserResult struct {
 }
 
 // AdminBulkGrantCoupon POST /api/admin/users/bulk-grant-coupon
-// 给一批用户每人发放 qty 张同款券。**每个用户独立事务**，单个失败不影响其它。
-// 限制：max 500 users / max 100 quantity（与单条 AdminGrantCoupon 对齐）。
-// 复用 lockUserForUpdate → 锁 template → buildCouponFromTemplate → LogOperationByTx 同款链路。
+//
+// 给一批用户每人发放 qty 张同款券。**全 batch 单事务原子**：
+// 任一用户失败 → 整批回滚，不发任何券。
+//
+// fix CRITICAL Sprint3-M5：旧实现"每用户独立事务"违反 1000 张券要么全发要么全废
+// 的硬约束——admin 中途看到失败时已无法回滚前 N-1 个成功的发券。
+//
+// 限制：max 500 users / max 100 quantity → 单 batch 上限 50,000 券。
+// SQLite 单写者 + INSERT 速率约 5k/s，最坏 10s 内完成事务；建议监控 tx 持有时间。
+//
+// 锁顺序：user_id 升序加锁（与其他用户级事务路径一致），避免 deadlock。
 func AdminBulkGrantCoupon(c *fiber.Ctx) error {
 	var p bulkGrantCouponPayload
 	if err := c.BodyParser(&p); err != nil {
@@ -478,7 +487,7 @@ func AdminBulkGrantCoupon(c *fiber.Ctx) error {
 	}
 	p.Reason = reason
 
-	// 预验 template（快路径），事务内仍会 SELECT FOR UPDATE 重读
+	// 预验 template（快路径，事务内仍会 SELECT FOR UPDATE 重读）
 	var tpl database.CouponTemplate
 	if err := database.DB.First(&tpl, p.TemplateID).Error; err != nil {
 		return c.Status(404).JSON(fiber.Map{"success": false, "message_code": "ERR_TEMPLATE_NOT_FOUND"})
@@ -487,7 +496,7 @@ func AdminBulkGrantCoupon(c *fiber.Ctx) error {
 		return c.Status(400).JSON(fiber.Map{"success": false, "message_code": "ERR_TEMPLATE_DISABLED"})
 	}
 
-	// dedupe user_ids（admin 可能重复传同 id）
+	// dedupe user_ids（admin 可能重复传同 id）+ 升序排序（lock order = deadlock prevention）
 	seen := make(map[uint]bool, len(p.UserIDs))
 	uniqueIDs := make([]uint, 0, len(p.UserIDs))
 	for _, id := range p.UserIDs {
@@ -496,42 +505,58 @@ func AdminBulkGrantCoupon(c *fiber.Ctx) error {
 			uniqueIDs = append(uniqueIDs, id)
 		}
 	}
+	sort.Slice(uniqueIDs, func(i, j int) bool { return uniqueIDs[i] < uniqueIDs[j] })
 
 	operatorID := getOperatorID(c)
-	results := make([]bulkGrantUserResult, 0, len(uniqueIDs))
-	successCount := 0
-	totalGranted := 0
 
-	for _, uid := range uniqueIDs {
-		var createdIDs []uint
-		txErr := database.DB.Transaction(func(tx *gorm.DB) error {
+	// 收集所有 batch 内创建的 coupon 与失败的用户 ID（用于错误响应）
+	type bulkUserOp struct {
+		UserID    uint
+		CouponIDs []uint
+	}
+	var ops []bulkUserOp
+	var failedUserID uint  // 触发回滚的 user_id（若有）
+	var failedReason string // 触发回滚的标准化原因
+
+	txErr := database.DB.Transaction(func(tx *gorm.DB) error {
+		// 锁 template 一次（整 batch 共享）
+		var freshTpl database.CouponTemplate
+		if err := tx.Clauses(clause.Locking{Strength: "UPDATE"}).First(&freshTpl, p.TemplateID).Error; err != nil {
+			return fmt.Errorf("re-read template: %w", err)
+		}
+		if !freshTpl.IsEnabled() {
+			return errCouponTemplateChanged
+		}
+		// 按升序 user_id 依次加锁 + 发券 + 审计
+		for _, uid := range uniqueIDs {
 			if err := lockUserForUpdate(tx, uid); err != nil {
-				return fmt.Errorf("lock user: %w", err)
+				failedUserID = uid
+				return fmt.Errorf("lock user %d: %w", uid, err)
 			}
 			var freshU database.User
 			if err := tx.Select("id, status").First(&freshU, uid).Error; err != nil {
-				return fmt.Errorf("re-read user: %w", err)
+				failedUserID = uid
+				return fmt.Errorf("re-read user %d: %w", uid, err)
 			}
 			if freshU.Status != 1 {
+				failedUserID = uid
 				return errTargetUserChanged
 			}
-			var freshTpl database.CouponTemplate
-			if err := tx.Clauses(clause.Locking{Strength: "UPDATE"}).First(&freshTpl, p.TemplateID).Error; err != nil {
-				return fmt.Errorf("re-read template: %w", err)
-			}
-			if !freshTpl.IsEnabled() {
-				return errCouponTemplateChanged
-			}
+			var createdIDs []uint
 			for i := 0; i < qty; i++ {
 				uc, err := buildCouponFromTemplate(uid, &freshTpl, operatorID, p.Reason)
 				if err != nil {
-					return fmt.Errorf("build coupon #%d: %w", i+1, err)
+					failedUserID = uid
+					return fmt.Errorf("build coupon for user %d #%d: %w", uid, i+1, err)
 				}
 				if err := tx.Create(&uc).Error; err != nil {
-					return fmt.Errorf("create coupon #%d: %w", i+1, err)
+					failedUserID = uid
+					return fmt.Errorf("create coupon for user %d #%d: %w", uid, i+1, err)
 				}
 				createdIDs = append(createdIDs, uc.ID)
 			}
+			ops = append(ops, bulkUserOp{UserID: uid, CouponIDs: createdIDs})
+
 			details, jerr := json.Marshal(map[string]interface{}{
 				"template_id": freshTpl.ID,
 				"coupon_ids":  createdIDs,
@@ -540,38 +565,54 @@ func AdminBulkGrantCoupon(c *fiber.Ctx) error {
 				"bulk":        true,
 			})
 			if jerr != nil {
-				return fmt.Errorf("marshal audit: %w", jerr)
+				failedUserID = uid
+				return fmt.Errorf("marshal audit for user %d: %w", uid, jerr)
 			}
-			return LogOperationByTx(tx, operatorID, uid, "admin", "GRANT_COUPON_BULK", c.IP(), string(details))
-		})
-		if txErr != nil {
-			var reasonStr string
-			switch {
-			case errors.Is(txErr, errCouponTemplateChanged):
-				reasonStr = "ERR_TEMPLATE_DISABLED"
-			case errors.Is(txErr, errTargetUserChanged):
-				reasonStr = "ERR_USER_CHANGED"
-			default:
-				reasonStr = truncateLog(txErr.Error(), 200)
+			if err := LogOperationByTx(tx, operatorID, uid, "admin", "GRANT_COUPON_BULK", c.IP(), string(details)); err != nil {
+				failedUserID = uid
+				return fmt.Errorf("audit for user %d: %w", uid, err)
 			}
-			results = append(results, bulkGrantUserResult{UserID: uid, Success: false, Reason: reasonStr})
-		} else {
-			results = append(results, bulkGrantUserResult{UserID: uid, Success: true, CouponIDs: createdIDs})
-			successCount++
-			totalGranted += qty
 		}
+		return nil
+	})
+
+	if txErr != nil {
+		switch {
+		case errors.Is(txErr, errCouponTemplateChanged):
+			failedReason = "ERR_TEMPLATE_DISABLED"
+		case errors.Is(txErr, errTargetUserChanged):
+			failedReason = "ERR_USER_CHANGED"
+		default:
+			failedReason = truncateLog(txErr.Error(), 300)
+		}
+		log.Printf("[COUPON-BULK-GRANT] ABORTED admin=%d tpl=%d users=%d failed_user=%d reason=%s — full rollback",
+			operatorID, tpl.ID, len(uniqueIDs), failedUserID, failedReason)
+		return c.Status(409).JSON(fiber.Map{
+			"success":        false,
+			"message":        "批量发券失败：" + failedReason + "（整批已回滚，未发出任何券）",
+			"message_code":   "ERR_BULK_GRANT_ABORTED",
+			"failed_user_id": failedUserID,
+			"reason":         failedReason,
+		})
 	}
 
-	log.Printf("[COUPON-BULK-GRANT] admin=%d tpl=%d users=%d/%d granted=%d qty/user=%d",
-		operatorID, tpl.ID, successCount, len(uniqueIDs), totalGranted, qty)
+	// 成功路径：所有 ops 已 commit
+	results := make([]bulkGrantUserResult, 0, len(ops))
+	for _, op := range ops {
+		results = append(results, bulkGrantUserResult{UserID: op.UserID, Success: true, CouponIDs: op.CouponIDs})
+	}
+	totalGranted := len(uniqueIDs) * qty
+
+	log.Printf("[COUPON-BULK-GRANT] OK admin=%d tpl=%d users=%d granted=%d qty/user=%d (single tx)",
+		operatorID, tpl.ID, len(uniqueIDs), totalGranted, qty)
 
 	return c.JSON(fiber.Map{
 		"success":      true,
 		"message_code": "SUCCESS_BULK_GRANTED",
 		"summary": fiber.Map{
 			"total_users":   len(uniqueIDs),
-			"success_count": successCount,
-			"failed_count":  len(uniqueIDs) - successCount,
+			"success_count": len(uniqueIDs),
+			"failed_count":  0,
 			"total_granted": totalGranted,
 		},
 		"results": results,
