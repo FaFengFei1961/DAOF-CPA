@@ -632,6 +632,54 @@ func TestEngineIntegration_OverflowBlockHardStops(t *testing.T) {
 	}
 }
 
+// TestEngineIntegration_FutureStartAtNotActivated 验证 Sprint2-M4 fix：
+// 未来生效订阅（start_at > now）不应被引擎当作活跃订阅。
+//
+// 旧实现仅查 status='active' AND end_at > now，admin 给用户开 7 天后才生效的订阅
+// 会被立即激活扣费 — 产品语义错位 + 审计回溯困难。
+func TestEngineIntegration_FutureStartAtNotActivated(t *testing.T) {
+	setupEngineTestDB(t)
+	userID := uint(8)
+	now := time.Now()
+
+	// 模拟"未来生效"订阅（start_at = now + 1 day, end_at = now + 30 days）
+	snap := makeSnapshot([]map[string]any{{
+		"id": 70, "model_match": `["*"]`, "limit_unit": "request_count",
+		"limit_value": 100.0, "priority": 1,
+	}})
+	futureSub := database.UserSubscription{
+		UserID:           userID,
+		PackageID:        1,
+		PackageSnapshot:  snap,
+		StartAt:          now.Add(24 * time.Hour),  // 未来生效
+		EndAt:            now.Add(30 * 24 * time.Hour),
+		ConsumptionOrder: 1,
+		StackIndex:       1,
+		Status:           "active",
+	}
+	if err := database.DB.Create(&futureSub).Error; err != nil {
+		t.Fatalf("seed future sub: %v", err)
+	}
+
+	FlushAllSubscriptionCache()
+	subs, err := GetUserActiveSubscriptions(userID)
+	if err != nil {
+		t.Fatalf("GetUserActiveSubscriptions: %v", err)
+	}
+	if len(subs) != 0 {
+		t.Errorf("future-dated subscription should NOT be active, got %d subs (sub_id=%d start_at=%v)",
+			len(subs), futureSub.ID, futureSub.StartAt)
+	}
+
+	// 同一用户的当前订阅（start_at < now < end_at）应正常激活
+	currentSub := seedSub(t, userID, snap, 2)
+	FlushAllSubscriptionCache()
+	subs, _ = GetUserActiveSubscriptions(userID)
+	if len(subs) != 1 || subs[0].Subscription.ID != currentSub.ID {
+		t.Errorf("current subscription should be active, got %d subs", len(subs))
+	}
+}
+
 // TestNormalizeOverflowStrategy_CollapsesUnknownToDefault 验证 legacy 数据收敛：
 // 历史 DB 可能存有 "allow" / "degrade_model" / "" / 空格等值，引擎统一视为 next_subscription，
 // 不再产生未定义行为。

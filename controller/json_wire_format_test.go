@@ -131,9 +131,13 @@ func TestWireFormat_AdminTopupOrders(t *testing.T) {
 }
 
 // TestWireFormat_GetSelfData /api/user/me 返回 quota 是 USD float（显式 map 路径）
+// + Sprint2-M1 安全约束：不得返回 token / password_hash / phone / github_id（敏感 PII）
 func TestWireFormat_GetSelfData(t *testing.T) {
 	setupSubTestDB(t)
 	user := seedTestUser(t, 50)
+	user.Token = "sk-daof-secret-self-token"
+	user.PasswordHash = "$2a$10$hashedSecret"
+	database.DB.Save(user)
 
 	app := fiber.New(fiber.Config{DisableStartupMessage: true})
 	app.Use(func(c *fiber.Ctx) error {
@@ -157,6 +161,57 @@ func TestWireFormat_GetSelfData(t *testing.T) {
 	}
 	if q != 50.0 {
 		t.Errorf("expected quota=50.0, got %v", q)
+	}
+
+	// fix CRITICAL Sprint2-M1：敏感字段必须不在 self-data 响应中
+	for _, sensitive := range []string{"token", "password_hash", "phone", "github_id"} {
+		if v, present := data[sensitive]; present {
+			t.Errorf("self-data must NOT expose %q field (got value=%v) — token reveal should be via dedicated endpoint", sensitive, v)
+		}
+	}
+}
+
+// TestWireFormat_GetUsers_ScrubsSensitive admin bulk 视图必须不暴露任何用户的
+// token / password_hash 明文（横向越权防护）
+func TestWireFormat_GetUsers_ScrubsSensitive(t *testing.T) {
+	setupSubTestDB(t)
+	admin := seedAdminUser(t)
+	// 给被列出的用户植入 token / password_hash，验证响应里被清零
+	target := seedTestUser(t, 10)
+	target.Token = "sk-daof-other-user-secret"
+	target.PasswordHash = "$2a$10$victimHash"
+	database.DB.Save(target)
+
+	app := fiber.New(fiber.Config{DisableStartupMessage: true})
+	app.Use(func(c *fiber.Ctx) error {
+		c.Locals("user", admin)
+		return c.Next()
+	})
+	app.Get("/users", GetUsers)
+
+	req := httptest.NewRequest("GET", "/users?page=1&page_size=50", nil)
+	resp, _ := app.Test(req, -1)
+	defer resp.Body.Close()
+	if resp.StatusCode != 200 {
+		t.Fatalf("status: %d", resp.StatusCode)
+	}
+	var out map[string]any
+	json.NewDecoder(resp.Body).Decode(&out)
+	list, _ := out["data"].([]any)
+	if len(list) == 0 {
+		t.Fatalf("expected at least 1 user in admin list, got %d", len(list))
+	}
+	for i, raw := range list {
+		row, _ := raw.(map[string]any)
+		// 仅断言"必须为空字符串"，不打印实际值（避免错把 token 写入测试日志）
+		if v, _ := row["token"].(string); v != "" {
+			rowID, _ := row["id"].(float64)
+			t.Errorf("admin GetUsers row[%d] (user_id=%v) MUST scrub token field (got non-empty string)", i, rowID)
+		}
+		if v, _ := row["password_hash"].(string); v != "" {
+			rowID, _ := row["id"].(float64)
+			t.Errorf("admin GetUsers row[%d] (user_id=%v) MUST scrub password_hash (got non-empty string)", i, rowID)
+		}
 	}
 }
 

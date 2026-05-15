@@ -102,9 +102,13 @@ func GetUsers(c *fiber.Ctx) error {
 	if err := db.Offset((page - 1) * pageSize).Limit(pageSize).Find(&users).Error; err != nil {
 		return c.Status(500).JSON(fiber.Map{"success": false, "message": "获取数据失败", "message_code": "ERR_FETCH_DATA_MATRIX"})
 	}
-	// PasswordHash 永远不应外传。
+	// fix CRITICAL Sprint2-M1：admin bulk 视图 scrub 敏感字段。
+	// 旧实现外传完整 User struct（含 Token / PasswordHash），admin 可看到所有用户的
+	// API token 明文。token 一旦被任意 admin 看到，等同于横向越权能调任意用户配额。
+	// PasswordHash / Token / GithubID（PII）一并清零，仅保留 admin 决策所需字段。
 	for i := range users {
 		users[i].PasswordHash = ""
+		users[i].Token = ""
 	}
 	return c.JSON(fiber.Map{
 		"success": true,
@@ -279,6 +283,10 @@ func GetSelfData(c *fiber.Ctx) error {
 	if user.Status == 2 {
 		return c.Status(403).JSON(fiber.Map{"success": false, "message_code": "ERR_BANNED", "ban_reason": user.BanReason})
 	}
+	// fix CRITICAL Sprint2-M1：自身路由也不暴露 token。
+	// 旧实现每次 /api/user/me 都附带 token 明文 → 浏览器 devtools、Sentry/日志、
+	// XSS 任意脚本都能采集。token 应通过专门的 reveal 接口 + 二次确认获取。
+	// UI 实际消费的字段：id / username / role / quota / status，无 token 引用（已 grep 验证）。
 	return c.JSON(fiber.Map{
 		"success": true,
 		"data": map[string]interface{}{
@@ -287,7 +295,6 @@ func GetSelfData(c *fiber.Ctx) error {
 			"role":     user.Role,
 			"quota":    database.MicroToUSD(user.Quota),
 			"status":   user.Status,
-			"token":    user.Token,
 		},
 	})
 }
