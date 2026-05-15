@@ -38,22 +38,26 @@ var errPlanLimitExceeded = errors.New("subscription quota plan limit exceeded")
 
 // EngineDecision 是引擎对一次请求的决策结果
 type EngineDecision struct {
-	Allowed            bool
-	SubscriptionID     uint
-	QuotaPlanID        uint
-	QuotaPlanIDs       []uint
-	ConsumedUnit       string
-	ConsumedDelta      float64
-	FallbackToBalance  bool
-	BlockReason        string
-	BlockMessage       string
-	BlockQuotaPlanID   uint
-	BlockConsumedValue float64
-	BlockDelta         float64
-	BlockLimitValue    float64
-	BlockRemaining     float64
-	BlockWindowEndAt   *time.Time
-	BlockUnit          string
+	Allowed                bool
+	SubscriptionID         uint
+	QuotaPlanID            uint
+	QuotaPlanIDs           []uint
+	ConsumedUnit           string
+	ConsumedDelta          float64
+	FallbackToBalance      bool
+	BlockReason            string
+	BlockMessage           string
+	BlockQuotaPlanID       uint
+	BlockConsumedValue     float64
+	BlockDelta             float64
+	BlockLimitValue        float64
+	BlockRemaining         float64
+	BlockConsumedMicroUSD  int64
+	BlockDeltaMicroUSD     int64
+	BlockLimitMicroUSD     int64
+	BlockRemainingMicroUSD int64
+	BlockWindowEndAt       *time.Time
+	BlockUnit              string
 	// ProductType 命中订阅时填 "subscription"（addon 已在 Phase 8 移除）。
 	// 未命中（FallbackToBalance / 拒绝）时为空字符串。
 	ProductType string
@@ -142,6 +146,10 @@ func Decide(req EngineRequest) EngineDecision {
 			d.BlockDelta = lastLimitDecision.BlockDelta
 			d.BlockLimitValue = lastLimitDecision.BlockLimitValue
 			d.BlockRemaining = lastLimitDecision.BlockRemaining
+			d.BlockConsumedMicroUSD = lastLimitDecision.BlockConsumedMicroUSD
+			d.BlockDeltaMicroUSD = lastLimitDecision.BlockDeltaMicroUSD
+			d.BlockLimitMicroUSD = lastLimitDecision.BlockLimitMicroUSD
+			d.BlockRemainingMicroUSD = lastLimitDecision.BlockRemainingMicroUSD
 			d.BlockWindowEndAt = lastLimitDecision.BlockWindowEndAt
 			d.BlockUnit = lastLimitDecision.BlockUnit
 		}
@@ -153,16 +161,20 @@ func Decide(req EngineRequest) EngineDecision {
 	// 非 precheck commit 路径（BlockQuotaPlanID=0）保持现有 generic 行为，不破坏既有契约。
 	if lastLimitDecision.BlockQuotaPlanID != 0 {
 		return EngineDecision{
-			Allowed:            false,
-			BlockReason:        lastLimitDecision.BlockReason,
-			BlockMessage:       lastLimitDecision.BlockMessage,
-			BlockQuotaPlanID:   lastLimitDecision.BlockQuotaPlanID,
-			BlockConsumedValue: lastLimitDecision.BlockConsumedValue,
-			BlockDelta:         lastLimitDecision.BlockDelta,
-			BlockLimitValue:    lastLimitDecision.BlockLimitValue,
-			BlockRemaining:     lastLimitDecision.BlockRemaining,
-			BlockWindowEndAt:   lastLimitDecision.BlockWindowEndAt,
-			BlockUnit:          lastLimitDecision.BlockUnit,
+			Allowed:                false,
+			BlockReason:            lastLimitDecision.BlockReason,
+			BlockMessage:           lastLimitDecision.BlockMessage,
+			BlockQuotaPlanID:       lastLimitDecision.BlockQuotaPlanID,
+			BlockConsumedValue:     lastLimitDecision.BlockConsumedValue,
+			BlockDelta:             lastLimitDecision.BlockDelta,
+			BlockLimitValue:        lastLimitDecision.BlockLimitValue,
+			BlockRemaining:         lastLimitDecision.BlockRemaining,
+			BlockConsumedMicroUSD:  lastLimitDecision.BlockConsumedMicroUSD,
+			BlockDeltaMicroUSD:     lastLimitDecision.BlockDeltaMicroUSD,
+			BlockLimitMicroUSD:     lastLimitDecision.BlockLimitMicroUSD,
+			BlockRemainingMicroUSD: lastLimitDecision.BlockRemainingMicroUSD,
+			BlockWindowEndAt:       lastLimitDecision.BlockWindowEndAt,
+			BlockUnit:              lastLimitDecision.BlockUnit,
 		}
 	}
 	return EngineDecision{
@@ -225,13 +237,31 @@ func trySharedQuota(cs *CachedSubscription, req EngineRequest) EngineDecision {
 				plan.ID, mult, engineMaxMultiplier)
 			mult = engineMaxMultiplier
 		}
+		limitValue := plan.LimitValue * mult
+		limitValueMicroUSD := int64(0)
+		deltaMicroUSD := int64(0)
+		if unit == "api_cost_usd" {
+			if plan.LimitValue > 0 && plan.LimitValueMicroUSD <= 0 {
+				log.Printf("[ENGINE] api_cost_usd plan %d missing limit_value_micro_usd", plan.ID)
+				return EngineDecision{Allowed: false, BlockReason: "invalid_plan_delta", BlockMessage: "订阅额度配置异常，请联系管理员"}
+			}
+			scaledLimit, ok := scaleAPICostLimitMicroUSD(plan.LimitValueMicroUSD, mult)
+			if !ok {
+				return EngineDecision{Allowed: false, BlockReason: "invalid_plan_delta", BlockMessage: "订阅额度配置异常，请联系管理员"}
+			}
+			limitValueMicroUSD = scaledLimit
+			limitValue = database.MicroToUSD(scaledLimit)
+			deltaMicroUSD = req.CostMicroUSD
+		}
 		specs = append(specs, consumeSpec{
-			PlanID:        plan.ID,
-			Bucket:        bucket,
-			Delta:         delta,
-			Unit:          unit,
-			WindowSeconds: plan.WindowSeconds,
-			LimitValue:    plan.LimitValue * mult,
+			PlanID:             plan.ID,
+			Bucket:             bucket,
+			Delta:              delta,
+			DeltaMicroUSD:      deltaMicroUSD,
+			Unit:               unit,
+			WindowSeconds:      plan.WindowSeconds,
+			LimitValue:         limitValue,
+			LimitValueMicroUSD: limitValueMicroUSD,
 		})
 	}
 
@@ -260,6 +290,10 @@ func trySharedQuota(cs *CachedSubscription, req EngineRequest) EngineDecision {
 			d.BlockDelta = failSnap.Delta
 			d.BlockLimitValue = failSnap.LimitValue
 			d.BlockRemaining = failSnap.Remaining
+			d.BlockConsumedMicroUSD = failSnap.ConsumedMicroUSD
+			d.BlockDeltaMicroUSD = failSnap.DeltaMicroUSD
+			d.BlockLimitMicroUSD = failSnap.LimitMicroUSD
+			d.BlockRemainingMicroUSD = failSnap.RemainingMicroUSD
 			d.BlockWindowEndAt = failSnap.WindowEndAt
 			d.BlockUnit = failSnap.Unit
 			d.BlockMessage = buildPrecheckLimitMessage(*failSnap)
@@ -281,22 +315,28 @@ func trySharedQuota(cs *CachedSubscription, req EngineRequest) EngineDecision {
 }
 
 type consumeSpec struct {
-	PlanID        uint
-	Bucket        string
-	Delta         float64
-	Unit          string
-	WindowSeconds int
-	LimitValue    float64
+	PlanID             uint
+	Bucket             string
+	Delta              float64
+	DeltaMicroUSD      int64
+	Unit               string
+	WindowSeconds      int
+	LimitValue         float64
+	LimitValueMicroUSD int64
 }
 
 type precheckLimitDetail struct {
-	PlanID        uint
-	ConsumedValue float64
-	Delta         float64
-	LimitValue    float64
-	Remaining     float64
-	WindowEndAt   *time.Time
-	Unit          string
+	PlanID            uint
+	ConsumedValue     float64
+	Delta             float64
+	LimitValue        float64
+	Remaining         float64
+	ConsumedMicroUSD  int64
+	DeltaMicroUSD     int64
+	LimitMicroUSD     int64
+	RemainingMicroUSD int64
+	WindowEndAt       *time.Time
+	Unit              string
 }
 
 // fix CRITICAL（多模型审计第二十五轮）：原 diagnosePrecheckLimit 在事务外重新 SELECT，
@@ -319,6 +359,7 @@ type snapshotPlan struct {
 	ModelMatch         string  `json:"model_match"`
 	LimitUnit          string  `json:"limit_unit"`
 	LimitValue         float64 `json:"limit_value"`
+	LimitValueMicroUSD int64   `json:"limit_value_micro_usd"`
 	WindowSeconds      int     `json:"window_seconds"`
 	WeightFactor       string  `json:"weight_factor"`
 	Priority           int     `json:"priority"`
@@ -346,6 +387,7 @@ func extractPlansFromSnapshot(snap map[string]any) []snapshotPlan {
 			ModelMatch:         stringFromAny(m["model_match"]),
 			LimitUnit:          stringFromAny(m["limit_unit"]),
 			LimitValue:         floatFromAny(m["limit_value"]),
+			LimitValueMicroUSD: int64FromAny(m["limit_value_micro_usd"]),
 			WindowSeconds:      intFromAny(m["window_seconds"]),
 			WeightFactor:       stringFromAny(m["weight_factor"]),
 			Priority:           intFromAny(m["priority"]),
@@ -450,6 +492,20 @@ func computeDelta(plan snapshotPlan, req EngineRequest) (float64, string) {
 	}
 	log.Printf("[ENGINE] unsupported limit_unit=%q plan_id=%d", plan.LimitUnit, plan.ID)
 	return -1, plan.LimitUnit
+}
+
+func scaleAPICostLimitMicroUSD(limitMicroUSD int64, multiplier float64) (int64, bool) {
+	if limitMicroUSD < 0 || math.IsNaN(multiplier) || math.IsInf(multiplier, 0) || multiplier <= 0 {
+		return 0, false
+	}
+	if limitMicroUSD == 0 {
+		return 0, true
+	}
+	scaled := math.Round(float64(limitMicroUSD) * multiplier)
+	if scaled <= 0 || scaled >= float64(math.MaxInt64) {
+		return 0, false
+	}
+	return int64(scaled), true
 }
 
 type weightInOut struct {
@@ -570,16 +626,31 @@ func atomicConsumeMany(subID, userID uint, specs []consumeSpec, isPrecheck bool)
 
 func consumePlanInTx(tx *gorm.DB, subID uint, spec consumeSpec, isPrecheck bool) (*planConsumeWarn, *precheckLimitDetail, error) {
 	now := time.Now()
+	isAPICost := spec.Unit == "api_cost_usd"
 	// fix CRITICAL（多模型审计第二十五轮）：snapshotForPlanLimit 在 tx 内捕获真实 usage 状态，
 	// 给 caller 用于构建用户侧错误消息（"本次预估超过当前窗口剩余"），不再事务外重查避免 TOCTOU。
-	snapshotForPlanLimit := func(consumedValue float64, windowEndAt time.Time) *precheckLimitDetail {
+	snapshotForPlanLimit := func(consumedValue float64, consumedMicroUSD int64, windowEndAt time.Time) *precheckLimitDetail {
+		remaining := math.Max(0, spec.LimitValue-consumedValue)
+		remainingMicroUSD := int64(0)
+		if isAPICost {
+			consumedValue = database.MicroToUSD(consumedMicroUSD)
+			remainingMicroUSD = spec.LimitValueMicroUSD - consumedMicroUSD
+			if remainingMicroUSD < 0 {
+				remainingMicroUSD = 0
+			}
+			remaining = database.MicroToUSD(remainingMicroUSD)
+		}
 		snap := &precheckLimitDetail{
-			PlanID:        spec.PlanID,
-			ConsumedValue: consumedValue,
-			Delta:         spec.Delta,
-			LimitValue:    spec.LimitValue,
-			Remaining:     math.Max(0, spec.LimitValue-consumedValue),
-			Unit:          spec.Unit,
+			PlanID:            spec.PlanID,
+			ConsumedValue:     consumedValue,
+			Delta:             spec.Delta,
+			LimitValue:        spec.LimitValue,
+			Remaining:         remaining,
+			ConsumedMicroUSD:  consumedMicroUSD,
+			DeltaMicroUSD:     spec.DeltaMicroUSD,
+			LimitMicroUSD:     spec.LimitValueMicroUSD,
+			RemainingMicroUSD: remainingMicroUSD,
+			Unit:              spec.Unit,
 		}
 		if !windowEndAt.IsZero() {
 			end := windowEndAt
@@ -587,18 +658,61 @@ func consumePlanInTx(tx *gorm.DB, subID uint, spec consumeSpec, isPrecheck bool)
 		}
 		return snap
 	}
+	exceedsLimit := func(consumedValue float64, consumedMicroUSD int64) bool {
+		if isAPICost {
+			return spec.LimitValueMicroUSD > 0 && consumedMicroUSD+spec.DeltaMicroUSD > spec.LimitValueMicroUSD
+		}
+		return spec.LimitValue > 0 && consumedValue+spec.Delta > spec.LimitValue
+	}
+	usageConsumedValue := func(u database.SubscriptionUsage) float64 {
+		if isAPICost {
+			return database.MicroToUSD(u.ConsumedValueMicroUSD)
+		}
+		return u.ConsumedValue
+	}
+	insertValues := func(windowEnd time.Time) database.SubscriptionUsage {
+		row := database.SubscriptionUsage{
+			SubscriptionID: subID,
+			QuotaPlanID:    spec.PlanID,
+			ModelBucket:    spec.Bucket,
+			WindowStartAt:  now,
+			WindowEndAt:    windowEnd,
+			RequestCount:   1,
+		}
+		if isAPICost {
+			row.ConsumedValueMicroUSD = spec.DeltaMicroUSD
+		} else {
+			row.ConsumedValue = spec.Delta
+		}
+		return row
+	}
+	updateValues := func(windowEnd time.Time) map[string]any {
+		values := map[string]any{
+			"window_start_at": now,
+			"window_end_at":   windowEnd,
+			"request_count":   1,
+		}
+		if isAPICost {
+			values["consumed_value"] = 0
+			values["consumed_value_micro_usd"] = spec.DeltaMicroUSD
+		} else {
+			values["consumed_value"] = spec.Delta
+			values["consumed_value_micro_usd"] = 0
+		}
+		return values
+	}
 	var usage database.SubscriptionUsage
 	err := tx.Where("subscription_id = ? AND quota_plan_id = ? AND model_bucket = ?",
 		subID, spec.PlanID, spec.Bucket).First(&usage).Error
 
 	if errors.Is(err, gorm.ErrRecordNotFound) {
-		if spec.LimitValue > 0 && spec.Delta > spec.LimitValue {
+		if exceedsLimit(0, 0) {
 			// 无 usage 行 → consumed=0；window 用预期开窗时间
 			windowEnd := time.Time{}
 			if spec.WindowSeconds > 0 {
 				windowEnd = now.Add(time.Duration(spec.WindowSeconds) * time.Second)
 			}
-			return nil, snapshotForPlanLimit(0, windowEnd), errPlanLimitExceeded
+			return nil, snapshotForPlanLimit(0, 0, windowEnd), errPlanLimitExceeded
 		}
 		if isPrecheck {
 			return nil, nil, nil
@@ -609,15 +723,7 @@ func consumePlanInTx(tx *gorm.DB, subID uint, spec consumeSpec, isPrecheck bool)
 		} else {
 			windowEnd = now.Add(365 * 24 * time.Hour)
 		}
-		newRow := database.SubscriptionUsage{
-			SubscriptionID: subID,
-			QuotaPlanID:    spec.PlanID,
-			ModelBucket:    spec.Bucket,
-			WindowStartAt:  now,
-			WindowEndAt:    windowEnd,
-			ConsumedValue:  spec.Delta,
-			RequestCount:   1,
-		}
+		newRow := insertValues(windowEnd)
 		if cerr := tx.Create(&newRow).Error; cerr != nil {
 			// 并发首插撞唯一索引时，重读后走累加路径。
 			if existing := (database.SubscriptionUsage{}); tx.
@@ -629,11 +735,15 @@ func consumePlanInTx(tx *gorm.DB, subID uint, spec consumeSpec, isPrecheck bool)
 				return nil, nil, fmt.Errorf("usage create: %w", cerr)
 			}
 		} else {
+			after := spec.Delta
+			if isAPICost {
+				after = database.MicroToUSD(spec.DeltaMicroUSD)
+			}
 			return &planConsumeWarn{
 				PlanID:      spec.PlanID,
 				Bucket:      spec.Bucket,
 				Before:      0,
-				After:       spec.Delta,
+				After:       after,
 				LimitValue:  spec.LimitValue,
 				WindowStart: now,
 			}, nil, nil
@@ -643,10 +753,10 @@ func consumePlanInTx(tx *gorm.DB, subID uint, spec consumeSpec, isPrecheck bool)
 	}
 
 	if spec.WindowSeconds > 0 && now.After(usage.WindowEndAt) {
-		if spec.LimitValue > 0 && spec.Delta > spec.LimitValue {
+		if exceedsLimit(0, 0) {
 			// window 已过期 → 视为新窗口起点，consumed=0
 			newEnd := now.Add(time.Duration(spec.WindowSeconds) * time.Second)
-			return nil, snapshotForPlanLimit(0, newEnd), errPlanLimitExceeded
+			return nil, snapshotForPlanLimit(0, 0, newEnd), errPlanLimitExceeded
 		}
 		if isPrecheck {
 			return nil, nil, nil
@@ -654,21 +764,20 @@ func consumePlanInTx(tx *gorm.DB, subID uint, spec consumeSpec, isPrecheck bool)
 		newEnd := now.Add(time.Duration(spec.WindowSeconds) * time.Second)
 		res := tx.Model(&database.SubscriptionUsage{}).
 			Where("id = ? AND window_end_at = ?", usage.ID, usage.WindowEndAt).
-			Updates(map[string]any{
-				"window_start_at": now,
-				"window_end_at":   newEnd,
-				"consumed_value":  spec.Delta,
-				"request_count":   1,
-			})
+			Updates(updateValues(newEnd))
 		if res.Error != nil {
 			return nil, nil, fmt.Errorf("usage reset: %w", res.Error)
 		}
 		if res.RowsAffected > 0 {
+			after := spec.Delta
+			if isAPICost {
+				after = database.MicroToUSD(spec.DeltaMicroUSD)
+			}
 			return &planConsumeWarn{
 				PlanID:      spec.PlanID,
 				Bucket:      spec.Bucket,
 				Before:      0,
-				After:       spec.Delta,
+				After:       after,
 				LimitValue:  spec.LimitValue,
 				WindowStart: now,
 			}, nil, nil
@@ -678,20 +787,27 @@ func consumePlanInTx(tx *gorm.DB, subID uint, spec consumeSpec, isPrecheck bool)
 		}
 	}
 
-	if spec.LimitValue > 0 && usage.ConsumedValue+spec.Delta > spec.LimitValue {
-		return nil, snapshotForPlanLimit(usage.ConsumedValue, usage.WindowEndAt), errPlanLimitExceeded
+	if exceedsLimit(usage.ConsumedValue, usage.ConsumedValueMicroUSD) {
+		return nil, snapshotForPlanLimit(usage.ConsumedValue, usage.ConsumedValueMicroUSD, usage.WindowEndAt), errPlanLimitExceeded
 	}
 	if isPrecheck {
 		return nil, nil, nil
 	}
 	q := tx.Model(&database.SubscriptionUsage{}).Where("id = ?", usage.ID)
-	if spec.LimitValue > 0 {
+	if isAPICost && spec.LimitValueMicroUSD > 0 {
+		q = q.Where("consumed_value_micro_usd + ? <= ?", spec.DeltaMicroUSD, spec.LimitValueMicroUSD)
+	} else if spec.LimitValue > 0 {
 		q = q.Where("consumed_value + ? <= ?", spec.Delta, spec.LimitValue)
 	}
-	res := q.Updates(map[string]any{
-		"consumed_value": gorm.Expr("consumed_value + ?", spec.Delta),
-		"request_count":  gorm.Expr("request_count + 1"),
-	})
+	updates := map[string]any{
+		"request_count": gorm.Expr("request_count + 1"),
+	}
+	if isAPICost {
+		updates["consumed_value_micro_usd"] = gorm.Expr("consumed_value_micro_usd + ?", spec.DeltaMicroUSD)
+	} else {
+		updates["consumed_value"] = gorm.Expr("consumed_value + ?", spec.Delta)
+	}
+	res := q.Updates(updates)
 	if res.Error != nil {
 		return nil, nil, fmt.Errorf("usage accumulate: %w", res.Error)
 	}
@@ -701,15 +817,20 @@ func consumePlanInTx(tx *gorm.DB, subID uint, spec consumeSpec, isPrecheck bool)
 		// 构 snapshot，避免 caller 拿过时的 usage.ConsumedValue 给用户错误"剩余"展示。
 		var fresh database.SubscriptionUsage
 		if rerr := tx.First(&fresh, usage.ID).Error; rerr == nil {
-			return nil, snapshotForPlanLimit(fresh.ConsumedValue, fresh.WindowEndAt), errPlanLimitExceeded
+			return nil, snapshotForPlanLimit(fresh.ConsumedValue, fresh.ConsumedValueMicroUSD, fresh.WindowEndAt), errPlanLimitExceeded
 		}
-		return nil, snapshotForPlanLimit(usage.ConsumedValue, usage.WindowEndAt), errPlanLimitExceeded
+		return nil, snapshotForPlanLimit(usage.ConsumedValue, usage.ConsumedValueMicroUSD, usage.WindowEndAt), errPlanLimitExceeded
+	}
+	before := usageConsumedValue(usage)
+	after := before + spec.Delta
+	if isAPICost {
+		after = database.MicroToUSD(usage.ConsumedValueMicroUSD + spec.DeltaMicroUSD)
 	}
 	return &planConsumeWarn{
 		PlanID:      spec.PlanID,
 		Bucket:      spec.Bucket,
-		Before:      usage.ConsumedValue,
-		After:       usage.ConsumedValue + spec.Delta,
+		Before:      before,
+		After:       after,
 		LimitValue:  spec.LimitValue,
 		WindowStart: usage.WindowStartAt,
 	}, nil, nil
@@ -770,6 +891,12 @@ func get402Message() string {
 func uintFromAny(v any) uint {
 	if f, ok := v.(float64); ok {
 		return uint(f)
+	}
+	return 0
+}
+func int64FromAny(v any) int64 {
+	if f, ok := v.(float64); ok {
+		return int64(f)
 	}
 	return 0
 }

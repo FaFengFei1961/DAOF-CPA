@@ -335,6 +335,13 @@ func AddChannelModel(c *fiber.Ctx) error {
 			"message":      msg,
 		})
 	}
+	if err := database.ValidateChannelModelPricing(&body); err != nil {
+		return c.Status(400).JSON(fiber.Map{
+			"success":      false,
+			"message_code": "ERR_INVALID_LIMIT",
+			"message":      err.Error(),
+		})
+	}
 	// fix MAJOR R23-M7（codex 审查）：官方渠道 + level=off 通过 confirm 豁免必须留痕
 	if confirmOfficialNoMod && body.ModerationLevel == "off" && channelTargetsOfficialHost(&ch) {
 		auditOfficialNoModerationConfirmed(c, &ch, &body, "ADD")
@@ -445,6 +452,13 @@ func UpdateChannelModel(c *fiber.Ctx) error {
 			"success":      false,
 			"message_code": code,
 			"message":      msg,
+		})
+	}
+	if err := database.ValidateChannelModelPricing(&chm); err != nil {
+		return c.Status(400).JSON(fiber.Map{
+			"success":      false,
+			"message_code": "ERR_INVALID_LIMIT",
+			"message":      err.Error(),
 		})
 	}
 	// fix MAJOR R23-M7：官方渠道 + level=off 通过 confirm 豁免必须留痕

@@ -51,6 +51,15 @@ func setupEngineTestDB(t *testing.T) {
 
 // makeSnapshot 构造 plan 列表 → JSON
 func makeSnapshot(plans []map[string]any) string {
+	for _, p := range plans {
+		if p["limit_unit"] == "api_cost_usd" {
+			if _, ok := p["limit_value_micro_usd"]; !ok {
+				if v, ok := p["limit_value"].(float64); ok {
+					p["limit_value_micro_usd"] = int64(v * float64(database.MicroPerUSD))
+				}
+			}
+		}
+	}
 	snap := map[string]any{"plans": plans}
 	b, _ := json.Marshal(snap)
 	return string(b)
@@ -186,8 +195,8 @@ func TestEngineIntegration_MultiWindowANDRollback(t *testing.T) {
 		t.Fatalf("usage rows=%d, want 2", len(rows))
 	}
 	for _, row := range rows {
-		if row.ConsumedValue != 12 {
-			t.Fatalf("plan %d consumed=%v, want 12 (failed third request must rollback all windows)", row.QuotaPlanID, row.ConsumedValue)
+		if row.ConsumedValueMicroUSD != 12*database.MicroPerUSD || row.ConsumedValue != 0 {
+			t.Fatalf("plan %d consumed micro/value=%d/%v, want 12000000/0 (failed third request must rollback all windows)", row.QuotaPlanID, row.ConsumedValueMicroUSD, row.ConsumedValue)
 		}
 		if row.ModelBucket != "provider:openai" {
 			t.Fatalf("bucket=%q, want provider:openai", row.ModelBucket)
@@ -269,11 +278,38 @@ func TestEngineIntegration_MixedAPICostAndRequestCountANDRollback(t *testing.T) 
 	if len(rows) != 2 {
 		t.Fatalf("usage rows=%d, want 2", len(rows))
 	}
-	if rows[0].QuotaPlanID != 120 || rows[0].ConsumedValue != 6 || rows[0].RequestCount != 2 {
-		t.Fatalf("api_cost usage = plan:%d consumed:%v requests:%d, want plan 120 consumed 6 requests 2", rows[0].QuotaPlanID, rows[0].ConsumedValue, rows[0].RequestCount)
+	if rows[0].QuotaPlanID != 120 || rows[0].ConsumedValueMicroUSD != 6*database.MicroPerUSD || rows[0].ConsumedValue != 0 || rows[0].RequestCount != 2 {
+		t.Fatalf("api_cost usage = plan:%d consumed_micro:%d consumed:%v requests:%d, want plan 120 consumed_micro 6000000 consumed 0 requests 2", rows[0].QuotaPlanID, rows[0].ConsumedValueMicroUSD, rows[0].ConsumedValue, rows[0].RequestCount)
 	}
 	if rows[1].QuotaPlanID != 121 || rows[1].ConsumedValue != 2 || rows[1].RequestCount != 2 {
 		t.Fatalf("request_count usage = plan:%d consumed:%v requests:%d, want plan 121 consumed 2 requests 2", rows[1].QuotaPlanID, rows[1].ConsumedValue, rows[1].RequestCount)
+	}
+}
+
+func TestEngineIntegration_APICostMicroUSDAggregatesExactly(t *testing.T) {
+	setupEngineTestDB(t)
+	usage := database.SubscriptionUsage{
+		SubscriptionID: 1,
+		QuotaPlanID:    122,
+		ModelBucket:    "gpt-*",
+		WindowStartAt:  time.Now(),
+		WindowEndAt:    time.Now().Add(time.Hour),
+	}
+	for i := int64(0); i < database.MicroPerUSD; i++ {
+		usage.ConsumedValueMicroUSD += 1
+	}
+	if err := database.DB.Create(&usage).Error; err != nil {
+		t.Fatalf("create usage: %v", err)
+	}
+	var row database.SubscriptionUsage
+	if err := database.DB.Where("subscription_id = ? AND quota_plan_id = ?", uint(1), uint(122)).First(&row).Error; err != nil {
+		t.Fatalf("load usage: %v", err)
+	}
+	if row.ConsumedValueMicroUSD != database.MicroPerUSD {
+		t.Fatalf("consumed_value_micro_usd=%d, want %d", row.ConsumedValueMicroUSD, database.MicroPerUSD)
+	}
+	if row.ConsumedValue != 0 {
+		t.Fatalf("api_cost_usd must not accumulate in float consumed_value, got %v", row.ConsumedValue)
 	}
 }
 

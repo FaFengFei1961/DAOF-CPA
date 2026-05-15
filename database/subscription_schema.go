@@ -31,7 +31,9 @@ type QuotaPlan struct {
 	//
 	// 未知单位在引擎侧 fail-closed，不再当成 1 次调用兜底。
 	LimitUnit  string  `gorm:"index;not null;default:'request_count'" json:"limit_unit"`
-	LimitValue float64 `gorm:"not null;default:0" json:"limit_value"`
+	LimitValue float64 `gorm:"not null;default:0" json:"limit_value"` // 非 api_cost_usd 单位的限额；api_cost_usd 的展示输入仍是 USD
+	// api_cost_usd 的 canonical 限额，单位 micro_usd。引擎只读此字段，避免美元额度和累计扣费之间出现 float 漂移。
+	LimitValueMicroUSD int64 `gorm:"not null;default:0" json:"limit_value_micro_usd"`
 
 	WindowSeconds int `gorm:"not null;default:0" json:"window_seconds"` // 0 = 套餐周期内累计
 
@@ -207,8 +209,11 @@ type SubscriptionUsage struct {
 	WindowStartAt time.Time `gorm:"index" json:"window_start_at"`
 	WindowEndAt   time.Time `gorm:"index" json:"window_end_at"`
 
+	// ConsumedValue 仅用于 token_count / request_count 等非金额单位。
 	ConsumedValue float64 `gorm:"default:0" json:"consumed_value"`
-	RequestCount  int64   `gorm:"default:0" json:"request_count"`
+	// ConsumedValueMicroUSD 是 api_cost_usd 的唯一累计字段，单位 micro_usd。
+	ConsumedValueMicroUSD int64 `gorm:"default:0" json:"consumed_value_micro_usd"`
+	RequestCount          int64 `gorm:"default:0" json:"request_count"`
 
 	CreatedAt time.Time `json:"created_at"`
 	UpdatedAt time.Time `json:"updated_at"`

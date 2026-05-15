@@ -129,14 +129,16 @@ func (b BillingEntry) MarshalJSON() ([]byte, error) {
 	}
 	return json.Marshal(&struct {
 		*billingEntryAlias
-		AmountUSD       float64 `json:"amount_usd"`
-		BalanceAfterUSD float64 `json:"balance_after_usd"`
-		AmountOriginal  float64 `json:"amount_original,omitempty"`
+		AmountUSD        float64 `json:"amount_usd"`
+		BalanceAfterUSD  float64 `json:"balance_after_usd"`
+		AmountOriginal   float64 `json:"amount_original,omitempty"`
+		EstimatedCostUSD float64 `json:"estimated_cost_usd,omitempty"`
 	}{
 		billingEntryAlias: (*billingEntryAlias)(&b),
 		AmountUSD:         MicroToUSD(b.AmountUSD),
 		BalanceAfterUSD:   MicroToUSD(b.BalanceAfterUSD),
 		AmountOriginal:    originalDisplay,
+		EstimatedCostUSD:  MicroToUSD(b.EstimatedCostUSD),
 	})
 }
 

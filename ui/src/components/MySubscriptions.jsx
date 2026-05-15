@@ -260,35 +260,56 @@ const SubscriptionUsageCard = ({ item, priority, onCancel, t, formatMeterCurrenc
 };
 
 const UsageMeter = ({ usage, formatMeterCurrency }) => {
+  const { t } = useTranslation();
+  const isExpired = usage.window_end_at && new Date(usage.window_end_at).getTime() < Date.now();
   const consumedPct = usage.is_unlimited ? 0 : safePct(usage.usage_pct);
   const remainingPct = usage.is_unlimited ? 100 : Math.max(0, 100 - consumedPct);
-  const color = remainingColor(remainingPct);
+  const color = isExpired ? 'var(--color-outline)' : remainingColor(remainingPct);
   const resetText = usage.window_end_at
     ? `${fmtRelativeFromNow(usage.window_end_at) || '窗口已结束'} · ${fmtTime(usage.window_end_at)}`
     : '首次使用后开始计时';
 
   return (
-    <div className="rounded-overlay bg-surface-container-low border border-outline-variant/40 p-4">
+    <div className={`rounded-overlay border border-outline-variant/40 p-4 ${isExpired ? 'bg-surface-container/50 grayscale opacity-80' : 'bg-surface-container-low'}`}>
       <div className="flex items-start justify-between gap-4 mb-2">
         <div className="min-w-0">
           <div className="text-sm font-semibold text-on-surface break-words leading-snug">{formatPlanTitle(usage)}</div>
           <div className="mt-1 text-xs text-outline font-mono break-words [overflow-wrap:anywhere]">{usage.model_bucket || 'default'}</div>
         </div>
         <div className="text-right shrink-0">
-          <div className="text-xs text-on-surface-variant">剩余</div>
-          <div className="text-lg font-bold" style={{ color }}>{remainingPct.toFixed(1)}%</div>
+          {isExpired ? (
+            <div className="text-sm font-bold text-outline mt-1">{t('SUB.WINDOW_EXPIRED_TITLE', '已结束')}</div>
+          ) : (
+            <>
+              <div className="text-xs text-on-surface-variant">剩余</div>
+              <div className="text-lg font-bold" style={{ color }}>{remainingPct.toFixed(1)}%</div>
+            </>
+          )}
         </div>
       </div>
 
-      <ProgressBar value={consumedPct} max={100} />
+      <ProgressBar value={isExpired ? 0 : consumedPct} max={100} />
+
+      {isExpired && (
+        <div className="mt-2 text-xs text-on-surface-variant">
+          {t('SUB.WINDOW_EXPIRED_HINT', '等待下次请求触发新窗口')}
+        </div>
+      )}
 
       <div className="mt-3 grid grid-cols-2 lg:grid-cols-4 gap-3 text-xs">
         <UsageDatum label="已用" value={formatUsageValue(usage.consumed, usage.unit, formatMeterCurrency)} />
         <UsageDatum label="额度" value={usage.is_unlimited ? '不限' : formatUsageValue(usage.limit, usage.unit, formatMeterCurrency)} />
-        <UsageDatum label="剩余" value={usage.is_unlimited ? '不限' : formatUsageValue(usage.remaining, usage.unit, formatMeterCurrency)} />
+        <UsageDatum label={isExpired ? '窗口' : '剩余'} value={isExpired ? <span className="text-outline">{t('SUB.WINDOW_ENDED_RELATIVE', '已过期 · {{relative}}', { relative: fmtRelativeFromNow(usage.window_end_at) || '' })}</span> : (usage.is_unlimited ? '不限' : formatUsageValue(usage.remaining, usage.unit, formatMeterCurrency))} />
         <UsageDatum label="调用" value={`${Number(usage.request_count || 0)} 次`} />
       </div>
-      <div className="mt-3 text-[11px] text-on-surface-variant">{resetText}</div>
+      <div className="mt-3 flex flex-col gap-1">
+        {!isExpired && <div className="text-[11px] text-on-surface-variant">{resetText}</div>}
+        {isExpired && (
+          <div className="text-[10px] text-outline">
+            {t('SUB.WINDOW_LAST_USAGE', '上次窗口用量 {{used}} / {{limit}}', { used: formatUsageValue(usage.consumed, usage.unit, formatMeterCurrency), limit: usage.is_unlimited ? '不限' : formatUsageValue(usage.limit, usage.unit, formatMeterCurrency) })}
+          </div>
+        )}
+      </div>
     </div>
   );
 };

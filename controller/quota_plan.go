@@ -5,6 +5,7 @@ package controller
 
 import (
 	"encoding/json"
+	"errors"
 	"log"
 	"math"
 	"strconv"
@@ -43,6 +44,19 @@ func validateJSONText(v string, fallback string) (string, bool) {
 		return v, false
 	}
 	return v, true
+}
+
+func normalizeQuotaPlanCostLimit(p *database.QuotaPlan) error {
+	if p.LimitUnit != "api_cost_usd" {
+		p.LimitValueMicroUSD = 0
+		return nil
+	}
+	micro, ok := database.USDToMicro(p.LimitValue)
+	if !ok {
+		return errors.New("invalid api_cost_usd limit")
+	}
+	p.LimitValueMicroUSD = micro
+	return nil
 }
 
 // ListQuotaPlans 返回所有配额计划。支持 ?enabled=1 / ?unit=request_count 等过滤。
@@ -96,6 +110,9 @@ func CreateQuotaPlan(c *fiber.Ctx) error {
 	}
 	// fix Minor（codex 第五轮）：拒绝异常数值，避免 NaN/Inf/负数渗入引擎逻辑
 	if !isFinite(p.LimitValue) || p.LimitValue < 0 {
+		return c.Status(400).JSON(fiber.Map{"success": false, "message": "limit_value 必须 ≥ 0 且为有限数", "message_code": "ERR_INVALID_LIMIT"})
+	}
+	if err := normalizeQuotaPlanCostLimit(&p); err != nil {
 		return c.Status(400).JSON(fiber.Map{"success": false, "message": "limit_value 必须 ≥ 0 且为有限数", "message_code": "ERR_INVALID_LIMIT"})
 	}
 	if p.WindowSeconds < 0 {
@@ -192,6 +209,19 @@ func UpdateQuotaPlan(c *fiber.Ctx) error {
 			return c.Status(400).JSON(fiber.Map{"success": false, "message_code": "ERR_INVALID_PRIORITY"})
 		}
 	}
+	nextUnit := p.LimitUnit
+	if v, ok := updates["limit_unit"]; ok {
+		nextUnit = v.(string)
+	}
+	nextLimitValue := p.LimitValue
+	if v, ok := updates["limit_value"]; ok {
+		nextLimitValue = v.(float64)
+	}
+	normalized := database.QuotaPlan{LimitUnit: nextUnit, LimitValue: nextLimitValue}
+	if err := normalizeQuotaPlanCostLimit(&normalized); err != nil {
+		return c.Status(400).JSON(fiber.Map{"success": false, "message_code": "ERR_INVALID_LIMIT", "message": "limit_value 必须 >= 0 且为有限数"})
+	}
+	updates["limit_value_micro_usd"] = normalized.LimitValueMicroUSD
 	if err := database.DB.Model(&p).Updates(updates).Error; err != nil {
 		log.Printf("[QUOTA-PLAN] update id=%d failed: %v", id, err)
 		return c.Status(500).JSON(fiber.Map{"success": false, "message_code": "ERR_DB_UPDATE"})

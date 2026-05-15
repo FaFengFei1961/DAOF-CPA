@@ -211,6 +211,10 @@ func SyncCacheConfig() {
 	newRouteMap := make(map[string][]*database.ChannelModel)
 	for i := range channelModels {
 		chm := &channelModels[i]
+		if err := database.ValidateChannelModelPricing(chm); err != nil {
+			log.Printf("[CACHE] QUARANTINE channel_model id=%d model=%q price validation failed: %v", chm.ID, chm.ModelID, err)
+			continue
+		}
 		// 只有该信道存活时，这个模型挂载才有意义
 		if _, exists := newChannelMap[chm.ChannelID]; exists {
 			newRouteMap[chm.ModelID] = append(newRouteMap[chm.ModelID], chm)

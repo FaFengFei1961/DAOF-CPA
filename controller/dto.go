@@ -13,12 +13,17 @@ type BillingEntryView struct {
 	UserID               uint      `json:"user_id"`
 	OccurredAt           time.Time `json:"occurred_at"`
 	EntryType            string    `json:"entry_type"`
+	BillingState         string    `json:"billing_state"`
 	AmountUSD            float64   `json:"amount_usd"`
 	BalanceAfterUSD      float64   `json:"balance_after_usd"`
 	RelatedType          string    `json:"related_type"`
 	RelatedID            uint      `json:"related_id"`
 	ModelName            string    `json:"model_name,omitempty"`
 	TokensTotal          int       `json:"tokens_total,omitempty"`
+	RequestID            string    `json:"request_id,omitempty"`
+	DeliveredBytes       int64     `json:"delivered_bytes,omitempty"`
+	EstimatedInputTokens int       `json:"estimated_input_tokens,omitempty"`
+	EstimatedCostUSD     float64   `json:"estimated_cost_usd,omitempty"`
 	SourceSubscriptionID *uint     `json:"source_subscription_id,omitempty"`
 	Description          string    `json:"description"`
 	CurrencyOriginal     string    `json:"currency_original,omitempty"`
@@ -116,12 +121,17 @@ func billingEntryViewFrom(b database.BillingEntry) BillingEntryView {
 		UserID:               b.UserID,
 		OccurredAt:           b.OccurredAt,
 		EntryType:            b.EntryType,
+		BillingState:         b.BillingState,
 		AmountUSD:            microUSDToFloat(b.AmountUSD),
 		BalanceAfterUSD:      microUSDToFloat(b.BalanceAfterUSD),
 		RelatedType:          b.RelatedType,
 		RelatedID:            b.RelatedID,
 		ModelName:            b.ModelName,
 		TokensTotal:          b.TokensTotal,
+		RequestID:            b.RequestID,
+		DeliveredBytes:       b.DeliveredBytes,
+		EstimatedInputTokens: b.EstimatedInputTokens,
+		EstimatedCostUSD:     microUSDToFloat(b.EstimatedCostUSD),
 		SourceSubscriptionID: b.SourceSubscriptionID,
 		Description:          b.Description,
 		CurrencyOriginal:     b.CurrencyOriginal,

@@ -26,6 +26,7 @@ import (
 type BillingEntryInput struct {
 	UserID          uint
 	EntryType       string // 见 billing_schema.go 的 BillingType* 常量
+	BillingState    string // 默认 settled；待人工处理时传 pending_reconcile / upstream_unmetered
 	AmountUSD       int64  // 入账正、出账负；api_usage_sub 传 0（单位 micro_usd）
 	BalanceAfterUSD int64  // 调用方算好（quota+= 后的值，单位 micro_usd）
 	Description     string
@@ -37,6 +38,10 @@ type BillingEntryInput struct {
 	// API 调用专属（可选）
 	ModelName            string
 	TokensTotal          int
+	RequestID            string
+	DeliveredBytes       int64
+	EstimatedInputTokens int
+	EstimatedCostUSD     int64
 	SourceSubscriptionID *uint
 
 	// 原币审计（可选）
@@ -61,6 +66,13 @@ func WriteBillingEntry(tx *gorm.DB, in BillingEntryInput) error {
 	if !IsKnownBillingType(in.EntryType) {
 		return fmt.Errorf("billing: unknown EntryType=%q (typo would corrupt summaries)", in.EntryType)
 	}
+	billingState := in.BillingState
+	if billingState == "" {
+		billingState = BillingStateSettled
+	}
+	if !IsKnownBillingState(billingState) {
+		return fmt.Errorf("billing: unknown BillingState=%q", billingState)
+	}
 	// fix Minor m3：零金额类型 invariant — AmountUSD 必须为 0
 	if IsZeroAmountBillingType(in.EntryType) && in.AmountUSD != 0 {
 		return fmt.Errorf("billing: %s entries require AmountUSD=0, got %v", in.EntryType, in.AmountUSD)
@@ -73,6 +85,7 @@ func WriteBillingEntry(tx *gorm.DB, in BillingEntryInput) error {
 		UserID:               in.UserID,
 		OccurredAt:           occurredAt,
 		EntryType:            in.EntryType,
+		BillingState:         billingState,
 		AmountUSD:            in.AmountUSD,
 		BalanceAfterUSD:      in.BalanceAfterUSD,
 		Description:          in.Description,
@@ -80,6 +93,10 @@ func WriteBillingEntry(tx *gorm.DB, in BillingEntryInput) error {
 		RelatedID:            in.RelatedID,
 		ModelName:            in.ModelName,
 		TokensTotal:          in.TokensTotal,
+		RequestID:            in.RequestID,
+		DeliveredBytes:       in.DeliveredBytes,
+		EstimatedInputTokens: in.EstimatedInputTokens,
+		EstimatedCostUSD:     in.EstimatedCostUSD,
 		SourceSubscriptionID: in.SourceSubscriptionID,
 		CurrencyOriginal:     in.CurrencyOriginal,
 		AmountOriginal:       in.AmountOriginal,

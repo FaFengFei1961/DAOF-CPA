@@ -182,6 +182,9 @@ func InitDB() {
 	// (entry_type, occurred_at DESC)：admin 全局某类型流水
 	mustExecIndex("idx_billing_type_time", `CREATE INDEX IF NOT EXISTS idx_billing_type_time
 		ON billing_entries(entry_type, occurred_at DESC)`)
+	// pending_reconcile / upstream_unmetered 后台对账列表
+	mustExecIndex("idx_billing_state_time", `CREATE INDEX IF NOT EXISTS idx_billing_state_time
+		ON billing_entries(billing_state, occurred_at DESC)`)
 	// (related_type, related_id)：从原始记录反查账单条目
 	mustExecIndex("idx_billing_related", `CREATE INDEX IF NOT EXISTS idx_billing_related
 		ON billing_entries(related_type, related_id)`)

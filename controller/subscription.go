@@ -528,6 +528,20 @@ type subscriptionUsageSummary struct {
 	IsUnlimited   bool       `json:"is_unlimited"`
 }
 
+func scaleMicroByFloatForDisplay(value int64, multiplier float64) int64 {
+	if value <= 0 {
+		return 0
+	}
+	if multiplier <= 0 || math.IsNaN(multiplier) || math.IsInf(multiplier, 0) {
+		multiplier = 1
+	}
+	scaled := math.Round(float64(value) * multiplier)
+	if scaled <= 0 || scaled >= float64(math.MaxInt64) {
+		return 0
+	}
+	return int64(scaled)
+}
+
 func buildSubscriptionUsageSummary(snapshotJSON string, usages []database.SubscriptionUsage) []subscriptionUsageSummary {
 	type planSnap struct {
 		ID                 uint    `json:"id"`
@@ -535,6 +549,7 @@ func buildSubscriptionUsageSummary(snapshotJSON string, usages []database.Subscr
 		ModelMatch         string  `json:"model_match"`
 		LimitUnit          string  `json:"limit_unit"`
 		LimitValue         float64 `json:"limit_value"`
+		LimitValueMicroUSD int64   `json:"limit_value_micro_usd"`
 		WindowSeconds      int     `json:"window_seconds"`
 		ExtraConfig        string  `json:"extra_config"`
 		QuantityMultiplier float64 `json:"quantity_multiplier"`
@@ -570,12 +585,19 @@ func buildSubscriptionUsageSummary(snapshotJSON string, usages []database.Subscr
 			mult = 1
 		}
 		limit := p.LimitValue * mult
+		if p.LimitUnit == "api_cost_usd" {
+			limit = database.MicroToUSD(scaleMicroByFloatForDisplay(p.LimitValueMicroUSD, mult))
+		}
 		consumed := 0.0
 		requestCount := int64(0)
 		var windowStart *time.Time
 		var windowEnd *time.Time
 		if hasUsage {
-			consumed = u.ConsumedValue
+			if p.LimitUnit == "api_cost_usd" {
+				consumed = database.MicroToUSD(u.ConsumedValueMicroUSD)
+			} else {
+				consumed = u.ConsumedValue
+			}
 			requestCount = u.RequestCount
 			ws := u.WindowStartAt
 			we := u.WindowEndAt
@@ -1314,6 +1336,7 @@ func AdminListSubscriptions(c *fiber.Ctx) error {
 				Name               string  `json:"name"`
 				LimitUnit          string  `json:"limit_unit"`
 				LimitValue         float64 `json:"limit_value"`
+				LimitValueMicroUSD int64   `json:"limit_value_micro_usd"`
 				WindowSeconds      int     `json:"window_seconds"`
 				ExtraConfig        string  `json:"extra_config"`
 				QuantityMultiplier float64 `json:"quantity_multiplier"`
@@ -1341,6 +1364,9 @@ func AdminListSubscriptions(c *fiber.Ctx) error {
 		consumedByPlan := make(map[uint]float64, len(usages))
 		for _, u := range usages {
 			consumedByPlan[u.QuotaPlanID] += u.ConsumedValue
+			if u.ConsumedValueMicroUSD > 0 {
+				consumedByPlan[u.QuotaPlanID] += database.MicroToUSD(u.ConsumedValueMicroUSD)
+			}
 		}
 		maxPct := 0.0
 		usageDetails := make([]map[string]any, 0, len(snap.Plans))
@@ -1350,6 +1376,9 @@ func AdminListSubscriptions(c *fiber.Ctx) error {
 				mult = 1
 			}
 			effectiveLimit := p.LimitValue * mult
+			if p.LimitUnit == "api_cost_usd" {
+				effectiveLimit = database.MicroToUSD(scaleMicroByFloatForDisplay(p.LimitValueMicroUSD, mult))
+			}
 			d := map[string]any{
 				"plan_id":        p.ID,
 				"name":           p.Name,
@@ -1409,6 +1438,7 @@ func buildPackageSnapshotTx(db *gorm.DB, pkg *database.Package) (string, error) 
 		ModelMatch         string  `json:"model_match"`
 		LimitUnit          string  `json:"limit_unit"`
 		LimitValue         float64 `json:"limit_value"`
+		LimitValueMicroUSD int64   `json:"limit_value_micro_usd"`
 		WindowSeconds      int     `json:"window_seconds"`
 		WeightFactor       string  `json:"weight_factor"`
 		Priority           int     `json:"priority"`
@@ -1474,6 +1504,9 @@ func buildPackageSnapshotTx(db *gorm.DB, pkg *database.Package) (string, error) 
 			missing = append(missing, pp.QuotaPlanID)
 			continue
 		}
+		if plan.LimitUnit == "api_cost_usd" && plan.LimitValue > 0 && plan.LimitValueMicroUSD <= 0 {
+			return "", fmt.Errorf("package %d plan_id %d missing limit_value_micro_usd", pkg.ID, plan.ID)
+		}
 	}
 	if len(missing) > 0 {
 		return "", fmt.Errorf("package %d has invalid plan_ids %v (missing or disabled)", pkg.ID, missing)
@@ -1485,7 +1518,7 @@ func buildPackageSnapshotTx(db *gorm.DB, pkg *database.Package) (string, error) 
 		}
 		s.Plans = append(s.Plans, planSnap{
 			ID: plan.ID, Name: plan.Name, ModelMatch: plan.ModelMatch,
-			LimitUnit: plan.LimitUnit, LimitValue: plan.LimitValue,
+			LimitUnit: plan.LimitUnit, LimitValue: plan.LimitValue, LimitValueMicroUSD: plan.LimitValueMicroUSD,
 			WindowSeconds: plan.WindowSeconds, WeightFactor: plan.WeightFactor,
 			Priority: plan.Priority, OverflowStrategy: plan.OverflowStrategy,
 			ExtraConfig:        plan.ExtraConfig,

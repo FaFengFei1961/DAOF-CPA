@@ -4,7 +4,7 @@ import { Package, RefreshCw, RotateCcw, Search, X, Gift, ChevronDown, Gauge, Tim
 import toast from 'react-hot-toast';
 import { useConfirm } from '../context/ConfirmContext';
 import { authFetch } from '../utils/authFetch';
-import { remainingColor, safePct } from '../utils/credits';
+import { remainingColor, safePct, fmtRelativeFromNow } from '../utils/credits';
 import AdminGrantSubscriptionModal from './AdminGrantSubscriptionModal';
 
 // 与后端 adminSubItem 字段对齐
@@ -537,24 +537,37 @@ const AdminUsageMetric = ({ icon: Icon, label, value, sub, pct }) => {
 };
 
 const AdminUsageDetailMeter = ({ detail }) => {
+  const { t } = useTranslation();
+  const isExpired = detail.window_end_at && new Date(detail.window_end_at).getTime() < Date.now();
   const usedPct = safePct(detail.pct || 0);
   const remainingPct = Math.max(0, 100 - usedPct);
-  const color = remainingColor(remainingPct);
+  const color = isExpired ? 'var(--color-outline)' : remainingColor(remainingPct);
   return (
-    <div className="rounded-overlay border border-outline-variant/40 bg-surface-container-low p-3">
+    <div className={`rounded-overlay border border-outline-variant/40 p-3 ${isExpired ? 'bg-surface-container/50 grayscale opacity-80' : 'bg-surface-container-low'}`}>
       <div className="flex items-start justify-between gap-3">
         <div className="min-w-0">
           <div className="text-sm font-semibold text-on-surface truncate">{formatUsageName(detail)}</div>
           <div className="text-[11px] text-outline font-mono truncate">{detail.name || `plan#${detail.plan_id}`}</div>
         </div>
         <div className="text-right shrink-0">
-          <div className="text-[11px] text-on-surface-variant">已用</div>
-          <div className="text-lg font-bold" style={{ color }}>{usedPct.toFixed(1)}%</div>
+          {isExpired ? (
+            <div className="text-sm font-bold text-outline mt-1">{t('SUB.WINDOW_EXPIRED_TITLE', '已结束')}</div>
+          ) : (
+            <>
+              <div className="text-[11px] text-on-surface-variant">已用</div>
+              <div className="text-lg font-bold" style={{ color }}>{usedPct.toFixed(1)}%</div>
+            </>
+          )}
         </div>
       </div>
       <div className="mt-3 h-2 rounded-full bg-black/35 overflow-hidden">
-        <div className="h-full" style={{ width: `${usedPct}%`, background: color }} />
+        <div className="h-full" style={{ width: `${isExpired ? 0 : usedPct}%`, background: color }} />
       </div>
+      {isExpired && (
+        <div className="mt-2 text-xs text-on-surface-variant">
+          {t('SUB.WINDOW_EXPIRED_HINT', '等待下次请求触发新窗口')}
+        </div>
+      )}
       <div className="mt-3 grid grid-cols-3 gap-2 text-xs">
         <div>
           <div className="text-outline">已用</div>
@@ -566,9 +579,20 @@ const AdminUsageDetailMeter = ({ detail }) => {
         </div>
         <div>
           <div className="text-outline">窗口</div>
-          <div className="font-mono text-on-surface">{formatWindowLabel(detail.window_seconds)}</div>
+          <div className="font-mono text-on-surface">
+            {isExpired ? (
+              <span className="text-outline">{t('SUB.WINDOW_ENDED_RELATIVE', '已过期 · {{relative}}', { relative: fmtRelativeFromNow(detail.window_end_at) || '' })}</span>
+            ) : (
+              formatWindowLabel(detail.window_seconds)
+            )}
+          </div>
         </div>
       </div>
+      {isExpired && (
+        <div className="mt-2 text-[10px] text-outline">
+          {t('SUB.WINDOW_LAST_USAGE', '上次窗口用量 {{used}} / {{limit}}', { used: fmtUsageValue(detail.consumed, detail.unit), limit: detail.limit > 0 ? fmtUsageValue(detail.limit, detail.unit) : '不限' })}
+        </div>
+      )}
     </div>
   );
 };

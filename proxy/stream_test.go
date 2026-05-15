@@ -1,8 +1,12 @@
 package proxy
 
 import (
+	"bufio"
 	"bytes"
+	"fmt"
 	"io"
+	"math"
+	"net"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -781,6 +785,207 @@ func TestStreamSuccessWithoutUsageIsAuditedAsUpstreamUnmetered(t *testing.T) {
 	}
 }
 
+func TestNonStreamZeroUsageWritesUpstreamUnmeteredBillingState(t *testing.T) {
+	app, cleanup := setupBillingFormulaTest(t, "gpt-zero-usage-test", `{
+		"choices":[{"message":{"content":"ok"}}],
+		"usage":{"prompt_tokens":0,"completion_tokens":0}
+	}`, &database.ChannelModel{
+		ChannelID:          1,
+		Weight:             1,
+		InputPrice:         1,
+		OutputPrice:        1,
+		ModerationLevel:    "off",
+		ModerationFailMode: "open",
+	})
+	defer cleanup()
+
+	payload := `{"model":"gpt-zero-usage-test","messages":[{"role":"user","content":"hi"}]}`
+	req := httptest.NewRequest("POST", "/v1/chat/completions", bytes.NewBufferString(payload))
+	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("Authorization", "Bearer sk-billing-formula")
+	resp, err := app.Test(req, -1)
+	if err != nil {
+		t.Fatalf("request failed: %v", err)
+	}
+	body, _ := io.ReadAll(resp.Body)
+	resp.Body.Close()
+	if resp.StatusCode != 200 {
+		t.Fatalf("expected upstream success to pass through, got %d body=%s", resp.StatusCode, string(body))
+	}
+
+	var bill database.BillingEntry
+	if err := database.DB.Where("model_name = ? AND billing_state = ?", "gpt-zero-usage-test", database.BillingStateUpstreamUnmetered).First(&bill).Error; err != nil {
+		t.Fatalf("expected upstream_unmetered billing entry: %v", err)
+	}
+	if bill.AmountUSD != 0 || bill.EntryType != database.BillingTypeApiUsagePendingReconcile {
+		t.Fatalf("unexpected billing entry: %+v", bill)
+	}
+	var logRow database.ApiLog
+	if err := database.DB.Where("model_name = ?", "gpt-zero-usage-test").First(&logRow).Error; err != nil {
+		t.Fatalf("expected api log: %v", err)
+	}
+	if logRow.Status != 200 || logRow.ErrorType != "upstream_unmetered" || logRow.Cost != 0 {
+		t.Fatalf("unexpected api log: %+v", logRow)
+	}
+}
+
+func TestNonStreamCostCalculationFailureReturns502WithoutBilling(t *testing.T) {
+	app, cleanup := setupBillingFormulaTest(t, "gpt-cost-invalid-test", `{
+		"choices":[{"message":{"content":"ok"}}],
+		"usage":{"prompt_tokens":10,"completion_tokens":5}
+	}`, &database.ChannelModel{
+		ChannelID:          1,
+		Weight:             1,
+		InputPrice:         math.Inf(1),
+		OutputPrice:        1,
+		ModerationLevel:    "off",
+		ModerationFailMode: "open",
+	})
+	defer cleanup()
+
+	payload := `{"model":"gpt-cost-invalid-test","messages":[{"role":"user","content":"hi"}]}`
+	req := httptest.NewRequest("POST", "/v1/chat/completions", bytes.NewBufferString(payload))
+	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("Authorization", "Bearer sk-billing-formula")
+	resp, err := app.Test(req, -1)
+	if err != nil {
+		t.Fatalf("request failed: %v", err)
+	}
+	body, _ := io.ReadAll(resp.Body)
+	resp.Body.Close()
+	if resp.StatusCode != 502 {
+		t.Fatalf("expected 502 for invalid cost, got %d body=%s", resp.StatusCode, string(body))
+	}
+	var count int64
+	database.DB.Model(&database.BillingEntry{}).Where("model_name = ?", "gpt-cost-invalid-test").Count(&count)
+	if count != 0 {
+		t.Fatalf("non-stream invalid cost must not write billing entries, got %d", count)
+	}
+}
+
+func TestStreamCostCalculationFailureWritesPendingReconcile(t *testing.T) {
+	app, cleanup := setupStreamStateTest(t, "gpt-stream-cost-invalid", "data: {\"choices\":[{\"delta\":{\"content\":\"hello\"}}]}\n\ndata: {\"usage\":{\"prompt_tokens\":10,\"completion_tokens\":5}}\n\ndata: [DONE]\n\n", &database.ChannelModel{
+		ChannelID:          1,
+		Weight:             1,
+		InputPrice:         math.Inf(1),
+		OutputPrice:        1,
+		ModerationLevel:    "off",
+		ModerationFailMode: "open",
+	})
+	defer cleanup()
+
+	resp := invokeStreamStateRequest(t, app, "gpt-stream-cost-invalid")
+	if resp.StatusCode != 200 {
+		body, _ := io.ReadAll(resp.Body)
+		t.Fatalf("stream status should remain 200 after delivery, got %d body=%s", resp.StatusCode, string(body))
+	}
+	resp.Body.Close()
+
+	var bill database.BillingEntry
+	if err := database.DB.Where("model_name = ? AND billing_state = ?", "gpt-stream-cost-invalid", database.BillingStatePendingReconcile).First(&bill).Error; err != nil {
+		t.Fatalf("expected pending_reconcile billing entry: %v", err)
+	}
+	if bill.AmountUSD != 0 || bill.EstimatedCostUSD <= 0 {
+		t.Fatalf("unexpected pending billing entry: %+v", bill)
+	}
+}
+
+func TestStreamClientDisconnectBeforeUsageWritesPendingReconcile(t *testing.T) {
+	var err error
+	database.DB, err = gorm.Open(sqlite.Open("file:stream-disconnect-pending?mode=memory&cache=shared"), &gorm.Config{})
+	if err != nil {
+		t.Fatalf("open in-memory db: %v", err)
+	}
+	if err := database.DB.AutoMigrate(&database.User{}, &database.ApiLog{}, &database.UserSubscription{},
+		&database.SubscriptionUsage{}, &database.Channel{}, &database.ChannelModel{}, &database.BillingEntry{}); err != nil {
+		t.Fatalf("migrate: %v", err)
+	}
+	user := database.User{ID: 101, Username: "stream-disconnect", Token: "sk-stream-disconnect", Quota: 100 * database.MicroPerUSD, Status: 1, BalanceConsumeEnabled: true}
+	if err := database.DB.Create(&user).Error; err != nil {
+		t.Fatalf("create user: %v", err)
+	}
+	AuthCache = map[string]*database.User{user.Token: &user}
+	AuthTokenCache = map[string]*database.AccessToken{}
+	RouteCache = map[string][]*database.ChannelModel{}
+	ChannelMapCache = map[uint]*database.Channel{}
+
+	backend := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "text/event-stream")
+		w.Header().Set("X-Request-Id", "req-disconnect-test")
+		w.WriteHeader(200)
+		flusher, _ := w.(http.Flusher)
+		for i := 0; i < 100; i++ {
+			fmt.Fprintf(w, "data: {\"choices\":[{\"delta\":{\"content\":\"chunk-%d\"}}]}\n\n", i)
+			if flusher != nil {
+				flusher.Flush()
+			}
+			time.Sleep(5 * time.Millisecond)
+		}
+	}))
+	defer backend.Close()
+	ChannelMapCache[1] = &database.Channel{ID: 1, Type: ChannelTypeOpenAI, BaseURL: backend.URL, Key: "upstream-key"}
+	RouteCache["gpt-disconnect-pending"] = []*database.ChannelModel{{
+		ChannelID:          1,
+		Weight:             1,
+		InputPrice:         1,
+		OutputPrice:        1,
+		ModerationLevel:    "off",
+		ModerationFailMode: "open",
+	}}
+
+	app := fiber.New()
+	app.Post("/v1/chat/completions", ChatCompletionProxyHandler)
+	ln, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatalf("listen: %v", err)
+	}
+	errCh := make(chan error, 1)
+	go func() {
+		errCh <- app.Listener(ln)
+	}()
+	defer func() {
+		_ = app.Shutdown()
+		<-errCh
+	}()
+
+	payload := `{"model":"gpt-disconnect-pending","messages":[{"role":"user","content":"hi"}],"stream":true}`
+	conn, err := net.Dial("tcp", ln.Addr().String())
+	if err != nil {
+		t.Fatalf("dial app: %v", err)
+	}
+	_, _ = fmt.Fprintf(conn, "POST /v1/chat/completions HTTP/1.1\r\nHost: %s\r\nContent-Type: application/json\r\nAuthorization: Bearer %s\r\nContent-Length: %d\r\n\r\n%s",
+		ln.Addr().String(), user.Token, len(payload), payload)
+	_ = conn.SetDeadline(time.Now().Add(2 * time.Second))
+	reader := bufio.NewReader(conn)
+	for {
+		line, err := reader.ReadString('\n')
+		if err != nil {
+			t.Fatalf("read response header: %v", err)
+		}
+		if line == "\r\n" {
+			break
+		}
+	}
+	if _, err := reader.ReadString('\n'); err != nil {
+		t.Fatalf("read first stream line: %v", err)
+	}
+	_ = conn.Close()
+
+	deadline := time.Now().Add(3 * time.Second)
+	for time.Now().Before(deadline) {
+		var bill database.BillingEntry
+		err := database.DB.Where("model_name = ? AND billing_state = ?", "gpt-disconnect-pending", database.BillingStatePendingReconcile).First(&bill).Error
+		if err == nil {
+			if bill.DeliveredBytes <= 0 || bill.EstimatedInputTokens <= 0 || bill.EstimatedCostUSD <= 0 || bill.RequestID == "" {
+				t.Fatalf("pending entry missing reconcile facts: %+v", bill)
+			}
+			return
+		}
+		time.Sleep(25 * time.Millisecond)
+	}
+	t.Fatalf("expected pending_reconcile billing entry after client disconnect")
+}
+
 func TestGetTransportEdge(t *testing.T) {
 	tr1 := getTransport("")                      // Default
 	tr2 := getTransport("http://127.0.0.1:1080") // Custom
@@ -943,6 +1148,54 @@ func TestBillingLongContextThresholdUsesPromptTokensOnly(t *testing.T) {
 	if row.Cost != 300000 {
 		t.Fatalf("cost=%d want 300000", row.Cost)
 	}
+}
+
+func setupStreamStateTest(t *testing.T, modelName, upstreamBody string, route *database.ChannelModel) (*fiber.App, func()) {
+	t.Helper()
+	var err error
+	database.DB, err = gorm.Open(sqlite.Open("file:"+modelName+"?mode=memory&cache=shared"), &gorm.Config{})
+	if err != nil {
+		t.Fatalf("open in-memory db: %v", err)
+	}
+	if err := database.DB.AutoMigrate(&database.User{}, &database.ApiLog{}, &database.UserSubscription{},
+		&database.SubscriptionUsage{}, &database.Channel{}, &database.ChannelModel{}, &database.BillingEntry{}); err != nil {
+		t.Fatalf("migrate: %v", err)
+	}
+	user := database.User{ID: 100, Username: "stream-state", Token: "sk-stream-state", Quota: 100 * database.MicroPerUSD, Status: 1, BalanceConsumeEnabled: true}
+	if err := database.DB.Create(&user).Error; err != nil {
+		t.Fatalf("create user: %v", err)
+	}
+
+	AuthCache = map[string]*database.User{user.Token: &user}
+	AuthTokenCache = map[string]*database.AccessToken{}
+	RouteCache = map[string][]*database.ChannelModel{}
+	ChannelMapCache = map[uint]*database.Channel{}
+
+	backend := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "text/event-stream")
+		w.Header().Set("X-Request-Id", "req-state-test")
+		w.WriteHeader(200)
+		w.Write([]byte(upstreamBody))
+	}))
+	ChannelMapCache[1] = &database.Channel{ID: 1, Type: ChannelTypeOpenAI, BaseURL: backend.URL, Key: "upstream-key"}
+	RouteCache[modelName] = []*database.ChannelModel{route}
+
+	app := fiber.New()
+	app.Post("/v1/chat/completions", ChatCompletionProxyHandler)
+	return app, backend.Close
+}
+
+func invokeStreamStateRequest(t *testing.T, app *fiber.App, modelName string) *http.Response {
+	t.Helper()
+	payload := `{"model":"` + modelName + `","messages":[{"role":"user","content":"hi"}],"stream":true}`
+	req := httptest.NewRequest("POST", "/v1/chat/completions", bytes.NewBufferString(payload))
+	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("Authorization", "Bearer sk-stream-state")
+	resp, err := app.Test(req, -1)
+	if err != nil {
+		t.Fatalf("request failed: %v", err)
+	}
+	return resp
 }
 
 func setupBillingFormulaTest(t *testing.T, modelName, upstreamBody string, route *database.ChannelModel) (*fiber.App, func()) {

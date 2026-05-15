@@ -207,17 +207,22 @@ func firstOrCreateDefaultQuotaPlan(tx *gorm.DB, spec defaultSubscriptionTier, wi
 		return plan, false, nil
 	}
 	enabled := true
+	limitMicro, ok := USDToMicro(limitUSD)
+	if !ok {
+		return plan, false, fmt.Errorf("quota plan %s limit overflow", name)
+	}
 	plan = QuotaPlan{
-		Name:             name,
-		DisplayName:      fmt.Sprintf("%s %s · %s", spec.ProviderLabel, spec.TierLabel, windowLabel),
-		Description:      fmt.Sprintf("%s。额度单位为 API 等值美元，不是现金余额。", windowLabel),
-		ModelMatch:       spec.ModelMatch,
-		LimitUnit:        "api_cost_usd",
-		LimitValue:       limitUSD,
-		WindowSeconds:    windowSeconds,
-		WeightFactor:     "{}",
-		Priority:         100,
-		OverflowStrategy: "block",
+		Name:               name,
+		DisplayName:        fmt.Sprintf("%s %s · %s", spec.ProviderLabel, spec.TierLabel, windowLabel),
+		Description:        fmt.Sprintf("%s。额度单位为 API 等值美元，不是现金余额。", windowLabel),
+		ModelMatch:         spec.ModelMatch,
+		LimitUnit:          "api_cost_usd",
+		LimitValue:         limitUSD,
+		LimitValueMicroUSD: limitMicro,
+		WindowSeconds:      windowSeconds,
+		WeightFactor:       "{}",
+		Priority:           100,
+		OverflowStrategy:   "block",
 		ExtraConfig: fmt.Sprintf(`{"seed":"subscription_v1","bucket":"%s","bucket_label":"%s","window":"%s"}`,
 			spec.Bucket, spec.ProviderLabel, windowKey),
 		Enabled: &enabled,

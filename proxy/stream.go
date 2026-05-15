@@ -385,6 +385,9 @@ func precheckQuotaMicroValues(decision EngineDecision) (limit, used, remaining i
 	if decision.BlockUnit != "api_cost_usd" {
 		return 0, 0, 0
 	}
+	if decision.BlockLimitMicroUSD > 0 || decision.BlockConsumedMicroUSD > 0 || decision.BlockRemainingMicroUSD > 0 {
+		return decision.BlockLimitMicroUSD, decision.BlockConsumedMicroUSD, decision.BlockRemainingMicroUSD
+	}
 	limit, _ = database.USDToMicro(decision.BlockLimitValue)
 	used, _ = database.USDToMicro(decision.BlockConsumedValue)
 	remaining, _ = database.USDToMicro(math.Max(0, decision.BlockRemaining))
@@ -935,7 +938,139 @@ func ChatCompletionProxyHandler(c *fiber.Ctx) error {
 	// Helper for Atomic Quota Deduction
 	apiErrorType := ""
 	apiErrorMessage := ""
-	deductQuota := func(promptTokens, completionTokens, cachedTokens, cacheWriteTokens, cacheWrite5mTokens, cacheWrite1hTokens, reasoningTokens, status int) {
+	type manualBillingStateInput struct {
+		BillingState          string
+		ReasonTag             string
+		ErrorType             string
+		ErrorMessage          string
+		Status                int
+		PromptTokens          int
+		CompletionTokens      int
+		CachedTokens          int
+		CacheWriteTokens      int
+		CacheWrite5mTokens    int
+		CacheWrite1hTokens    int
+		ReasoningTokens       int
+		DeliveredBytes        int64
+		EstimatedInputTokens  int
+		EstimatedCostMicroUSD int64
+	}
+	selectedChannelTypeForBilling := func() string {
+		if selectedChan == nil {
+			return ""
+		}
+		return selectedChan.Type
+	}
+	upstreamRequestID := func(apiLogID uint) string {
+		for _, header := range []string{"X-Request-Id", "X-Cpa-Request-Id", "Request-Id"} {
+			if v := strings.TrimSpace(httpResp.Header.Get(header)); v != "" {
+				return sanitizeError(v, 128)
+			}
+		}
+		if apiLogID > 0 {
+			return fmt.Sprintf("api_log:%d", apiLogID)
+		}
+		return fmt.Sprintf("local:%d:%d", user.ID, startTime.UnixNano())
+	}
+	writeBillingWithRetry := func(entry database.BillingEntryInput, rawCostMicroUSD, chargedCostMicroUSD int64, apiLogID uint) {
+		var billErr error
+		for attempt := 1; attempt <= 3; attempt++ {
+			billErr = database.WriteBillingEntryNonFatal(entry)
+			if billErr == nil {
+				return
+			}
+			log.Printf("[BILLING-PENDING-WRITE] attempt %d/3 failed user=%d model=%s state=%s: %v", attempt, user.ID, modelName, entry.BillingState, billErr)
+			if attempt < 3 {
+				time.Sleep(100 * time.Millisecond)
+			}
+		}
+		log.Printf("[BILLING-LOST-DEBT] user=%d model=%s raw_cost_micro=%d charged_cost_micro=%d api_log_id=%d state=%s UNRECOVERABLE — manual reconcile from ApiLog required: %v",
+			user.ID, modelName, rawCostMicroUSD, chargedCostMicroUSD, apiLogID, entry.BillingState, billErr)
+	}
+	recordManualBillingState := func(in manualBillingStateInput) {
+		if in.EstimatedInputTokens <= 0 {
+			in.EstimatedInputTokens = estimatePrecheckTokens(body)
+		}
+		if in.Status == 0 {
+			in.Status = 200
+		}
+		selectedChannelType := selectedChannelTypeForBilling()
+		resolution := ResolveBillingRules(modelName, body, in.ReasoningTokens, selectedChannelType, fallbackUserOptIn).WithCosts(0)
+		apiLog := database.ApiLog{
+			UserID:               user.ID,
+			TokenName:            HashTokenForLog(token),
+			ModelName:            modelName,
+			RequestedModel:       resolution.RequestedModel,
+			ServedModel:          resolution.ServedModel,
+			PromptTokens:         in.PromptTokens,
+			CompletionTokens:     in.CompletionTokens,
+			CachedTokens:         in.CachedTokens,
+			CacheWriteTokens:     in.CacheWriteTokens,
+			CacheWrite5mTokens:   in.CacheWrite5mTokens,
+			CacheWrite1hTokens:   in.CacheWrite1hTokens,
+			ReasoningTokens:      in.ReasoningTokens,
+			Cost:                 0,
+			ChargedCost:          0,
+			PlatformCostEstimate: 0,
+			ModelWeight:          resolution.ModelWeight,
+			HealthMultiplier:     resolution.HealthMultiplier,
+			BillingRulesVersion:  resolution.BillingRulesVersion,
+			FallbackUserOptIn:    resolution.FallbackUserOptIn,
+			FallbackReason:       sanitizeError(resolution.FallbackReason, 160),
+			UpstreamProvider:     sanitizeError(strings.ToLower(strings.TrimSpace(selectedChannelType)), 64),
+			Latency:              time.Since(startTime).Milliseconds(),
+			Status:               in.Status,
+			IPAddress:            clientIP,
+			RequestPath:          sanitizeError(path, 160),
+			ErrorType:            sanitizeError(in.ErrorType, 64),
+			ErrorMessage:         sanitizeError(in.ErrorMessage, 512),
+			PrecheckInputTokens:  in.EstimatedInputTokens,
+			PrecheckRawCost:      in.EstimatedCostMicroUSD,
+			PrecheckChargedCost:  in.EstimatedCostMicroUSD,
+			CreatedAt:            time.Now(),
+		}
+		apiLogPersisted := true
+		if err := database.DB.Create(&apiLog).Error; err != nil {
+			log.Printf("[BILLING-CRITICAL] user=%d model=%s manual-state api_log create failed: %v", user.ID, modelName, err)
+			apiLogPersisted = false
+		}
+		relatedID := uint(0)
+		relatedType := ""
+		if apiLogPersisted {
+			relatedID = apiLog.ID
+			relatedType = "api_log"
+		}
+		requestID := upstreamRequestID(relatedID)
+		entry := database.BillingEntryInput{
+			UserID:               user.ID,
+			EntryType:            database.BillingTypeApiUsagePendingReconcile,
+			BillingState:         in.BillingState,
+			AmountUSD:            0,
+			BalanceAfterUSD:      user.Quota,
+			ModelName:            modelName,
+			TokensTotal:          in.PromptTokens + in.CompletionTokens,
+			RequestID:            requestID,
+			DeliveredBytes:       in.DeliveredBytes,
+			EstimatedInputTokens: in.EstimatedInputTokens,
+			EstimatedCostUSD:     in.EstimatedCostMicroUSD,
+			RelatedType:          relatedType,
+			RelatedID:            relatedID,
+			Description: fmt.Sprintf("[%s] %s · request_id=%s · delivered_bytes=%d · estimated_input_tokens=%d · estimated_cost=%s · %s",
+				in.ReasonTag, modelName, requestID, in.DeliveredBytes, in.EstimatedInputTokens,
+				FormatChargedCostForDescription(in.EstimatedCostMicroUSD, in.EstimatedCostMicroUSD), in.ErrorMessage),
+		}
+		writeBillingWithRetry(entry, in.EstimatedCostMicroUSD, in.EstimatedCostMicroUSD, relatedID)
+	}
+	estimateDeliveredCost := func(deliveredBytes int64) int64 {
+		outputTokens := 0
+		if deliveredBytes > 0 {
+			outputTokens = int((deliveredBytes + 3) / 4)
+		}
+		estimated := estimatePrecheckBalanceDelta(modelName, estimatePrecheckTokens(body), outputTokens)
+		resolution := ResolveBillingRules(modelName, body, 0, selectedChannelTypeForBilling(), fallbackUserOptIn).WithCosts(estimated)
+		return resolution.ChargedCostMicroUSD
+	}
+	deductQuota := func(promptTokens, completionTokens, cachedTokens, cacheWriteTokens, cacheWrite5mTokens, cacheWrite1hTokens, reasoningTokens, status int, deliveredBytes int64) bool {
 		// fix CRITICAL Phase 4-codex（第二十四轮）：所有 token 必须 clamp >= 0；
 		// cached 必须 ≤ prompt（cached 是 prompt 子集），否则 (prompt-cached) 为负让 cost 变负，
 		// 进入 `if costMicroUSD > 0` 分支被跳过 → 用户得到免费服务且 ApiLog.Cost 污染统计。
@@ -1056,7 +1191,28 @@ func ChatCompletionProxyHandler(c *fiber.Ctx) error {
 				log.Printf("[BILLING-CRITICAL] user=%d model=%s cost overflow/NaN; prompt=%d completion=%d cached_read=%d cache_write=%d cache_write_5m=%d cache_write_1h=%d reasoning=%d inputPrice=%v outputPrice=%v cachedPrice=%v cacheWrite5mPrice=%v cacheWrite1hPrice=%v — failing closed (0 cost)",
 					user.ID, modelName, promptTokens, completionTokens, cachedTokens, cacheWriteTokens, cacheWrite5mTokens, cacheWrite1hTokens, reasoningTokens,
 					inputPrice, outputPrice, cachedInputPrice, cacheWriteInputPrice, cacheWrite1hInputPrice)
-				costMicroUSD = 0
+				if isStream {
+					recordManualBillingState(manualBillingStateInput{
+						BillingState:          database.BillingStatePendingReconcile,
+						ReasonTag:             "COST-CALC-FAILED",
+						ErrorType:             "billing_cost_invalid",
+						ErrorMessage:          "stream delivered but cost calculation failed",
+						Status:                200,
+						PromptTokens:          promptTokens,
+						CompletionTokens:      completionTokens,
+						CachedTokens:          cachedTokens,
+						CacheWriteTokens:      cacheWriteTokens,
+						CacheWrite5mTokens:    cacheWrite5mTokens,
+						CacheWrite1hTokens:    cacheWrite1hTokens,
+						ReasoningTokens:       reasoningTokens,
+						DeliveredBytes:        deliveredBytes,
+						EstimatedInputTokens:  promptTokens,
+						EstimatedCostMicroUSD: estimateDeliveredCost(deliveredBytes),
+					})
+				} else {
+					recordProxyApiLog(user.ID, token, modelName, 502, clientIP, startTime, path, "billing_cost_invalid", "cost calculation failed")
+				}
+				return false
 			}
 		}
 		selectedChannelType := ""
@@ -1141,14 +1297,18 @@ func ChatCompletionProxyHandler(c *fiber.Ctx) error {
 				relatedType = "api_log"
 			}
 			pendingEntry := database.BillingEntryInput{
-				UserID:          user.ID,
-				EntryType:       database.BillingTypeApiUsagePendingReconcile,
-				AmountUSD:       0,
-				BalanceAfterUSD: user.Quota,
-				ModelName:       modelName,
-				TokensTotal:     promptTokens + completionTokens, // cached/reasoning 是 prompt/completion 子集（cost 算法保持一致）
-				RelatedType:     relatedType,
-				RelatedID:       relatedID,
+				UserID:               user.ID,
+				EntryType:            database.BillingTypeApiUsagePendingReconcile,
+				BillingState:         database.BillingStatePendingReconcile,
+				AmountUSD:            0,
+				BalanceAfterUSD:      user.Quota,
+				ModelName:            modelName,
+				TokensTotal:          promptTokens + completionTokens, // cached/reasoning 是 prompt/completion 子集（cost 算法保持一致）
+				RequestID:            upstreamRequestID(relatedID),
+				EstimatedInputTokens: promptTokens,
+				EstimatedCostUSD:     chargedCostMicroUSD,
+				RelatedType:          relatedType,
+				RelatedID:            relatedID,
 				Description: fmt.Sprintf("[DB-RETRY] %s · %d+%d tokens · %s 待对账（订阅 DB 加载失败）",
 					modelName, promptTokens, completionTokens, FormatChargedCostForDescription(costMicroUSD, chargedCostMicroUSD)),
 			}
@@ -1169,7 +1329,7 @@ func ChatCompletionProxyHandler(c *fiber.Ctx) error {
 				log.Printf("[BILLING-LOST-DEBT] user=%d model=%s raw_cost_micro=%d charged_cost_micro=%d api_log_id=%d UNRECOVERABLE — manual reconcile from ApiLog required: %v",
 					user.ID, modelName, costMicroUSD, chargedCostMicroUSD, apiLog.ID, billErr)
 			}
-			return // 不走 sub 账单 + 不走 balance fallback 扣费
+			return true // 不走 sub 账单 + 不走 balance fallback 扣费
 		}
 
 		// 账单流水：命中订阅扣额度（不动 quota，AmountUSD=0，仅审计 token 数）
@@ -1277,14 +1437,18 @@ func ChatCompletionProxyHandler(c *fiber.Ctx) error {
 					relatedType = "api_log"
 				}
 				pendingEntry := database.BillingEntryInput{
-					UserID:          user.ID,
-					EntryType:       database.BillingTypeApiUsagePendingReconcile,
-					AmountUSD:       0,
-					BalanceAfterUSD: user.Quota,
-					ModelName:       modelName,
-					TokensTotal:     promptTokens + completionTokens, // cached/reasoning 是 prompt/completion 子集（cost 算法保持一致）
-					RelatedType:     relatedType,
-					RelatedID:       relatedID,
+					UserID:               user.ID,
+					EntryType:            database.BillingTypeApiUsagePendingReconcile,
+					BillingState:         database.BillingStatePendingReconcile,
+					AmountUSD:            0,
+					BalanceAfterUSD:      user.Quota,
+					ModelName:            modelName,
+					TokensTotal:          promptTokens + completionTokens, // cached/reasoning 是 prompt/completion 子集（cost 算法保持一致）
+					RequestID:            upstreamRequestID(relatedID),
+					EstimatedInputTokens: promptTokens,
+					EstimatedCostUSD:     chargedCostMicroUSD,
+					RelatedType:          relatedType,
+					RelatedID:            relatedID,
 					Description: fmt.Sprintf("[UNAUTHORIZED-FALLBACK] %s · %d+%d tokens · %s 待对账（订阅 commit 期被耗尽 + 余额消费禁用）",
 						modelName, promptTokens, completionTokens, FormatChargedCostForDescription(costMicroUSD, chargedCostMicroUSD)),
 				}
@@ -1333,6 +1497,7 @@ func ChatCompletionProxyHandler(c *fiber.Ctx) error {
 				authTokenMutex.Unlock()
 			}
 		}
+		return true
 	}
 
 	// fix Major（codex 第七轮）：原实现把上游所有响应头透传给客户端，
@@ -1391,7 +1556,13 @@ func ChatCompletionProxyHandler(c *fiber.Ctx) error {
 			if inputTokens < 0 {
 				inputTokens = 0
 			}
-			deductQuota(inputTokens, 0, 0, 0, 0, 0, 0, statusCode)
+			if !deductQuota(inputTokens, 0, 0, 0, 0, 0, 0, statusCode, 0) {
+				c.Set("Content-Type", "application/json")
+				return c.Status(502).JSON(fiber.Map{"error": fiber.Map{
+					"message": "billing cost calculation failed",
+					"type":    "billing_cost_invalid",
+				}})
+			}
 			return c.Send(bodyCopy)
 		}
 
@@ -1409,7 +1580,32 @@ func ChatCompletionProxyHandler(c *fiber.Ctx) error {
 				"type":    "upstream_unmetered",
 			}})
 		}
-		deductQuota(usage.PromptTokens, usage.CompletionTokens, usage.CachedTokens, usage.CacheWriteTokens, usage.CacheWrite5mTokens, usage.CacheWrite1hTokens, usage.ReasoningTokens, statusCode)
+		if statusCode >= 200 && statusCode < 300 && usage.HasAny() && !usage.HasBillableTokens() {
+			log.Printf("[BILLING-UNMETERED] user=%d model=%s non-stream upstream returned usage metadata with zero billable tokens", user.ID, modelName)
+			recordManualBillingState(manualBillingStateInput{
+				BillingState:         database.BillingStateUpstreamUnmetered,
+				ReasonTag:            "UPSTREAM-UNMETERED",
+				ErrorType:            "upstream_unmetered",
+				ErrorMessage:         "upstream usage metadata had zero billable tokens",
+				Status:               statusCode,
+				PromptTokens:         usage.PromptTokens,
+				CompletionTokens:     usage.CompletionTokens,
+				CachedTokens:         usage.CachedTokens,
+				CacheWriteTokens:     usage.CacheWriteTokens,
+				CacheWrite5mTokens:   usage.CacheWrite5mTokens,
+				CacheWrite1hTokens:   usage.CacheWrite1hTokens,
+				ReasoningTokens:      usage.ReasoningTokens,
+				EstimatedInputTokens: estimatePrecheckTokens(body),
+			})
+			return c.Send(bodyCopy)
+		}
+		if !deductQuota(usage.PromptTokens, usage.CompletionTokens, usage.CachedTokens, usage.CacheWriteTokens, usage.CacheWrite5mTokens, usage.CacheWrite1hTokens, usage.ReasoningTokens, statusCode, 0) {
+			c.Set("Content-Type", "application/json")
+			return c.Status(502).JSON(fiber.Map{"error": fiber.Map{
+				"message": "billing cost calculation failed",
+				"type":    "billing_cost_invalid",
+			}})
+		}
 
 		return c.Send(bodyCopy)
 	}
@@ -1449,7 +1645,9 @@ func ChatCompletionProxyHandler(c *fiber.Ctx) error {
 		cacheWrite5mTokens := 0
 		cacheWrite1hTokens := 0
 		reasoningTokens := 0
-		sawMeteredUsage := false
+		sawUsageMetadata := false
+		sawBillableUsage := false
+		deliveredBytes := int64(0)
 		var param any
 
 		extractUsage := func(jsonData []byte) {
@@ -1469,7 +1667,10 @@ func ChatCompletionProxyHandler(c *fiber.Ctx) error {
 			}
 			usage := extractUsageTokenCounts(usageBlock)
 			if usage.HasAny() {
-				sawMeteredUsage = true
+				sawUsageMetadata = true
+			}
+			if usage.HasBillableTokens() {
+				sawBillableUsage = true
 			}
 			if usage.HasPromptTokens {
 				promptTokens = usage.PromptTokens
@@ -1547,6 +1748,7 @@ func ChatCompletionProxyHandler(c *fiber.Ctx) error {
 					}
 					w.Write(chunk)
 					w.Write([]byte("\n\n"))
+					deliveredBytes += int64(len(chunk))
 				}
 			} else {
 				if jsonData := jsonPayload(line); jsonData != nil {
@@ -1554,6 +1756,7 @@ func ChatCompletionProxyHandler(c *fiber.Ctx) error {
 				}
 				w.Write(line)
 				w.Write([]byte("\n"))
+				deliveredBytes += int64(len(line))
 			}
 
 			if !flushOrBail() {
@@ -1566,14 +1769,50 @@ func ChatCompletionProxyHandler(c *fiber.Ctx) error {
 			// 这里显式调一次让上游 Read 立刻返回 err，scanner 退出更快、token 计费更准确）。
 			successfulUpstreamCancel()
 			// 仍然走 deductQuota（已经接收到的 token 应当计费），但跳过下面的 [DONE] / error 事件
-			if !sawMeteredUsage {
+			if !sawUsageMetadata {
 				log.Printf("[BILLING-UNMETERED] user=%d model=%s stream disconnected before usage metadata; delivered portion not billed", user.ID, modelName)
 				apiErrorType = "client_disconnected_unmetered"
 				apiErrorMessage = "client disconnected before usage metadata"
-				deductQuota(promptTokens, completionTokens, cachedTokens, cacheWriteTokens, cacheWrite5mTokens, cacheWrite1hTokens, reasoningTokens, 499)
+				recordManualBillingState(manualBillingStateInput{
+					BillingState:          database.BillingStatePendingReconcile,
+					ReasonTag:             "CLIENT-DISCONNECT",
+					ErrorType:             apiErrorType,
+					ErrorMessage:          apiErrorMessage,
+					Status:                499,
+					PromptTokens:          promptTokens,
+					CompletionTokens:      completionTokens,
+					CachedTokens:          cachedTokens,
+					CacheWriteTokens:      cacheWriteTokens,
+					CacheWrite5mTokens:    cacheWrite5mTokens,
+					CacheWrite1hTokens:    cacheWrite1hTokens,
+					ReasoningTokens:       reasoningTokens,
+					DeliveredBytes:        deliveredBytes,
+					EstimatedInputTokens:  estimatePrecheckTokens(body),
+					EstimatedCostMicroUSD: estimateDeliveredCost(deliveredBytes),
+				})
 				return
 			}
-			deductQuota(promptTokens, completionTokens, cachedTokens, cacheWriteTokens, cacheWrite5mTokens, cacheWrite1hTokens, reasoningTokens, 200)
+			if !sawBillableUsage {
+				log.Printf("[BILLING-UNMETERED] user=%d model=%s stream disconnected after zero-token usage metadata", user.ID, modelName)
+				recordManualBillingState(manualBillingStateInput{
+					BillingState:         database.BillingStateUpstreamUnmetered,
+					ReasonTag:            "UPSTREAM-UNMETERED",
+					ErrorType:            "upstream_unmetered",
+					ErrorMessage:         "upstream usage metadata had zero billable tokens",
+					Status:               200,
+					PromptTokens:         promptTokens,
+					CompletionTokens:     completionTokens,
+					CachedTokens:         cachedTokens,
+					CacheWriteTokens:     cacheWriteTokens,
+					CacheWrite5mTokens:   cacheWrite5mTokens,
+					CacheWrite1hTokens:   cacheWrite1hTokens,
+					ReasoningTokens:      reasoningTokens,
+					DeliveredBytes:       deliveredBytes,
+					EstimatedInputTokens: estimatePrecheckTokens(body),
+				})
+				return
+			}
+			deductQuota(promptTokens, completionTokens, cachedTokens, cacheWriteTokens, cacheWrite5mTokens, cacheWrite1hTokens, reasoningTokens, 200, deliveredBytes)
 			return
 		}
 
@@ -1593,15 +1832,36 @@ func ChatCompletionProxyHandler(c *fiber.Ctx) error {
 			w.Flush()
 		}
 
-		if !sawMeteredUsage {
+		if !sawUsageMetadata {
 			log.Printf("[BILLING-UNMETERED] user=%d model=%s stream upstream omitted usage metadata; delivered response not billed", user.ID, modelName)
 			apiErrorType = "upstream_unmetered"
 			apiErrorMessage = "upstream stream omitted usage metadata"
-			deductQuota(promptTokens, completionTokens, cachedTokens, cacheWriteTokens, cacheWrite5mTokens, cacheWrite1hTokens, reasoningTokens, 502)
+			deductQuota(promptTokens, completionTokens, cachedTokens, cacheWriteTokens, cacheWrite5mTokens, cacheWrite1hTokens, reasoningTokens, 502, deliveredBytes)
 			return
 		}
 
-		deductQuota(promptTokens, completionTokens, cachedTokens, cacheWriteTokens, cacheWrite5mTokens, cacheWrite1hTokens, reasoningTokens, 200)
+		if !sawBillableUsage {
+			log.Printf("[BILLING-UNMETERED] user=%d model=%s stream upstream returned usage metadata with zero billable tokens", user.ID, modelName)
+			recordManualBillingState(manualBillingStateInput{
+				BillingState:         database.BillingStateUpstreamUnmetered,
+				ReasonTag:            "UPSTREAM-UNMETERED",
+				ErrorType:            "upstream_unmetered",
+				ErrorMessage:         "upstream usage metadata had zero billable tokens",
+				Status:               200,
+				PromptTokens:         promptTokens,
+				CompletionTokens:     completionTokens,
+				CachedTokens:         cachedTokens,
+				CacheWriteTokens:     cacheWriteTokens,
+				CacheWrite5mTokens:   cacheWrite5mTokens,
+				CacheWrite1hTokens:   cacheWrite1hTokens,
+				ReasoningTokens:      reasoningTokens,
+				DeliveredBytes:       deliveredBytes,
+				EstimatedInputTokens: estimatePrecheckTokens(body),
+			})
+			return
+		}
+
+		deductQuota(promptTokens, completionTokens, cachedTokens, cacheWriteTokens, cacheWrite5mTokens, cacheWrite1hTokens, reasoningTokens, 200, deliveredBytes)
 	})
 
 	return nil
@@ -1687,6 +1947,10 @@ type usageTokenCounts struct {
 
 func (u usageTokenCounts) HasAny() bool {
 	return u.HasPromptTokens || u.HasCompletionTokens || u.HasCachedTokens || u.HasCacheWriteTokens || u.HasReasoningTokens
+}
+
+func (u usageTokenCounts) HasBillableTokens() bool {
+	return u.PromptTokens+u.CompletionTokens > 0
 }
 
 func extractUsageTokenCounts(usage gjson.Result) usageTokenCounts {
@@ -1822,8 +2086,8 @@ func checkedCostMicroUSD(t1 int, p1 float64, t2 int, p2 float64, t3 int, p3 floa
 		if math.IsNaN(p) || math.IsInf(p, 0) {
 			return 0, false
 		}
-		if p < 0 {
-			return 0, false // 负价格无意义
+		if p < 0 || p > database.MaxChannelModelPricePerMTok {
+			return 0, false // 负价格或异常巨大价格无意义
 		}
 	}
 	// token 必须 >= 0

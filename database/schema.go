@@ -1,6 +1,8 @@
 package database
 
 import (
+	"fmt"
+	"math"
 	"time"
 
 	"gorm.io/gorm"
@@ -113,6 +115,37 @@ type ChannelModel struct {
 	CreatedAt time.Time      `json:"created_at"`
 	UpdatedAt time.Time      `json:"updated_at"`
 	DeletedAt gorm.DeletedAt `gorm:"index" json:"-"` // 软删除：与 Channel 的 DeletedAt 配对，channel.go DeleteChannel 时一并 Delete
+}
+
+const MaxChannelModelPricePerMTok = 1_000_000.0
+
+// ValidateChannelModelPricing rejects values that can make cost calculation
+// non-finite, negative, or operationally absurd before they enter route cache.
+func ValidateChannelModelPricing(cm *ChannelModel) error {
+	if cm == nil {
+		return fmt.Errorf("channel model is nil")
+	}
+	for name, v := range map[string]float64{
+		"input_price":                cm.InputPrice,
+		"output_price":               cm.OutputPrice,
+		"cached_input_price":         cm.CachedInputPrice,
+		"cache_write_input_price":    cm.CacheWriteInputPrice,
+		"cache_write_1h_input_price": cm.CacheWrite1hInputPrice,
+		"high_input_price":           cm.HighInputPrice,
+		"high_cached_input_price":    cm.HighCachedInputPrice,
+		"high_output_price":          cm.HighOutputPrice,
+	} {
+		if math.IsNaN(v) || math.IsInf(v, 0) || v < 0 || v > MaxChannelModelPricePerMTok {
+			return fmt.Errorf("%s must be finite and between 0 and %.0f USD/M tokens", name, MaxChannelModelPricePerMTok)
+		}
+	}
+	if cm.ContextPriceThreshold < 0 {
+		return fmt.Errorf("context_price_threshold must be >= 0")
+	}
+	if cm.Weight < 0 {
+		return fmt.Errorf("weight must be >= 0")
+	}
+	return nil
 }
 
 // SysConfig 存储全息网关的底层鉴权机密，如 Github Oauth / 阿里云信息等

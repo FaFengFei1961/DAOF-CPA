@@ -39,6 +39,10 @@ type BillingEntry struct {
 	// EntryType 见上方文件头注释。索引用于按类型筛选。
 	EntryType string `gorm:"index;not null;size:32;<-:create" json:"entry_type"`
 
+	// BillingState 是账单行的处理状态。正常已结算行写 settled；上游已交付但无法安全扣减时
+	// 写 pending_reconcile / upstream_unmetered，供后续 admin 对账。
+	BillingState string `gorm:"index;not null;default:'settled';size:32;<-:create" json:"billing_state"`
+
 	// AmountUSD 影响 user.quota 的净变动；仅 api_usage_sub 类型为 0。
 	// 单位：micro_usd（USD * 1e6），int64 全程整数算术杜绝累加误差。
 	AmountUSD int64 `gorm:"not null;<-:create" json:"amount_usd"`
@@ -52,6 +56,12 @@ type BillingEntry struct {
 	// API 调用专属字段（其他类型留空）
 	ModelName   string `gorm:"size:64;<-:create" json:"model_name,omitempty"`
 	TokensTotal int    `gorm:"<-:create" json:"tokens_total,omitempty"` // prompt + completion（cached/reasoning 是这两者的子集，不重复加）
+
+	// 待对账 API 调用补充字段。AmountUSD 仍为 0，不影响余额；这些字段只保留可追溯的估算事实。
+	RequestID            string `gorm:"index;size:128;<-:create" json:"request_id,omitempty"`
+	DeliveredBytes       int64  `gorm:"default:0;<-:create" json:"delivered_bytes,omitempty"`
+	EstimatedInputTokens int    `gorm:"default:0;<-:create" json:"estimated_input_tokens,omitempty"`
+	EstimatedCostUSD     int64  `gorm:"default:0;<-:create" json:"estimated_cost_usd,omitempty"` // micro_usd
 
 	// SourceSubscriptionID 语义因 EntryType 不同（fix m4，codex 第十四轮印证）：
 	//   api_usage_sub → 此次 API 调用的额度来自哪个订阅实例（"quota source"）
@@ -74,6 +84,12 @@ type BillingEntry struct {
 //
 // Phase 8：平台只保留周期订阅模式。
 const (
+	BillingStateSettled           = "settled"
+	BillingStatePendingReconcile  = "pending_reconcile"
+	BillingStateUpstreamUnmetered = "upstream_unmetered"
+)
+
+const (
 	BillingTypeTopup             = "topup"               // 充值入账
 	BillingTypePurchaseSub       = "purchase_sub"        // 购买周期套餐
 	BillingTypeBonusCredit       = "bonus_credit"        // 注册 / 邀请等奖励余额
@@ -93,6 +109,14 @@ const (
 // IsCreditEntry 是否为入账类型（用于汇总；AmountUSD 单位 micro_usd）
 func (b *BillingEntry) IsCreditEntry() bool {
 	return b.AmountUSD > 0
+}
+
+func IsKnownBillingState(s string) bool {
+	switch s {
+	case BillingStateSettled, BillingStatePendingReconcile, BillingStateUpstreamUnmetered:
+		return true
+	}
+	return false
 }
 
 // IsConsumeEntry 是否为消费类型（仅 API 扣费 + 购买；不含退款回收）
