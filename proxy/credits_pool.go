@@ -1745,6 +1745,47 @@ func fetchGeminiCliQuota(ctx context.Context, af authFileLite, entry *CreditEntr
 	} else {
 		entry.Models = []string{"gemini-2.5-pro", "gemini-2.5-flash", "gemini-2.5-flash-lite"}
 	}
+
+	// 拉 paidTier.id / currentTier.id 作为 Gemini CLI 套餐级别（FREE / LEGACY / STANDARD /
+	// PRO / ULTRA 等，来自 Google Cloud Code Assist）。逻辑与 Antigravity 一致，但 metadata
+	// 标 ideName=gemini-cli 让上游区分。
+	caHeaders := map[string]string{
+		"Authorization":     "Bearer $TOKEN$",
+		"Content-Type":      "application/json",
+		"User-Agent":        "GeminiCLI/0.5.0 (linux; x64)",
+		"x-goog-api-client": "gl-node/22.10.0",
+	}
+	caPayload, _ := json.Marshal(map[string]any{
+		"metadata": map[string]any{
+			"ideName":       "gemini-cli",
+			"ideType":       "IDE_UNSPECIFIED",
+			"ideVersion":    "0.5.0",
+			"pluginVersion": "0.5.0",
+			"platform":      "PLATFORM_LINUX",
+			"duetProject":   projectID,
+		},
+		"mode":                    "FULL_ELIGIBILITY_CHECK",
+		"cloudaicompanionProject": projectID,
+	})
+	if r, err := cpaAPICall(ctx, af.AuthIndex, "POST",
+		"https://cloudcode-pa.googleapis.com/v1internal:loadCodeAssist",
+		caHeaders, string(caPayload)); err == nil && r.StatusCode == 200 {
+		var resp struct {
+			PaidTier    *struct{ ID string `json:"id"` } `json:"paidTier"`
+			CurrentTier *struct{ ID string `json:"id"` } `json:"currentTier"`
+		}
+		if json.Unmarshal(r.Body, &resp) == nil {
+			switch {
+			case resp.PaidTier != nil && resp.PaidTier.ID != "":
+				entry.PlanType = resp.PaidTier.ID
+			case resp.CurrentTier != nil && resp.CurrentTier.ID != "":
+				entry.PlanType = resp.CurrentTier.ID
+			}
+		}
+	} else if err != nil {
+		log.Printf("[CREDITS] Gemini-CLI loadCodeAssist auth=%s 失败: %s", af.AuthIndex, sanitizeError(err.Error(), 200))
+	}
+
 	return nil
 }
 
