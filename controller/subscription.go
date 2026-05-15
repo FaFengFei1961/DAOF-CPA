@@ -1370,10 +1370,21 @@ func AdminListSubscriptions(c *fiber.Ctx) error {
 		// 计算消费率：取所有限额 plan 中 consumed/limit 最大的那个
 		usages := usagesBySubID[sub.ID]
 		consumedByPlan := make(map[uint]float64, len(usages))
-		for _, u := range usages {
+		// 按 plan_id 索引最近一条 usage row（用于提取 window_start_at / window_end_at / request_count）
+		latestUsageByPlan := make(map[uint]*database.SubscriptionUsage, len(usages))
+		for i, u := range usages {
 			consumedByPlan[u.QuotaPlanID] += u.ConsumedValue
 			if u.ConsumedValueMicroUSD > 0 {
 				consumedByPlan[u.QuotaPlanID] += database.MicroToUSD(u.ConsumedValueMicroUSD)
+			}
+			// 多 bucket 时取 window_end_at 最近（最新）的一条作为 admin 展示参考
+			prev, ok := latestUsageByPlan[u.QuotaPlanID]
+			if !ok {
+				latestUsageByPlan[u.QuotaPlanID] = &usages[i]
+				continue
+			}
+			if !u.WindowEndAt.IsZero() && (prev.WindowEndAt.IsZero() || u.WindowEndAt.After(prev.WindowEndAt)) {
+				latestUsageByPlan[u.QuotaPlanID] = &usages[i]
 			}
 		}
 		maxPct := 0.0
@@ -1402,6 +1413,17 @@ func AdminListSubscriptions(c *fiber.Ctx) error {
 				"window_seconds": p.WindowSeconds,
 				"extra_config":   p.ExtraConfig,
 				"consumed":       consumedByPlan[p.ID],
+			}
+			// 补 window 信息：admin UI 依赖 window_end_at 判断窗口是否过期（trigger-on-first-use
+			// 模式下窗口过期不会自动 reset，UI 需展示"已结束 · 等待下次请求"而非继续显示老百分比）
+			if usage := latestUsageByPlan[p.ID]; usage != nil {
+				if !usage.WindowStartAt.IsZero() {
+					d["window_start_at"] = usage.WindowStartAt
+				}
+				if !usage.WindowEndAt.IsZero() {
+					d["window_end_at"] = usage.WindowEndAt
+				}
+				d["request_count"] = usage.RequestCount
 			}
 			if effectiveLimit > 0 {
 				pct := consumedByPlan[p.ID] / effectiveLimit * 100
