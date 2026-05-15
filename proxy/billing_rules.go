@@ -261,6 +261,19 @@ func matchBillingWeight(modelName string, thinking bool, rules []BillingWeightRu
 	return 1.0
 }
 
+// applyBillingMultiplier 把 multiplier (PPM 整数) 应用到已 ceil-div 的 micro_usd 成本。
+//
+// fix CRITICAL Sprint4-M2：旧实现使用 floor div（big.Int.Div）会让"已 ceil 到 1 micro
+// 的低成本请求"再经 multiplier<1 时被截断到 0 micro（"免费消耗"漏洞从 checkedCostMicroUSD
+// 出口移动到这里）。
+//
+// 举例：
+//   cost=2 micro × multiplier=0.3 → 2 × 300000 / 1e6 = 0.6
+//   旧 floor: 0 micro  → 免费消耗 ❌
+//   新 ceil:  1 micro  → 平台至少收 1 micro ✓
+//
+// 修复：对**正数结果**使用 ceil-div：(a + b - 1) / b（a, b > 0 时等价 ⌈a/b⌉）。
+// 与 checkedCostMicroUSD 的 ceil 策略一致，保证全链路平台永不少收。
 func applyBillingMultiplier(costMicroUSD int64, multiplier float64) int64 {
 	if costMicroUSD <= 0 {
 		return 0
@@ -271,7 +284,12 @@ func applyBillingMultiplier(costMicroUSD int64, multiplier float64) int64 {
 	}
 
 	value := new(big.Int).Mul(big.NewInt(costMicroUSD), big.NewInt(multiplierPPM))
-	value.Div(value, big.NewInt(database.MultiplierPPMBase))
+	// Ceil-div：value > 0 时 (value + base - 1) / base = ⌈value/base⌉
+	divisor := big.NewInt(database.MultiplierPPMBase)
+	if value.Sign() > 0 {
+		value.Add(value, new(big.Int).Sub(divisor, big.NewInt(1)))
+	}
+	value.Quo(value, divisor)
 	if !value.IsInt64() {
 		return math.MaxInt64
 	}

@@ -17,6 +17,7 @@ import (
 	"fmt"
 	"log"
 	"math"
+	"math/big"
 	"path"
 	"sort"
 	"strings"
@@ -542,18 +543,36 @@ func computeDelta(plan snapshotPlan, req EngineRequest) (float64, string) {
 	return -1, plan.LimitUnit
 }
 
+// scaleAPICostLimitMicroUSD 用 quantity_multiplier 扩缩 api_cost_usd plan 的限额（micro_usd）。
+//
+// fix CRITICAL Sprint4-M2：旧实现 `math.Round(float64(limitMicroUSD) * multiplier)`
+// 对于不可精确表示的 multiplier（如 0.3）会引入 IEEE 754 噪声。改为 PPM 整数路径：
+//   limitMicroUSD × multiplierPPM / 1e6
+// 整除发放额度（限额方向：floor 不"额外赠送"，保守发放）。
+//
+// 边界例：
+//   limit=1_000_000 × multiplier=0.3 → 1_000_000 × 300000 / 1e6 = 300_000 (= $0.30) ✓
+//   limit=1_000_000 × multiplier=2.5 → 1_000_000 × 2500000 / 1e6 = 2_500_000 (= $2.50) ✓
+//
+// 与 applyBillingMultiplier 同款 multiplierPPMFromFloat 解析路径，统一 PPM 入口。
 func scaleAPICostLimitMicroUSD(limitMicroUSD int64, multiplier float64) (int64, bool) {
-	if limitMicroUSD < 0 || math.IsNaN(multiplier) || math.IsInf(multiplier, 0) || multiplier <= 0 {
+	if limitMicroUSD < 0 {
 		return 0, false
 	}
 	if limitMicroUSD == 0 {
 		return 0, true
 	}
-	scaled := math.Round(float64(limitMicroUSD) * multiplier)
-	if scaled <= 0 || scaled >= float64(math.MaxInt64) {
+	multiplierPPM, ok := multiplierPPMFromFloat(multiplier)
+	if !ok {
 		return 0, false
 	}
-	return int64(scaled), true
+	value := new(big.Int).Mul(big.NewInt(limitMicroUSD), big.NewInt(multiplierPPM))
+	// 限额方向：floor 不赠送额度（admin 配 multiplier 表示精确倍数，余数舍去）
+	value.Quo(value, big.NewInt(database.MultiplierPPMBase))
+	if !value.IsInt64() || value.Sign() <= 0 {
+		return 0, false
+	}
+	return value.Int64(), true
 }
 
 type weightInOut struct {

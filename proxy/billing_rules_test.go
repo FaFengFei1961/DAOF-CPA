@@ -100,6 +100,8 @@ func TestResolveBillingRulesFromConfig(t *testing.T) {
 	}
 }
 
+// TestMultiplierFixedPoint 验证 applyBillingMultiplier 使用 ceil-div（Sprint4-M2 fix）。
+// 余数 > 0 时向上进位，保证正数成本不被截断到 0；与 checkedCostMicroUSD 同款 ceil 语义。
 func TestMultiplierFixedPoint(t *testing.T) {
 	cases := []struct {
 		cost       int64
@@ -115,14 +117,42 @@ func TestMultiplierFixedPoint(t *testing.T) {
 		if !ok {
 			t.Fatalf("multiplierPPMFromFloat(%v) failed", tc.multiplier)
 		}
-		expected := new(big.Int).Mul(big.NewInt(tc.cost), big.NewInt(ppm))
-		expected.Div(expected, big.NewInt(database.MultiplierPPMBase))
+		// 期望 ceil-div: ⌈cost × ppm / base⌉
+		product := new(big.Int).Mul(big.NewInt(tc.cost), big.NewInt(ppm))
+		divisor := big.NewInt(database.MultiplierPPMBase)
+		adjusted := new(big.Int).Add(product, new(big.Int).Sub(divisor, big.NewInt(1)))
+		expected := new(big.Int).Quo(adjusted, divisor)
 		if !expected.IsInt64() {
 			t.Fatalf("test expected overflowed: %s", expected.String())
 		}
 		if got := applyBillingMultiplier(tc.cost, tc.multiplier); got != expected.Int64() {
 			t.Fatalf("cost=%d multiplier=%v got=%d want=%d", tc.cost, tc.multiplier, got, expected.Int64())
 		}
+	}
+}
+
+// TestApplyBillingMultiplier_CeilPreventsSubMicroLoss 验证 ceil-div 防 sub-1-micro 免费消耗：
+// cost × multiplier 落在 (0, 1) micro 范围 → 必须进位到 1，旧 floor 会截断到 0（免费）。
+func TestApplyBillingMultiplier_CeilPreventsSubMicroLoss(t *testing.T) {
+	// 2 micro × 0.3 = 0.6 micro → ceil = 1（旧 floor = 0 即免费消耗）
+	if got := applyBillingMultiplier(2, 0.3); got != 1 {
+		t.Errorf("cost=2 mult=0.3 expect ceil to 1 micro, got %d (was 0 before Sprint4-M2 fix)", got)
+	}
+	// 1 micro × 0.5 = 0.5 micro → ceil = 1
+	if got := applyBillingMultiplier(1, 0.5); got != 1 {
+		t.Errorf("cost=1 mult=0.5 expect ceil to 1, got %d", got)
+	}
+	// 边界：1 micro × 1.0 = 1 micro，整除不应误进位
+	if got := applyBillingMultiplier(1, 1.0); got != 1 {
+		t.Errorf("cost=1 mult=1.0 expect exact 1, got %d", got)
+	}
+	// 0 成本仍为 0
+	if got := applyBillingMultiplier(0, 0.5); got != 0 {
+		t.Errorf("cost=0 expect 0, got %d", got)
+	}
+	// 负成本返回 0
+	if got := applyBillingMultiplier(-5, 0.5); got != 0 {
+		t.Errorf("cost=-5 expect 0, got %d", got)
 	}
 }
 
