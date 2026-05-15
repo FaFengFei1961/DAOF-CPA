@@ -1,20 +1,4 @@
-/**
- * App — Phase 0 重构后的根组件
- *
- * 旧版 App.jsx 587 行混合了：路由、auth、ban 拦截、global profile fetch、mobile bottom nav。
- * 重构后：
- *   - 路由 → routes.jsx + RouterProvider
- *   - auth/profile/ban → context/AuthContext.jsx
- *   - mobile bottom nav → shells/MobileBottomNav.jsx
- *   - sys/setup wizard → 这里仍保留（pre-app flow，不进路由）
- *
- * App.jsx 现在只做：
- *   1. setup needed / sys param 前置 wizard（admin 首次安装 / admin secret login）
- *   2. AuthProvider 包裹
- *   3. Toaster + AuthModalContainer + BanAlertContainer 全局 portal
- *   4. RouterProvider 挂载
- *   5. github oauth callback 拦截（一次性，URL 含 ?code= 时）
- */
+
 import React, { useEffect, useMemo, useState, lazy, Suspense } from 'react';
 import { useTranslation } from 'react-i18next';
 import { RouterProvider } from 'react-router-dom';
@@ -27,11 +11,10 @@ import router from './routes';
 import { logger } from './utils/logger';
 
 const AdminSecretLogin = lazy(() => import('./components/AdminSecretLogin'));
+const BANNED_MARKER = '\u5c01\u7981';
+const BANNED_PREFIX = '\u8d26\u6237\u88ab\u5c01\u7981';
+const BANNED_REASON_PREFIX = '\u7406\u7531\uff1a';
 
-// ─── 内部组件：处理 github oauth callback ────────────────────────
-//
-// 必须在 AuthProvider 内（用 useAuth 触发 modal）。挂载点在 RootShell。
-//
 const GithubCallbackHandler = () => {
   const { t } = useTranslation();
   const { openLogin, onLoginSuccess } = useAuth();
@@ -55,7 +38,10 @@ const GithubCallbackHandler = () => {
       .then(async (res) => {
         const ct = res.headers.get('content-type') || '';
         if (!ct.includes('application/json')) {
-          throw new Error(`HTTP ${res.status}：服务端返回非 JSON 响应`);
+          throw new Error(t('APP.NON_JSON_RESPONSE', {
+            status: res.status,
+            defaultValue: 'HTTP {{status}}: 服务端返回非 JSON 响应',
+          }));
         }
         return res.json();
       })
@@ -68,10 +54,10 @@ const GithubCallbackHandler = () => {
           openLogin({ step: 'bind', tmpToken: data.tmp_token });
         } else if (data.action === 'require_profile_setup') {
           openLogin({ step: 'profile', tmpToken: data.tmp_token, defaultName: data.default_name || '' });
-        } else if (data.message_code === 'ERR_BANNED' || (data.message && data.message.includes('封禁'))) {
-          // ban 通过 daof_banned 事件抛出，AuthContext 监听
+        } else if (data.message_code === 'ERR_BANNED' || (data.message && data.message.includes(BANNED_MARKER))) {
+
           window.dispatchEvent(new CustomEvent('daof_banned', {
-            detail: data.ban_reason || (data.message ? data.message.replace('账户被封禁', '').replace('理由：', '').trim() : ''),
+            detail: data.ban_reason || (data.message ? data.message.replace(BANNED_PREFIX, '').replace(BANNED_REASON_PREFIX, '').trim() : ''),
           }));
         } else {
           toast.error((data.message_code ? t('API.' + data.message_code) : data.message) || t('APP.GITHUB_OAUTH_FAILED', 'GitHub 登录失败'));
@@ -112,7 +98,7 @@ const RootShell = () => (
 function App() {
   const { t } = useTranslation();
 
-  // sys/setup 前置 wizard 仍然依赖 URL ?sys= 参数 + /api/root/check-sys
+
   const sysParam = useMemo(() => new URLSearchParams(window.location.search).get('sys'), []);
   const isAdminUnlocked = localStorage.getItem('daof_admin_unlocked') === '1';
   const [sysCheckStatus, setSysCheckStatus] = useState(() => ({
@@ -120,7 +106,7 @@ function App() {
     setupNeeded: false,
   }));
 
-  // 仅当带 sysParam 才探测系统首次安装态（避免外网 LanGuard 403 噪音）
+
   useEffect(() => {
     if (!sysParam) return;
     let cancelled = false;
@@ -148,7 +134,7 @@ function App() {
     );
   }
 
-  // setup 流程：必须带 ?sys=... 才能进入 setup 引导，否则锁站
+
   if (sysCheckStatus.setupNeeded) {
     if (sysParam && !isAdminUnlocked) {
       return (
@@ -157,7 +143,7 @@ function App() {
             sysParam={sysParam}
             setupMode
             onSuccess={() => {
-              // setup 完成 → 强制刷新到 /admin
+
               window.location.href = '/admin';
             }}
           />
@@ -176,7 +162,7 @@ function App() {
     );
   }
 
-  // 正常态：admin 通过 ?sys= URL 走 AdminSecretLogin
+
   if (sysParam && !isAdminUnlocked) {
     return (
       <Suspense fallback={<div className="min-h-screen bg-surface" />}>

@@ -57,10 +57,10 @@ const MySubscriptions = ({ isAuthenticated = true, embedded = false }) => {
         writePageCache(cacheKey, nextSubs);
         setSubs(nextSubs);
       } else {
-        toast.error(json.message || t('SUB.LOAD_FAIL', '加载失败'));
+        toast.error(json.message || t('MY_SUBS.LOAD_FAIL', '加载失败'));
       }
     } catch {
-      if (mountedRef.current) toast.error(t('SUB.LOAD_FAIL', '加载失败'));
+      if (mountedRef.current) toast.error(t('MY_SUBS.LOAD_FAIL', '加载失败'));
     } finally {
       if (mountedRef.current) {
         setLoading(false);
@@ -73,16 +73,16 @@ const MySubscriptions = ({ isAuthenticated = true, embedded = false }) => {
 
   const cancel = async (sub) => {
     const name = getPackageName(sub);
-    const msg = t('SUB.CANCEL_CONFIRM', { name, defaultValue: '取消订阅「{{name}}」？\n\n订阅将立即停止消费您的额度。如需退款，请通过客服工单提交申请。' });
+    const msg = t('MY_SUBS.CANCEL_CONFIRM', { name, defaultValue: '取消订阅「{{name}}」？\n\n订阅将立即停止消费您的额度。如需退款，请通过客服工单提交申请。' });
     if (!(await confirm(msg))) return;
     try {
       const json = await authFetch(`/api/subscriptions/${sub.id}/cancel`, { method: 'POST' });
       if (json.success) {
-        toast.success(t('SUB.CANCEL_OK', '订阅已取消。如需退款请联系客服。'));
+        toast.success(t('MY_SUBS.CANCEL_OK', '订阅已取消。如需退款请联系客服。'));
         load({ force: true });
-      } else toast.error(json.message || t('SUB.CANCEL_FAIL', '取消失败'));
+      } else toast.error(json.message || t('MY_SUBS.CANCEL_FAIL', '取消失败'));
     } catch {
-      toast.error(t('SUB.CANCEL_NET_ERR', '网络异常，取消失败'));
+      toast.error(t('MY_SUBS.CANCEL_NET_ERR', '网络异常，取消失败'));
     }
   };
 
@@ -93,7 +93,7 @@ const MySubscriptions = ({ isAuthenticated = true, embedded = false }) => {
   const activeSubscriptions = activeItems;
 
   const body = loading ? (
-    <div className="text-center py-20 text-on-surface-variant">{t('SUB.LOADING', '加载中...')}</div>
+    <div className="text-center py-20 text-on-surface-variant">{t('COMMON.LOADING', '加载中…')}</div>
   ) : (
     <>
       <UsageOverview
@@ -104,19 +104,19 @@ const MySubscriptions = ({ isAuthenticated = true, embedded = false }) => {
       />
 
       <StoreSection
-        title={t('SUB.GROUP_SUBSCRIPTION', '订阅')}
-        right={<span className="text-xs text-on-surface-variant">{activeSubscriptions.length} 个活跃订阅</span>}
+        title={t('MY_SUBS.GROUP_SUBSCRIPTION', '订阅')}
+        right={<span className="text-xs text-on-surface-variant">{t('MY_SUBS.ACTIVE_COUNT', '{{count}} 个活跃订阅', { count: activeSubscriptions.length })}</span>}
       >
         {activeSubscriptions.length === 0 ? (
           <EmptyUsageCard>
             <div className="flex flex-col items-center gap-3">
               <PackageIcon size={32} className="text-on-surface-variant/50" />
-              <span>{t('SUB.GROUP_SUB_EMPTY', '暂无活跃订阅')}</span>
-              <button 
+              <span>{t('MY_SUBS.GROUP_SUB_EMPTY', '暂无活跃订阅')}</span>
+              <button
                 onClick={() => window.location.href = '/upgrade'}
                 className="mt-2 text-sm font-semibold text-primary hover:underline inline-flex items-center gap-1"
               >
-                浏览套餐
+                {t('MY_SUBS.BROWSE_PACKAGES', '浏览套餐')}
               </button>
             </div>
           </EmptyUsageCard>
@@ -146,8 +146,8 @@ const MySubscriptions = ({ isAuthenticated = true, embedded = false }) => {
     <div className="w-full max-w-[1680px] mx-auto px-4 md:px-8 2xl:px-10 py-8">
       <StorePage
         icon={PackageIcon}
-        title={t('SUB.MY_TITLE', '我的订阅')}
-        subtitle={t('SUB.MY_SUBTITLE', '订阅最先消耗；用尽后才走余额扣费（在账号设置中开启）。')}
+        title={t('MY_SUBS.MY_TITLE', '我的订阅')}
+        subtitle={t('MY_SUBS.MY_SUBTITLE', '订阅最先消耗；用尽后才走余额扣费（在账号设置中开启）。')}
       >
         {body}
       </StorePage>
@@ -156,6 +156,7 @@ const MySubscriptions = ({ isAuthenticated = true, embedded = false }) => {
 };
 
 const UsageOverview = ({ items, refreshing, onRefresh, formatMeterCurrency }) => {
+  const { t } = useTranslation();
   const apiRows = items.flatMap((item) => item.summaries).filter((u) => u.unit === 'api_cost_usd');
   const fiveHour = sumUsage(apiRows.filter((u) => Number(u.window_seconds || 0) === 5 * 3600));
   const sevenDay = sumUsage(apiRows.filter((u) => Number(u.window_seconds || 0) === 7 * 86400));
@@ -165,7 +166,7 @@ const UsageOverview = ({ items, refreshing, onRefresh, formatMeterCurrency }) =>
   return (
     <section className="space-y-3">
       <div className="flex items-center justify-between gap-3">
-        <h2 className="text-xl font-bold text-on-surface">用量监控</h2>
+        <h2 className="text-xl font-bold text-on-surface">{t('MY_SUBS.USAGE_MONITOR_TITLE', '用量监控')}</h2>
         <button
           type="button"
           onClick={onRefresh}
@@ -173,14 +174,14 @@ const UsageOverview = ({ items, refreshing, onRefresh, formatMeterCurrency }) =>
           className="inline-flex items-center gap-2 h-9 px-3 rounded-control bg-surface-container-high border border-outline-variant text-xs font-semibold text-on-surface-variant hover:text-on-surface disabled:opacity-60"
         >
           <RefreshCw size={14} className={refreshing ? 'animate-spin' : ''} />
-          刷新
+          {t('COMMON.REFRESH', '刷新')}
         </button>
       </div>
       <div className="grid grid-cols-1 sm:grid-cols-2 xl:grid-cols-4 gap-3">
-        <MetricCard icon={Layers} label="当前优先消费" value={priorityName} sub={`${items.length} 个活跃订阅`} />
-        <MetricCard icon={TimerReset} label="5 小时剩余" value={formatRemainingMetric(fiveHour, formatMeterCurrency)} sub={formatUsedMetric(fiveHour, formatMeterCurrency)} tone={fiveHour.remainingPct} />
-        <MetricCard icon={Gauge} label="7 天剩余" value={formatRemainingMetric(sevenDay, formatMeterCurrency)} sub={formatUsedMetric(sevenDay, formatMeterCurrency)} tone={sevenDay.remainingPct} />
-        <MetricCard icon={Activity} label="已采集用量" value={formatUsageValue(observed.consumed, 'api_cost_usd', formatMeterCurrency)} sub={`${observed.requestCount} 次调用`} />
+        <MetricCard icon={Layers} label={t('MY_SUBS.METRIC_PRIORITY', '当前优先消费')} value={priorityName} sub={t('MY_SUBS.ACTIVE_COUNT', '{{count}} 个活跃订阅', { count: items.length })} />
+        <MetricCard icon={TimerReset} label={t('MY_SUBS.METRIC_5H_REMAINING', '5 小时剩余')} value={formatRemainingMetric(fiveHour, formatMeterCurrency)} sub={formatUsedMetric(fiveHour, formatMeterCurrency, t)} tone={fiveHour.remainingPct} />
+        <MetricCard icon={Gauge} label={t('MY_SUBS.METRIC_7D_REMAINING', '7 天剩余')} value={formatRemainingMetric(sevenDay, formatMeterCurrency)} sub={formatUsedMetric(sevenDay, formatMeterCurrency, t)} tone={sevenDay.remainingPct} />
+        <MetricCard icon={Activity} label={t('MY_SUBS.METRIC_OBSERVED_USAGE', '已采集用量')} value={formatUsageValue(observed.consumed, 'api_cost_usd', formatMeterCurrency)} sub={t('MY_SUBS.API_CALL_COUNT', '{{count}} 次调用', { count: observed.requestCount })} />
       </div>
     </section>
   );
@@ -225,24 +226,24 @@ const SubscriptionUsageCard = ({ item, priority, onCancel, t, formatMeterCurrenc
               <span className="font-bold text-lg text-on-surface min-w-0 break-words leading-snug">{packageName}</span>
               <span className="text-xs px-2 py-0.5 rounded-control bg-primary/10 text-primary font-mono">#{sub.stack_index}</span>
               {priority ? (
-                <span className="text-xs px-2 py-0.5 rounded-control bg-success/20 text-success">{t('SUB.ACTIVE_TAG', '优先消费中')}</span>
+                <span className="text-xs px-2 py-0.5 rounded-control bg-success/20 text-success">{t('MY_SUBS.ACTIVE_TAG', '优先消费中')}</span>
               ) : (
-                <span className="text-xs px-2 py-0.5 rounded-control bg-surface-container-high text-outline">{t('SUB.QUEUED_TAG', '排队中')}</span>
+                <span className="text-xs px-2 py-0.5 rounded-control bg-surface-container-high text-outline">{t('MY_SUBS.QUEUED_TAG', '排队中')}</span>
               )}
               {sub.is_granted && (
-                <span className="text-xs px-2 py-0.5 rounded-control bg-surface-container-high text-on-surface-variant">内测赠送</span>
+                <span className="text-xs px-2 py-0.5 rounded-control bg-surface-container-high text-on-surface-variant">{t('MY_SUBS.GRANTED_TAG', '内测赠送')}</span>
               )}
             </div>
             <div className="mt-2 text-xs text-on-surface-variant flex flex-wrap items-center gap-x-3 gap-y-1">
-              <span><Clock size={11} className="inline mr-1" />{t('SUB.DAYS_LEFT', { n: daysLeft, defaultValue: '剩 {{n}} 天' })}</span>
+              <span><Clock size={11} className="inline mr-1" />{t('MY_SUBS.DAYS_LEFT', { n: daysLeft, defaultValue: '剩 {{n}} 天' })}</span>
               <span>{fmtTime(sub.start_at)} - {fmtTime(sub.end_at)}</span>
             </div>
           </div>
           <div className="shrink-0 text-right">
-            <div className="text-[11px] text-on-surface-variant">平均剩余</div>
+            <div className="text-[11px] text-on-surface-variant">{t('MY_SUBS.AVG_REMAINING', '平均剩余')}</div>
             <div className="text-2xl font-bold" style={{ color }}>{avgRemaining.toFixed(1)}%</div>
           </div>
-          <button type="button" onClick={onCancel} className="p-2 -mr-2 -mt-2 text-on-surface-variant hover:text-error" title={t('SUB.CANCEL_BTN', '取消订阅')}>
+          <button type="button" onClick={onCancel} className="p-2 -mr-2 -mt-2 text-on-surface-variant hover:text-error" title={t('MY_SUBS.CANCEL_BTN', '取消订阅')}>
             <X size={16} />
           </button>
         </div>
@@ -250,7 +251,7 @@ const SubscriptionUsageCard = ({ item, priority, onCancel, t, formatMeterCurrenc
 
       <div className="p-5 space-y-3">
         {summaries.length === 0 ? (
-          <div className="text-xs text-outline italic">{t('SUB.NOT_USED', '暂无可展示的配额计划')}</div>
+          <div className="text-xs text-outline italic">{t('MY_SUBS.NOT_USED', '暂无可展示的配额计划')}</div>
         ) : (
           summaries.map((u) => <UsageMeter key={`${u.plan_id}:${u.model_bucket}:${u.window_seconds}`} usage={u} formatMeterCurrency={formatMeterCurrency} />)
         )}
@@ -265,23 +266,27 @@ const UsageMeter = ({ usage, formatMeterCurrency }) => {
   const consumedPct = usage.is_unlimited ? 0 : safePct(usage.usage_pct);
   const remainingPct = usage.is_unlimited ? 100 : Math.max(0, 100 - consumedPct);
   const color = isExpired ? 'var(--color-outline)' : remainingColor(remainingPct);
+  const unlimitedText = t('MY_SUBS.UNLIMITED', '不限');
   const resetText = usage.window_end_at
-    ? `${fmtRelativeFromNow(usage.window_end_at) || '窗口已结束'} · ${fmtTime(usage.window_end_at)}`
-    : '首次使用后开始计时';
+    ? t('MY_SUBS.WINDOW_RESET_AT', '{{relative}} · {{time}}', {
+      relative: fmtRelativeFromNow(usage.window_end_at) || t('MY_SUBS.WINDOW_ENDED', '窗口已结束'),
+      time: fmtTime(usage.window_end_at),
+    })
+    : t('MY_SUBS.WINDOW_START_AFTER_FIRST_USE', '首次使用后开始计时');
 
   return (
     <div className={`rounded-overlay border border-outline-variant/40 p-4 ${isExpired ? 'bg-surface-container/50 grayscale opacity-80' : 'bg-surface-container-low'}`}>
       <div className="flex items-start justify-between gap-4 mb-2">
         <div className="min-w-0">
-          <div className="text-sm font-semibold text-on-surface break-words leading-snug">{formatPlanTitle(usage)}</div>
+          <div className="text-sm font-semibold text-on-surface break-words leading-snug">{formatPlanTitle(usage, t)}</div>
           <div className="mt-1 text-xs text-outline font-mono break-words [overflow-wrap:anywhere]">{usage.model_bucket || 'default'}</div>
         </div>
         <div className="text-right shrink-0">
           {isExpired ? (
-            <div className="text-sm font-bold text-outline mt-1">{t('SUB.WINDOW_EXPIRED_TITLE', '已结束')}</div>
+            <div className="text-sm font-bold text-outline mt-1">{t('MY_SUBS.WINDOW_EXPIRED_TITLE', '已结束')}</div>
           ) : (
             <>
-              <div className="text-xs text-on-surface-variant">剩余</div>
+              <div className="text-xs text-on-surface-variant">{t('MY_SUBS.REMAINING', '剩余')}</div>
               <div className="text-lg font-bold" style={{ color }}>{remainingPct.toFixed(1)}%</div>
             </>
           )}
@@ -292,21 +297,21 @@ const UsageMeter = ({ usage, formatMeterCurrency }) => {
 
       {isExpired && (
         <div className="mt-2 text-xs text-on-surface-variant">
-          {t('SUB.WINDOW_EXPIRED_HINT', '等待下次请求触发新窗口')}
+          {t('MY_SUBS.WINDOW_EXPIRED_HINT', '等待下次请求触发新窗口')}
         </div>
       )}
 
       <div className="mt-3 grid grid-cols-2 lg:grid-cols-4 gap-3 text-xs">
-        <UsageDatum label="已用" value={formatUsageValue(usage.consumed, usage.unit, formatMeterCurrency)} />
-        <UsageDatum label="额度" value={usage.is_unlimited ? '不限' : formatUsageValue(usage.limit, usage.unit, formatMeterCurrency)} />
-        <UsageDatum label={isExpired ? '窗口' : '剩余'} value={isExpired ? <span className="text-outline">{t('SUB.WINDOW_ENDED_RELATIVE', '已过期 · {{relative}}', { relative: fmtRelativeFromNow(usage.window_end_at) || '' })}</span> : (usage.is_unlimited ? '不限' : formatUsageValue(usage.remaining, usage.unit, formatMeterCurrency))} />
-        <UsageDatum label="调用" value={`${Number(usage.request_count || 0)} 次`} />
+        <UsageDatum label={t('MY_SUBS.USED', '已用')} value={formatUsageValue(usage.consumed, usage.unit, formatMeterCurrency)} />
+        <UsageDatum label={t('MY_SUBS.QUOTA', '额度')} value={usage.is_unlimited ? unlimitedText : formatUsageValue(usage.limit, usage.unit, formatMeterCurrency)} />
+        <UsageDatum label={isExpired ? t('MY_SUBS.WINDOW', '窗口') : t('MY_SUBS.REMAINING', '剩余')} value={isExpired ? <span className="text-outline">{t('MY_SUBS.WINDOW_ENDED_RELATIVE', '已过期 · {{relative}}', { relative: fmtRelativeFromNow(usage.window_end_at) || '' })}</span> : (usage.is_unlimited ? unlimitedText : formatUsageValue(usage.remaining, usage.unit, formatMeterCurrency))} />
+        <UsageDatum label={t('MY_SUBS.CALLS', '调用')} value={t('MY_SUBS.CALL_COUNT_SHORT', '{{count}} 次', { count: Number(usage.request_count || 0) })} />
       </div>
       <div className="mt-3 flex flex-col gap-1">
         {!isExpired && <div className="text-[11px] text-on-surface-variant">{resetText}</div>}
         {isExpired && (
           <div className="text-[10px] text-outline">
-            {t('SUB.WINDOW_LAST_USAGE', '上次窗口用量 {{used}} / {{limit}}', { used: formatUsageValue(usage.consumed, usage.unit, formatMeterCurrency), limit: usage.is_unlimited ? '不限' : formatUsageValue(usage.limit, usage.unit, formatMeterCurrency) })}
+            {t('MY_SUBS.WINDOW_LAST_USAGE', '上次窗口用量 {{used}} / {{limit}}', { used: formatUsageValue(usage.consumed, usage.unit, formatMeterCurrency), limit: usage.is_unlimited ? unlimitedText : formatUsageValue(usage.limit, usage.unit, formatMeterCurrency) })}
           </div>
         )}
       </div>
@@ -405,22 +410,22 @@ const usageBucketFromPlan = (plan) => {
   return 'default';
 };
 
-const formatPlanTitle = (usage) => {
-  const windowText = formatWindow(usage.window_seconds);
-  if (usage.unit === 'api_cost_usd') return `${windowText} API 等值额度`;
-  if (usage.unit === 'request_count') return `${windowText} 调用次数`;
-  if (usage.unit?.includes('tokens')) return `${windowText} Token 额度`;
+const formatPlanTitle = (usage, t) => {
+  const windowText = formatWindow(usage.window_seconds, t);
+  if (usage.unit === 'api_cost_usd') return t('MY_SUBS.PLAN_TITLE_API_CREDIT', '{{window}} API 等值额度', { window: windowText });
+  if (usage.unit === 'request_count') return t('MY_SUBS.PLAN_TITLE_REQUESTS', '{{window}} 调用次数', { window: windowText });
+  if (usage.unit?.includes('tokens')) return t('MY_SUBS.PLAN_TITLE_TOKENS', '{{window}} Token 额度', { window: windowText });
   return usage.plan_name || windowText;
 };
 
-const formatWindow = (seconds) => {
+const formatWindow = (seconds, t) => {
   const n = Number(seconds || 0);
-  if (!n) return '套餐周期';
-  if (n === 5 * 3600) return '5 小时';
-  if (n === 7 * 86400) return '7 天';
-  if (n % 86400 === 0) return `${n / 86400} 天`;
-  if (n % 3600 === 0) return `${n / 3600} 小时`;
-  return `${n} 秒`;
+  if (!n) return t('MY_SUBS.WINDOW_PACKAGE_PERIOD', '套餐周期');
+  if (n === 5 * 3600) return t('MY_SUBS.WINDOW_5H', '5 小时');
+  if (n === 7 * 86400) return t('MY_SUBS.WINDOW_7D', '7 天');
+  if (n % 86400 === 0) return t('MY_SUBS.WINDOW_DAYS', '{{count}} 天', { count: n / 86400 });
+  if (n % 3600 === 0) return t('MY_SUBS.WINDOW_HOURS', '{{count}} 小时', { count: n / 3600 });
+  return t('MY_SUBS.WINDOW_SECONDS', '{{count}} 秒', { count: n });
 };
 
 const formatUsageValue = (value, unit, formatMeterCurrency) => {
@@ -480,9 +485,11 @@ const formatRemainingMetric = (sum, formatMeterCurrency) => {
   return `${formatUsageValue(sum.remaining, 'api_cost_usd', formatMeterCurrency)} / ${formatUsageValue(sum.limit, 'api_cost_usd', formatMeterCurrency)}`;
 };
 
-const formatUsedMetric = (sum, formatMeterCurrency) => {
-  if (sum.limit <= 0) return '暂无额度';
-  return `已用 ${formatUsageValue(sum.consumed, 'api_cost_usd', formatMeterCurrency)}`;
+const formatUsedMetric = (sum, formatMeterCurrency, t) => {
+  if (sum.limit <= 0) return t('MY_SUBS.NO_QUOTA', '暂无额度');
+  return t('MY_SUBS.USED_AMOUNT', '已用 {{amount}}', {
+    amount: formatUsageValue(sum.consumed, 'api_cost_usd', formatMeterCurrency),
+  });
 };
 
 export default MySubscriptions;

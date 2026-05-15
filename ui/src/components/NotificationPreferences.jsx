@@ -4,8 +4,8 @@ import toast from 'react-hot-toast';
 import { authFetch, isLoggedIn, readAuthState } from '../utils/authFetch';
 import { isPageCacheFresh, readPageCache, writePageCache } from '../utils/pageCache';
 
-// 用户级通知偏好：3 类可关闭 + 阈值多选。
-// security/system 类强制送达，UI 仅展示提示，不渲染开关。
+
+
 const TOGGLABLE_CATEGORIES = [
   { key: 'subscription_expiring', i18n: 'CAT_SUB_EXPIRING' },
   { key: 'subscription_usage_warn', i18n: 'CAT_SUB_USAGE' },
@@ -17,6 +17,47 @@ const FORCED_CATEGORIES = [
   { i18n: 'CAT_SYSTEM_FORCED' },
   { i18n: 'CAT_SECURITY_FORCED' },
 ];
+
+const getCategoryLabel = (key, t) => {
+  switch (key) {
+    case 'subscription_expiring':
+      return t('NOTIF.PREF.CAT_SUB_EXPIRING', '订阅到期提醒');
+    case 'subscription_usage_warn':
+      return t('NOTIF.PREF.CAT_SUB_USAGE', '套餐用量预警');
+    case 'refund':
+      return t('NOTIF.PREF.CAT_REFUND', '退款通知');
+    case 'ticket_message':
+      return t('NOTIF.PREF.CAT_TICKET_MESSAGE', '工单消息');
+    default:
+      return key;
+  }
+};
+
+const getCategoryHint = (key, t) => {
+  switch (key) {
+    case 'subscription_expiring':
+      return t('NOTIF.PREF.CAT_SUB_EXPIRING_HINT', '订阅过期与即将到期预警');
+    case 'subscription_usage_warn':
+      return t('NOTIF.PREF.CAT_SUB_USAGE_HINT', '用量达到阈值时提醒');
+    case 'refund':
+      return t('NOTIF.PREF.CAT_REFUND_HINT', '取消订阅退款到账提醒');
+    case 'ticket_message':
+      return t('NOTIF.PREF.CAT_TICKET_MESSAGE_HINT', '客服在你提交的工单里发新消息时通知你');
+    default:
+      return '';
+  }
+};
+
+const getForcedCategoryLabel = (key, t) => {
+  switch (key) {
+    case 'CAT_SYSTEM_FORCED':
+      return t('NOTIF.PREF.CAT_SYSTEM_FORCED', '系统公告（必收）');
+    case 'CAT_SECURITY_FORCED':
+      return t('NOTIF.PREF.CAT_SECURITY_FORCED', '账户安全（必收）');
+    default:
+      return key;
+  }
+};
 
 const THRESHOLD_PRESETS = [70, 80, 90, 100];
 const NOTIF_PREF_CACHE_TTL_MS = 30000;
@@ -58,7 +99,7 @@ const NotificationPreferences = () => {
         setUsageThresholds(Array.isArray(json.data.usage_thresholds) ? json.data.usage_thresholds : []);
       }
     } catch {
-      // 静默：用首屏默认值
+      // Use cached/default preferences when the preference endpoint is unavailable.
     } finally {
       setLoading(false);
     }
@@ -67,7 +108,6 @@ const NotificationPreferences = () => {
   useEffect(() => { load(); }, [load]);
 
   const toggleCategory = (key) => {
-    // 缺失视为启用，所以第一次点击应当显式置 false
     const current = enabledCategories[key];
     const next = current === false ? true : false;
     setEnabledCategories({ ...enabledCategories, [key]: next });
@@ -111,7 +151,7 @@ const NotificationPreferences = () => {
   const isCatEnabled = (key) => enabledCategories[key] !== false;
 
   if (loading) {
-    return <div className="text-sm text-on-surface-variant py-4">{t('SYSTEM.LOADING', '加载中...')}</div>;
+    return <div className="text-sm text-on-surface-variant py-4">{t('COMMON.LOADING', '加载中…')}</div>;
   }
 
   return (
@@ -125,7 +165,7 @@ const NotificationPreferences = () => {
         </p>
       </header>
 
-      {/* 类别开关 */}
+
       <div className="rounded-overlay border border-outline-variant bg-surface-container p-4 space-y-3">
         <div className="text-xs font-semibold text-on-surface-variant uppercase tracking-wide">
           {t('NOTIF.PREF.CATEGORIES_LABEL', '通知类别')}
@@ -140,10 +180,10 @@ const NotificationPreferences = () => {
             />
             <div className="flex-1">
               <div className="text-sm text-on-surface group-hover:text-primary transition">
-                {t(`NOTIF.PREF.${cat.i18n}`)}
+                {getCategoryLabel(cat.key, t)}
               </div>
               <div className="text-[11px] text-on-surface-variant mt-0.5">
-                {t(`NOTIF.PREF.${cat.i18n}_HINT`)}
+                {getCategoryHint(cat.key, t)}
               </div>
             </div>
           </label>
@@ -154,13 +194,13 @@ const NotificationPreferences = () => {
               <span className="text-[10px] text-on-surface-variant">✓</span>
             </div>
             <div className="text-sm text-on-surface-variant">
-              {t(`NOTIF.PREF.${cat.i18n}`)}
+              {getForcedCategoryLabel(cat.i18n, t)}
             </div>
           </div>
         ))}
       </div>
 
-      {/* 阈值 */}
+
       <div className="rounded-overlay border border-outline-variant bg-surface-container p-4 space-y-3">
         <div>
           <div className="text-xs font-semibold text-on-surface-variant uppercase tracking-wide">
@@ -198,7 +238,7 @@ const NotificationPreferences = () => {
           disabled={saving}
           className="fl-btn fl-btn-prominent h-9 px-4 disabled:opacity-50"
         >
-          {saving ? t('NOTIF.PREF.SAVING', '保存中...') : t('NOTIF.PREF.SAVE', '保存')}
+          {saving ? t('COMMON.SAVING', '保存中...') : t('COMMON.SAVE', '保存')}
         </button>
       </div>
     </section>

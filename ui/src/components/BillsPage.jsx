@@ -10,23 +10,68 @@ import { authFetch, readAuthState } from '../utils/authFetch';
 import { isPageCacheFresh, readPageCache, writePageCache } from '../utils/pageCache';
 import { useCurrency } from '../context/CurrencyContext';
 
-// EntryType → 显示元数据。每种类型一个图标 + 颜色 + 中文标签。
-// label 通过 i18n 拿，未配置时显示 fallback。
+
+
 //
-// fix MAJOR（codex 第十七轮）：补齐 admin_grant_* + api_usage_pending_reconcile，
-// 与后端 allowedBillingTypes 同步。
+
+
 const TYPE_META = {
-  topup:                       { icon: ArrowDownCircle, color: 'text-success',   bg: 'bg-success',   i18n: 'BILL.T_TOPUP',              fallback: '充值',            direction: 'in' },
-  purchase_sub:                { icon: ArrowUpCircle,   color: 'text-primary',    bg: 'bg-primary',    i18n: 'BILL.T_PURCHASE_SUB',       fallback: '购买套餐',         direction: 'out' },
-  bonus_credit:                { icon: ArrowDownCircle, color: 'text-success', bg: 'bg-success', i18n: 'BILL.T_BONUS',              fallback: '奖励入账',         direction: 'in' },
-  refund_sub:                  { icon: ArrowDownCircle, color: 'text-warning',   bg: 'bg-warning',   i18n: 'BILL.T_REFUND_SUB',         fallback: '订阅退款',         direction: 'in' },
-  refund_topup:                { icon: ArrowUpCircle,   color: 'text-warning',  bg: 'bg-warning',  i18n: 'BILL.T_REFUND_TOPUP',       fallback: '充值退款',         direction: 'out' },
-  admin_adjust:                { icon: RefreshCw,       color: 'text-primary',  bg: 'bg-primary/10',  i18n: 'BILL.T_ADMIN_ADJUST',       fallback: '管理员调整',       direction: 'neutral' },
-  admin_grant_sub:             { icon: ArrowDownCircle, color: 'text-primary',  bg: 'bg-primary',  i18n: 'BILL.T_ADMIN_GRANT_SUB',    fallback: '管理员赠送订阅',   direction: 'neutral' },
-  admin_revoke_grant:          { icon: RefreshCw,       color: 'text-warning',   bg: 'bg-warning',   i18n: 'BILL.T_ADMIN_REVOKE_GRANT', fallback: '管理员收回赠送',   direction: 'neutral' },
-  api_consume_balance:         { icon: Activity,        color: 'text-error',    bg: 'bg-error',    i18n: 'BILL.T_API_BALANCE',        fallback: '余额扣费',         direction: 'out' },
-  api_usage_sub:               { icon: Activity,        color: 'text-on-surface-variant',   bg: 'bg-surface-container',   i18n: 'BILL.T_API_SUB',            fallback: '套餐扣额度',       direction: 'usage' },
-  api_usage_pending_reconcile: { icon: Activity,        color: 'text-warning',  bg: 'bg-warning',  i18n: 'BILL.T_API_PENDING',        fallback: '待对账',           direction: 'neutral' },
+  topup:                       { icon: ArrowDownCircle, color: 'text-success', bg: 'bg-success', direction: 'in' },
+  purchase_sub:                { icon: ArrowUpCircle, color: 'text-primary', bg: 'bg-primary', direction: 'out' },
+  bonus_credit:                { icon: ArrowDownCircle, color: 'text-success', bg: 'bg-success', direction: 'in' },
+  refund_sub:                  { icon: ArrowDownCircle, color: 'text-warning', bg: 'bg-warning', direction: 'in' },
+  refund_topup:                { icon: ArrowUpCircle, color: 'text-warning', bg: 'bg-warning', direction: 'out' },
+  admin_adjust:                { icon: RefreshCw, color: 'text-primary', bg: 'bg-primary/10', direction: 'neutral' },
+  admin_grant_sub:             { icon: ArrowDownCircle, color: 'text-primary', bg: 'bg-primary', direction: 'neutral' },
+  admin_revoke_grant:          { icon: RefreshCw, color: 'text-warning', bg: 'bg-warning', direction: 'neutral' },
+  api_consume_balance:         { icon: Activity, color: 'text-error', bg: 'bg-error', direction: 'out' },
+  api_usage_sub:               { icon: Activity, color: 'text-on-surface-variant', bg: 'bg-surface-container', direction: 'usage' },
+  api_usage_pending_reconcile: { icon: Activity, color: 'text-warning', bg: 'bg-warning', direction: 'neutral' },
+};
+
+const getBillingTypeLabel = (type, t) => {
+  switch (type) {
+    case 'topup': return t('BILL.T_TOPUP', '充值');
+    case 'purchase_sub': return t('BILL.T_PURCHASE_SUB', '购买套餐');
+    case 'bonus_credit': return t('BILL.T_BONUS', '奖励入账');
+    case 'refund_sub': return t('BILL.T_REFUND_SUB', '订阅退款');
+    case 'refund_topup': return t('BILL.T_REFUND_TOPUP', '充值退款');
+    case 'admin_adjust': return t('BILL.T_ADMIN_ADJUST', '管理员调整');
+    case 'admin_grant_sub': return t('BILL.T_ADMIN_GRANT_SUB', '管理员赠送订阅');
+    case 'admin_revoke_grant': return t('BILL.T_ADMIN_REVOKE_GRANT', '管理员收回赠送');
+    case 'api_consume_balance': return t('BILL.T_API_BALANCE', '余额扣费');
+    case 'api_usage_sub': return t('BILL.T_API_SUB', '套餐扣额度');
+    case 'api_usage_pending_reconcile': return t('BILL.T_API_PENDING', '待对账');
+    default: return type;
+  }
+};
+
+const getBillingStateLabel = (state, t) => {
+  switch (state) {
+    case 'settled': return t('BILL.STATE_SETTLED', '已结算');
+    case 'pending_reconcile': return t('BILL.STATE_PENDING_RECONCILE', '待对账');
+    case 'upstream_unmetered': return t('BILL.STATE_UPSTREAM_UNMETERED', '上游未计量');
+    default: return state || '—';
+  }
+};
+
+const getReconcileErrorMessage = (code, t) => {
+  switch (code) {
+    case 'ERR_RECONCILE_RESULT_INVALID':
+      return t('BILL.ERR_RECONCILE_RESULT_INVALID', '对账结果无效');
+    case 'ERR_RECONCILE_NOTE_REQUIRED':
+      return t('BILL.ERR_RECONCILE_NOTE_REQUIRED', '请填写对账说明');
+    case 'ERR_RECONCILE_NOTE_TOO_LONG':
+      return t('BILL.ERR_RECONCILE_NOTE_TOO_LONG', '对账说明不能超过 500 字');
+    case 'ERR_RECONCILE_NOT_PENDING':
+      return t('BILL.ERR_RECONCILE_NOT_PENDING', '该账单当前不可对账');
+    case 'ERR_RECONCILE_ALREADY_DONE':
+      return t('BILL.ERR_RECONCILE_ALREADY_DONE', '该账单已完成对账');
+    case 'ERR_RECONCILE_RACED':
+      return t('BILL.ERR_RECONCILE_RACED', '账单状态已变化，请刷新后重试');
+    default:
+      return '';
+  }
 };
 
 const formatSignedCurrency = (n, formatCurrency, decimals = 2) => {
@@ -49,17 +94,9 @@ const DEFAULT_NON_USAGE_TYPES = Object.keys(TYPE_META).filter(
 );
 const RECONCILABLE_BILLING_STATES = new Set(['pending_reconcile', 'upstream_unmetered']);
 const BILLING_STATE_META = {
-  settled: { i18n: 'BILL.STATE_SETTLED', fallback: '已结算', className: 'bg-success/10 text-success border-success/20' },
-  pending_reconcile: { i18n: 'BILL.STATE_PENDING_RECONCILE', fallback: '待对账', className: 'bg-warning/10 text-warning border-warning/20' },
-  upstream_unmetered: { i18n: 'BILL.STATE_UPSTREAM_UNMETERED', fallback: '上游未计量', className: 'bg-warning/10 text-warning border-warning/20' },
-};
-const RECONCILE_ERROR_MESSAGES = {
-  ERR_RECONCILE_RESULT_INVALID: ['BILL.ERR_RECONCILE_RESULT_INVALID', '对账结果无效'],
-  ERR_RECONCILE_NOTE_REQUIRED: ['BILL.ERR_RECONCILE_NOTE_REQUIRED', '请填写对账说明'],
-  ERR_RECONCILE_NOTE_TOO_LONG: ['BILL.ERR_RECONCILE_NOTE_TOO_LONG', '对账说明不能超过 500 字'],
-  ERR_RECONCILE_NOT_PENDING: ['BILL.ERR_RECONCILE_NOT_PENDING', '该账单当前不可对账'],
-  ERR_RECONCILE_ALREADY_DONE: ['BILL.ERR_RECONCILE_ALREADY_DONE', '该账单已完成对账'],
-  ERR_RECONCILE_RACED: ['BILL.ERR_RECONCILE_RACED', '账单状态已变化，请刷新后重试'],
+  settled: { className: 'bg-success/10 text-success border-success/20' },
+  pending_reconcile: { className: 'bg-warning/10 text-warning border-warning/20' },
+  upstream_unmetered: { className: 'bg-warning/10 text-warning border-warning/20' },
 };
 
 const getBillingAuthKey = () => {
@@ -98,14 +135,14 @@ const BillsPage = () => {
   const [nextCursor, setNextCursor] = useState(() => initialListCache?.nextCursor || 0);
   const [reconcileEntry, setReconcileEntry] = useState(null);
 
-  // 筛选状态
-  const [selectedTypes, setSelectedTypes] = useState([]); // 空 = 全部
-  const [hideUsage, setHideUsage] = useState(true); // 默认折叠 api_usage_sub（量大）
+
+  const [selectedTypes, setSelectedTypes] = useState([]);
+  const [hideUsage, setHideUsage] = useState(true);
   const [fromDate, setFromDate] = useState('');
   const [toDate, setToDate] = useState('');
 
-  // fix MAJOR M8（gemini 第二十轮）：抑制快速切换筛选/分页时的请求竞态。
-  // 旧请求晚于新请求返回时丢弃结果，避免覆盖 entries / cursor。
+
+
   const reqIdRef = useRef(0);
   const summaryReqIdRef = useRef(0);
 
@@ -113,7 +150,7 @@ const BillsPage = () => {
     const params = new URLSearchParams();
     let types = [...selectedTypes];
     if (hideUsage && types.length === 0) {
-      // 默认排除 usage，等价于"显示所有非 usage 类型"
+
       types = Object.keys(TYPE_META).filter(
         (k) => k !== 'api_usage_sub'
       );
@@ -146,7 +183,7 @@ const BillsPage = () => {
     }
     try {
       const json = await authFetch(`/api/billing/mine?${qs}`);
-      // M8: 旧请求晚于新请求返回时丢弃结果
+
       if (myReqId !== reqIdRef.current) return;
       if (json.success) {
         const pageEntries = json.data || [];
@@ -190,7 +227,7 @@ const BillsPage = () => {
         setSummary(json.data);
       }
     } catch {
-      // 静默：列表已经显示了，summary 失败不阻塞
+      // Summary is non-blocking; keep the list visible if it fails.
     }
   }, [billingAuthKey, buildQuery]);
 
@@ -206,8 +243,8 @@ const BillsPage = () => {
 
   const handleExport = async () => {
     try {
-      // fix Major（codex+gemini 第十四轮）：readAuthState 实际返回 { isAdmin, userToken }；
-      // 原读 auth.token 为 undefined → Bearer-only 用户的 CSV 导出 401。
+
+
       const auth = readAuthState();
       const qs = buildQuery();
       const url = `/api/billing/mine/export?${qs}`;
@@ -222,8 +259,8 @@ const BillsPage = () => {
       a.href = objectURL;
       a.download = `billing-${new Date().toISOString().slice(0, 10)}.csv`;
       a.click();
-      // fix Minor（gemini）：a.click() 是同步派发但下载是异步消费；Firefox/Safari 上立即 revoke
-      // 可能导致下载失败。延后 revoke 给浏览器时间消费 blob。
+
+
       setTimeout(() => URL.revokeObjectURL(objectURL), 1000);
       toast.success(t('BILL.EXPORT_OK', 'CSV 已下载'));
     } catch (e) {
@@ -265,7 +302,7 @@ const BillsPage = () => {
         </div>
       </header>
 
-      {/* 月度汇总卡片 */}
+
       {summary && (
         <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
           <SummaryCard
@@ -295,16 +332,15 @@ const BillsPage = () => {
         </div>
       )}
 
-      {/* Phase 8：删 BillingRulesPanel —— 计费规则统一在 /pricing 一站式呈现，
-          /bills 只看历史交易，不重复展示规则 */}
 
-      {/* 筛选 */}
+
+
       <section className="rounded-overlay bg-surface-container/40 border border-outline-variant/40 p-4 space-y-3">
         <div className="flex items-center gap-2 text-sm font-medium text-on-surface">
           <Filter className="w-4 h-4" />{t('BILL.FILTER', '筛选')}
         </div>
         <div className="flex flex-wrap gap-2">
-          {Object.entries(TYPE_META).map(([key, meta]) => {
+          {Object.keys(TYPE_META).map((key) => {
             const active = selectedTypes.includes(key);
             return (
               <button
@@ -317,7 +353,7 @@ const BillsPage = () => {
                     : 'bg-surface text-on-surface border-outline-variant hover:bg-on-surface/[0.04]'
                 }`}
               >
-                {t(meta.i18n, meta.fallback)}
+                {getBillingTypeLabel(key, t)}
               </button>
             );
           })}
@@ -351,15 +387,15 @@ const BillsPage = () => {
         </div>
       </section>
 
-      {/* 列表 */}
+
       <section>
         {loading ? (
           <div className="text-center py-12 text-on-surface/60">{t('COMMON.LOADING', '加载中…')}</div>
         ) : entries.length === 0 ? (
           <div className="text-center py-12 text-on-surface/60 fl-card">
             <Receipt className="w-12 h-12 mx-auto mb-3 opacity-40" />
-            <p className="font-semibold text-on-surface mb-1">暂无账单</p>
-            <p className="text-sm">充值或订阅后会显示账单</p>
+            <p className="font-semibold text-on-surface mb-1">{t('BILL.EMPTY_TITLE', '暂无账单')}</p>
+            <p className="text-sm">{t('BILL.EMPTY_DESC', '充值或订阅后会显示账单')}</p>
           </div>
         ) : (
           <ul className="divide-y divide-outline-variant/30 rounded-overlay border border-outline-variant/40 overflow-hidden bg-surface">
@@ -421,15 +457,14 @@ const SummaryCard = ({ label, value, color, icon: Icon }) => (
 const BillRow = ({ entry, t, formatCurrency, onReconcile }) => {
   const meta = TYPE_META[entry.entry_type] || {
     icon: Activity, color: 'text-on-surface', bg: 'bg-surface-container/30',
-    fallback: entry.entry_type, i18n: '',
   };
   const Icon = meta.icon;
-  const label = meta.i18n ? t(meta.i18n, meta.fallback) : meta.fallback;
+  const label = getBillingTypeLabel(entry.entry_type, t);
   const isUsage = meta.direction === 'usage';
   const amountText = isUsage
     ? (entry.tokens_total > 0 ? `${entry.tokens_total.toLocaleString()} tok` : '—')
     : formatSignedCurrency(entry.amount_usd, formatCurrency, 2);
-  const description = formatBillingDescription(entry, formatCurrency);
+  const description = formatBillingDescription(entry, formatCurrency, t);
   const canReconcile = Boolean(onReconcile) && RECONCILABLE_BILLING_STATES.has(entry.billing_state);
 
   return (
@@ -493,11 +528,9 @@ const BillRow = ({ entry, t, formatCurrency, onReconcile }) => {
 
 const BillingStateBadge = ({ state, t }) => {
   const meta = BILLING_STATE_META[state] || {
-    i18n: '',
-    fallback: state || '—',
     className: 'bg-surface-container text-on-surface/70 border-outline-variant',
   };
-  const label = meta.i18n ? t(meta.i18n, meta.fallback) : meta.fallback;
+  const label = getBillingStateLabel(state, t);
   return (
     <span className={`inline-flex items-center px-2 py-0.5 rounded-control border text-[11px] ${meta.className}`}>
       {label}
@@ -533,8 +566,8 @@ const ReconcileBillingModal = ({ entry, t, onClose, onSuccess }) => {
         return;
       }
       const code = json.message_code;
-      const mapped = RECONCILE_ERROR_MESSAGES[code];
-      toast.error(mapped ? t(mapped[0], mapped[1]) : (json.message || t('BILL.RECONCILE_FAILED', '对账失败')));
+      const mapped = getReconcileErrorMessage(code, t);
+      toast.error(mapped || json.message || t('BILL.RECONCILE_FAILED', '对账失败'));
     } catch (err) {
       toast.error(`${t('BILL.RECONCILE_FAILED', '对账失败')}: ${err.message || err}`);
     } finally {
@@ -633,13 +666,21 @@ const ReconcileBillingModal = ({ entry, t, onClose, onSuccess }) => {
   );
 };
 
-const formatBillingDescription = (entry, formatCurrency) => {
+const formatBillingDescription = (entry, formatCurrency, t) => {
   const raw = String(entry.description || '').trim();
   if (entry.entry_type === 'admin_adjust') {
     const amount = Number(entry.amount_usd || 0);
-    if (amount > 0) return `管理员调整额度 · 余额增加 ${formatCurrency(Math.abs(amount), 2)}`;
-    if (amount < 0) return `管理员调整额度 · 余额减少 ${formatCurrency(Math.abs(amount), 2)}`;
-    return '管理员调整额度 · 余额未变化';
+    if (amount > 0) {
+      return t('BILL.ADMIN_ADJUST_INCREASE', '管理员调整额度 · 余额增加 {{amount}}', {
+        amount: formatCurrency(Math.abs(amount), 2),
+      });
+    }
+    if (amount < 0) {
+      return t('BILL.ADMIN_ADJUST_DECREASE', '管理员调整额度 · 余额减少 {{amount}}', {
+        amount: formatCurrency(Math.abs(amount), 2),
+      });
+    }
+    return t('BILL.ADMIN_ADJUST_UNCHANGED', '管理员调整额度 · 余额未变化');
   }
   if (entry.entry_type === 'purchase_sub') {
     return raw.replace(/ · USD\s+-?\d+(\.\d+)?$/i, ` · ${formatCurrency(Math.abs(Number(entry.amount_usd || 0)), 2)}`);

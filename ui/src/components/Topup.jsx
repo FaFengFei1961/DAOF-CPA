@@ -12,13 +12,36 @@ import { PAGE_SIZE_HISTORY } from './common/constants';
 import TextInput from './ui/TextInput';
 
 const PAY_METHOD_META = {
-  alipay:    { i18n: 'PAY_ALIPAY',    color: 'bg-[#1677ff]', text: 'text-white' },
-  wxpay:     { i18n: 'PAY_WXPAY',     color: 'bg-[#07c160]', text: 'text-white' },
-  qqpay:     { i18n: 'PAY_QQPAY',     color: 'bg-[#12b7f5]', text: 'text-white' },
-  bank:      { i18n: 'PAY_BANK',      color: 'bg-error',   text: 'text-white' },
-  jdpay:     { i18n: 'PAY_JDPAY',     color: 'bg-error',   text: 'text-white' },
-  paypal:    { i18n: 'PAY_PAYPAL',    color: 'bg-[#003087]', text: 'text-white' },
-  douyinpay: { i18n: 'PAY_DOUYINPAY', color: 'bg-black',     text: 'text-white' },
+  alipay:    { color: 'bg-[#1677ff]', text: 'text-white' },
+  wxpay:     { color: 'bg-[#07c160]', text: 'text-white' },
+  qqpay:     { color: 'bg-[#12b7f5]', text: 'text-white' },
+  bank:      { color: 'bg-error',   text: 'text-white' },
+  jdpay:     { color: 'bg-error',   text: 'text-white' },
+  paypal:    { color: 'bg-[#003087]', text: 'text-white' },
+  douyinpay: { color: 'bg-black',     text: 'text-white' },
+};
+
+const getPayMethodLabel = (method, t) => {
+  switch (method) {
+    case 'alipay': return t('TOPUP.PAY_ALIPAY', '支付宝');
+    case 'wxpay': return t('TOPUP.PAY_WXPAY', '微信支付');
+    case 'qqpay': return t('TOPUP.PAY_QQPAY', 'QQ 钱包');
+    case 'bank': return t('TOPUP.PAY_BANK', '银联');
+    case 'jdpay': return t('TOPUP.PAY_JDPAY', '京东支付');
+    case 'paypal': return t('TOPUP.PAY_PAYPAL', 'PayPal');
+    case 'douyinpay': return t('TOPUP.PAY_DOUYINPAY', '抖音支付');
+    default: return method;
+  }
+};
+
+const getTopupStatusLabel = (status, t) => {
+  switch (status) {
+    case 'created': return t('TOPUP.STATUS_CREATED', '待支付');
+    case 'paid': return t('TOPUP.STATUS_PAID', '已到账');
+    case 'failed': return t('TOPUP.STATUS_FAILED', '失败/取消');
+    case 'refunded': return t('TOPUP.STATUS_REFUNDED', '已退款');
+    default: return status;
+  }
 };
 const TOPUP_CACHE_TTL_MS = 30000;
 const TOPUP_OPTIONS_CACHE_KEY = 'topup:options';
@@ -38,7 +61,7 @@ const Topup = ({ isAuthenticated }) => {
   const [submitting, setSubmitting] = useState(false);
   const [orderResult, setOrderResult] = useState(null); // {gateway_pay_type, pay_info, ...}
 
-  // fix MAJOR（gemini 第十六轮）：充值历史改为完整分页（原硬编码 page=1&page_size=20，>20 条永远看不到）
+
   const [historyPage, setHistoryPage] = useState(1);
   const historyCacheKey = useMemo(() => getTopupHistoryCacheKey(historyPage), [historyPage]);
   const initialHistoryCache = readPageCache(getTopupHistoryCacheKey(1));
@@ -46,8 +69,8 @@ const Topup = ({ isAuthenticated }) => {
   const [historyLoading, setHistoryLoading] = useState(false);
   const [historyTotal, setHistoryTotal] = useState(() => initialHistoryCache?.total || 0);
 
-  // 注意：依赖空数组——此函数引用稳定，避免 "切换支付方式 → loadOptions 重新触发拉取" 的 race。
-  // 使用函数式 setPayType 在拿到方法列表时只在为空时填默认。
+
+
   const loadOptions = useCallback(async ({ force = false } = {}) => {
     const cached = readPageCache(TOPUP_OPTIONS_CACHE_KEY);
     if (cached) {
@@ -68,7 +91,7 @@ const Topup = ({ isAuthenticated }) => {
         setPayType(prev => prev || methods[0] || '');
       }
     } catch {
-      // 静默：未配置时下方 banner 会提示
+      // The unconfigured state below handles option-load failures.
     } finally {
       setLoadingOpts(false);
     }
@@ -103,29 +126,29 @@ const Topup = ({ isAuthenticated }) => {
   useEffect(() => { loadOptions(); }, [loadOptions]);
   useEffect(() => { loadHistory(); }, [loadHistory]);
 
-  // 创建订单后启动状态轮询：每 3 秒查一次本订单 status
-  // 看到 paid → 弹 toast、关闭支付面板、触发顶栏余额刷新
-  // 看到 failed/refunded → 停止轮询
-  // 10 分钟超时自动停止
+
+
+
+
   useEffect(() => {
     const targetOrderNo = orderResult?.out_trade_no;
     if (!targetOrderNo) return;
 
     let cancelled = false;
-    let timerId = null; // fix gemini-Major: 跟踪当前 setTimeout id，cleanup 时能清掉最新一次（之前只清第一次 initial）
+    let timerId = null;
     const startedAt = Date.now();
 
     const tick = async () => {
       if (cancelled) return;
-      if (Date.now() - startedAt > 10 * 60 * 1000) return; // 10 分钟超时
+      if (Date.now() - startedAt > 10 * 60 * 1000) return;
 
       try {
-        // 轮询固定查第 1 页（最新订单一定在头部），不影响用户翻页查看的状态
+
         const json = await authFetch(`/api/topup/mine?page=1&page_size=${PAGE_SIZE_HISTORY}`);
         if (json.success && Array.isArray(json.data)) {
           const latestPageOne = { rows: json.data, total: json.meta?.total || 0 };
           writePageCache(getTopupHistoryCacheKey(1), latestPageOne);
-          // 仅当用户当前在第 1 页时才同步覆盖列表，否则只更新 total
+
           if (historyPage === 1) {
             setHistory(latestPageOne.rows);
             setHistoryTotal(latestPageOne.total);
@@ -143,7 +166,9 @@ const Topup = ({ isAuthenticated }) => {
             }
           }
         }
-      } catch { /* 静默 */ }
+      } catch {
+        // Payment status polling is best-effort.
+      }
 
       if (!cancelled) timerId = setTimeout(tick, 3000);
     };
@@ -156,7 +181,7 @@ const Topup = ({ isAuthenticated }) => {
   }, [orderResult?.out_trade_no, t, historyPage]);
 
   const handleSubmit = async () => {
-    // fix Sprint4-M3：协议从 amount_rmb float 改为 amount_fen int64（杜绝 float 进金额链路）
+
     const amt = parseFloat(amount);
     if (isNaN(amt) || amt <= 0) {
       toast.error(t('TOPUP.ERR_AMOUNT', '金额不在允许范围内'));
@@ -185,8 +210,8 @@ const Topup = ({ isAuthenticated }) => {
       });
       if (json.success && json.data) {
         setOrderResult(json.data);
-        // 不能 window.open：在 await 之后调用会被浏览器弹窗拦截器拦掉。
-        // 改为下方 <a> 链接展示，用户主动点击才打开（绕过拦截 + 满足"用户手势"要求）。
+
+
         if (json.data.pay_info) {
           toast.success(t('TOPUP.GO_PAY_HINT', '订单已创建，请点击下方链接支付'));
         }
@@ -202,11 +227,11 @@ const Topup = ({ isAuthenticated }) => {
   };
 
   const usdEstimate = (() => {
-    // fix Sprint4-M3：opts.exchange_rate_rmb_per_usd_micros 是 int64（RMB/USD × 1e6）
+
     const amt = parseFloat(amount);
     const rateMicros = opts?.exchange_rate_rmb_per_usd_micros;
     if (isNaN(amt) || !rateMicros || rateMicros <= 0) return null;
-    // 预览用 float 估算（不入账，仅 UI 显示）；后端用 big.Int 整数算
+
     return (amt * 1_000_000 / rateMicros).toFixed(2);
   })();
 
@@ -217,7 +242,7 @@ const Topup = ({ isAuthenticated }) => {
   const showRawPayInfo = payInfo && !showQRCode && !showPaymentLink;
 
   if (loadingOpts) {
-    return <div className="text-center py-12 text-on-surface-variant">{t('SYSTEM.LOADING', '加载中...')}</div>;
+    return <div className="text-center py-12 text-on-surface-variant">{t('COMMON.LOADING', '加载中…')}</div>;
   }
 
   if (!opts || !opts.configured) {
@@ -238,24 +263,22 @@ const Topup = ({ isAuthenticated }) => {
   return (
     <div className="max-w-3xl mx-auto py-6">
       <StorePage>
-        {/* Phase 8：去 StoreHero（"即时到账"营销 badge + "扫码即时到账"营销
-            副标），改纯 PageHeader 信息标题 */}
+
         <PageHeader
           icon={Wallet}
           title={t('TOPUP.TITLE', '余额充值')}
           sub={t('TOPUP.SUB_PLAIN', '人民币按当前汇率换算入账 USD 余额')}
         />
 
-      {/* 充值表单 */}
+
       <section className="fl-card p-6 space-y-5">
-        {/* 金额 */}
+
         <div className="space-y-3">
           <label htmlFor="topup-amount" className="text-xs font-semibold text-on-surface-variant uppercase tracking-wide">
             {t('TOPUP.AMOUNT_LABEL', '充值金额（人民币）')}
           </label>
 
-          {/* 输入框始终显示，主元素。
-              fix Sprint4-M3：opts.{min,max}_amount_fen 是 fen int，UI 显示需 /100 转元 */}
+
           <div className="flex items-center gap-2">
             <span className="text-lg text-on-surface-variant font-semibold" aria-hidden="true">¥</span>
             <TextInput
@@ -271,8 +294,7 @@ const Topup = ({ isAuthenticated }) => {
             />
           </div>
 
-          {/* 预设档位（如果有）：点击同步到输入框
-              fix Sprint4-M3：presets_fen 是 fen int 数组，UI 显示 /100 转元 */}
+
           {opts.presets_fen.length > 0 && (
             <div className="flex flex-wrap gap-2">
               {opts.presets_fen.map(fen => {
@@ -316,23 +338,22 @@ const Topup = ({ isAuthenticated }) => {
           </div>
         </div>
 
-        {/* 支付方式 */}
+
         <div className="space-y-3">
           <span id="topup-pay-method-label" className="text-xs font-semibold text-on-surface-variant uppercase tracking-wide block">
             {t('TOPUP.PAY_METHOD_LABEL', '支付方式')}
           </span>
-          {/* fix Minor 第二十轮：去掉 role="radiogroup"（与子按钮 aria-pressed 不再是 radio 语义），
-              改用 group + aria-labelledby 让屏幕阅读器正确理解这是一组关联按钮 */}
+
           <div role="group" aria-labelledby="topup-pay-method-label" className="grid grid-cols-2 sm:grid-cols-3 gap-2">
             {opts.methods.map(m => {
-              const meta = PAY_METHOD_META[m] || { i18n: m.toUpperCase(), color: 'bg-surface-container', text: 'text-on-surface' };
+              const meta = PAY_METHOD_META[m] || { color: 'bg-surface-container', text: 'text-on-surface' };
               const active = payType === m;
               return (
                 <button
                   key={m}
                   type="button"
-                  // fix Minor 第二十轮（gemini）：原 role="radio" 需要 radiogroup + 方向键管理才完整。
-                  // 改用 aria-pressed 让按钮回归普通切换语义，Tab+Enter/Space 即可操作。
+
+
                   aria-pressed={active}
                   onClick={() => setPayType(m)}
                   className={`relative h-12 rounded-control flex items-center justify-center gap-2 border transition font-medium ${
@@ -342,14 +363,14 @@ const Topup = ({ isAuthenticated }) => {
                   }`}
                 >
                   <Banknote size={16} aria-hidden="true" />
-                  {t(`TOPUP.${meta.i18n}`, meta.i18n)}
+                  {getPayMethodLabel(m, t)}
                 </button>
               );
             })}
           </div>
         </div>
 
-        {/* 提交 */}
+
         <button
           type="button"
           onClick={handleSubmit}
@@ -360,7 +381,7 @@ const Topup = ({ isAuthenticated }) => {
         </button>
       </section>
 
-      {/* 下单结果：二维码 / 跳转链接 */}
+
       {orderResult && (
         <section className="fl-card p-8 flex flex-col items-center gap-5 border-primary/40 shadow-primary/5">
           <div className="text-center">
@@ -416,14 +437,14 @@ const Topup = ({ isAuthenticated }) => {
         </section>
       )}
 
-      {/* 历史 */}
+
       <StoreSection
         title={t('TOPUP.HISTORY_TITLE', '充值记录')}
         right={
           <button
             onClick={() => loadHistory({ force: true })}
             className="w-8 h-8 rounded-control flex items-center justify-center text-on-surface-variant hover:bg-on-surface/[0.04]"
-            aria-label={t('SYSTEM.REFRESH', '刷新')}
+            aria-label={t('COMMON.REFRESH', '刷新')}
           >
             <RefreshCw size={14} className={historyLoading ? 'animate-spin' : ''} />
           </button>
@@ -457,11 +478,11 @@ const Topup = ({ isAuthenticated }) => {
                       <span className="text-xs text-on-surface-variant ml-1">/ ${o.amount_usd.toFixed(2)}</span>
                     </td>
                     <td className="px-3 py-2">
-                      {t(`TOPUP.${(PAY_METHOD_META[o.pay_type] || {}).i18n || o.pay_type.toUpperCase()}`, o.pay_type)}
+                      {getPayMethodLabel(o.pay_type, t)}
                     </td>
                     <td className="px-3 py-2">
                       <span className={statusClass(o.status)}>
-                        {t(`TOPUP.STATUS_${o.status.toUpperCase()}`, o.status)}
+                        {getTopupStatusLabel(o.status, t)}
                       </span>
                     </td>
                     <td className="px-3 py-2 text-xs font-mono text-on-surface-variant max-w-[180px] truncate" title={o.out_trade_no}>
@@ -473,7 +494,7 @@ const Topup = ({ isAuthenticated }) => {
             </table>
           </div>
         )}
-        {/* fix MAJOR（gemini 第十六轮）：充值历史分页 */}
+
         <Pagination
           page={historyPage}
           pageSize={PAGE_SIZE_HISTORY}
@@ -499,7 +520,7 @@ const statusClass = (s) => {
   }
 };
 
-// isSafePaymentTarget 防御性校验：网页跳转只允许 http(s)，App scheme 只允许已知支付客户端。
+
 const isSafePaymentTarget = (target, gatewayPayType) => {
   if (typeof target !== 'string') return false;
   try {

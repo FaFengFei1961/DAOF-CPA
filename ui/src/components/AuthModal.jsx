@@ -23,12 +23,12 @@ const AuthModal = ({ isOpen, onClose, onLoginSuccess, initialStep = 'github', tm
   const [countdown, setCountdown] = useState(0);
   const [sendingSms, setSendingSms] = useState(false);
   const countdownTimerRef = useRef(null);
-  // a11y: 模态首次焦点目标。GitHub step 聚焦关闭按钮，bind/profile 聚焦第一个输入框
+
   const closeBtnRef = useRef(null);
-  const modalRef = useRef(null); // C-F1 第二十一轮: focus trap 范围
+  const modalRef = useRef(null);
   const { onBackdropClick } = useModalA11y(isOpen, onClose, closeBtnRef, modalRef);
 
-  // 卸载时清理 SMS 倒计时定时器，避免在已卸载组件上 setState
+
   useEffect(() => () => {
     if (countdownTimerRef.current) clearInterval(countdownTimerRef.current);
   }, []);
@@ -38,7 +38,7 @@ const AuthModal = ({ isOpen, onClose, onLoginSuccess, initialStep = 'github', tm
   const [phone, setPhone] = useState('');
   const [code, setCode] = useState('');
 
-  // Profile Form State (H-2 修复：state 必须在 useEffect 引用前声明)
+
   const [profileName, setProfileName] = useState('');
   const [profileError, setProfileError] = useState('');
 
@@ -70,19 +70,25 @@ const AuthModal = ({ isOpen, onClose, onLoginSuccess, initialStep = 'github', tm
   const handleGithubLogin = async () => {
     setLoading(true);
     try {
-      // 先到后端拿一次性 state + PKCE challenge，把公开参数透传到 GitHub 授权 URL
+
       const [pubRes, stateRes] = await Promise.all([
         fetch('/api/public-config'),
         fetch('/api/auth/github/prepare', { credentials: 'include' }),
       ]);
-      // 5xx 时后端通常返 HTML 错误页；显式检查 status 给出真实原因
+
       if (!pubRes.ok) {
-        toast.error(`服务端异常 (HTTP ${pubRes.status})，无法读取 GitHub OAuth 配置`);
+        toast.error(t('AUTH.GITHUB_CONFIG_HTTP_ERROR', {
+          status: pubRes.status,
+          defaultValue: '服务端异常 (HTTP {{status}})，无法读取 GitHub OAuth 配置',
+        }));
         setLoading(false);
         return;
       }
       if (!stateRes.ok) {
-        toast.error(`服务端异常 (HTTP ${stateRes.status})，无法生成 OAuth state`);
+        toast.error(t('AUTH.OAUTH_STATE_HTTP_ERROR', {
+          status: stateRes.status,
+          defaultValue: '服务端异常 (HTTP {{status}})，无法生成 OAuth state',
+        }));
         setLoading(false);
         return;
       }
@@ -99,17 +105,19 @@ const AuthModal = ({ isOpen, onClose, onLoginSuccess, initialStep = 'github', tm
         return;
       }
       const client_id = pub.github_client_id.trim();
-      // fix Major（自审第十轮）：原代码直接用后端 SysConfig.server_address 拼接 OAuth redirect_uri，
-      // 任何 admin 误填 / SysConfig 入侵都能让 GitHub 把 authorization code 重定向到攻击者域。
-      // GitHub 会对照已注册的 redirect_uri 白名单（强 mitigation），但前端缺少独立校验是 defense-in-depth 缺口。
-      // 校验：server_address 必须与当前页面 origin 同源；不一致直接退化到 window.location.origin。
+
+
+
+
       const baseAddress = (() => {
         const raw = (pub.server_address || '').trim().replace(/\/$/, '');
         if (!raw) return window.location.origin;
         try {
           const u = new URL(raw);
           if (u.origin === window.location.origin) return raw;
-        } catch { /* 解析失败直接退化 */ }
+        } catch {
+          // Fall back to the current origin when server_address is invalid.
+        }
         return window.location.origin;
       })();
       const callbackUri = `${baseAddress}/oauth/github`;
@@ -141,7 +149,7 @@ const AuthModal = ({ isOpen, onClose, onLoginSuccess, initialStep = 'github', tm
       const data = await res.json();
       if (!data.success) {
         toast.error(data.message || t('AUTH.SMS_SEND_FAILED', '验证码发送失败'));
-        // 服务器返回 retry_after 时使用其值开始倒计时
+
         if (data.retry_after && data.retry_after > 0) {
           setCountdown(data.retry_after);
           startCountdown(data.retry_after);

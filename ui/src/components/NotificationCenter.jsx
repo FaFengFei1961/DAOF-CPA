@@ -12,9 +12,9 @@ const SEVERITY_COLOR = {
   error: 'text-error',
 };
 
-// 通知中心。挂在 TopBar 作为下拉面板。
-// 未登录 → 显示空态 + "登录后查看通知"引导按钮，不发请求
-// 已登录 → 拉 /api/notifications，每 60s 自动刷新
+
+
+
 const NotificationCenter = ({ isAuthenticated, onSignIn }) => {
   const { t } = useTranslation();
   const navigate = useNavigate();
@@ -32,14 +32,16 @@ const NotificationCenter = ({ isAuthenticated, onSignIn }) => {
         setNotifs(json.data || []);
         setUnread(json.unread_count || 0);
       }
-    } catch { /* 静默 */ }
+    } catch {
+      // Notification polling is best-effort.
+    }
   }, []);
 
   useEffect(() => {
     if (!isAuthenticated) return;
     load();
-    // fix Minor m23-f2（gemini 第二十三轮）：标签页隐藏时跳过轮询省流量。
-    // tab 切回前台时立即触发一次 load 让用户拿到最新通知。
+
+
     const intervalId = setInterval(() => {
       if (typeof document !== 'undefined' && document.hidden) return;
       load();
@@ -58,7 +60,7 @@ const NotificationCenter = ({ isAuthenticated, onSignIn }) => {
     };
   }, [load, isAuthenticated]);
 
-  // 点外部关闭
+
   useEffect(() => {
     const handler = (e) => {
       if (ref.current && !ref.current.contains(e.target)) {
@@ -76,7 +78,7 @@ const NotificationCenter = ({ isAuthenticated, onSignIn }) => {
       await authFetch(`/api/notifications/${n.id}/read`, { method: 'POST' });
       load();
     } catch {
-      // 静默：单条标记失败不打扰用户
+      // A single read-marker failure should not interrupt the user.
     }
   };
 
@@ -94,9 +96,9 @@ const NotificationCenter = ({ isAuthenticated, onSignIn }) => {
     }
   };
 
-  // fix Major（codex 第四轮）：前端必须独立校验 action_url，不能信赖后端 dispatcher 一定过滤干净。
-  // 拒绝 javascript:/data:/blob:/外部 URL/协议相对（//host）/含控制字符。
-  // 即使 dispatcher 后期被绕过或脏数据残留，前端也不会把用户带去钓鱼站。
+
+
+
   const isSafeNavigateURL = (raw) => {
     if (typeof raw !== 'string') return false;
     const s = raw.trim();
@@ -105,7 +107,7 @@ const NotificationCenter = ({ isAuthenticated, onSignIn }) => {
     if (s.startsWith('//')) return false;
     if (!s.startsWith('/')) return false;
     try {
-      // 用 base URL 解析；如果结果 origin 不等于当前 origin，拒绝
+
       const u = new URL(s, window.location.origin);
       if (u.origin !== window.location.origin) return false;
       const proto = u.protocol.toLowerCase();
@@ -125,17 +127,17 @@ const NotificationCenter = ({ isAuthenticated, onSignIn }) => {
     markRead(n);
     if (n.action_url) {
       if (!isSafeNavigateURL(n.action_url)) {
-        // 不可信链接静默忽略；保留 markRead 的副作用
+
         setOpen(false);
         setSelectedNotif(null);
         return;
       }
-      // Phase 0：用 react-router 的 navigate 直接 path 跳，保留 query / hash。
-      // 后端发的 action_url 如 "/upgrade?pane=mine"、"/tickets" 等。
+
+
       try {
         navigate(n.action_url);
       } catch {
-        // 极端情况：action_url 不是合法 path → fallback location.href
+
         window.location.href = n.action_url;
       }
       setOpen(false);
@@ -145,9 +147,7 @@ const NotificationCenter = ({ isAuthenticated, onSignIn }) => {
 
   return (
     <div className="relative" ref={ref}>
-      {/* fix CRITICAL C23-F1（gemini 第二十三轮 + WCAG 4.1.2 Name, Role, Value）：
-          自定义下拉缺 aria-haspopup + aria-expanded + 可识别的 dialog role。
-          屏幕阅读器之前不知道这是个弹出面板。 */}
+
       <button
         type="button"
         onClick={() => {
@@ -245,9 +245,9 @@ const NotificationCenter = ({ isAuthenticated, onSignIn }) => {
             ) : notifs.length === 0 ? (
               <div className="text-center py-12 text-on-surface-variant text-sm">{t('NOTIF.EMPTY', '没有通知')}</div>
             ) : (
-              // fix Major Codex UX 审查（第二十五轮）：原实现把整条通知做成大 button，
-              // action_text（如"查看订阅"、"联系客服"）后端存了但前端完全不展示，用户不知道点击会做什么。
-              // 改用 article + 标题/正文 div + 独立 action_text CTA 按钮——保留整条点击行为，但语义清晰。
+
+
+
               notifs.map(n => (
                 <article key={n.id}
                   className={`px-3 py-3 border-b border-outline-variant/20 hover:bg-surface-container-high ${!n.read_at ? 'bg-primary/5' : ''}`}>
