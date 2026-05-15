@@ -139,7 +139,7 @@ func TestPurgeUserDependents_PreservesOperationLog(t *testing.T) {
 	if err := database.DB.AutoMigrate(&database.AccessToken{}, &database.ApiLog{},
 		&database.Notification{}, &database.NotificationBroadcastTarget{},
 		&database.SubscriptionUsage{}, &database.UserSubscription{},
-		&database.TopupOrder{}, &database.TopupRefund{}, &database.Ticket{}, &database.TicketMessage{},
+		&database.TopupOrder{}, &database.TopupRefund{}, &database.PaymentWebhookReceipt{}, &database.Ticket{}, &database.TicketMessage{},
 		&database.NotificationPreference{}, &database.BillingEntry{}); err != nil {
 		t.Fatalf("migrate dependents: %v", err)
 	}

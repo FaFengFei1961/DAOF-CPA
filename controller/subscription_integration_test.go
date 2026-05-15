@@ -41,7 +41,7 @@ func setupSubTestDB(t *testing.T) {
 		&database.QuotaPlan{}, &database.Package{}, &database.PackagePlan{},
 		&database.UserSubscription{}, &database.SubscriptionUsage{}, &database.Notification{},
 		&database.OperationLog{},
-		&database.TopupOrder{}, &database.TopupRefund{},
+		&database.TopupOrder{}, &database.TopupRefund{}, &database.PaymentWebhookReceipt{},
 		&database.BillingEntry{},
 		&database.CouponTemplate{}, &database.UserCoupon{}, // R23+2 优惠券系统
 		&database.Ticket{}, &database.TicketMessage{}, // 工单系统（M23-A4 ticket CSRF 测试需要）

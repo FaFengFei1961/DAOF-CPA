@@ -74,8 +74,8 @@ func InitDB() {
 		&UserSubscription{}, &SubscriptionUsage{}, &Notification{},
 		// 通知增强系统
 		&NotificationPreference{}, &NotificationBroadcast{}, &NotificationBroadcastTarget{},
-		// 充值订单（易付通对接）+ 退款事实表（Sprint1-P0-6 幂等）
-		&TopupOrder{}, &TopupRefund{},
+		// 充值订单（易付通对接）+ 退款事实表（Sprint1-P0-6 幂等）+ webhook 回执（Sprint4-M3 防重放）
+		&TopupOrder{}, &TopupRefund{}, &PaymentWebhookReceipt{},
 		// 工单系统（用户↔admin 多轮会话，关闭 15 天后 cron 物理清除）
 		&Ticket{}, &TicketMessage{},
 		// CPA 凭证元数据本地缓存（增量同步，避免每次查 quota 都下载凭证文件）

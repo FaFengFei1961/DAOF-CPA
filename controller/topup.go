@@ -20,6 +20,7 @@ package controller
 import (
 	"context"
 	"crypto/rand"
+	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
 	"errors"
@@ -27,6 +28,7 @@ import (
 	"log"
 	"math"
 	"math/big"
+	"net"
 	"net/url"
 	"strconv"
 	"strings"
@@ -309,8 +311,18 @@ func YifutNotify(c *fiber.Ctx) error {
 		logKey = "<empty>"
 	}
 
+	remoteIP := c.IP()
+
+	// fix CRITICAL Sprint4-M3：IP 白名单（最外层防御，比签名校验更早，节省密码学开销）
+	// 默认 SysConfig yifut_notify_allowed_cidrs 为空 → 跳过 IP 检查；admin 配置后强制校验。
+	if !checkYifutNotifyIPAllowed(remoteIP) {
+		// 不写 webhook receipt — 这种情况未经签名验证，无可信 nonce
+		log.Printf("[TOPUP-NOTIFY] IP not allowed out_trade_no=%s ip=%s", logKey, remoteIP)
+		return c.Status(403).SendString("ip_not_allowed")
+	}
+
 	if !proxy.VerifyYifutRSA(params, cfg.PlatformPublicKey) {
-		log.Printf("[TOPUP-NOTIFY] sign verify FAILED out_trade_no=%s ip=%s", logKey, c.IP())
+		log.Printf("[TOPUP-NOTIFY] sign verify FAILED out_trade_no=%s ip=%s", logKey, remoteIP)
 		return c.Status(403).SendString("sign_invalid")
 	}
 
@@ -319,13 +331,28 @@ func YifutNotify(c *fiber.Ctx) error {
 	// 拿到平台合法签名的回调后投递到本站 notify。回调"签名有效"，但 pid 不属于我们。
 	// 必须强制 params["pid"] == cfg.PID，缺失或不一致即拒绝。
 	if cfg.PID == "" || params["pid"] != cfg.PID {
-		log.Printf("[TOPUP-NOTIFY] pid mismatch out_trade_no=%s expected=%s got=%s ip=%s", logKey, cfg.PID, params["pid"], c.IP())
+		log.Printf("[TOPUP-NOTIFY] pid mismatch out_trade_no=%s expected=%s got=%s ip=%s", logKey, cfg.PID, params["pid"], remoteIP)
+		recordWebhookReceipt("yifut", params, logKey, remoteIP, "rejected_pid", "pid mismatch")
 		return c.Status(403).SendString("pid_mismatch")
 	}
 
 	// 防重放：timestamp 必填，且与服务器时间漂移 ≤300 秒
 	if !checkYifutTimestamp(params["timestamp"], logKey, "TOPUP-NOTIFY") {
+		recordWebhookReceipt("yifut", params, logKey, remoteIP, "rejected_timestamp", "timestamp drift > 300s")
 		return c.Status(403).SendString("timestamp_invalid")
+	}
+
+	// fix CRITICAL Sprint4-M3：nonce 防重放（最强防线）
+	// 即使签名 + pid + timestamp 全过，同一回调（out_trade_no + sign 前 16 字符）也不能入账两次。
+	// 这层在 TopupOrder.status CAS 之外，提供独立审计 + 跨订单重放兜底（万一上游 bug 复用 sign）。
+	if duplicate, err := recordWebhookReceiptOnce("yifut", params, logKey, remoteIP); err != nil {
+		// DB 故障 → 500 让易付通重试（事务尚未提交，状态未变）
+		log.Printf("[TOPUP-NOTIFY] webhook receipt insert failed out_trade_no=%s: %v", logKey, err)
+		return c.Status(500).SendString("receipt_failed")
+	} else if duplicate {
+		// 同一 (provider, nonce) 已存在 → 重放，直接 success 让易付通停止重试
+		log.Printf("[TOPUP-NOTIFY] webhook duplicate (nonce already used) out_trade_no=%s ip=%s", logKey, remoteIP)
+		return c.SendString("success")
 	}
 
 	if params["trade_status"] != "TRADE_SUCCESS" {
@@ -1042,12 +1069,127 @@ func collectQueryParams(c *fiber.Ctx) map[string]string {
 //
 // 强制要求 SysConfig.server_address 必须配置——绝不 fallback 到 c.Hostname()，
 // 否则攻击者可伪造 Host 头让 notify_url 指向任意域名导致合法支付永远不到账。
+//
+// fix CRITICAL Sprint4-M3：默认强制 https://；admin 误配 http:// 会让 notify_url
+// 在网关侧明文传输 + 易受 MitM 篡改。可通过 SysConfig server_address_require_https=false
+// 显式关闭（仅开发期，生产部署应保持 true）。
 func buildAbsoluteURL(path string) (string, error) {
-	base := readStringConfig("server_address", "")
+	base := strings.TrimSpace(readStringConfig("server_address", ""))
 	if base == "" {
 		return "", fmt.Errorf("server_address SysConfig not configured")
 	}
+	if readBoolConfig("server_address_require_https", true) {
+		lower := strings.ToLower(base)
+		if !strings.HasPrefix(lower, "https://") {
+			return "", fmt.Errorf("server_address must use https:// (got %q); to disable set SysConfig server_address_require_https=false", base)
+		}
+	}
 	return strings.TrimRight(base, "/") + path, nil
+}
+
+// checkYifutNotifyIPAllowed 检查回调来源 IP 是否在 SysConfig yifut_notify_allowed_cidrs
+// 配置的白名单内。空配置 = 允许所有 IP（仅依赖签名 + nonce 防重放）。
+//
+// fix CRITICAL Sprint4-M3：旧实现完全依赖签名作为唯一防线，签名密钥若泄漏 / 易付通侧
+// 异常签发，无法靠业务侧防御。增加 IP CIDR 白名单作为最外层防线（生产建议配置）。
+func checkYifutNotifyIPAllowed(remoteIP string) bool {
+	csv := strings.TrimSpace(readStringConfig("yifut_notify_allowed_cidrs", ""))
+	if csv == "" {
+		return true // 未配置 → 默认允许，仅依赖下游签名/nonce 防御
+	}
+	ip := net.ParseIP(strings.TrimSpace(remoteIP))
+	if ip == nil {
+		log.Printf("[TOPUP-NOTIFY] cannot parse remote IP %q", remoteIP)
+		return false
+	}
+	for _, raw := range strings.Split(csv, ",") {
+		cidr := strings.TrimSpace(raw)
+		if cidr == "" {
+			continue
+		}
+		_, ipnet, err := net.ParseCIDR(cidr)
+		if err != nil {
+			// admin 配错就跳过这条；安全决策 fail-closed：直接 IP 比较看是否裸 IP
+			if cidr == remoteIP {
+				return true
+			}
+			log.Printf("[TOPUP-NOTIFY] bad CIDR config %q: %v", cidr, err)
+			continue
+		}
+		if ipnet.Contains(ip) {
+			return true
+		}
+	}
+	return false
+}
+
+// webhookNonce 由 out_trade_no + sign 前 16 字符拼接，保证：
+//  - 同一订单同一签名只能入账一次（重放被 unique 约束拒绝）
+//  - 不同订单的回调不互相冲突
+//  - sign 缺失时退化为 out_trade_no:notimestamp:no_sign（仍可作 nonce）
+func webhookNonce(provider string, params map[string]string) string {
+	outTradeNo := strings.TrimSpace(params["out_trade_no"])
+	sign := strings.TrimSpace(params["sign"])
+	if len(sign) > 16 {
+		sign = sign[:16]
+	}
+	if sign == "" {
+		sign = "no_sign"
+	}
+	return provider + ":" + outTradeNo + ":" + sign
+}
+
+// signatureHash 把回调签名做 SHA-256 摘要，落库审计时不存原始签名以最小化敏感面。
+func signatureHash(sign string) string {
+	if sign == "" {
+		return ""
+	}
+	sum := sha256.Sum256([]byte(sign))
+	return hex.EncodeToString(sum[:])
+}
+
+// recordWebhookReceiptOnce 写入 PaymentWebhookReceipt，唯一约束触发即返回 duplicate=true。
+//
+// 调用方应在 RSA + pid + timestamp 校验**全部通过后**调用，将处理结果记为 "accepted"。
+// 重放（同 nonce 再次到达）由 DB unique 索引兜底，返回 (true, nil)。
+func recordWebhookReceiptOnce(provider string, params map[string]string, outTradeNo, remoteIP string) (bool, error) {
+	receipt := database.PaymentWebhookReceipt{
+		Provider:      provider,
+		Nonce:         webhookNonce(provider, params),
+		SignatureHash: signatureHash(params["sign"]),
+		OutTradeNo:    outTradeNo,
+		RemoteIP:      remoteIP,
+		Status:        "accepted",
+		ReceivedAt:    time.Now(),
+	}
+	if err := database.DB.Create(&receipt).Error; err != nil {
+		// unique 违反 = nonce 已存在 = 重放
+		if strings.Contains(strings.ToLower(err.Error()), "unique") {
+			return true, nil
+		}
+		return false, err
+	}
+	return false, nil
+}
+
+// recordWebhookReceipt 记录"被拒绝"的回调（pid/timestamp 等失败），用于审计；
+// 失败本身不返回 error 让 caller 继续走拒绝流程（即使 receipt 落库失败也不能让 callback 通过）。
+func recordWebhookReceipt(provider string, params map[string]string, outTradeNo, remoteIP, status, reason string) {
+	receipt := database.PaymentWebhookReceipt{
+		Provider:      provider,
+		Nonce:         webhookNonce(provider, params) + ":" + status, // 拒绝路径附加 status 避免与 accepted 互相冲突
+		SignatureHash: signatureHash(params["sign"]),
+		OutTradeNo:    outTradeNo,
+		RemoteIP:      remoteIP,
+		Status:        status,
+		Reason:        reason,
+		ReceivedAt:    time.Now(),
+	}
+	if err := database.DB.Create(&receipt).Error; err != nil {
+		// 失败时仅 log，不影响主流程（caller 已经决定拒绝）
+		log.Printf("[TOPUP-NOTIFY] webhook receipt log failed status=%s out_trade_no=%s: %v",
+			status, outTradeNo, err)
+	}
 }
 
 func readStringConfig(key, def string) string {

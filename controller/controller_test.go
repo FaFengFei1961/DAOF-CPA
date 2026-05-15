@@ -35,7 +35,7 @@ func initializeMegaTestDB() *fiber.App {
 		&database.Notification{},
 		&database.NotificationBroadcastTarget{}, // codex 第五轮 fix：需要先建 schema 才能级联清理
 		&database.UserSubscription{}, &database.SubscriptionUsage{},
-		&database.TopupOrder{}, &database.TopupRefund{}, &database.NotificationPreference{},
+		&database.TopupOrder{}, &database.TopupRefund{}, &database.PaymentWebhookReceipt{}, &database.NotificationPreference{},
 		&database.Ticket{}, &database.TicketMessage{},
 		&database.BillingEntry{}, // C2/C3 fix：UpdateUser/purgeUserDependents 现在写/删账单
 

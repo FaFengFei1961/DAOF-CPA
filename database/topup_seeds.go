@@ -30,6 +30,14 @@ var TopupSysConfigDefaults = map[string]string{
 	// 汇率（RMB per USD × 1e6）。Sprint4-M3：从 float 7.2 改为 int64 定点 7_200_000。
 	"exchange_rate_rmb_per_usd_micros": "7200000",
 
+	// ── Webhook 安全 (Sprint4-M3) ──
+	// 易付通回调来源 IP CIDR 白名单（CSV）。空表示禁用 IP 检查（仅依赖签名 + nonce 防重放）。
+	// 例："1.2.3.0/24,5.6.7.8/32"。admin 在易付通商户后台查到固定回调 IP 段后建议启用。
+	"yifut_notify_allowed_cidrs": "",
+	// server_address 是否强制 https（生产 true；开发 false 可用 http）。
+	// 强制开启可防 admin 误配 http://... 导致 notify_url 在网关侧被劫持。
+	"server_address_require_https": "true",
+
 	// ── 商品名 / param 模板 ──
 	"yifut_product_name": "DAOF-CPA 余额充值",
 
