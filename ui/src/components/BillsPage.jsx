@@ -3,11 +3,11 @@ import { useTranslation } from 'react-i18next';
 import {
   ArrowDownCircle, ArrowUpCircle, RefreshCw, Receipt,
   Filter, Download, Calendar, Activity, Wallet,
+  X,
 } from 'lucide-react';
 import toast from 'react-hot-toast';
 import { authFetch, readAuthState } from '../utils/authFetch';
 import { isPageCacheFresh, readPageCache, writePageCache } from '../utils/pageCache';
-import Pagination from './common/Pagination';
 import { useCurrency } from '../context/CurrencyContext';
 
 // EntryType → 显示元数据。每种类型一个图标 + 颜色 + 中文标签。
@@ -43,9 +43,24 @@ const fmtTime = (s) => {
 };
 
 const BILLING_CACHE_TTL_MS = 30000;
+const BILLING_PAGE_SIZE = 30;
 const DEFAULT_NON_USAGE_TYPES = Object.keys(TYPE_META).filter(
   (k) => k !== 'api_usage_sub'
 );
+const RECONCILABLE_BILLING_STATES = new Set(['pending_reconcile', 'upstream_unmetered']);
+const BILLING_STATE_META = {
+  settled: { i18n: 'BILL.STATE_SETTLED', fallback: '已结算', className: 'bg-success/10 text-success border-success/20' },
+  pending_reconcile: { i18n: 'BILL.STATE_PENDING_RECONCILE', fallback: '待对账', className: 'bg-warning/10 text-warning border-warning/20' },
+  upstream_unmetered: { i18n: 'BILL.STATE_UPSTREAM_UNMETERED', fallback: '上游未计量', className: 'bg-warning/10 text-warning border-warning/20' },
+};
+const RECONCILE_ERROR_MESSAGES = {
+  ERR_RECONCILE_RESULT_INVALID: ['BILL.ERR_RECONCILE_RESULT_INVALID', '对账结果无效'],
+  ERR_RECONCILE_NOTE_REQUIRED: ['BILL.ERR_RECONCILE_NOTE_REQUIRED', '请填写对账说明'],
+  ERR_RECONCILE_NOTE_TOO_LONG: ['BILL.ERR_RECONCILE_NOTE_TOO_LONG', '对账说明不能超过 500 字'],
+  ERR_RECONCILE_NOT_PENDING: ['BILL.ERR_RECONCILE_NOT_PENDING', '该账单当前不可对账'],
+  ERR_RECONCILE_ALREADY_DONE: ['BILL.ERR_RECONCILE_ALREADY_DONE', '该账单已完成对账'],
+  ERR_RECONCILE_RACED: ['BILL.ERR_RECONCILE_RACED', '账单状态已变化，请刷新后重试'],
+};
 
 const getBillingAuthKey = () => {
   const { isAdmin, userToken } = readAuthState();
@@ -59,16 +74,17 @@ const buildDefaultBillingQuery = (extra = {}) => {
   return params.toString();
 };
 
-const getBillingListCacheKey = (authKey, qs) => `billing:list:v2:${authKey}:${qs}`;
+const getBillingListCacheKey = (authKey, qs) => `billing:list:v3:${authKey}:${qs}`;
 const getBillingSummaryCacheKey = (authKey, qs) => `billing:summary:${authKey}:${qs}`;
 
 const BillsPage = () => {
   const { t } = useTranslation();
   const { formatCurrency } = useCurrency();
-  const billingAuthKey = useRef(getBillingAuthKey()).current;
+  const [billingAuthKey] = useState(getBillingAuthKey);
+  const [isAdmin] = useState(() => readAuthState().isAdmin);
   const initialListCache = readPageCache(getBillingListCacheKey(
     billingAuthKey,
-    buildDefaultBillingQuery({ page: 1, page_size: 30 })
+    buildDefaultBillingQuery({ page_size: BILLING_PAGE_SIZE })
   ));
   const initialSummaryCache = readPageCache(getBillingSummaryCacheKey(
     billingAuthKey,
@@ -78,9 +94,9 @@ const BillsPage = () => {
   const [entries, setEntries] = useState(() => initialListCache?.entries || []);
   const [summary, setSummary] = useState(() => initialSummaryCache || null);
   const [loading, setLoading] = useState(() => !initialListCache);
-  const [page, setPage] = useState(1);
-  const [pageSize] = useState(30);
-  const [total, setTotal] = useState(0);
+  const [loadingMore, setLoadingMore] = useState(false);
+  const [nextCursor, setNextCursor] = useState(() => initialListCache?.nextCursor || 0);
+  const [reconcileEntry, setReconcileEntry] = useState(null);
 
   // 筛选状态
   const [selectedTypes, setSelectedTypes] = useState([]); // 空 = 全部
@@ -89,7 +105,7 @@ const BillsPage = () => {
   const [toDate, setToDate] = useState('');
 
   // fix MAJOR M8（gemini 第二十轮）：抑制快速切换筛选/分页时的请求竞态。
-  // 旧请求晚于新请求返回时丢弃结果，避免覆盖 entries / total。
+  // 旧请求晚于新请求返回时丢弃结果，避免覆盖 entries / cursor。
   const reqIdRef = useRef(0);
   const summaryReqIdRef = useRef(0);
 
@@ -109,28 +125,40 @@ const BillsPage = () => {
     return params.toString();
   }, [selectedTypes, hideUsage, fromDate, toDate]);
 
-  const loadEntries = useCallback(async ({ force = false } = {}) => {
+  const loadEntries = useCallback(async ({ force = false, append = false, cursor = 0 } = {}) => {
     const myReqId = ++reqIdRef.current;
-    const qs = buildQuery({ page, page_size: pageSize });
+    const extra = { page_size: BILLING_PAGE_SIZE };
+    if (cursor > 0) extra.cursor = cursor;
+    const qs = buildQuery(extra);
     const cacheKey = getBillingListCacheKey(billingAuthKey, qs);
-    const cached = readPageCache(cacheKey);
+    const cached = append ? null : readPageCache(cacheKey);
     if (cached) {
       setEntries(cached.entries || []);
-      setTotal(cached.total || 0);
+      setNextCursor(cached.nextCursor || 0);
       setLoading(false);
       if (!force && isPageCacheFresh(cacheKey, BILLING_CACHE_TTL_MS)) return;
     } else {
-      setLoading(true);
+      if (append) {
+        setLoadingMore(true);
+      } else {
+        setLoading(true);
+      }
     }
     try {
       const json = await authFetch(`/api/billing/mine?${qs}`);
       // M8: 旧请求晚于新请求返回时丢弃结果
       if (myReqId !== reqIdRef.current) return;
       if (json.success) {
-        const next = { entries: json.data || [], total: json.meta?.total || 0 };
-        writePageCache(cacheKey, next);
-        setEntries(next.entries);
-        setTotal(next.total);
+        const pageEntries = json.data || [];
+        const next = Number(json.next_cursor || 0);
+        if (append) {
+          setEntries((prev) => [...prev, ...pageEntries]);
+        } else {
+          const cacheValue = { entries: pageEntries, nextCursor: next };
+          writePageCache(cacheKey, cacheValue);
+          setEntries(pageEntries);
+        }
+        setNextCursor(next);
       } else {
         toast.error(t('BILL.LOAD_FAIL', '加载账单失败'));
       }
@@ -138,9 +166,12 @@ const BillsPage = () => {
       if (myReqId !== reqIdRef.current) return;
       toast.error(`${t('BILL.LOAD_FAIL', '加载账单失败')}: ${e.message || e}`);
     } finally {
-      if (myReqId === reqIdRef.current) setLoading(false);
+      if (myReqId === reqIdRef.current) {
+        setLoading(false);
+        setLoadingMore(false);
+      }
     }
-  }, [billingAuthKey, buildQuery, page, pageSize, t]);
+  }, [billingAuthKey, buildQuery, t]);
 
   const loadSummary = useCallback(async ({ force = false } = {}) => {
     const myReqId = ++summaryReqIdRef.current;
@@ -166,11 +197,7 @@ const BillsPage = () => {
   useEffect(() => { loadEntries(); }, [loadEntries]);
   useEffect(() => { loadSummary(); }, [loadSummary]);
 
-  // fix Minor（gemini 第十四轮）：原实现 filter 改变同时触发独立的 setPage(1) effect +
-  // buildQuery 重建 → 两次顺序 fetch 闪烁。改为在 toggle / 日期变化的 onChange 直接 setPage(1)
-  // 同步执行（React 18+ batch 合并 set 调用），避免双 fetch。
   const toggleType = (type) => {
-    setPage(1);
     setSelectedTypes((prev) => {
       if (prev.includes(type)) return prev.filter((x) => x !== type);
       return [...prev, type];
@@ -300,7 +327,7 @@ const BillsPage = () => {
             <input
               type="checkbox"
               checked={hideUsage}
-              onChange={(e) => { setPage(1); setHideUsage(e.target.checked); }}
+              onChange={(e) => setHideUsage(e.target.checked)}
               className="rounded-control"
             />
             <span>{t('BILL.HIDE_USAGE', '隐藏 API 用量行（按订阅扣额度）')}</span>
@@ -310,14 +337,14 @@ const BillsPage = () => {
             <input
               type="date"
               value={fromDate}
-              onChange={(e) => { setPage(1); setFromDate(e.target.value); }}
+              onChange={(e) => setFromDate(e.target.value)}
               className="px-2 py-1 rounded-control border border-outline-variant bg-surface text-sm"
             />
             <span>→</span>
             <input
               type="date"
               value={toDate}
-              onChange={(e) => { setPage(1); setToDate(e.target.value); }}
+              onChange={(e) => setToDate(e.target.value)}
               className="px-2 py-1 rounded-control border border-outline-variant bg-surface text-sm"
             />
           </div>
@@ -336,19 +363,47 @@ const BillsPage = () => {
           </div>
         ) : (
           <ul className="divide-y divide-outline-variant/30 rounded-overlay border border-outline-variant/40 overflow-hidden bg-surface">
-            {entries.map((e) => <BillRow key={e.id} entry={e} t={t} formatCurrency={formatCurrency} />)}
+            {entries.map((e) => (
+              <BillRow
+                key={e.id}
+                entry={e}
+                t={t}
+                formatCurrency={formatCurrency}
+                onReconcile={isAdmin ? setReconcileEntry : null}
+              />
+            ))}
           </ul>
         )}
-        {/* fix MAJOR（gemini 第十七轮）：用共用 Pagination 组件 */}
-        <Pagination
-          page={page}
-          pageSize={pageSize}
-          total={total}
-          loading={loading}
-          onPageChange={setPage}
-          className="mt-4"
-        />
+        {entries.length > 0 && (
+          <div className="mt-4 flex justify-center">
+            {nextCursor > 0 ? (
+              <button
+                type="button"
+                disabled={loadingMore}
+                onClick={() => loadEntries({ append: true, cursor: nextCursor })}
+                className="inline-flex items-center gap-1.5 px-4 py-2 rounded-control border border-outline-variant text-sm hover:bg-on-surface/[0.04] disabled:opacity-50 disabled:cursor-not-allowed"
+              >
+                {loadingMore ? t('COMMON.LOADING', '加载中…') : t('BILL.LOAD_MORE', '加载更多')}
+              </button>
+            ) : (
+              <span className="text-xs text-on-surface/50">{t('BILL.NO_MORE', '没有更多账单')}</span>
+            )}
+          </div>
+        )}
       </section>
+
+      {reconcileEntry && (
+        <ReconcileBillingModal
+          entry={reconcileEntry}
+          t={t}
+          onClose={() => setReconcileEntry(null)}
+          onSuccess={() => {
+            setReconcileEntry(null);
+            loadEntries({ force: true });
+            loadSummary({ force: true });
+          }}
+        />
+      )}
     </div>
   );
 };
@@ -363,7 +418,7 @@ const SummaryCard = ({ label, value, color, icon: Icon }) => (
   </div>
 );
 
-const BillRow = ({ entry, t, formatCurrency }) => {
+const BillRow = ({ entry, t, formatCurrency, onReconcile }) => {
   const meta = TYPE_META[entry.entry_type] || {
     icon: Activity, color: 'text-on-surface', bg: 'bg-surface-container/30',
     fallback: entry.entry_type, i18n: '',
@@ -375,6 +430,7 @@ const BillRow = ({ entry, t, formatCurrency }) => {
     ? (entry.tokens_total > 0 ? `${entry.tokens_total.toLocaleString()} tok` : '—')
     : formatSignedCurrency(entry.amount_usd, formatCurrency, 2);
   const description = formatBillingDescription(entry, formatCurrency);
+  const canReconcile = Boolean(onReconcile) && RECONCILABLE_BILLING_STATES.has(entry.billing_state);
 
   return (
     <li className="flex items-center gap-3 px-4 py-3 hover:bg-on-surface/[0.02]">
@@ -412,13 +468,168 @@ const BillRow = ({ entry, t, formatCurrency }) => {
         }`}>
           {amountText}
         </div>
+        <div className="mt-1 flex justify-end">
+          {canReconcile ? (
+            <button
+              type="button"
+              onClick={() => onReconcile(entry)}
+              className="inline-flex items-center px-2.5 py-1 rounded-control bg-warning text-white text-xs font-medium hover:opacity-90"
+            >
+              {t('BILL.RECONCILE_ACTION', '对账')}
+            </button>
+          ) : (
+            <BillingStateBadge state={entry.billing_state} t={t} />
+          )}
+        </div>
         {!isUsage && (
-          <div className="text-xs text-on-surface/50">
+          <div className="mt-1 text-xs text-on-surface/50">
             {t('BILL.BALANCE_AFTER', '余额')} {formatCurrency(entry.balance_after_usd || 0, 2)}
           </div>
         )}
       </div>
     </li>
+  );
+};
+
+const BillingStateBadge = ({ state, t }) => {
+  const meta = BILLING_STATE_META[state] || {
+    i18n: '',
+    fallback: state || '—',
+    className: 'bg-surface-container text-on-surface/70 border-outline-variant',
+  };
+  const label = meta.i18n ? t(meta.i18n, meta.fallback) : meta.fallback;
+  return (
+    <span className={`inline-flex items-center px-2 py-0.5 rounded-control border text-[11px] ${meta.className}`}>
+      {label}
+    </span>
+  );
+};
+
+const ReconcileBillingModal = ({ entry, t, onClose, onSuccess }) => {
+  const [result, setResult] = useState('absorbed');
+  const [note, setNote] = useState('');
+  const [submitting, setSubmitting] = useState(false);
+
+  const submit = async (e) => {
+    e.preventDefault();
+    const trimmedNote = note.trim();
+    if (!trimmedNote) {
+      toast.error(t('BILL.ERR_RECONCILE_NOTE_REQUIRED', '请填写对账说明'));
+      return;
+    }
+    if ([...trimmedNote].length > 500) {
+      toast.error(t('BILL.ERR_RECONCILE_NOTE_TOO_LONG', '对账说明不能超过 500 字'));
+      return;
+    }
+    setSubmitting(true);
+    try {
+      const json = await authFetch(`/api/admin/billing/${entry.id}/reconcile`, {
+        method: 'POST',
+        body: { result, note: trimmedNote },
+      });
+      if (json.success) {
+        toast.success(t('BILL.SUCCESS_RECONCILED', '对账已提交'));
+        onSuccess();
+        return;
+      }
+      const code = json.message_code;
+      const mapped = RECONCILE_ERROR_MESSAGES[code];
+      toast.error(mapped ? t(mapped[0], mapped[1]) : (json.message || t('BILL.RECONCILE_FAILED', '对账失败')));
+    } catch (err) {
+      toast.error(`${t('BILL.RECONCILE_FAILED', '对账失败')}: ${err.message || err}`);
+    } finally {
+      setSubmitting(false);
+    }
+  };
+
+  return (
+    <div
+      role="dialog"
+      aria-modal="true"
+      aria-labelledby="reconcile-billing-title"
+      className="fixed inset-0 z-[70] flex items-center justify-center p-4 bg-black/70 backdrop-blur-md"
+      onClick={(e) => {
+        if (e.target === e.currentTarget && !submitting) onClose();
+      }}
+    >
+      <form
+        onSubmit={submit}
+        className="w-full max-w-lg rounded-overlay bg-surface shadow-2xl shadow-black/40 border border-outline-variant/40 overflow-hidden"
+      >
+        <div className="flex items-center justify-between px-5 py-4 border-b border-outline-variant/40">
+          <div>
+            <h2 id="reconcile-billing-title" className="text-lg font-semibold text-on-surface">
+              {t('BILL.RECONCILE_TITLE', '账单对账')}
+            </h2>
+            <p className="text-xs text-on-surface/60">
+              #{entry.id} · {entry.model_name || entry.entry_type}
+            </p>
+          </div>
+          <button
+            type="button"
+            disabled={submitting}
+            onClick={onClose}
+            className="p-2 rounded-control hover:bg-on-surface/[0.04] disabled:opacity-50"
+            aria-label={t('COMMON.CLOSE', '关闭')}
+          >
+            <X className="w-4 h-4" />
+          </button>
+        </div>
+
+        <div className="p-5 space-y-4">
+          <label className="block">
+            <span className="block text-sm font-medium text-on-surface mb-1.5">
+              {t('BILL.RECONCILE_RESULT_LABEL', '对账结果')}
+            </span>
+            <select
+              value={result}
+              onChange={(e) => setResult(e.target.value)}
+              className="w-full px-3 py-2 rounded-control border border-outline-variant bg-surface text-sm"
+            >
+              <option value="absorbed">{t('BILL.RECONCILE_RESULT_ABSORBED', '平台吸收')}</option>
+              <option value="charged">{t('BILL.RECONCILE_RESULT_CHARGED', '补扣用户')}</option>
+              <option value="voided">{t('BILL.RECONCILE_RESULT_VOIDED', '作废')}</option>
+            </select>
+          </label>
+
+          <label className="block">
+            <span className="block text-sm font-medium text-on-surface mb-1.5">
+              {t('BILL.RECONCILE_NOTE_LABEL', '对账说明')}
+            </span>
+            <textarea
+              required
+              maxLength={500}
+              value={note}
+              onChange={(e) => setNote(e.target.value)}
+              rows={5}
+              className="w-full px-3 py-2 rounded-control border border-outline-variant bg-surface text-sm resize-y"
+              placeholder={t('BILL.RECONCILE_NOTE_PLACEHOLDER', '填写决策原因，最多 500 字')}
+            />
+            <span className="block mt-1 text-xs text-on-surface/50 text-right">
+              {[...note].length}/500
+            </span>
+          </label>
+        </div>
+
+        <div className="flex justify-end gap-2 px-5 py-4 border-t border-outline-variant/40 bg-surface-container/30">
+          <button
+            type="button"
+            disabled={submitting}
+            onClick={onClose}
+            className="px-4 py-2 rounded-control border border-outline-variant text-sm hover:bg-on-surface/[0.04] disabled:opacity-50"
+          >
+            {t('COMMON.CANCEL', '取消')}
+          </button>
+          <button
+            type="submit"
+            disabled={submitting}
+            className="px-4 py-2 rounded-control bg-primary text-white text-sm hover:opacity-90 disabled:opacity-50"
+          >
+            {submitting ? t('COMMON.SUBMITTING', '提交中…') : t('BILL.RECONCILE_SUBMIT', '提交对账')}
+          </button>
+        </div>
+      </form>
+    </div>
   );
 };
 

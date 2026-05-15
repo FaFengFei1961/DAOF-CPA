@@ -13,6 +13,7 @@ import (
 	"daof-ai-hub/database"
 	"encoding/csv"
 	"fmt"
+	"io"
 	"log"
 	"regexp"
 	"strconv"
@@ -121,7 +122,7 @@ func applyBillingFilters(q *gorm.DB, f billingFilters) *gorm.DB {
 
 // ─── 用户：GET /api/billing/mine ─────────────────────────────────
 
-// MyBillingEntries 分页列表。最多 200 条/页，倒序。
+// MyBillingEntries keyset 分页列表。最多 200 条/页，按 id 倒序。
 func MyBillingEntries(c *fiber.Ctx) error {
 	user, err := getCurrentUser(c)
 	if err != nil {
@@ -144,29 +145,34 @@ func listBillingEntries(c *fiber.Ctx, userID uint, includeInternal bool) error {
 	if err != nil {
 		return c.Status(400).JSON(fiber.Map{"success": false, "message": err.Error(), "message_code": "ERR_INVALID_FILTER"})
 	}
-	page, _ := strconv.Atoi(c.Query("page", "1"))
-	if page < 1 {
-		page = 1
-	}
 	size, _ := strconv.Atoi(c.Query("page_size", "30"))
 	if size < 1 || size > 200 {
 		size = 30
 	}
+	var cursor int64
+	if rawCursor := strings.TrimSpace(c.Query("cursor")); rawCursor != "" {
+		cursor, err = strconv.ParseInt(rawCursor, 10, 64)
+		if err != nil || cursor < 0 {
+			return c.Status(400).JSON(fiber.Map{"success": false, "message_code": "ERR_INVALID_PARAMS"})
+		}
+	}
 
 	q := applyBillingFilters(database.DB.Model(&database.BillingEntry{}), f)
-	var total int64
-	if err := q.Count(&total).Error; err != nil {
-		log.Printf("[BILLING-LIST] count failed user=%d: %v", userID, err)
-		return c.Status(500).JSON(fiber.Map{"success": false, "message_code": "ERR_DB_QUERY"})
+	if cursor > 0 {
+		q = q.Where("id < ?", cursor)
 	}
 
 	var rows []database.BillingEntry
-	if err := q.Order("occurred_at DESC").
-		Offset((page - 1) * size).
-		Limit(size).
+	if err := q.Order("id DESC").
+		Limit(size + 1).
 		Find(&rows).Error; err != nil {
 		log.Printf("[BILLING-LIST] find failed user=%d: %v", userID, err)
 		return c.Status(500).JSON(fiber.Map{"success": false, "message_code": "ERR_DB_QUERY"})
+	}
+	var nextCursor int64
+	if len(rows) > size {
+		rows = rows[:size]
+		nextCursor = int64(rows[len(rows)-1].ID)
 	}
 	if !includeInternal {
 		for i := range rows {
@@ -179,9 +185,9 @@ func listBillingEntries(c *fiber.Ctx, userID uint, includeInternal bool) error {
 	}
 
 	return c.JSON(fiber.Map{
-		"success": true,
-		"data":    billingEntryViewsFrom(rows),
-		"meta":    fiber.Map{"page": page, "page_size": size, "total": total},
+		"success":     true,
+		"data":        billingEntryViewsFrom(rows),
+		"next_cursor": nextCursor,
 	})
 }
 
@@ -278,22 +284,12 @@ func AdminUserBillingExport(c *fiber.Ctx) error {
 	return exportBillingCSV(c, uint(id), true)
 }
 
-// exportBillingCSV 导出 CSV。设上限 10000 行避免 OOM；超出建议用筛选条件缩小范围。
-const csvExportMaxRows = 10000
+const billingCSVBatchSize = 500
 
 func exportBillingCSV(c *fiber.Ctx, userID uint, includeInternal bool) error {
 	f, err := parseBillingFilters(c, userID)
 	if err != nil {
 		return c.Status(400).JSON(fiber.Map{"success": false, "message": err.Error(), "message_code": "ERR_INVALID_FILTER"})
-	}
-	q := applyBillingFilters(database.DB.Model(&database.BillingEntry{}), f).
-		Order("occurred_at DESC").
-		Limit(csvExportMaxRows)
-
-	var rows []database.BillingEntry
-	if err := q.Find(&rows).Error; err != nil {
-		log.Printf("[BILLING-EXPORT] find failed user=%d: %v", userID, err)
-		return c.Status(500).JSON(fiber.Map{"success": false, "message_code": "ERR_DB_QUERY"})
 	}
 
 	c.Set("Content-Type", "text/csv; charset=utf-8")
@@ -301,64 +297,94 @@ func exportBillingCSV(c *fiber.Ctx, userID uint, includeInternal bool) error {
 		fmt.Sprintf(`attachment; filename="billing-user-%d-%s.csv"`,
 			userID, time.Now().Format("20060102")))
 
+	pr, pw := io.Pipe()
+	go func() {
+		if err := writeBillingCSVStream(pw, f, userID, includeInternal); err != nil {
+			log.Printf("[BILLING-EXPORT] stream failed user=%d: %v", userID, err)
+			_ = pw.CloseWithError(err)
+			return
+		}
+		_ = pw.Close()
+	}()
+
+	return c.SendStream(pr)
+}
+
+func writeBillingCSVStream(w io.Writer, f billingFilters, userID uint, includeInternal bool) error {
 	// 写 BOM 让 Excel 正确识别 UTF-8 中文
-	if _, err := c.Write([]byte{0xEF, 0xBB, 0xBF}); err != nil {
+	if _, err := w.Write([]byte{0xEF, 0xBB, 0xBF}); err != nil {
 		return err
 	}
 
-	w := csv.NewWriter(c)
-	defer w.Flush()
+	csvw := csv.NewWriter(w)
+	defer csvw.Flush()
 
 	// 表头（中文友好；用户和 admin 共用）
 	header := []string{
 		"发生时间", "类型", "金额(USD)", "余额(USD)",
 		"模型", "Tokens", "原币种", "原币金额", "描述", "关联类型", "关联ID",
 	}
-	if err := w.Write(header); err != nil {
+	if err := csvw.Write(header); err != nil {
+		return err
+	}
+	csvw.Flush()
+	if err := csvw.Error(); err != nil {
 		return err
 	}
 
-	for _, r := range rows {
-		description := r.Description
-		relatedType := r.RelatedType
-		relatedID := r.RelatedID
-		if !includeInternal {
-			description = publicBillingDescription(r)
-			relatedType = ""
-			relatedID = 0
+	q := applyBillingFilters(database.DB.Model(&database.BillingEntry{}), f)
+	var rows []database.BillingEntry
+	return q.FindInBatches(&rows, billingCSVBatchSize, func(tx *gorm.DB, batch int) error {
+		for _, r := range rows {
+			record := billingCSVRecord(r, includeInternal)
+			if err := csvw.Write(record); err != nil {
+				// 流式写入失败时无法回传 4xx（headers 已发），至少日志记录受影响行。
+				log.Printf("[BILLING-EXPORT] mid-stream write failed user=%d entry_id=%d batch=%d: %v (响应已截断，客户端 CSV 不完整)",
+					userID, r.ID, batch, err)
+				return err
+			}
 		}
-		// fix Major（codex+claude 第十四轮）：所有可能含用户/admin 输入的字符串字段必须经过 csvSanitize
-		// 防 Excel 公式注入。数字/枚举字段不需要（来源受控）。
-		// 金额 micro_usd → USD 字符串（6 位小数无损）；原币 RMB → fen → 元字符串（2 位小数）
-		amountOriginalStr := ""
-		if r.CurrencyOriginal == "USD" {
-			amountOriginalStr = database.FormatMicroUSD(r.AmountOriginal)
-		} else if r.CurrencyOriginal == "CNY" || r.CurrencyOriginal == "RMB" {
-			amountOriginalStr = database.FormatFen(r.AmountOriginal)
-		} else {
-			amountOriginalStr = strconv.FormatInt(r.AmountOriginal, 10) // 未知币种用 raw 整数
-		}
-		record := []string{
-			r.OccurredAt.Format("2006-01-02 15:04:05"),
-			localizeBillingType(r.EntryType),
-			database.FormatMicroUSD(r.AmountUSD),
-			database.FormatMicroUSD(r.BalanceAfterUSD),
-			csvSanitize(r.ModelName),
-			strconv.Itoa(r.TokensTotal),
-			csvSanitize(r.CurrencyOriginal),
-			amountOriginalStr,
-			csvSanitize(description),
-			csvSanitize(relatedType),
-			strconv.Itoa(int(relatedID)),
-		}
-		if err := w.Write(record); err != nil {
-			// fix Minor: 流式写入失败时无法回传 4xx（headers 已发），至少日志记录受影响行数
-			log.Printf("[BILLING-EXPORT] mid-stream write failed user=%d entry_id=%d: %v (响应已截断，客户端 CSV 不完整)",
-				userID, r.ID, err)
+		csvw.Flush()
+		if err := csvw.Error(); err != nil {
 			return err
 		}
+		return tx.Error
+	}).Error
+}
+
+func billingCSVRecord(r database.BillingEntry, includeInternal bool) []string {
+	description := r.Description
+	relatedType := r.RelatedType
+	relatedID := r.RelatedID
+	if !includeInternal {
+		description = publicBillingDescription(r)
+		relatedType = ""
+		relatedID = 0
 	}
-	return nil
+	// fix Major（codex+claude 第十四轮）：所有可能含用户/admin 输入的字符串字段必须经过 csvSanitize
+	// 防 Excel 公式注入。数字/枚举字段不需要（来源受控）。
+	// 金额 micro_usd → USD 字符串（6 位小数无损）；原币 RMB → fen → 元字符串（2 位小数）
+	amountOriginalStr := ""
+	if r.CurrencyOriginal == "USD" {
+		amountOriginalStr = database.FormatMicroUSD(r.AmountOriginal)
+	} else if r.CurrencyOriginal == "CNY" || r.CurrencyOriginal == "RMB" {
+		amountOriginalStr = database.FormatFen(r.AmountOriginal)
+	} else {
+		amountOriginalStr = strconv.FormatInt(r.AmountOriginal, 10) // 未知币种用 raw 整数
+	}
+	return []string{
+		r.OccurredAt.Format("2006-01-02 15:04:05"),
+		localizeBillingType(r.EntryType),
+		database.FormatMicroUSD(r.AmountUSD),
+		database.FormatMicroUSD(r.BalanceAfterUSD),
+		csvSanitize(r.ModelName),
+		strconv.Itoa(r.TokensTotal),
+		csvSanitize(r.CurrencyOriginal),
+		amountOriginalStr,
+		csvSanitize(description),
+		csvSanitize(relatedType),
+		strconv.Itoa(int(relatedID)),
+	}
 }
 
 var adminMarkerRE = regexp.MustCompile(`(^| · )admin#\d+($| · )`)
