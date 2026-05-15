@@ -7,7 +7,7 @@ const ADMIN_TOKEN = process.env.ADMIN_TOKEN || '';
 test.describe('Subscription system', () => {
   test('list public packages without auth', async ({ request }) => {
     // ListPublicPackages 通常允许匿名
-    const res = await request.get('/api/packages/public');
+    const res = await request.get('/api/packages');
     // 可能 200 (有套餐) 或 200 (空数组)
     expect(res.ok()).toBeTruthy();
     const json = await res.json();

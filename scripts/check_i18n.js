@@ -160,12 +160,13 @@ function main() {
     }
   }
 
+  console.log('\nDrift: ' + (missingInEn.length + missingInZh.length) + ', Orphan: ' + orphanKeys.length + ', Total keys: ' + allKeys.size);
   if (failed) {
     process.exit(1);
   }
 
   if (orphanKeys.length > 0) {
-    console.log(`i18n check passed with ${orphanKeys.length} orphan key(s) allowed by --allow-orphan.`);
+    console.log('i18n check passed with ' + orphanKeys.length + ' orphan key(s) allowed by --allow-orphan.');
   } else {
     console.log('i18n check passed.');
   }

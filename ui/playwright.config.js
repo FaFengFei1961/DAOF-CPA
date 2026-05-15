@@ -20,7 +20,7 @@ export default defineConfig({
   workers: 1,
   reporter: [['list'], ['html', { open: 'never' }]],
   use: {
-    baseURL: process.env.BASE_URL || 'http://localhost:8080',
+    baseURL: process.env.BASE_URL || 'http://localhost:3000',
     headless: true,
     screenshot: 'only-on-failure',
     trace: 'retain-on-failure',

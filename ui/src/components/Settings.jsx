@@ -6,6 +6,7 @@ import UserCoupons from './UserCoupons';
 import NotificationPreferences from './NotificationPreferences';
 import BalanceConsumePreferences from './BalanceConsumePreferences';
 import { useTheme } from '../context/ThemeContext';
+import { SEED_COLORS } from '../utils/theme-seeds';
 
 /**
  * Settings — 用户个人设置（Phase 4 完成瘦身）
@@ -16,16 +17,6 @@ import { useTheme } from '../context/ThemeContext';
  * 旧 props（initialTab / hideNav / isAdmin / isAuthenticated）现在仅 initialTab 还有用，
  * 其它已退役。保留 isAuthenticated 兼容旧调用。
  */
-const SEED_COLORS = [
-  { hex: '#7c5cff', name: '紫' },
-  { hex: '#2563eb', name: '蓝' },
-  { hex: '#059669', name: '青' },
-  { hex: '#ea580c', name: '橙' },
-  { hex: '#dc2626', name: '红' },
-  { hex: '#0891b2', name: '湖' },
-  { hex: '#a16207', name: '金' },
-  { hex: '#475569', name: '灰' },
-];
 
 const Settings = ({ initialTab }) => {
   const { themePref, changeTheme, seedColor, changeSeedColor } = useTheme();

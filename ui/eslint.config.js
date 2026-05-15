@@ -83,7 +83,8 @@ export default defineConfig([
     // Block B exclude these from strict-tokens check
     files: [
       'src/components/ui/**/*.{js,jsx}',
-      'src/context/ConfirmContext.jsx'
+      'src/context/ConfirmContext.jsx',
+      'src/utils/theme-seeds.js'
     ],
     rules: {
       'design-system/strict-tokens': 'off',

@@ -31,7 +31,7 @@ const AdminShell = () => {
 
         <AdminSidebar />
 
-        <div className="flex-1 lg:ml-60 flex flex-col h-screen overflow-y-auto">
+        <div className="flex-1 min-w-0 lg:ml-60 flex flex-col h-screen overflow-y-auto">
           <TopBar
             isAuthenticated={isAuthenticated}
             isAdmin={isAdmin}
@@ -42,7 +42,7 @@ const AdminShell = () => {
             id="main-content"
             tabIndex="-1"
             key={location.pathname}
-            className="flex-1 w-full max-w-[1880px] 2xl:max-w-none mx-auto px-3 sm:px-5 lg:px-6 2xl:px-8 mt-2 sm:mt-4 focus:outline-none animate-in fade-in slide-in-from-bottom-1 duration-300"
+            className="flex-1 min-w-0 w-full max-w-[1880px] 2xl:max-w-none mx-auto px-3 sm:px-5 lg:px-6 2xl:px-8 mt-2 sm:mt-4 focus:outline-none animate-in fade-in slide-in-from-bottom-1 duration-300"
           >
             <Suspense fallback={<div className="py-12 text-center text-sm text-on-surface-variant">{t('APP.LOADING', '加载中...')}</div>}>
               <Outlet />
