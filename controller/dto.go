@@ -33,29 +33,29 @@ type BillingEntryView struct {
 
 // TopupOrderView is the public topup order wire contract.
 type TopupOrderView struct {
-	ID                   uint       `json:"id"`
-	OutTradeNo           string     `json:"out_trade_no"`
-	TradeNo              string     `json:"trade_no"`
-	ApiTradeNo           string     `json:"api_trade_no"`
-	UserID               uint       `json:"user_id"`
-	PayType              string     `json:"pay_type"`
-	Device               string     `json:"device"`
-	MoneyRMB             float64    `json:"money_rmb"`
-	AmountUSD            float64    `json:"amount_usd"`
-	ExchangeRateRmbPerUsdMicros int64 `json:"exchange_rate_rmb_per_usd_micros"`
-	Name                 string     `json:"name"`
-	ClientIP             string     `json:"client_ip"`
-	Param                string     `json:"param"`
-	GatewayPayType       string     `json:"gateway_pay_type"`
-	PayInfo              string     `json:"pay_info"`
-	PayMethod            string     `json:"pay_method"`
-	Status               string     `json:"status"`
-	RefundedAmountRMB    float64    `json:"refunded_amount_rmb"`
-	RefundNo             string     `json:"refund_no"`
-	OutRefundNo          string     `json:"out_refund_no"`
-	CreatedAt            time.Time  `json:"created_at"`
-	PaidAt               *time.Time `json:"paid_at"`
-	UpdatedAt            time.Time  `json:"updated_at"`
+	ID                          uint       `json:"id"`
+	OutTradeNo                  string     `json:"out_trade_no"`
+	TradeNo                     string     `json:"trade_no"`
+	ApiTradeNo                  string     `json:"api_trade_no"`
+	UserID                      uint       `json:"user_id"`
+	PayType                     string     `json:"pay_type"`
+	Device                      string     `json:"device"`
+	MoneyRMB                    float64    `json:"money_rmb"`
+	AmountUSD                   float64    `json:"amount_usd"`
+	ExchangeRateRmbPerUsdMicros int64      `json:"exchange_rate_rmb_per_usd_micros"`
+	Name                        string     `json:"name"`
+	ClientIP                    string     `json:"client_ip"`
+	Param                       string     `json:"param"`
+	GatewayPayType              string     `json:"gateway_pay_type"`
+	PayInfo                     string     `json:"pay_info"`
+	PayMethod                   string     `json:"pay_method"`
+	Status                      string     `json:"status"`
+	RefundedAmountRMB           float64    `json:"refunded_amount_rmb"`
+	RefundNo                    string     `json:"refund_no"`
+	OutRefundNo                 string     `json:"out_refund_no"`
+	CreatedAt                   time.Time  `json:"created_at"`
+	PaidAt                      *time.Time `json:"paid_at"`
+	UpdatedAt                   time.Time  `json:"updated_at"`
 }
 
 // CouponTemplateView is the admin coupon-template wire contract.
@@ -150,29 +150,29 @@ func billingEntryViewsFrom(rows []database.BillingEntry) []BillingEntryView {
 
 func topupOrderViewFrom(o database.TopupOrder) TopupOrderView {
 	return TopupOrderView{
-		ID:                   o.ID,
-		OutTradeNo:           o.OutTradeNo,
-		TradeNo:              o.TradeNo,
-		ApiTradeNo:           o.ApiTradeNo,
-		UserID:               o.UserID,
-		PayType:              o.PayType,
-		Device:               o.Device,
-		MoneyRMB:             fenToRMBFloat(o.MoneyRMB),
-		AmountUSD:            microUSDToFloat(o.AmountUSD),
+		ID:                          o.ID,
+		OutTradeNo:                  o.OutTradeNo,
+		TradeNo:                     o.TradeNo,
+		ApiTradeNo:                  o.ApiTradeNo,
+		UserID:                      o.UserID,
+		PayType:                     o.PayType,
+		Device:                      o.Device,
+		MoneyRMB:                    fenToRMBFloat(o.MoneyRMB),
+		AmountUSD:                   microUSDToFloat(o.AmountUSD),
 		ExchangeRateRmbPerUsdMicros: o.ExchangeRateRmbPerUsdMicros,
-		Name:                 o.Name,
-		ClientIP:             o.ClientIP,
-		Param:                o.Param,
-		GatewayPayType:       o.GatewayPayType,
-		PayInfo:              o.PayInfo,
-		PayMethod:            o.PayMethod,
-		Status:               o.Status,
-		RefundedAmountRMB:    fenToRMBFloat(o.RefundedAmountRMB),
-		RefundNo:             o.RefundNo,
-		OutRefundNo:          o.OutRefundNo,
-		CreatedAt:            o.CreatedAt,
-		PaidAt:               o.PaidAt,
-		UpdatedAt:            o.UpdatedAt,
+		Name:                        o.Name,
+		ClientIP:                    o.ClientIP,
+		Param:                       o.Param,
+		GatewayPayType:              o.GatewayPayType,
+		PayInfo:                     o.PayInfo,
+		PayMethod:                   o.PayMethod,
+		Status:                      o.Status,
+		RefundedAmountRMB:           fenToRMBFloat(o.RefundedAmountRMB),
+		RefundNo:                    o.RefundNo,
+		OutRefundNo:                 o.OutRefundNo,
+		CreatedAt:                   o.CreatedAt,
+		PaidAt:                      o.PaidAt,
+		UpdatedAt:                   o.UpdatedAt,
 	}
 }
 
@@ -185,10 +185,7 @@ func topupOrderViewsFrom(rows []database.TopupOrder) []TopupOrderView {
 }
 
 func couponTemplateViewFrom(t database.CouponTemplate) CouponTemplateView {
-	discountValue := float64(t.DiscountValue)
-	if t.DiscountType != "percent" {
-		discountValue = microUSDToFloat(t.DiscountValue)
-	}
+	discountValue := microUSDToFloat(t.DiscountValue)
 	return CouponTemplateView{
 		ID:            t.ID,
 		Name:          t.Name,

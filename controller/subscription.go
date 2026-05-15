@@ -404,6 +404,13 @@ func purchaseAsInstant(c *fiber.Ctx, user *database.User, pkg *database.Package,
 				"message_code": "ERR_PRICE_OVERFLOW",
 			})
 		}
+		if errors.Is(err, errCouponSnapshotBelowCostFloor) {
+			return c.Status(409).JSON(fiber.Map{
+				"success":      false,
+				"message":      "优惠券价格快照低于当前套餐下限，请联系客服或更换优惠券",
+				"message_code": MessageCodeCouponSnapshotBelowCostFloor,
+			})
+		}
 		// fix CRITICAL R23+3-C3：事务内重读 package 发现状态变化 → 让前端刷新重试
 		switch {
 		case errors.Is(err, errPackageGoneInTx):
@@ -735,10 +742,10 @@ func CancelSubscription(c *fiber.Ctx) error {
 
 // adminRefundSubscriptionRequest admin 触发订阅退款的请求体
 //
-// 前端传 USD float（人友好），handler 内转 micro_usd 入业务逻辑。
+// 金额入口使用 int64 micro_usd，禁止 USD float。
 type adminRefundSubscriptionRequest struct {
-	AmountUSD float64 `json:"amount_usd"` // 协商后的退款金额（USD），必须 > 0 且 <= 购买价
-	Reason    string  `json:"reason"`     // 退款原因（写入审计）
+	AmountMicroUSD int64  `json:"amount_micro_usd"` // 协商后的退款金额（micro_usd），必须 > 0 且 <= 购买价
+	Reason         string `json:"reason"`           // 退款原因（写入审计）
 	//
 	// 业务规则（用户 2026-05-10 第三次反馈定稿）：取消/退款都**不**触碰优惠券。
 	// admin 视情况想给用户发"补偿券"应**独立**走 AdminGrantCoupon 入口，
@@ -778,33 +785,12 @@ func AdminRefundSubscription(c *fiber.Ctx) error {
 	if err := c.BodyParser(&req); err != nil {
 		return c.Status(400).JSON(fiber.Map{"success": false, "message_code": "ERR_PARSE_PAYLOAD"})
 	}
-	// 数值校验：必须有限正数
-	if !isFinite(req.AmountUSD) || req.AmountUSD <= 0 {
+	refundAmountMicro := req.AmountMicroUSD
+	if refundAmountMicro <= 0 {
 		return c.Status(400).JSON(fiber.Map{
 			"success":      false,
-			"message":      "amount_usd 必须为正数（USD）",
-			"message_code": "ERR_INVALID_AMOUNT",
-		})
-	}
-	// fix CRITICAL（多模型审计第二十五轮）：admin 客户端 float 输入易产生精度漂移
-	// （例如显示 $13.89 但实际 13.890000000000001）。原实现用 +1000 micro_usd（$0.001）
-	// 容差兜底，但这等价于让 admin 可以多退 $0.001，违反"退款≤已收"铁律。
-	// 改为：入口先 round 到 2 位小数（USD 业务最小单位 = 美分）再转 micro，
-	// 从根源消除浮点误差。下方 cap 检查使用严格 `>`，无任何容差。
-	refundAmountUSD := math.Round(req.AmountUSD*100) / 100
-	if refundAmountUSD <= 0 {
-		return c.Status(400).JSON(fiber.Map{
-			"success":      false,
-			"message":      "amount_usd 取整后必须 > 0（最小退款单位 $0.01）",
-			"message_code": "ERR_INVALID_AMOUNT",
-		})
-	}
-	refundAmountMicro, ok := database.USDToMicro(refundAmountUSD)
-	if !ok {
-		return c.Status(400).JSON(fiber.Map{
-			"success":      false,
-			"message":      "amount_usd 数值非法（NaN/Inf/超范围）",
-			"message_code": "ERR_INVALID_AMOUNT",
+			"message":      "amount_micro_usd 必须为正整数",
+			"message_code": "ERR_REFUND_AMOUNT_INVALID",
 		})
 	}
 
@@ -850,7 +836,7 @@ func AdminRefundSubscription(c *fiber.Ctx) error {
 			"success": false,
 			"message": fmt.Sprintf("退款金额超过用户实际支付金额 $%s",
 				database.FormatMicroUSD(purchasedPriceMicro)),
-			"message_code": "ERR_AMOUNT_EXCEEDS_NET_COST",
+			"message_code": "ERR_REFUND_AMOUNT_EXCEEDS_PURCHASE",
 		})
 	}
 
@@ -919,7 +905,6 @@ func AdminRefundSubscription(c *fiber.Ctx) error {
 		auditDetails, _ := json.Marshal(map[string]any{
 			"type":              "REFUND_SUBSCRIPTION",
 			"sub_id":            sub.ID,
-			"amount":            req.AmountUSD,     // USD float（审计展示字段）
 			"amount_micro_usd":  refundAmountMicro, // 精确审计（int64）
 			"reason":            req.Reason,
 			"prev":              sub.Status,
@@ -956,16 +941,16 @@ func AdminRefundSubscription(c *fiber.Ctx) error {
 	title := readSysConfigCached("notif_refund_title", "退款已到账")
 	bodyTpl := readSysConfigCached("notif_refund_body", "「{package_name}」已退款 {amount} {currency}，到账您的余额。")
 	body := strings.ReplaceAll(bodyTpl, "{package_name}", pkgName)
-	body = strings.ReplaceAll(body, "{amount}", fmt.Sprintf("%.2f", req.AmountUSD))
+	body = strings.ReplaceAll(body, "{amount}", database.FormatMicroUSD(refundAmountMicro))
 	body = strings.ReplaceAll(body, "{currency}", "USD")
 	dedupKey := fmt.Sprintf("refund:sub_%d", sub.ID)
 	proxy.Dispatch(sub.UserID, "refund", "success", title, body,
 		proxy.LinkUpgradeMine(), "查看", "subscription", sub.ID, &dedupKey)
 
 	return c.JSON(fiber.Map{
-		"success":      true,
-		"refund_usd":   req.AmountUSD,
-		"message_code": "SUCCESS_REFUNDED",
+		"success":          true,
+		"refund_micro_usd": refundAmountMicro,
+		"message_code":     "SUCCESS_REFUNDED",
 	})
 }
 

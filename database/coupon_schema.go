@@ -24,6 +24,7 @@
 package database
 
 import (
+	"log"
 	"time"
 
 	"gorm.io/gorm"
@@ -104,6 +105,7 @@ func (uc *UserCoupon) IsAvailable(now time.Time) bool {
 // SnapshotEffectivePrice 给定原价（micro_usd），返回应用本券后的实际单价（micro_usd）。
 //
 // fixed_price：直接返回 SnapshotValue（但若 SnapshotValue > basePrice 则保护性退化为 basePrice）。
+// 本函数不重新校验套餐 cost_floor / price_amount 下限；调用方必须在持锁事务内自行校验。
 // 调用方应在事务内（持锁后）使用，结果可直接写入账单 AmountUSD。
 func (uc *UserCoupon) SnapshotEffectivePrice(basePriceMicroUSD int64) int64 {
 	switch uc.SnapshotType {
@@ -118,6 +120,7 @@ func (uc *UserCoupon) SnapshotEffectivePrice(basePriceMicroUSD int64) int64 {
 		return uc.SnapshotValue
 	default:
 		// 未知类型 → 退回原价（不涨价、不打折）
+		log.Printf("[COUPON] unexpected discount_type=%q, fail-closed returning base price", uc.SnapshotType)
 		return basePriceMicroUSD
 	}
 }

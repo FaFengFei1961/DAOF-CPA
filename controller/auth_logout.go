@@ -5,12 +5,12 @@ import (
 	"strings"
 
 	"daof-ai-hub/database"
+	"daof-ai-hub/proxy"
 
 	"github.com/gofiber/fiber/v2"
 )
 
-// AuthLogout revokes the current browser session. API keys are not revoked here;
-// users must manage long-lived SDK credentials from the token manager.
+// AuthLogout revokes the current browser session and evicts the legacy bearer token cache path.
 func AuthLogout(c *fiber.Ctx) error {
 	user, err := getCurrentUser(c)
 	if err != nil {
@@ -26,6 +26,10 @@ func AuthLogout(c *fiber.Ctx) error {
 		if err := database.RevokeSessionByID(sessionID); err != nil {
 			return c.Status(500).JSON(fiber.Map{"success": false, "message_code": "ERR_DB_UPDATE"})
 		}
+	}
+
+	if user.Token != "" {
+		proxy.EvictUserToken(user.Token)
 	}
 
 	LogOperationBy(user.ID, user.ID, "user", "USER_LOGOUT", c.IP(),

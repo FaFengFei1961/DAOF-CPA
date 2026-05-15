@@ -114,7 +114,7 @@ func TestBilling_AdminRefundSubWritesEntry(t *testing.T) {
 
 	code, _ := doJSON(t, app, "POST",
 		"/admin/sub/"+itoaUint(sub.ID)+"/refund",
-		map[string]any{"amount_usd": 8.0, "reason": "用户协商"})
+		map[string]any{"amount_micro_usd": 8 * database.MicroPerUSD, "reason": "用户协商"})
 	if code != 200 {
 		t.Fatalf("refund failed: %d", code)
 	}
@@ -176,7 +176,7 @@ func TestBilling_FullFlow_PurchaseThenRefund(t *testing.T) {
 	adminApp := newAdminTestApp(admin)
 	if code, _ := doJSON(t, adminApp, "POST",
 		"/admin/sub/"+itoaUint(sub.ID)+"/refund",
-		map[string]any{"amount_usd": 5.0, "reason": "测试退款"}); code != 200 {
+		map[string]any{"amount_micro_usd": 5 * database.MicroPerUSD, "reason": "测试退款"}); code != 200 {
 		t.Fatalf("refund: %d", code)
 	}
 

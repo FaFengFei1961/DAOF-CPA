@@ -112,18 +112,28 @@ func TestValidateTemplate_FixedPriceAboveCostFloorAccepted(t *testing.T) {
 	}
 }
 
-func TestValidateTemplate_CostFloorZeroSkipsCheck(t *testing.T) {
+func TestValidateTemplate_CostFloorZeroFallback(t *testing.T) {
 	db := setupCouponTestDB(t)
 	pkg := seedCouponCostFloorPackage(t, db, "Unconfigured", 0)
 
 	err := validateTemplate(&database.CouponTemplate{
-		Name:          "zero-skip",
+		Name:          "zero-fallback-below-price",
 		DiscountType:  "fixed_price",
 		DiscountValue: couponMinFixedPriceMicroUSD,
 		PackageIDs:    fmt.Sprintf("[%d]", pkg.ID),
 	})
+	if !errors.Is(err, errCouponFixedPriceBelowPackageCostFloor) {
+		t.Fatalf("expected cost_floor=0 to fallback to package price and reject, got %v", err)
+	}
+
+	err = validateTemplate(&database.CouponTemplate{
+		Name:          "zero-fallback-at-price",
+		DiscountType:  "fixed_price",
+		DiscountValue: pkg.PriceAmount,
+		PackageIDs:    fmt.Sprintf("[%d]", pkg.ID),
+	})
 	if err != nil {
-		t.Fatalf("expected cost_floor=0 to skip package cost check, got %v", err)
+		t.Fatalf("expected fixed_price at package price fallback to pass, got %v", err)
 	}
 }
 
@@ -262,6 +272,7 @@ func TestLockAndApplyCoupon_HappyPath(t *testing.T) {
 	pkg := &database.Package{}
 	pkg.ID = 5
 	pkg.PriceAmount = 20
+	pkg.CostFloorMicroUSD = 5
 
 	var got *database.UserCoupon
 	err := db.Transaction(func(tx *gorm.DB) error {
@@ -409,6 +420,7 @@ func TestLockAndApplyCoupon_ConcurrentRace(t *testing.T) {
 	pkg := &database.Package{}
 	pkg.ID = 5
 	pkg.PriceAmount = 20
+	pkg.CostFloorMicroUSD = 5
 
 	// 第一笔事务消费成功
 	err1 := db.Transaction(func(tx *gorm.DB) error {
@@ -436,5 +448,31 @@ func TestLockAndApplyCoupon_ConcurrentRace(t *testing.T) {
 	}
 	if fresh.UsedAt == nil {
 		t.Error("expected UsedAt set by first tx")
+	}
+}
+
+func TestLockAndApplyCoupon_RechecksCostFloor(t *testing.T) {
+	db := setupCouponTestDB(t)
+	uc := database.UserCoupon{
+		UserID: 1, Code: "CP-1-1-floor-recheck",
+		Status: "available", SnapshotType: "fixed_price", SnapshotValue: 10,
+	}
+	db.Create(&uc)
+	pkg := &database.Package{}
+	pkg.ID = 5
+	pkg.PriceAmount = 20
+
+	err := db.Transaction(func(tx *gorm.DB) error {
+		_, err := lockAndApplyCoupon(tx, 1, uc.ID, pkg)
+		return err
+	})
+	if !errors.Is(err, errCouponSnapshotBelowCostFloor) {
+		t.Fatalf("expected snapshot below cost floor rejection, got %v", err)
+	}
+
+	var fresh database.UserCoupon
+	db.First(&fresh, uc.ID)
+	if fresh.Status != "available" {
+		t.Fatalf("coupon should remain available after rejected use, got %q", fresh.Status)
 	}
 }

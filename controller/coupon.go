@@ -34,6 +34,7 @@ import (
 var errCouponInvalid = errors.New("coupon invalid")
 var errCouponNotApplicable = errors.New("coupon not applicable to this package")
 var errCouponFixedPriceBelowPackageCostFloor = errors.New("coupon fixed_price below package cost_floor")
+var errCouponSnapshotBelowCostFloor = errors.New("coupon snapshot fixed_price below package cost_floor")
 
 // fix Major（codex 第十五轮）：admin 并发禁用 template / 修改启用状态时，
 // 事务内重读会发现脏快照——返回此哨兵让外层映射到 409 + 明确 message_code
@@ -78,9 +79,11 @@ func parsePackageIDsStrict(s string) ([]uint, bool) {
 // 默认 0.01 USD = 10000 micro_usd（一分钱保底，远低于任何套餐价但绝非"免费"）。
 // 业务侧若需更严格成本下限，可通过 SysConfig `coupon_min_fixed_price_micro_usd` 调高。
 const couponMinFixedPriceMicroUSD = int64(10_000)
+const maxAdminCouponDiscountValueMicroUSD = int64(MaxAdminQuotaUSD) * database.MicroPerUSD
 
 // 直接使用常量字面量，i18n 覆盖测试可通过 AST 扫描捕获，避免遗漏翻译。
 const MessageCodeCouponFixedPriceBelowPackageCostFloor = "ERR_COUPON_FIXED_PRICE_BELOW_PACKAGE_COST_FLOOR"
+const MessageCodeCouponSnapshotBelowCostFloor = "ERR_COUPON_SNAPSHOT_BELOW_COST_FLOOR"
 
 func couponTemplateValidationMessageCode(err error) string {
 	if errors.Is(err, errCouponFixedPriceBelowPackageCostFloor) {
@@ -89,34 +92,55 @@ func couponTemplateValidationMessageCode(err error) string {
 	return "ERR_INVALID_TEMPLATE"
 }
 
+func couponPackageEffectiveLowerBoundMicroUSD(p *database.Package) int64 {
+	if p == nil {
+		return 0
+	}
+	if p.CostFloorMicroUSD > 0 {
+		return p.CostFloorMicroUSD
+	}
+	return p.PriceAmount
+}
+
 func validateTemplateFixedPriceCostFloor(t *database.CouponTemplate, packageIDs []uint) error {
 	if t.DiscountType != "fixed_price" {
 		return nil
 	}
-	var maxCostPkg database.Package
+	var pkgs []database.Package
 	q := database.DB.Model(&database.Package{}).
-		Select("id, name, cost_floor_micro_usd").
-		Where("cost_floor_micro_usd > ?", 0)
+		Select("id, name, price_amount, cost_floor_micro_usd")
 	if len(packageIDs) > 0 {
 		q = q.Where("id IN ?", packageIDs)
 	}
-	if err := q.Order("cost_floor_micro_usd DESC, id ASC").Limit(1).Find(&maxCostPkg).Error; err != nil {
+	if err := q.Find(&pkgs).Error; err != nil {
 		return fmt.Errorf("查询套餐成本下限失败: %w", err)
+	}
+	var maxCostPkg database.Package
+	var maxLowerBound int64
+	for _, pkg := range pkgs {
+		lowerBound := couponPackageEffectiveLowerBoundMicroUSD(&pkg)
+		if lowerBound <= 0 {
+			continue
+		}
+		if maxCostPkg.ID == 0 || lowerBound > maxLowerBound || (lowerBound == maxLowerBound && pkg.ID < maxCostPkg.ID) {
+			maxCostPkg = pkg
+			maxLowerBound = lowerBound
+		}
 	}
 	if maxCostPkg.ID == 0 {
 		return nil
 	}
-	if t.DiscountValue >= maxCostPkg.CostFloorMicroUSD {
+	if t.DiscountValue >= maxLowerBound {
 		return nil
 	}
-	return fmt.Errorf("%w: fixed_price %d micro_usd ($%s) 低于套餐「%s」(#%d) 成本下限 %d micro_usd ($%s)",
+	return fmt.Errorf("%w: fixed_price %d micro_usd ($%s) 低于套餐「%s」(#%d) 生效下限 %d micro_usd ($%s)",
 		errCouponFixedPriceBelowPackageCostFloor,
 		t.DiscountValue,
 		database.FormatMicroUSD(t.DiscountValue),
 		maxCostPkg.Name,
 		maxCostPkg.ID,
-		maxCostPkg.CostFloorMicroUSD,
-		database.FormatMicroUSD(maxCostPkg.CostFloorMicroUSD))
+		maxLowerBound,
+		database.FormatMicroUSD(maxLowerBound))
 }
 
 // validateTemplate 校验模板字段。
@@ -195,6 +219,14 @@ func lockAndApplyCoupon(tx *gorm.DB, userID, couponID uint, pkg *database.Packag
 	if !coupon.AppliesToPackage(pkg.ID, allowed) {
 		return nil, errCouponNotApplicable
 	}
+	if coupon.SnapshotType == "fixed_price" {
+		effectiveLowerBound := couponPackageEffectiveLowerBoundMicroUSD(pkg)
+		if effectiveLowerBound > 0 && coupon.SnapshotValue < effectiveLowerBound {
+			log.Printf("[COUPON] blocked coupon %d for package %d: snapshot fixed_price=%d below effective lower bound=%d",
+				coupon.ID, pkg.ID, coupon.SnapshotValue, effectiveLowerBound)
+			return nil, errCouponSnapshotBelowCostFloor
+		}
+	}
 	// 条件 UPDATE：只有当前 status='available' 才能改成 'used'。
 	// 任何并发抢占（用户重复点击 / admin revoke）会让 RowsAffected == 0 → 返回 errCouponInvalid。
 	res := tx.Model(&database.UserCoupon{}).
@@ -227,15 +259,15 @@ func AdminListCouponTemplates(c *fiber.Ctx) error {
 	return c.JSON(fiber.Map{"success": true, "data": couponTemplateViewsFrom(list)})
 }
 
-// couponTemplateJSON admin 端 JSON 表示（USD float），handler 内转 micro_usd。
+// couponTemplateJSON admin 端 JSON 表示。金额入口使用 int64 micro_usd，禁止 USD float。
 type couponTemplateJSON struct {
-	Name          string  `json:"name"`
-	Description   string  `json:"description"`
-	DiscountType  string  `json:"discount_type"`
-	DiscountValue float64 `json:"discount_value"` // USD float
-	PackageIDs    string  `json:"package_ids"`
-	ValidDays     int     `json:"valid_days"`
-	Enabled       *bool   `json:"enabled"`
+	Name                  string `json:"name"`
+	Description           string `json:"description"`
+	DiscountType          string `json:"discount_type"`
+	DiscountValueMicroUSD int64  `json:"discount_value_micro_usd"`
+	PackageIDs            string `json:"package_ids"`
+	ValidDays             int    `json:"valid_days"`
+	Enabled               *bool  `json:"enabled"`
 }
 
 func parseCouponTemplate(c *fiber.Ctx) (database.CouponTemplate, error) {
@@ -243,19 +275,15 @@ func parseCouponTemplate(c *fiber.Ctx) (database.CouponTemplate, error) {
 	if err := c.BodyParser(&raw); err != nil {
 		return database.CouponTemplate{}, err
 	}
-	// fix MAJOR Phase 4-codex（第二十四轮）：admin 金额必须过 MaxAdminQuotaUSD 上限
-	if err := validateAdminQuotaInput(raw.DiscountValue); err != nil {
-		return database.CouponTemplate{}, fmt.Errorf("discount_value: %w", err)
-	}
-	micro, ok := database.USDToMicro(raw.DiscountValue)
-	if !ok {
-		return database.CouponTemplate{}, fmt.Errorf("discount_value 非法")
+	if raw.DiscountValueMicroUSD > maxAdminCouponDiscountValueMicroUSD ||
+		raw.DiscountValueMicroUSD < -maxAdminCouponDiscountValueMicroUSD {
+		return database.CouponTemplate{}, fmt.Errorf("discount_value_micro_usd 超过上限")
 	}
 	return database.CouponTemplate{
 		Name:          raw.Name,
 		Description:   raw.Description,
 		DiscountType:  raw.DiscountType,
-		DiscountValue: micro,
+		DiscountValue: raw.DiscountValueMicroUSD,
 		PackageIDs:    raw.PackageIDs,
 		ValidDays:     raw.ValidDays,
 		Enabled:       raw.Enabled,

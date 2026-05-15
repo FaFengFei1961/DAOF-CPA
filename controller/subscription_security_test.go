@@ -9,7 +9,7 @@
 //  3. R10: AdminRefundSubscription 状态机 — refunded 终态，重复退款 409
 //  4. R10: canceled_at 不被退款时间覆写 — 已 canceled 子保留原始取消时间
 //  5. R9:  purchasedPrice<=0 时拒绝退款（防 snapshot 损坏 + 删除套餐场景任意金额）
-//  6. R10: AdminRefund 金额上限 ERR_AMOUNT_EXCEEDS_NET_COST
+//  6. R10: AdminRefund 金额上限 ERR_REFUND_AMOUNT_EXCEEDS_PURCHASE
 package controller
 
 import (
@@ -43,8 +43,8 @@ func TestSecurity_AdminRefund_DoubleRefundBlocked(t *testing.T) {
 	database.DB.Create(&sub)
 
 	code, resp := doJSON(t, app, "POST", "/admin/sub/"+itoaUint(sub.ID)+"/refund", map[string]any{
-		"amount_usd": 5.0,
-		"reason":     "重复退款测试",
+		"amount_micro_usd": 5 * database.MicroPerUSD,
+		"reason":           "重复退款测试",
 	})
 	if code != 409 {
 		t.Errorf("expected 409 (already refunded), got %d body=%v", code, resp)
@@ -73,8 +73,8 @@ func TestSecurity_AdminRefund_CanceledAtPreserved(t *testing.T) {
 	database.DB.Create(&sub)
 
 	code, _ := doJSON(t, app, "POST", "/admin/sub/"+itoaUint(sub.ID)+"/refund", map[string]any{
-		"amount_usd": 8.0,
-		"reason":     "用户协商退款",
+		"amount_micro_usd": 8 * database.MicroPerUSD,
+		"reason":           "用户协商退款",
 	})
 	if code != 200 {
 		t.Fatalf("refund should succeed, got %d", code)
@@ -119,8 +119,8 @@ func TestSecurity_AdminRefund_PriceUnknownBlocked(t *testing.T) {
 	database.DB.Create(&sub)
 
 	code, resp := doJSON(t, app, "POST", "/admin/sub/"+itoaUint(sub.ID)+"/refund", map[string]any{
-		"amount_usd": 50.0,
-		"reason":     "未付费退款测试",
+		"amount_micro_usd": 50 * database.MicroPerUSD,
+		"reason":           "未付费退款测试",
 	})
 	if code != 400 {
 		t.Errorf("expected 400 (zero paid), got %d body=%v", code, resp)

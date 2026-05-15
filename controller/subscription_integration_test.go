@@ -543,8 +543,8 @@ func TestIntegration_AdminRefund_Success(t *testing.T) {
 
 	// Admin 退款 5 USD
 	code, resp := doJSON(t, app, "POST", "/admin/sub/"+itoaUint(sub.ID)+"/refund", map[string]any{
-		"amount_usd": 5.0,
-		"reason":     "协商退款",
+		"amount_micro_usd": 5 * database.MicroPerUSD,
+		"reason":           "协商退款",
 	})
 	if code != 200 {
 		t.Fatalf("expected 200, got %d, body=%v", code, resp)
@@ -577,9 +577,67 @@ func TestIntegration_AdminRefund_Success(t *testing.T) {
 	if log.ActionType != "REFUND_SUBSCRIPTION" {
 		t.Errorf("log action type: got %q", log.ActionType)
 	}
-	if !strings.Contains(log.Details, `"amount":5`) {
-		t.Errorf("log details missing amount field: %s", log.Details)
+	if !strings.Contains(log.Details, `"amount_micro_usd":5000000`) {
+		t.Errorf("log details missing amount_micro_usd field: %s", log.Details)
 	}
+}
+
+func TestAdminRefundSubscription_AmountMicroUSD(t *testing.T) {
+	t.Run("accepts micro usd amount", func(t *testing.T) {
+		setupSubTestDB(t)
+		admin := seedAdminUser(t)
+		user := seedTestUser(t, 100)
+		pkg := seedPackage(t)
+		app := newAdminTestApp(admin)
+
+		sub := database.UserSubscription{
+			UserID:                user.ID,
+			PackageID:             pkg.ID,
+			Status:                "active",
+			PackageSnapshot:       `{"price_amount": 9900000}`,
+			PurchasedUnitPriceUSD: 9_900_000,
+		}
+		database.DB.Create(&sub)
+
+		code, resp := doJSON(t, app, "POST", "/admin/sub/"+itoaUint(sub.ID)+"/refund", map[string]any{
+			"amount_micro_usd": 5_000_000,
+			"reason":           "micro dto",
+		})
+		if code != 200 {
+			t.Fatalf("expected 200, got %d body=%v", code, resp)
+		}
+		if resp["refund_micro_usd"] != float64(5_000_000) {
+			t.Fatalf("refund_micro_usd=%v want 5000000", resp["refund_micro_usd"])
+		}
+	})
+
+	t.Run("rejects amount above purchase", func(t *testing.T) {
+		setupSubTestDB(t)
+		admin := seedAdminUser(t)
+		user := seedTestUser(t, 100)
+		pkg := seedPackage(t)
+		app := newAdminTestApp(admin)
+
+		sub := database.UserSubscription{
+			UserID:                user.ID,
+			PackageID:             pkg.ID,
+			Status:                "active",
+			PackageSnapshot:       `{"price_amount": 9900000}`,
+			PurchasedUnitPriceUSD: 9_900_000,
+		}
+		database.DB.Create(&sub)
+
+		code, resp := doJSON(t, app, "POST", "/admin/sub/"+itoaUint(sub.ID)+"/refund", map[string]any{
+			"amount_micro_usd": 10_000_000,
+			"reason":           "too much",
+		})
+		if code != 400 {
+			t.Fatalf("expected 400, got %d body=%v", code, resp)
+		}
+		if resp["message_code"] != "ERR_REFUND_AMOUNT_EXCEEDS_PURCHASE" {
+			t.Fatalf("message_code=%v want ERR_REFUND_AMOUNT_EXCEEDS_PURCHASE", resp["message_code"])
+		}
+	})
 }
 
 func TestIntegration_AdminRefund_ExceedsPrice(t *testing.T) {
@@ -600,15 +658,14 @@ func TestIntegration_AdminRefund_ExceedsPrice(t *testing.T) {
 
 	// 退款 10 USD > 购买价 9.9
 	code, resp := doJSON(t, app, "POST", "/admin/sub/"+itoaUint(sub.ID)+"/refund", map[string]any{
-		"amount_usd": 10.0,
-		"reason":     "超额",
+		"amount_micro_usd": 10 * database.MicroPerUSD,
+		"reason":           "超额",
 	})
 	if code != 400 {
 		t.Errorf("expected 400, got %d, body=%v", code, resp)
 	}
-	// 错误码沿用 ERR_AMOUNT_EXCEEDS_NET_COST，语义为超过实际支付金额。
-	if resp["message_code"] != "ERR_AMOUNT_EXCEEDS_NET_COST" {
-		t.Errorf("expected ERR_AMOUNT_EXCEEDS_NET_COST, got %v", resp["message_code"])
+	if resp["message_code"] != "ERR_REFUND_AMOUNT_EXCEEDS_PURCHASE" {
+		t.Errorf("expected ERR_REFUND_AMOUNT_EXCEEDS_PURCHASE, got %v", resp["message_code"])
 	}
 }
 
@@ -629,8 +686,8 @@ func TestIntegration_AdminRefund_AlreadyRefunded(t *testing.T) {
 	database.DB.Create(&sub)
 
 	code, resp := doJSON(t, app, "POST", "/admin/sub/"+itoaUint(sub.ID)+"/refund", map[string]any{
-		"amount_usd": 1.0,
-		"reason":     "二次退款",
+		"amount_micro_usd": 1 * database.MicroPerUSD,
+		"reason":           "二次退款",
 	})
 	if code != 409 {
 		t.Errorf("expected 409, got %d, body=%v", code, resp)
@@ -662,8 +719,8 @@ func TestIntegration_AdminRefund_FreeCoupon_RejectZeroPaid(t *testing.T) {
 	database.DB.Create(&sub)
 
 	code, resp := doJSON(t, app, "POST", "/admin/sub/"+itoaUint(sub.ID)+"/refund", map[string]any{
-		"amount_usd": 5.0, // admin 试图退 $5
-		"reason":     "试图套利",
+		"amount_micro_usd": 5 * database.MicroPerUSD, // admin 试图退 $5
+		"reason":           "试图套利",
 	})
 	if code != 400 {
 		t.Errorf("expected 400 for free-coupon sub, got %d body=%v", code, resp)
@@ -701,8 +758,8 @@ func TestIntegration_AdminRefund_DoesNotRestoreCoupon(t *testing.T) {
 
 	// 退款 $5
 	code, _ := doJSON(t, app, "POST", "/admin/sub/"+itoaUint(sub.ID)+"/refund", map[string]any{
-		"amount_usd": 5.0,
-		"reason":     "客户申请退款",
+		"amount_micro_usd": 5 * database.MicroPerUSD,
+		"reason":           "客户申请退款",
 	})
 	if code != 200 {
 		t.Fatalf("refund should succeed, got %d", code)
@@ -736,8 +793,8 @@ func TestIntegration_AdminRefund_DoesNotGrantNewCoupon(t *testing.T) {
 
 	// 退款（普通 amount + reason，不含 regrant 字段）
 	code, _ := doJSON(t, app, "POST", "/admin/sub/"+itoaUint(sub.ID)+"/refund", map[string]any{
-		"amount_usd": 5.0,
-		"reason":     "误购买",
+		"amount_micro_usd": 5 * database.MicroPerUSD,
+		"reason":           "误购买",
 	})
 	if code != 200 {
 		t.Fatalf("refund should succeed, got %d", code)
@@ -751,11 +808,11 @@ func TestIntegration_AdminRefund_DoesNotGrantNewCoupon(t *testing.T) {
 	}
 }
 
-func TestIntegration_PurchaseWithFreeCoupon_DoesNotCreditBalance(t *testing.T) {
+func TestIntegration_PurchaseWithBelowFloorCouponRejected(t *testing.T) {
 	setupSubTestDB(t)
 	user := seedTestUser(t, 100)
 
-	// 套餐价 $20，免费券实付 $0
+	// 套餐价 $20，cost_floor 未配置时必须 fallback 到 price_amount，不能用 $0 券。
 	pkg := database.Package{
 		Name:                 "CouponPkg",
 		PriceAmount:          20 * database.MicroPerUSD,
@@ -769,7 +826,7 @@ func TestIntegration_PurchaseWithFreeCoupon_DoesNotCreditBalance(t *testing.T) {
 	pkg.MaxActivePerUser = 5
 	database.DB.Create(&pkg)
 
-	// 给用户一张 $0 免费券
+	// 给用户一张低于 fallback 下限的 $0 券
 	freeCoupon := database.UserCoupon{
 		UserID: user.ID, Code: "CP-test-free", Status: "available",
 		SnapshotType: "fixed_price", SnapshotValue: 0, SnapshotPackageIDs: "",
@@ -786,24 +843,25 @@ func TestIntegration_PurchaseWithFreeCoupon_DoesNotCreditBalance(t *testing.T) {
 		"quantity":   1,
 		"coupon_id":  freeCoupon.ID,
 	})
-	if code != 200 {
-		t.Fatalf("purchase should succeed, got %d body=%v", code, resp)
+	if code != 409 {
+		t.Fatalf("purchase should reject below-floor coupon, got %d body=%v", code, resp)
+	}
+	if resp["message_code"] != "ERR_COUPON_SNAPSHOT_BELOW_COST_FLOOR" {
+		t.Fatalf("message_code=%v want ERR_COUPON_SNAPSHOT_BELOW_COST_FLOOR", resp["message_code"])
 	}
 
-	// 关键断言：免费券只让实付价为 0，绝不能给用户倒贴余额。
+	// 关键断言：拒绝路径不能改余额，也不能把券标记为 used。
 	var fresh database.User
 	database.DB.First(&fresh, user.ID)
 	deltaBalance := fresh.Quota - quotaBefore
-	if deltaBalance > 1000 { // 容差 1000 micro_usd = $0.001
-		t.Errorf("FREE coupon 不能给用户倒贴余额：delta=%d micro_usd want 0", deltaBalance)
+	if deltaBalance != 0 {
+		t.Errorf("rejected coupon changed balance: delta=%d micro_usd want 0", deltaBalance)
 	}
 
-	var bonusCount int64
-	database.DB.Model(&database.BillingEntry{}).
-		Where("user_id = ? AND entry_type = ?", user.ID, database.BillingTypeBonusCredit).
-		Count(&bonusCount)
-	if bonusCount != 0 {
-		t.Errorf("purchase should not write bonus_credit entries, got %d", bonusCount)
+	var freshCoupon database.UserCoupon
+	database.DB.First(&freshCoupon, freeCoupon.ID)
+	if freshCoupon.Status != "available" {
+		t.Errorf("rejected coupon status=%q want available", freshCoupon.Status)
 	}
 }
 

@@ -351,8 +351,8 @@ func TestGrant_ThenRefund_Rejected(t *testing.T) {
 	// 2) admin 尝试退款 → 应该被拒绝
 	refundApp := newAdminTestApp(admin)
 	code, resp = doJSON(t, refundApp, "POST", "/admin/sub/"+itoaUint(sub.ID)+"/refund", map[string]any{
-		"amount_usd": 5.0,
-		"reason":     "退个赠送的看会不会被拒",
+		"amount_micro_usd": 5 * database.MicroPerUSD,
+		"reason":           "退个赠送的看会不会被拒",
 	})
 	if code != 400 {
 		t.Fatalf("expected 400 for granted sub refund, got %d body=%v", code, resp)
