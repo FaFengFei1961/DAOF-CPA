@@ -17,7 +17,8 @@
     "SHOW": "显示",
     "SAVING": "保存中...",
     "SAVE": "保存",
-    "EMPTY": "暂无数据"
+    "EMPTY": "暂无数据",
+    "SUBMITTING": "Submitting…"
   },
   "NOTIF": {
     "CENTER": "Notifications",
@@ -449,7 +450,29 @@
     "T_API_PENDING": "Pending Reconcile",
     "ADMIN_USER_TITLE": "User Billing",
     "ADMIN_USER_ID": "User ID",
-    "ADMIN_USER_EMPTY": "This user has no billing entries"
+    "ADMIN_USER_EMPTY": "This user has no billing entries",
+    "LOAD_MORE": "Load more",
+    "NO_MORE": "No more bills",
+    "STATE_SETTLED": "Settled",
+    "STATE_PENDING_RECONCILE": "Pending reconcile",
+    "STATE_UPSTREAM_UNMETERED": "Upstream unmetered",
+    "RECONCILE_ACTION": "Reconcile",
+    "RECONCILE_TITLE": "Reconcile billing entry",
+    "RECONCILE_RESULT_LABEL": "Result",
+    "RECONCILE_RESULT_ABSORBED": "Absorbed (platform pays)",
+    "RECONCILE_RESULT_CHARGED": "Charged (recover from user)",
+    "RECONCILE_RESULT_VOIDED": "Voided",
+    "RECONCILE_NOTE_LABEL": "Decision note",
+    "RECONCILE_NOTE_PLACEHOLDER": "Explain the reason (max 500 chars)",
+    "RECONCILE_SUBMIT": "Submit reconcile",
+    "SUCCESS_RECONCILED": "Reconcile submitted",
+    "RECONCILE_FAILED": "Reconcile failed",
+    "ERR_RECONCILE_RESULT_INVALID": "Result must be one of absorbed / charged / voided",
+    "ERR_RECONCILE_NOTE_REQUIRED": "Decision note is required",
+    "ERR_RECONCILE_NOTE_TOO_LONG": "Decision note must be 500 characters or less",
+    "ERR_RECONCILE_NOT_PENDING": "Bill is not in a reconcilable state",
+    "ERR_RECONCILE_ALREADY_DONE": "This bill has already been reconciled",
+    "ERR_RECONCILE_RACED": "Bill state changed, please refresh and retry"
   },
   "TOPBAR": {
     "SEARCH_PLACEHOLDER": "Search for your desired model routing port...",
@@ -844,6 +867,20 @@
       "NO_CHAT_NON_STREAM": "禁止 Chat Completions 非流式",
       "RESPONSES_ONLY": "仅 Responses API",
       "HINT": "用于 gpt-5.5 等只在特定端点稳定工作的模型；不兼容请求会在平台侧直接返回明确错误。"
+    },
+    "CIRCUIT": {
+      "TITLE": "Channel Circuit Monitor",
+      "CHANNEL": "Channel",
+      "STATE": "State",
+      "STATE_CLOSED": "Closed (healthy)",
+      "STATE_OPEN": "Open (tripped)",
+      "STATE_HALF_OPEN": "Half-open (probing)",
+      "STATE_UNKNOWN": "Unknown",
+      "FAILURES": "Consecutive failures",
+      "COOLDOWN_REMAINING": "Cooldown remaining",
+      "ACTIONS": "Actions",
+      "RESET": "Force reset",
+      "EMPTY": "No circuit state available"
     }
   },
   "COUPON": {

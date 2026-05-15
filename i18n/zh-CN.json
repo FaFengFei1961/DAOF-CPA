@@ -17,7 +17,8 @@
     "SHOW": "显示",
     "SAVING": "保存中...",
     "SAVE": "保存",
-    "EMPTY": "暂无数据"
+    "EMPTY": "暂无数据",
+    "SUBMITTING": "提交中…"
   },
   "NOTIF": {
     "CENTER": "通知中心",
@@ -449,7 +450,29 @@
     "T_API_PENDING": "待对账",
     "ADMIN_USER_TITLE": "用户账单",
     "ADMIN_USER_ID": "用户 ID",
-    "ADMIN_USER_EMPTY": "该用户暂无账单"
+    "ADMIN_USER_EMPTY": "该用户暂无账单",
+    "LOAD_MORE": "加载更多",
+    "NO_MORE": "没有更多账单",
+    "STATE_SETTLED": "已结算",
+    "STATE_PENDING_RECONCILE": "待对账",
+    "STATE_UPSTREAM_UNMETERED": "上游未计量",
+    "RECONCILE_ACTION": "对账",
+    "RECONCILE_TITLE": "账单对账",
+    "RECONCILE_RESULT_LABEL": "对账结果",
+    "RECONCILE_RESULT_ABSORBED": "平台吸收",
+    "RECONCILE_RESULT_CHARGED": "补扣用户",
+    "RECONCILE_RESULT_VOIDED": "作废",
+    "RECONCILE_NOTE_LABEL": "对账说明",
+    "RECONCILE_NOTE_PLACEHOLDER": "填写决策原因，最多 500 字",
+    "RECONCILE_SUBMIT": "提交对账",
+    "SUCCESS_RECONCILED": "对账已提交",
+    "RECONCILE_FAILED": "对账失败",
+    "ERR_RECONCILE_RESULT_INVALID": "对账结果只能是 absorbed / charged / voided",
+    "ERR_RECONCILE_NOTE_REQUIRED": "请填写对账说明",
+    "ERR_RECONCILE_NOTE_TOO_LONG": "对账说明不能超过 500 字",
+    "ERR_RECONCILE_NOT_PENDING": "账单当前状态不可对账",
+    "ERR_RECONCILE_ALREADY_DONE": "该账单已完成对账，不能重复处理",
+    "ERR_RECONCILE_RACED": "账单状态已变化，请刷新后重试"
   },
   "TOPBAR": {
     "SEARCH_PLACEHOLDER": "搜索您需要的模型调度口...",
@@ -844,6 +867,20 @@
       "NO_CHAT_NON_STREAM": "禁止 Chat Completions 非流式",
       "RESPONSES_ONLY": "仅 Responses API",
       "HINT": "用于 gpt-5.5 等只在特定端点稳定工作的模型；不兼容请求会在平台侧直接返回明确错误。"
+    },
+    "CIRCUIT": {
+      "TITLE": "渠道熔断监控",
+      "CHANNEL": "渠道",
+      "STATE": "状态",
+      "STATE_CLOSED": "正常 (closed)",
+      "STATE_OPEN": "熔断 (open)",
+      "STATE_HALF_OPEN": "半开探测 (half-open)",
+      "STATE_UNKNOWN": "未知",
+      "FAILURES": "连续失败",
+      "COOLDOWN_REMAINING": "剩余冷却",
+      "ACTIONS": "操作",
+      "RESET": "强制重置",
+      "EMPTY": "暂无 circuit 状态"
     }
   },
   "COUPON": {
