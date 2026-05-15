@@ -4,7 +4,8 @@ import { Package, RefreshCw, RotateCcw, Search, X, Gift, ChevronDown, Gauge, Tim
 import toast from 'react-hot-toast';
 import { useConfirm } from '../context/ConfirmContext';
 import { authFetch } from '../utils/authFetch';
-import { remainingColor, safePct, fmtRelativeFromNow } from '../utils/credits';
+import { remainingColor, safePct, fmtRelativeFromNow, fmtAbsoluteShort } from '../utils/credits';
+import { Clock } from 'lucide-react';
 import AdminGrantSubscriptionModal from './AdminGrantSubscriptionModal';
 
 // 与后端 adminSubItem 字段对齐
@@ -591,6 +592,11 @@ const AdminUsageDetailMeter = ({ detail }) => {
       {isExpired && (
         <div className="mt-2 text-[10px] text-outline">
           {t('SUB.WINDOW_LAST_USAGE', '上次窗口用量 {{used}} / {{limit}}', { used: fmtUsageValue(detail.consumed, detail.unit), limit: detail.limit > 0 ? fmtUsageValue(detail.limit, detail.unit) : '不限' })}
+        </div>
+      )}
+      {!isExpired && detail.window_end_at && (
+        <div className="mt-2 flex items-center gap-1 text-[10px] text-on-surface-variant font-mono">
+          <Clock size={10} /> {t('SUB.WINDOW_NEXT_RESET', '下次重置')} {fmtAbsoluteShort(detail.window_end_at)}
         </div>
       )}
     </div>
