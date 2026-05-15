@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"log"
 	"math"
+	"math/big"
 	"net/http"
 	"sort"
 	"strconv"
@@ -19,25 +20,25 @@ import (
 )
 
 type upstreamAccountCostPayload struct {
-	ID                          uint    `json:"id"`
-	Provider                    string  `json:"provider"`
-	AuthIndex                   string  `json:"auth_index"`
-	AuthType                    string  `json:"auth_type"`
-	Label                       string  `json:"label"`
-	PlanName                    string  `json:"plan_name"`
-	MonthlyCostUSD              float64 `json:"monthly_cost_usd"`
-	EstimatedMonthlyCapacityUSD float64 `json:"estimated_monthly_capacity_usd"`
-	Active                      *bool   `json:"active"`
-	Notes                       string  `json:"notes"`
+	ID                               uint   `json:"id"`
+	Provider                         string `json:"provider"`
+	AuthIndex                        string `json:"auth_index"`
+	AuthType                         string `json:"auth_type"`
+	Label                            string `json:"label"`
+	PlanName                         string `json:"plan_name"`
+	MonthlyCostMicroUSD              int64  `json:"monthly_cost_micro_usd"`
+	EstimatedMonthlyCapacityMicroUSD int64  `json:"estimated_monthly_capacity_micro_usd"`
+	Active                           *bool  `json:"active"`
+	Notes                            string `json:"notes"`
 }
 
 type upstreamAccountCostBulkPayload struct {
-	Accounts                    []upstreamAccountCostBulkAccount `json:"accounts"`
-	PlanName                    string                           `json:"plan_name"`
-	MonthlyCostUSD              float64                          `json:"monthly_cost_usd"`
-	EstimatedMonthlyCapacityUSD float64                          `json:"estimated_monthly_capacity_usd"`
-	Active                      *bool                            `json:"active"`
-	Notes                       string                           `json:"notes"`
+	Accounts                         []upstreamAccountCostBulkAccount `json:"accounts"`
+	PlanName                         string                           `json:"plan_name"`
+	MonthlyCostMicroUSD              int64                            `json:"monthly_cost_micro_usd"`
+	EstimatedMonthlyCapacityMicroUSD int64                            `json:"estimated_monthly_capacity_micro_usd"`
+	Active                           *bool                            `json:"active"`
+	Notes                            string                           `json:"notes"`
 }
 
 type upstreamAccountCostBulkAccount struct {
@@ -48,18 +49,18 @@ type upstreamAccountCostBulkAccount struct {
 }
 
 type upstreamAccountCostOut struct {
-	ID                          uint      `json:"id"`
-	Provider                    string    `json:"provider"`
-	AuthIndex                   string    `json:"auth_index"`
-	AuthType                    string    `json:"auth_type"`
-	Label                       string    `json:"label"`
-	PlanName                    string    `json:"plan_name"`
-	MonthlyCostUSD              float64   `json:"monthly_cost_usd"`
-	EstimatedMonthlyCapacityUSD float64   `json:"estimated_monthly_capacity_usd"`
-	Active                      bool      `json:"active"`
-	Notes                       string    `json:"notes"`
-	CreatedAt                   time.Time `json:"created_at"`
-	UpdatedAt                   time.Time `json:"updated_at"`
+	ID                               uint      `json:"id"`
+	Provider                         string    `json:"provider"`
+	AuthIndex                        string    `json:"auth_index"`
+	AuthType                         string    `json:"auth_type"`
+	Label                            string    `json:"label"`
+	PlanName                         string    `json:"plan_name"`
+	MonthlyCostMicroUSD              int64     `json:"monthly_cost_micro_usd"`
+	EstimatedMonthlyCapacityMicroUSD int64     `json:"estimated_monthly_capacity_micro_usd"`
+	Active                           bool      `json:"active"`
+	Notes                            string    `json:"notes"`
+	CreatedAt                        time.Time `json:"created_at"`
+	UpdatedAt                        time.Time `json:"updated_at"`
 }
 
 type upstreamAccountCostPreset struct {
@@ -149,13 +150,13 @@ func BulkUpsertUpstreamAccountCosts(c *fiber.Ctx) error {
 			"message":      "accounts 必须包含 1-500 个账号",
 		})
 	}
-	monthlyCost, ok := database.USDToMicro(payload.MonthlyCostUSD)
-	if !ok || payload.MonthlyCostUSD < 0 {
-		return c.Status(http.StatusBadRequest).JSON(fiber.Map{"success": false, "message_code": "ERR_INVALID_AMOUNT", "message": "monthly_cost_usd 必须是非负数字"})
+	monthlyCost := payload.MonthlyCostMicroUSD
+	if monthlyCost < 0 {
+		return c.Status(http.StatusBadRequest).JSON(fiber.Map{"success": false, "message_code": "ERR_INVALID_AMOUNT", "message": "monthly_cost_micro_usd 必须是非负整数"})
 	}
-	capacity, ok := database.USDToMicro(payload.EstimatedMonthlyCapacityUSD)
-	if !ok || payload.EstimatedMonthlyCapacityUSD < 0 {
-		return c.Status(http.StatusBadRequest).JSON(fiber.Map{"success": false, "message_code": "ERR_INVALID_AMOUNT", "message": "estimated_monthly_capacity_usd 必须是非负数字"})
+	capacity := payload.EstimatedMonthlyCapacityMicroUSD
+	if capacity < 0 {
+		return c.Status(http.StatusBadRequest).JSON(fiber.Map{"success": false, "message_code": "ERR_INVALID_AMOUNT", "message": "estimated_monthly_capacity_micro_usd 必须是非负整数"})
 	}
 	active := true
 	if payload.Active != nil {
@@ -341,23 +342,30 @@ func GetUpstreamMarginReport(c *fiber.Ctx) error {
 	cutoff := resolvePeriodCutoff(period)
 	q := database.DB.Model(&database.ApiLog{})
 	if !cutoff.IsZero() {
-		q = q.Where("created_at >= ?", cutoff)
+		q = q.Where("api_logs.created_at >= ?", cutoff)
 	}
 
 	var rows []upstreamMarginAggRow
-	if err := q.Select(`CASE
-			WHEN upstream_provider IS NOT NULL AND upstream_provider <> '' THEN upstream_provider
+	if err := q.
+		Joins("LEFT JOIN api_log_attributions ala ON ala.api_log_id = api_logs.id").
+		Joins("LEFT JOIN api_log_cost_estimates ace ON ace.api_log_id = api_logs.id").
+		Select(`CASE
+			WHEN ala.upstream_provider IS NOT NULL AND ala.upstream_provider <> '' THEN ala.upstream_provider
+			WHEN api_logs.upstream_provider IS NOT NULL AND api_logs.upstream_provider <> '' THEN api_logs.upstream_provider
 			ELSE 'unknown'
 		END AS provider,
-		COALESCE(upstream_auth_index, '') AS auth_index,
-		COALESCE(upstream_auth_type, '') AS auth_type,
+		COALESCE(NULLIF(ala.upstream_account_auth_index, ''), NULLIF(api_logs.upstream_auth_index, ''), '') AS auth_index,
+		COALESCE(NULLIF(ala.upstream_auth_type, ''), NULLIF(api_logs.upstream_auth_type, ''), '') AS auth_type,
 		COUNT(*) AS requests,
-		SUM(CASE WHEN status < 200 OR status >= 300 THEN 1 ELSE 0 END) AS failed_requests,
-		COALESCE(SUM(prompt_tokens), 0) AS input_tokens,
-		COALESCE(SUM(completion_tokens), 0) AS output_tokens,
-		COALESCE(SUM(cost), 0) AS raw_cost,
-		COALESCE(SUM(CASE WHEN charged_cost = 0 AND cost > 0 THEN cost ELSE charged_cost END), 0) AS charged_cost,
-		COALESCE(SUM(platform_cost_estimate), 0) AS stored_platform_cost`).
+		SUM(CASE WHEN api_logs.status < 200 OR api_logs.status >= 300 THEN 1 ELSE 0 END) AS failed_requests,
+		COALESCE(SUM(api_logs.prompt_tokens), 0) AS input_tokens,
+		COALESCE(SUM(api_logs.completion_tokens), 0) AS output_tokens,
+		COALESCE(SUM(api_logs.cost), 0) AS raw_cost,
+		COALESCE(SUM(CASE WHEN api_logs.charged_cost = 0 AND api_logs.cost > 0 THEN api_logs.cost ELSE api_logs.charged_cost END), 0) AS charged_cost,
+		COALESCE(SUM(CASE
+			WHEN ace.platform_cost_micro_usd IS NOT NULL AND ace.platform_cost_micro_usd > 0 THEN ace.platform_cost_micro_usd
+			ELSE api_logs.platform_cost_estimate
+		END), 0) AS stored_platform_cost`).
 		Group("provider, auth_index, auth_type").
 		Order("raw_cost DESC").
 		Scan(&rows).Error; err != nil {
@@ -463,20 +471,18 @@ func parseUpstreamAccountCostPayload(c *fiber.Ctx) (upstreamAccountCostPayload, 
 		_ = c.Status(http.StatusBadRequest).JSON(fiber.Map{"success": false, "message_code": "ERR_INVALID_PARAMS", "message": "provider 和 auth_index 必填"})
 		return payload, false
 	}
-	if _, ok := database.USDToMicro(payload.MonthlyCostUSD); !ok || payload.MonthlyCostUSD < 0 {
-		_ = c.Status(http.StatusBadRequest).JSON(fiber.Map{"success": false, "message_code": "ERR_INVALID_AMOUNT", "message": "monthly_cost_usd 必须是非负数字"})
+	if payload.MonthlyCostMicroUSD < 0 {
+		_ = c.Status(http.StatusBadRequest).JSON(fiber.Map{"success": false, "message_code": "ERR_INVALID_AMOUNT", "message": "monthly_cost_micro_usd 必须是非负整数"})
 		return payload, false
 	}
-	if _, ok := database.USDToMicro(payload.EstimatedMonthlyCapacityUSD); !ok || payload.EstimatedMonthlyCapacityUSD < 0 {
-		_ = c.Status(http.StatusBadRequest).JSON(fiber.Map{"success": false, "message_code": "ERR_INVALID_AMOUNT", "message": "estimated_monthly_capacity_usd 必须是非负数字"})
+	if payload.EstimatedMonthlyCapacityMicroUSD < 0 {
+		_ = c.Status(http.StatusBadRequest).JSON(fiber.Map{"success": false, "message_code": "ERR_INVALID_AMOUNT", "message": "estimated_monthly_capacity_micro_usd 必须是非负整数"})
 		return payload, false
 	}
 	return payload, true
 }
 
 func upstreamAccountCostFromPayload(payload upstreamAccountCostPayload, existing database.UpstreamAccountCost) database.UpstreamAccountCost {
-	monthlyCost, _ := database.USDToMicro(payload.MonthlyCostUSD)
-	capacity, _ := database.USDToMicro(payload.EstimatedMonthlyCapacityUSD)
 	active := existing.Active
 	if payload.Active != nil {
 		active = *payload.Active
@@ -488,8 +494,8 @@ func upstreamAccountCostFromPayload(payload upstreamAccountCostPayload, existing
 	existing.AuthType = payload.AuthType
 	existing.Label = payload.Label
 	existing.PlanName = payload.PlanName
-	existing.MonthlyCostUSD = monthlyCost
-	existing.EstimatedMonthlyCapacityUSD = capacity
+	existing.MonthlyCostUSD = payload.MonthlyCostMicroUSD
+	existing.EstimatedMonthlyCapacityUSD = payload.EstimatedMonthlyCapacityMicroUSD
 	existing.Active = active
 	existing.Notes = payload.Notes
 	return existing
@@ -497,18 +503,18 @@ func upstreamAccountCostFromPayload(payload upstreamAccountCostPayload, existing
 
 func upstreamAccountCostToOut(row database.UpstreamAccountCost) upstreamAccountCostOut {
 	return upstreamAccountCostOut{
-		ID:                          row.ID,
-		Provider:                    row.Provider,
-		AuthIndex:                   row.AuthIndex,
-		AuthType:                    row.AuthType,
-		Label:                       row.Label,
-		PlanName:                    row.PlanName,
-		MonthlyCostUSD:              database.MicroToUSD(row.MonthlyCostUSD),
-		EstimatedMonthlyCapacityUSD: database.MicroToUSD(row.EstimatedMonthlyCapacityUSD),
-		Active:                      row.Active,
-		Notes:                       row.Notes,
-		CreatedAt:                   row.CreatedAt,
-		UpdatedAt:                   row.UpdatedAt,
+		ID:                               row.ID,
+		Provider:                         row.Provider,
+		AuthIndex:                        row.AuthIndex,
+		AuthType:                         row.AuthType,
+		Label:                            row.Label,
+		PlanName:                         row.PlanName,
+		MonthlyCostMicroUSD:              row.MonthlyCostUSD,
+		EstimatedMonthlyCapacityMicroUSD: row.EstimatedMonthlyCapacityUSD,
+		Active:                           row.Active,
+		Notes:                            row.Notes,
+		CreatedAt:                        row.CreatedAt,
+		UpdatedAt:                        row.UpdatedAt,
 	}
 }
 
@@ -541,14 +547,11 @@ func estimatePlatformCostFromAccount(rawCost int64, acct database.UpstreamAccoun
 	if rawCost <= 0 || acct.MonthlyCostUSD <= 0 || acct.EstimatedMonthlyCapacityUSD <= 0 {
 		return 0
 	}
-	value := math.Round(float64(rawCost) * float64(acct.MonthlyCostUSD) / float64(acct.EstimatedMonthlyCapacityUSD))
+	value := roundedPositiveProductRatio(rawCost, acct.MonthlyCostUSD, acct.EstimatedMonthlyCapacityUSD)
 	if value < 1 {
 		return 1
 	}
-	if value >= float64(math.MaxInt64) {
-		return math.MaxInt64
-	}
-	return int64(value)
+	return value
 }
 
 func refreshPlatformCostEstimateForAccount(acct database.UpstreamAccountCost) error {
@@ -560,21 +563,50 @@ func refreshPlatformCostEstimateForAccount(acct database.UpstreamAccountCost) er
 		Cost int64
 	}
 	var rows []row
-	if err := database.DB.Model(&database.ApiLog{}).
-		Select("id, cost").
-		Where("upstream_provider = ? AND upstream_auth_index = ? AND cost > 0", normalizeCostProvider(acct.Provider), acct.AuthIndex).
+	provider := normalizeCostProvider(acct.Provider)
+	authIndex := strings.TrimSpace(acct.AuthIndex)
+	if err := database.DB.Table("api_logs").
+		Select("api_logs.id, api_logs.cost").
+		Joins("LEFT JOIN api_log_attributions ala ON ala.api_log_id = api_logs.id").
+		Where(`api_logs.cost > 0 AND (
+			(api_logs.upstream_provider = ? AND api_logs.upstream_auth_index = ?)
+			OR (ala.upstream_provider = ? AND ala.upstream_account_auth_index = ?)
+		)`, provider, authIndex, provider, authIndex).
 		Find(&rows).Error; err != nil {
 		return err
 	}
 	return database.DB.Transaction(func(tx *gorm.DB) error {
 		for _, r := range rows {
 			estimate := estimatePlatformCostFromAccount(r.Cost, acct)
-			if err := tx.Model(&database.ApiLog{}).Where("id = ?", r.ID).Update("platform_cost_estimate", estimate).Error; err != nil {
+			if _, err := insertApiLogCostEstimateTx(tx, r.ID, estimate, "capacity_share", time.Now()); err != nil {
 				return err
 			}
 		}
 		return nil
 	})
+}
+
+func insertApiLogCostEstimateTx(tx *gorm.DB, apiLogID uint, estimate int64, method string, computedAt time.Time) (bool, error) {
+	if apiLogID == 0 || estimate <= 0 {
+		return false, nil
+	}
+	row := database.ApiLogCostEstimate{
+		ApiLogID:             apiLogID,
+		PlatformCostMicroUSD: estimate,
+		ComputedAt:           computedAt,
+		Method:               strings.TrimSpace(method),
+	}
+	if row.Method == "" {
+		row.Method = "capacity_share"
+	}
+	res := tx.Clauses(clause.OnConflict{
+		Columns:   []clause.Column{{Name: "api_log_id"}},
+		DoNothing: true,
+	}).Create(&row)
+	if res.Error != nil {
+		return false, res.Error
+	}
+	return res.RowsAffected > 0, nil
 }
 
 func platformCostEstimateForMatchedLogTx(tx *gorm.DB, provider, authIndex string, rawCost int64) int64 {
@@ -624,11 +656,56 @@ func proratedCapacityMicro(monthlyCapacity int64, windowDays float64) int64 {
 	if monthlyCapacity <= 0 || windowDays <= 0 {
 		return 0
 	}
-	value := math.Round(float64(monthlyCapacity) * windowDays / 30)
-	if value >= float64(math.MaxInt64) {
+	if math.IsNaN(windowDays) || math.IsInf(windowDays, 0) {
+		return 0
+	}
+	daysRat := new(big.Rat).SetFloat64(windowDays)
+	if daysRat == nil || daysRat.Sign() <= 0 {
+		return 0
+	}
+	value := new(big.Rat).Mul(new(big.Rat).SetInt64(monthlyCapacity), daysRat)
+	value.Quo(value, big.NewRat(30, 1))
+	out, ok := roundedPositiveRatToInt64(value)
+	if !ok {
 		return math.MaxInt64
 	}
-	return int64(value)
+	return out
+}
+
+func roundedPositiveProductRatio(amount, multiplier, divisor int64) int64 {
+	if amount <= 0 || multiplier <= 0 || divisor <= 0 {
+		return 0
+	}
+	product := new(big.Int).Mul(big.NewInt(amount), big.NewInt(multiplier))
+	q := new(big.Int)
+	rem := new(big.Int)
+	div := big.NewInt(divisor)
+	q.QuoRem(product, div, rem)
+	rem.Mul(rem, big.NewInt(2))
+	if rem.Cmp(div) >= 0 {
+		q.Add(q, big.NewInt(1))
+	}
+	if !q.IsInt64() {
+		return math.MaxInt64
+	}
+	return q.Int64()
+}
+
+func roundedPositiveRatToInt64(r *big.Rat) (int64, bool) {
+	if r == nil || r.Sign() < 0 {
+		return 0, false
+	}
+	q := new(big.Int)
+	rem := new(big.Int)
+	q.QuoRem(r.Num(), r.Denom(), rem)
+	rem.Mul(rem, big.NewInt(2))
+	if rem.Cmp(r.Denom()) >= 0 {
+		q.Add(q, big.NewInt(1))
+	}
+	if !q.IsInt64() {
+		return 0, false
+	}
+	return q.Int64(), true
 }
 
 func marginRate(margin, revenue int64) float64 {

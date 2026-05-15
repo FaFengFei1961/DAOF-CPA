@@ -21,7 +21,7 @@ func setupUpstreamCostTestDB(t *testing.T) *fiber.App {
 	if err != nil {
 		t.Fatalf("open sqlite: %v", err)
 	}
-	if err := db.AutoMigrate(&database.ApiLog{}, &database.UpstreamAccountCost{}); err != nil {
+	if err := db.AutoMigrate(&database.ApiLog{}, &database.ApiLogAttribution{}, &database.ApiLogCostEstimate{}, &database.UpstreamAccountCost{}); err != nil {
 		t.Fatalf("migrate: %v", err)
 	}
 	database.DB = db
@@ -98,14 +98,14 @@ func TestUpstreamMarginReportUsesAccountCostCapacity(t *testing.T) {
 	}
 
 	payload := map[string]any{
-		"provider":                       "codex",
-		"auth_index":                     "acct-1",
-		"auth_type":                      "oauth",
-		"label":                          "Codex Pro 1",
-		"plan_name":                      "ChatGPT Pro",
-		"monthly_cost_usd":               20,
-		"estimated_monthly_capacity_usd": 200,
-		"active":                         true,
+		"provider":                             "codex",
+		"auth_index":                           "acct-1",
+		"auth_type":                            "oauth",
+		"label":                                "Codex Pro 1",
+		"plan_name":                            "ChatGPT Pro",
+		"monthly_cost_micro_usd":               20 * database.MicroPerUSD,
+		"estimated_monthly_capacity_micro_usd": 200 * database.MicroPerUSD,
+		"active":                               true,
 	}
 	body, _ := json.Marshal(payload)
 	req := httptest.NewRequest("POST", "/api/admin/upstream-accounts", bytes.NewReader(body))
@@ -178,10 +178,10 @@ func TestBulkUpsertUpstreamAccountCosts(t *testing.T) {
 			{"provider": "anthropic", "auth_index": "acct-a", "auth_type": "oauth", "label": "Claude A"},
 			{"provider": "anthropic", "auth_index": "acct-b", "auth_type": "oauth", "label": "Claude B"},
 		},
-		"plan_name":                      "Claude Max 5x",
-		"monthly_cost_usd":               100,
-		"estimated_monthly_capacity_usd": 500,
-		"active":                         true,
+		"plan_name":                            "Claude Max 5x",
+		"monthly_cost_micro_usd":               100 * database.MicroPerUSD,
+		"estimated_monthly_capacity_micro_usd": 500 * database.MicroPerUSD,
+		"active":                               true,
 	}
 	body, _ := json.Marshal(payload)
 	req := httptest.NewRequest("POST", "/api/admin/upstream-accounts/bulk", bytes.NewReader(body))
@@ -200,13 +200,34 @@ func TestBulkUpsertUpstreamAccountCosts(t *testing.T) {
 	if count != 2 {
 		t.Fatalf("account cost rows=%d want 2", count)
 	}
-	var updatedLogs []database.ApiLog
-	if err := database.DB.Order("upstream_auth_index").Find(&updatedLogs).Error; err != nil {
-		t.Fatalf("read logs: %v", err)
+	var estimates []database.ApiLogCostEstimate
+	if err := database.DB.Order("api_log_id").Find(&estimates).Error; err != nil {
+		t.Fatalf("read estimates: %v", err)
 	}
-	for _, row := range updatedLogs {
-		if row.PlatformCostEstimate != 10*database.MicroPerUSD {
-			t.Fatalf("platform estimate for %s=%d want 10 USD", row.UpstreamAuthIndex, row.PlatformCostEstimate)
+	if len(estimates) != 2 {
+		t.Fatalf("estimate rows=%d want 2", len(estimates))
+	}
+	for _, row := range estimates {
+		if row.PlatformCostMicroUSD != 10*database.MicroPerUSD {
+			t.Fatalf("platform estimate=%d want 10 USD", row.PlatformCostMicroUSD)
 		}
+	}
+}
+
+func TestUpstreamCost_BigIntCapacityShare(t *testing.T) {
+	acct := database.UpstreamAccountCost{
+		MonthlyCostUSD:              9_000_000_000_000_000_000,
+		EstimatedMonthlyCapacityUSD: 9_000_000_000_000_000_000,
+		Active:                      true,
+	}
+	got := estimatePlatformCostFromAccount(9_000_000_000_000_000_000, acct)
+	if got != 9_000_000_000_000_000_000 {
+		t.Fatalf("estimate=%d want exact large int64 ratio", got)
+	}
+
+	acct.MonthlyCostUSD = 1
+	acct.EstimatedMonthlyCapacityUSD = 2
+	if got := estimatePlatformCostFromAccount(5, acct); got != 3 {
+		t.Fatalf("rounded estimate=%d want 3", got)
 	}
 }

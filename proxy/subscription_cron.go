@@ -22,9 +22,10 @@ import (
 )
 
 var (
-	subCronDone chan struct{}
-	subCronOnce sync.Once
-	subCronStop sync.Once
+	subCronDone                 chan struct{}
+	subCronOnce                 sync.Once
+	subCronStop                 sync.Once
+	apiLogCleanupDisabledLogged bool
 )
 
 // StartSubscriptionCron 启动订阅 cron。main.go 启动时调用一次。
@@ -137,44 +138,18 @@ func cleanupClosedTickets() {
 	}
 }
 
-// cleanupOldApiLogs 按 SysConfig.apilog_retention_days 删除老 ApiLog 记录
-// 0 表示禁用清理；批量限制避免一次锁表过久
+// cleanupOldApiLogs 暂停 ApiLog 物理清理。
+//
+// ApiLog 是核心审计事实表，必须 append-only。旧实现按 retention 直接 DELETE，
+// 会破坏审计链；后续需要先设计 archive table / 文件导出机制，再恢复保留期清理。
 func cleanupOldApiLogs() {
 	retentionDays, _ := strconv.Atoi(getStrConfigStr("apilog_retention_days", "90"))
 	if retentionDays <= 0 {
 		return
 	}
-	// fix Major M7（claude perf 第十五轮）：默认 batch 5000 → SQLite WAL 单写者锁
-	// 持续 200ms+，期间 SSE 写入全部排队抖动剧烈。降到 200，每 60s 跑一次自然消化积压。
-	// admin 可通过 SysConfig.apilog_cleanup_batch_size 临时调高做一次性清理。
-	batchSize, _ := strconv.Atoi(getStrConfigStr("apilog_cleanup_batch_size", "200"))
-	if batchSize <= 0 {
-		batchSize = 200
-	}
-	cutoff := time.Now().Add(-time.Duration(retentionDays) * 24 * time.Hour)
-
-	// fix Major（自审第八轮）：原写法 `DELETE FROM t WHERE id IN (SELECT id FROM t LIMIT ?)`
-	// 在 PostgreSQL 不允许（同表 DELETE 子查询不能用 LIMIT，会报错），SQLite 允许但行为依版本。
-	// 改为两步：先 SELECT id 列表（GORM 帮我们做 LIMIT），再按 IN 删除。两步都跨方言可移植。
-	var ids []uint
-	if err := database.DB.Model(&database.ApiLog{}).
-		Where("created_at < ?", cutoff).
-		Order("id ASC").
-		Limit(batchSize).
-		Pluck("id", &ids).Error; err != nil {
-		log.Printf("[SUB-CRON] api_logs cleanup query failed: %v", err)
-		return
-	}
-	if len(ids) == 0 {
-		return
-	}
-	res := database.DB.Where("id IN ?", ids).Delete(&database.ApiLog{})
-	if res.Error != nil {
-		log.Printf("[SUB-CRON] api_logs cleanup delete failed: %v", res.Error)
-		return
-	}
-	if res.RowsAffected > 0 {
-		log.Printf("[SUB-CRON] 清理 %d 条 api_logs（>%d 天）", res.RowsAffected, retentionDays)
+	if !apiLogCleanupDisabledLogged {
+		apiLogCleanupDisabledLogged = true
+		log.Printf("[SUB-CRON] api_logs cleanup disabled for append-only audit; retention_days=%d ignored until archival is implemented", retentionDays)
 	}
 }
 

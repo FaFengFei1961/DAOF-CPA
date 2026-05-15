@@ -38,6 +38,31 @@ func TestChannelTargetsOfficialHost(t *testing.T) {
 	}
 }
 
+func TestChannelModel_PicoPayloadParsing(t *testing.T) {
+	payload := channelModelPayload{
+		ModelID:                            "gpt-5.5",
+		InputPricePicoPerToken:             1_250_000_000,
+		OutputPricePicoPerToken:            10_000_000_000,
+		CachedInputPricePicoPerToken:       500_000_000,
+		CacheWriteInputPricePicoPerToken:   2_500_000_000,
+		CacheWrite1hInputPricePicoPerToken: 3_500_000_000,
+		HighInputPricePicoPerToken:         4_000_000_000,
+		HighCachedInputPricePicoPerToken:   1_000_000_000,
+		HighOutputPricePicoPerToken:        20_000_000_000,
+		Weight:                             1,
+		Status:                             1,
+	}
+	got, err := payload.toChannelModel()
+	if err != nil {
+		t.Fatalf("toChannelModel: %v", err)
+	}
+	if got.InputPricePicoPerToken != payload.InputPricePicoPerToken ||
+		got.OutputPricePicoPerToken != payload.OutputPricePicoPerToken ||
+		got.CacheWrite1hInputPricePicoPerToken != payload.CacheWrite1hInputPricePicoPerToken {
+		t.Fatalf("pico prices not preserved: got=%+v payload=%+v", got, payload)
+	}
+}
+
 // TestValidateChannelModelModeration 覆盖 enum 校验 + fail-closed 强制
 func TestValidateChannelModelModeration_EnumChecks(t *testing.T) {
 	thirdParty := &database.Channel{Type: "openai", BaseURL: "https://relay.example.com"}

@@ -198,3 +198,32 @@ func TestBilling_EntryType_Helpers(t *testing.T) {
 		})
 	}
 }
+
+func TestBillingEntry_CreatedAtCreateOnly(t *testing.T) {
+	setupBillingTestDB(t)
+	createdAt := time.Date(2026, 5, 15, 9, 0, 0, 0, time.UTC)
+	entry := BillingEntry{
+		UserID:          1,
+		OccurredAt:      createdAt,
+		EntryType:       BillingTypeTopup,
+		BillingState:    BillingStateSettled,
+		AmountUSD:       10 * MicroPerUSD,
+		BalanceAfterUSD: 10 * MicroPerUSD,
+		Description:     "created_at immutable",
+		CreatedAt:       createdAt,
+	}
+	if err := DB.Create(&entry).Error; err != nil {
+		t.Fatalf("create entry: %v", err)
+	}
+
+	replacement := createdAt.Add(24 * time.Hour)
+	_ = DB.Model(&BillingEntry{}).Where("id = ?", entry.ID).Update("created_at", replacement).Error
+
+	var got BillingEntry
+	if err := DB.First(&got, entry.ID).Error; err != nil {
+		t.Fatalf("reload entry: %v", err)
+	}
+	if !got.CreatedAt.Equal(createdAt) {
+		t.Fatalf("CreatedAt changed to %v, want %v", got.CreatedAt, createdAt)
+	}
+}

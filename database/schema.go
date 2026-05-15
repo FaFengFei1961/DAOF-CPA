@@ -1,11 +1,12 @@
 package database
 
 import (
+	"errors"
 	"fmt"
-	"math"
 	"time"
 
 	"gorm.io/gorm"
+	"gorm.io/gorm/clause"
 )
 
 // User 代表核心的用户实体，集成 Oauth 与手机双重绑定体系
@@ -118,40 +119,13 @@ type ChannelModel struct {
 }
 
 const (
-	MaxChannelModelPricePerMTok      = 1_000_000.0
 	PicoPerUSD                       = int64(1_000_000_000_000_000)
 	PicoPerMicroUSD                  = int64(1_000_000_000)
 	PicoPerTokenPerUSDPerMTok        = int64(1_000_000_000)
-	MaxChannelModelPricePicoPerToken = int64(MaxChannelModelPricePerMTok) * PicoPerTokenPerUSDPerMTok
+	MaxChannelModelPricePicoPerToken = int64(1_000_000) * PicoPerTokenPerUSDPerMTok
 	MultiplierPPMBase                = int64(1_000_000)
 	MaxBillingMultiplierPPM          = int64(1_000_000_000)
 )
-
-func PricePicoPerTokenFromUSDPerMTok(price float64) (int64, error) {
-	if math.IsNaN(price) || math.IsInf(price, 0) || price < 0 || price > MaxChannelModelPricePerMTok {
-		return 0, fmt.Errorf("price must be finite and between 0 and %.0f USD/M tokens", MaxChannelModelPricePerMTok)
-	}
-	pico := math.Round(price * float64(PicoPerTokenPerUSDPerMTok))
-	if pico < 0 || pico > float64(MaxChannelModelPricePicoPerToken) {
-		return 0, fmt.Errorf("price exceeds fixed-point bounds")
-	}
-	return int64(pico), nil
-}
-
-func MustPricePicoPerTokenFromUSDPerMTok(price float64) int64 {
-	pico, err := PricePicoPerTokenFromUSDPerMTok(price)
-	if err != nil {
-		panic(err)
-	}
-	return pico
-}
-
-func PriceUSDPerMTokFromPico(pico int64) float64 {
-	if pico <= 0 {
-		return 0
-	}
-	return float64(pico) / float64(PicoPerTokenPerUSDPerMTok)
-}
 
 // ValidateChannelModelPricing rejects values that can make cost calculation
 // non-finite, negative, or operationally absurd before they enter route cache.
@@ -205,52 +179,64 @@ type AccessToken struct {
 
 // ApiLog 记录每一条流过系统的对话指纹
 type ApiLog struct {
-	ID                     uint       `gorm:"primaryKey" json:"id"`
-	UserID                 uint       `gorm:"index;not null" json:"user_id"`
-	TokenName              string     `json:"token_name"`
-	ModelName              string     `gorm:"index" json:"model_name"`
-	RequestedModel         string     `gorm:"index;size:160;default:''" json:"requested_model"`
-	ServedModel            string     `gorm:"index;size:160;default:''" json:"served_model"`
-	PromptTokens           int        `json:"prompt_tokens"`
-	CompletionTokens       int        `json:"completion_tokens"`
-	CachedTokens           int        `json:"cached_tokens"`      // cache read tokens
-	CacheWriteTokens       int        `json:"cache_write_tokens"` // cache creation/write tokens
-	CacheWrite5mTokens     int        `gorm:"column:cache_write_5m_tokens" json:"cache_write_5m_tokens"`
-	CacheWrite1hTokens     int        `gorm:"column:cache_write_1h_tokens" json:"cache_write_1h_tokens"`
-	ReasoningTokens        int        `json:"reasoning_tokens"`
-	Cost                   int64      `json:"cost"`                                    // 原始 API 等值成本（micro_usd, USD * 1e6）
-	ChargedCost            int64      `gorm:"default:0" json:"charged_cost"`           // 套餐/credits 扣减成本（micro_usd），余额扣费仍使用 Cost
-	PlatformCostEstimate   int64      `gorm:"default:0" json:"platform_cost_estimate"` // 平台真实账号成本估算（micro_usd，仅毛利分析）
-	ModelWeight            float64    `gorm:"default:1" json:"model_weight"`           // 公开模型权重
-	HealthMultiplier       float64    `gorm:"default:1" json:"health_multiplier"`      // 公开高峰/健康系数
-	BillingRulesVersion    string     `gorm:"size:64;default:''" json:"billing_rules_version"`
-	PrecheckInputTokens    int        `gorm:"default:0" json:"precheck_input_tokens"`    // 预检估算输入 tokens（失败请求不计入用量）
-	PrecheckOutputTokens   int        `gorm:"default:0" json:"precheck_output_tokens"`   // 预检预留输出 tokens
-	PrecheckRawCost        int64      `gorm:"default:0" json:"precheck_raw_cost"`        // 预检 API 等值成本（micro_usd）
-	PrecheckChargedCost    int64      `gorm:"default:0" json:"precheck_charged_cost"`    // 预检套餐/credits 扣减成本（micro_usd）
-	PrecheckQuotaPlanID    uint       `gorm:"default:0" json:"precheck_quota_plan_id"`   // 触发预检拒绝的 quota_plan
-	PrecheckQuotaLimit     int64      `gorm:"default:0" json:"precheck_quota_limit"`     // 当前窗口限额（micro_usd，仅 api_cost_usd 计划）
-	PrecheckQuotaUsed      int64      `gorm:"default:0" json:"precheck_quota_used"`      // 当前窗口已用（micro_usd，仅 api_cost_usd 计划）
-	PrecheckQuotaRemaining int64      `gorm:"default:0" json:"precheck_quota_remaining"` // 当前窗口剩余（micro_usd，仅 api_cost_usd 计划）
-	PrecheckWindowEndAt    *time.Time `json:"precheck_window_end_at"`                    // 当前窗口结束时间
-	BlockReason            string     `gorm:"size:96;default:''" json:"block_reason"`    // 机器可读阻断原因
-	FallbackUserOptIn      bool       `gorm:"default:false" json:"fallback_user_opt_in"`
-	FallbackReason         string     `gorm:"size:160;default:''" json:"fallback_reason"`
-	UpstreamProvider       string     `gorm:"index;size:64;default:''" json:"upstream_provider"`   // CPA usage/provider 归因
-	UpstreamAuthIndex      string     `gorm:"index;size:64;default:''" json:"upstream_auth_index"` // CPA 稳定账号索引（不可逆）
-	UpstreamAuthType       string     `gorm:"size:64;default:''" json:"upstream_auth_type"`        // oauth/api_key 等
-	UpstreamSource         string     `gorm:"size:255;default:''" json:"upstream_source"`          // CPA source（admin-only，可辅助定位）
-	UpstreamRequestID      string     `gorm:"index;size:64;default:''" json:"upstream_request_id"` // CPA 内部 request_id
-	UpstreamUsageRecordID  uint       `gorm:"index;default:0" json:"upstream_usage_record_id"`     // 对应 upstream_usage_records.id
-	UpstreamUsageMatch     string     `gorm:"size:64;default:''" json:"upstream_usage_match"`      // exact_tokens / single_candidate_zero_usage
-	UpstreamUsageSyncedAt  *time.Time `json:"upstream_usage_synced_at"`
-	Latency                int64      `gorm:"default:0" json:"latency"`           // ms延迟 (Parity)
-	Status                 int        `gorm:"default:200" json:"status"`          // 状态码或结果记录 (Parity)
-	IPAddress              string     `gorm:"index;default:''" json:"ip_address"` // 请求来源IP (Parity)
-	RequestPath            string     `gorm:"size:160;default:''" json:"request_path"`
-	ErrorType              string     `gorm:"size:64;default:''" json:"error_type"`
-	ErrorMessage           string     `gorm:"size:512;default:''" json:"error_message"`
-	CreatedAt              time.Time  `gorm:"index" json:"created_at"`
+	ID                     uint       `gorm:"primaryKey;<-:create" json:"id"`
+	UserID                 uint       `gorm:"index;not null;<-:create" json:"user_id"`
+	TokenName              string     `gorm:"<-:create" json:"token_name"`
+	ModelName              string     `gorm:"index;<-:create" json:"model_name"`
+	RequestedModel         string     `gorm:"index;size:160;default:'';<-:create" json:"requested_model"`
+	ServedModel            string     `gorm:"index;size:160;default:'';<-:create" json:"served_model"`
+	PromptTokens           int        `gorm:"<-:create" json:"prompt_tokens"`
+	CompletionTokens       int        `gorm:"<-:create" json:"completion_tokens"`
+	CachedTokens           int        `gorm:"<-:create" json:"cached_tokens"`      // cache read tokens
+	CacheWriteTokens       int        `gorm:"<-:create" json:"cache_write_tokens"` // cache creation/write tokens
+	CacheWrite5mTokens     int        `gorm:"column:cache_write_5m_tokens;<-:create" json:"cache_write_5m_tokens"`
+	CacheWrite1hTokens     int        `gorm:"column:cache_write_1h_tokens;<-:create" json:"cache_write_1h_tokens"`
+	ReasoningTokens        int        `gorm:"<-:create" json:"reasoning_tokens"`
+	Cost                   int64      `gorm:"<-:create" json:"cost"`                             // 原始 API 等值成本（micro_usd, USD * 1e6）
+	ChargedCost            int64      `gorm:"default:0;<-:create" json:"charged_cost"`           // 套餐/credits 扣减成本（micro_usd），余额扣费仍使用 Cost
+	PlatformCostEstimate   int64      `gorm:"default:0;<-:create" json:"platform_cost_estimate"` // 平台真实账号成本估算（micro_usd，仅毛利分析）
+	ModelWeight            float64    `gorm:"default:1;<-:create" json:"model_weight"`           // 公开模型权重
+	HealthMultiplier       float64    `gorm:"default:1;<-:create" json:"health_multiplier"`      // 公开高峰/健康系数
+	BillingRulesVersion    string     `gorm:"size:64;default:'';<-:create" json:"billing_rules_version"`
+	PrecheckInputTokens    int        `gorm:"default:0;<-:create" json:"precheck_input_tokens"`    // 预检估算输入 tokens（失败请求不计入用量）
+	PrecheckOutputTokens   int        `gorm:"default:0;<-:create" json:"precheck_output_tokens"`   // 预检预留输出 tokens
+	PrecheckRawCost        int64      `gorm:"default:0;<-:create" json:"precheck_raw_cost"`        // 预检 API 等值成本（micro_usd）
+	PrecheckChargedCost    int64      `gorm:"default:0;<-:create" json:"precheck_charged_cost"`    // 预检套餐/credits 扣减成本（micro_usd）
+	PrecheckQuotaPlanID    uint       `gorm:"default:0;<-:create" json:"precheck_quota_plan_id"`   // 触发预检拒绝的 quota_plan
+	PrecheckQuotaLimit     int64      `gorm:"default:0;<-:create" json:"precheck_quota_limit"`     // 当前窗口限额（micro_usd，仅 api_cost_usd 计划）
+	PrecheckQuotaUsed      int64      `gorm:"default:0;<-:create" json:"precheck_quota_used"`      // 当前窗口已用（micro_usd，仅 api_cost_usd 计划）
+	PrecheckQuotaRemaining int64      `gorm:"default:0;<-:create" json:"precheck_quota_remaining"` // 当前窗口剩余（micro_usd，仅 api_cost_usd 计划）
+	PrecheckWindowEndAt    *time.Time `gorm:"<-:create" json:"precheck_window_end_at"`             // 当前窗口结束时间
+	BlockReason            string     `gorm:"size:96;default:'';<-:create" json:"block_reason"`    // 机器可读阻断原因
+	FallbackUserOptIn      bool       `gorm:"default:false;<-:create" json:"fallback_user_opt_in"`
+	FallbackReason         string     `gorm:"size:160;default:'';<-:create" json:"fallback_reason"`
+	UpstreamProvider       string     `gorm:"index;size:64;default:'';<-:create" json:"upstream_provider"`   // CPA usage/provider 归因
+	UpstreamAuthIndex      string     `gorm:"index;size:64;default:'';<-:create" json:"upstream_auth_index"` // CPA 稳定账号索引（不可逆）
+	UpstreamAuthType       string     `gorm:"size:64;default:'';<-:create" json:"upstream_auth_type"`        // oauth/api_key 等
+	UpstreamSource         string     `gorm:"size:255;default:'';<-:create" json:"upstream_source"`          // CPA source（admin-only，可辅助定位）
+	UpstreamRequestID      string     `gorm:"index;size:64;default:'';<-:create" json:"upstream_request_id"` // CPA 内部 request_id
+	UpstreamUsageRecordID  uint       `gorm:"index;default:0;<-:create" json:"upstream_usage_record_id"`     // 对应 upstream_usage_records.id
+	UpstreamUsageMatch     string     `gorm:"size:64;default:'';<-:create" json:"upstream_usage_match"`      // exact_tokens / single_candidate_zero_usage
+	UpstreamUsageSyncedAt  *time.Time `gorm:"<-:create" json:"upstream_usage_synced_at"`
+	Latency                int64      `gorm:"default:0;<-:create" json:"latency"`           // ms延迟 (Parity)
+	Status                 int        `gorm:"default:200;<-:create" json:"status"`          // 状态码或结果记录 (Parity)
+	IPAddress              string     `gorm:"index;default:'';<-:create" json:"ip_address"` // 请求来源IP (Parity)
+	RequestPath            string     `gorm:"size:160;default:'';<-:create" json:"request_path"`
+	ErrorType              string     `gorm:"size:64;default:'';<-:create" json:"error_type"`
+	ErrorMessage           string     `gorm:"size:512;default:'';<-:create" json:"error_message"`
+	CreatedAt              time.Time  `gorm:"index;<-:create" json:"created_at"`
+}
+
+var ErrApiLogAppendOnly = errors.New("api_logs is append-only; write mutable attribution or estimates to side tables")
+
+func (l *ApiLog) BeforeUpdate(tx *gorm.DB) error {
+	tx.Statement.AddClause(clause.Where{Exprs: []clause.Expression{clause.Expr{SQL: "1 = 0"}}})
+	return nil
+}
+
+func (l *ApiLog) BeforeDelete(tx *gorm.DB) error {
+	tx.Statement.AddClause(clause.Where{Exprs: []clause.Expression{clause.Expr{SQL: "1 = 0"}}})
+	return nil
 }
 
 // UpstreamUsageRecord 保存从 CLIProxyAPI usage queue 拉取到的原始用量事实。

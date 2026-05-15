@@ -23,7 +23,7 @@ import (
 )
 
 func pricePicoForTest(price float64) int64 {
-	return database.MustPricePicoPerTokenFromUSDPerMTok(price)
+	return int64(price * float64(database.PicoPerTokenPerUSDPerMTok))
 }
 
 func TestCostCalculationZeroBias(t *testing.T) {

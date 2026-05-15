@@ -12,13 +12,13 @@ import (
 	"gorm.io/gorm/logger"
 )
 
-func TestStoreAndMatchCLIProxyUsageRecordsExactTokens(t *testing.T) {
+func TestApiLog_AttributionViaSideTable(t *testing.T) {
 	var err error
 	database.DB, err = gorm.Open(sqlite.Open("file:cliproxy_usage_sync_exact?mode=memory&cache=shared"), &gorm.Config{})
 	if err != nil {
 		t.Fatalf("open db: %v", err)
 	}
-	if err := database.DB.AutoMigrate(&database.ApiLog{}, &database.UpstreamUsageRecord{}); err != nil {
+	if err := database.DB.AutoMigrate(&database.ApiLog{}, &database.ApiLogAttribution{}, &database.ApiLogCostEstimate{}, &database.UpstreamUsageRecord{}); err != nil {
 		t.Fatalf("migrate: %v", err)
 	}
 
@@ -66,12 +66,12 @@ func TestStoreAndMatchCLIProxyUsageRecordsExactTokens(t *testing.T) {
 		t.Fatalf("unexpected result: %+v", result)
 	}
 
-	var got database.ApiLog
-	if err := database.DB.First(&got, apiLog.ID).Error; err != nil {
-		t.Fatalf("reload api log: %v", err)
+	var got database.ApiLogAttribution
+	if err := database.DB.Where("api_log_id = ?", apiLog.ID).First(&got).Error; err != nil {
+		t.Fatalf("reload api log attribution: %v", err)
 	}
-	if got.UpstreamProvider != "openai" || got.UpstreamAuthIndex != "auth-index-1" || got.UpstreamUsageMatch != "exact_tokens" {
-		t.Fatalf("unexpected upstream attribution: provider=%q auth=%q match=%q", got.UpstreamProvider, got.UpstreamAuthIndex, got.UpstreamUsageMatch)
+	if got.UpstreamProvider != "openai" || got.UpstreamAccountAuthIndex != "auth-index-1" || got.MatchReason != "exact_tokens" {
+		t.Fatalf("unexpected upstream attribution: provider=%q auth=%q match=%q", got.UpstreamProvider, got.UpstreamAccountAuthIndex, got.MatchReason)
 	}
 
 	var usage database.UpstreamUsageRecord
@@ -83,13 +83,88 @@ func TestStoreAndMatchCLIProxyUsageRecordsExactTokens(t *testing.T) {
 	}
 }
 
+func TestApiLog_NoUpdate(t *testing.T) {
+	var err error
+	database.DB, err = gorm.Open(sqlite.Open("file:api_log_no_update?mode=memory&cache=shared"), &gorm.Config{})
+	if err != nil {
+		t.Fatalf("open db: %v", err)
+	}
+	if err := database.DB.AutoMigrate(&database.ApiLog{}); err != nil {
+		t.Fatalf("migrate: %v", err)
+	}
+
+	row := database.ApiLog{
+		UserID:    1,
+		ModelName: "gpt-5.5",
+		Cost:      100,
+		Status:    200,
+		CreatedAt: time.Now(),
+	}
+	if err := database.DB.Create(&row).Error; err != nil {
+		t.Fatalf("create api log: %v", err)
+	}
+
+	res := database.DB.Model(&database.ApiLog{}).Where("id = ?", row.ID).Update("cost", int64(200))
+	if res.Error != nil {
+		t.Fatalf("update error: %v", res.Error)
+	}
+	if res.RowsAffected != 0 {
+		t.Fatalf("update rows=%d want 0", res.RowsAffected)
+	}
+
+	var got database.ApiLog
+	if err := database.DB.First(&got, row.ID).Error; err != nil {
+		t.Fatalf("reload api log: %v", err)
+	}
+	if got.Cost != 100 {
+		t.Fatalf("cost changed to %d", got.Cost)
+	}
+}
+
+func TestApiLog_NoDelete(t *testing.T) {
+	var err error
+	database.DB, err = gorm.Open(sqlite.Open("file:api_log_no_delete?mode=memory&cache=shared"), &gorm.Config{})
+	if err != nil {
+		t.Fatalf("open db: %v", err)
+	}
+	if err := database.DB.AutoMigrate(&database.ApiLog{}); err != nil {
+		t.Fatalf("migrate: %v", err)
+	}
+
+	row := database.ApiLog{
+		UserID:    1,
+		ModelName: "gpt-5.5",
+		Status:    200,
+		CreatedAt: time.Now(),
+	}
+	if err := database.DB.Create(&row).Error; err != nil {
+		t.Fatalf("create api log: %v", err)
+	}
+
+	res := database.DB.Unscoped().Where("id = ?", row.ID).Delete(&database.ApiLog{})
+	if res.Error != nil {
+		t.Fatalf("delete error: %v", res.Error)
+	}
+	if res.RowsAffected != 0 {
+		t.Fatalf("delete rows=%d want 0", res.RowsAffected)
+	}
+
+	var count int64
+	if err := database.DB.Model(&database.ApiLog{}).Where("id = ?", row.ID).Count(&count).Error; err != nil {
+		t.Fatalf("count api log: %v", err)
+	}
+	if count != 1 {
+		t.Fatalf("api log count=%d want 1", count)
+	}
+}
+
 func TestStoreAndMatchCLIProxyUsageRecordsKeepsUnmatched(t *testing.T) {
 	var err error
 	database.DB, err = gorm.Open(sqlite.Open("file:cliproxy_usage_sync_unmatched?mode=memory&cache=shared"), &gorm.Config{})
 	if err != nil {
 		t.Fatalf("open db: %v", err)
 	}
-	if err := database.DB.AutoMigrate(&database.ApiLog{}, &database.UpstreamUsageRecord{}); err != nil {
+	if err := database.DB.AutoMigrate(&database.ApiLog{}, &database.ApiLogAttribution{}, &database.ApiLogCostEstimate{}, &database.UpstreamUsageRecord{}); err != nil {
 		t.Fatalf("migrate: %v", err)
 	}
 

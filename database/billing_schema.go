@@ -77,7 +77,7 @@ type BillingEntry struct {
 	CurrencyOriginal string `gorm:"size:8;<-:create" json:"currency_original,omitempty"`
 	AmountOriginal   int64  `gorm:"<-:create" json:"amount_original,omitempty"`
 
-	CreatedAt time.Time `json:"created_at"`
+	CreatedAt time.Time `gorm:"<-:create" json:"created_at"`
 }
 
 // EntryType 常量集。新增类型时在此处加常量并更新 IsConsumeEntry / IsCreditEntry 的判定。

@@ -59,126 +59,98 @@ var allowedModerationFailModes = map[string]bool{
 }
 
 type channelModelPayload struct {
-	ModelID                          string  `json:"model_id"`
-	DisplayName                      string  `json:"display_name"`
-	InputPriceUSDPerMTok             float64 `json:"input_price"`
-	OutputPriceUSDPerMTok            float64 `json:"output_price"`
-	CachedInputPriceUSDPerMTok       float64 `json:"cached_input_price"`
-	CacheWriteInputPriceUSDPerMTok   float64 `json:"cache_write_input_price"`
-	CacheWrite1hInputPriceUSDPerMTok float64 `json:"cache_write_1h_input_price"`
-	ContextPriceThreshold            int     `json:"context_price_threshold"`
-	HighInputPriceUSDPerMTok         float64 `json:"high_input_price"`
-	HighCachedInputPriceUSDPerMTok   float64 `json:"high_cached_input_price"`
-	HighOutputPriceUSDPerMTok        float64 `json:"high_output_price"`
-	MaxContextLength                 int     `json:"max_context_length"`
-	Weight                           int     `json:"weight"`
-	Status                           int     `json:"status"`
-	EndpointPolicy                   string  `json:"endpoint_policy"`
-	ModerationLevel                  string  `json:"moderation_level"`
-	ModerationFailMode               string  `json:"moderation_fail_mode"`
+	ModelID                            string `json:"model_id"`
+	DisplayName                        string `json:"display_name"`
+	InputPricePicoPerToken             int64  `json:"input_price_pico_per_token"`
+	OutputPricePicoPerToken            int64  `json:"output_price_pico_per_token"`
+	CachedInputPricePicoPerToken       int64  `json:"cached_input_price_pico_per_token"`
+	CacheWriteInputPricePicoPerToken   int64  `json:"cache_write_input_price_pico_per_token"`
+	CacheWrite1hInputPricePicoPerToken int64  `json:"cache_write_1h_input_price_pico_per_token"`
+	ContextPriceThreshold              int    `json:"context_price_threshold"`
+	HighInputPricePicoPerToken         int64  `json:"high_input_price_pico_per_token"`
+	HighCachedInputPricePicoPerToken   int64  `json:"high_cached_input_price_pico_per_token"`
+	HighOutputPricePicoPerToken        int64  `json:"high_output_price_pico_per_token"`
+	MaxContextLength                   int    `json:"max_context_length"`
+	Weight                             int    `json:"weight"`
+	Status                             int    `json:"status"`
+	EndpointPolicy                     string `json:"endpoint_policy"`
+	ModerationLevel                    string `json:"moderation_level"`
+	ModerationFailMode                 string `json:"moderation_fail_mode"`
 }
 
 type channelModelResponse struct {
-	ID                               uint      `json:"id"`
-	ChannelID                        uint      `json:"channel_id"`
-	ModelID                          string    `json:"model_id"`
-	DisplayName                      string    `json:"display_name"`
-	InputPriceUSDPerMTok             float64   `json:"input_price"`
-	OutputPriceUSDPerMTok            float64   `json:"output_price"`
-	CachedInputPriceUSDPerMTok       float64   `json:"cached_input_price"`
-	CacheWriteInputPriceUSDPerMTok   float64   `json:"cache_write_input_price"`
-	CacheWrite1hInputPriceUSDPerMTok float64   `json:"cache_write_1h_input_price"`
-	ContextPriceThreshold            int       `json:"context_price_threshold"`
-	HighInputPriceUSDPerMTok         float64   `json:"high_input_price"`
-	HighCachedInputPriceUSDPerMTok   float64   `json:"high_cached_input_price"`
-	HighOutputPriceUSDPerMTok        float64   `json:"high_output_price"`
-	MaxContextLength                 int       `json:"max_context_length"`
-	Weight                           int       `json:"weight"`
-	Status                           int       `json:"status"`
-	EndpointPolicy                   string    `json:"endpoint_policy"`
-	ModerationLevel                  string    `json:"moderation_level"`
-	ModerationFailMode               string    `json:"moderation_fail_mode"`
-	CreatedAt                        time.Time `json:"created_at"`
-	UpdatedAt                        time.Time `json:"updated_at"`
+	ID                                 uint      `json:"id"`
+	ChannelID                          uint      `json:"channel_id"`
+	ModelID                            string    `json:"model_id"`
+	DisplayName                        string    `json:"display_name"`
+	InputPricePicoPerToken             int64     `json:"input_price_pico_per_token"`
+	OutputPricePicoPerToken            int64     `json:"output_price_pico_per_token"`
+	CachedInputPricePicoPerToken       int64     `json:"cached_input_price_pico_per_token"`
+	CacheWriteInputPricePicoPerToken   int64     `json:"cache_write_input_price_pico_per_token"`
+	CacheWrite1hInputPricePicoPerToken int64     `json:"cache_write_1h_input_price_pico_per_token"`
+	ContextPriceThreshold              int       `json:"context_price_threshold"`
+	HighInputPricePicoPerToken         int64     `json:"high_input_price_pico_per_token"`
+	HighCachedInputPricePicoPerToken   int64     `json:"high_cached_input_price_pico_per_token"`
+	HighOutputPricePicoPerToken        int64     `json:"high_output_price_pico_per_token"`
+	MaxContextLength                   int       `json:"max_context_length"`
+	Weight                             int       `json:"weight"`
+	Status                             int       `json:"status"`
+	EndpointPolicy                     string    `json:"endpoint_policy"`
+	ModerationLevel                    string    `json:"moderation_level"`
+	ModerationFailMode                 string    `json:"moderation_fail_mode"`
+	CreatedAt                          time.Time `json:"created_at"`
+	UpdatedAt                          time.Time `json:"updated_at"`
 }
 
 func (p channelModelPayload) toChannelModel() (database.ChannelModel, error) {
-	inputPrice, err := database.PricePicoPerTokenFromUSDPerMTok(p.InputPriceUSDPerMTok)
-	if err != nil {
-		return database.ChannelModel{}, fmt.Errorf("input_price: %w", err)
-	}
-	outputPrice, err := database.PricePicoPerTokenFromUSDPerMTok(p.OutputPriceUSDPerMTok)
-	if err != nil {
-		return database.ChannelModel{}, fmt.Errorf("output_price: %w", err)
-	}
-	cachedInputPrice, err := database.PricePicoPerTokenFromUSDPerMTok(p.CachedInputPriceUSDPerMTok)
-	if err != nil {
-		return database.ChannelModel{}, fmt.Errorf("cached_input_price: %w", err)
-	}
-	cacheWriteInputPrice, err := database.PricePicoPerTokenFromUSDPerMTok(p.CacheWriteInputPriceUSDPerMTok)
-	if err != nil {
-		return database.ChannelModel{}, fmt.Errorf("cache_write_input_price: %w", err)
-	}
-	cacheWrite1hInputPrice, err := database.PricePicoPerTokenFromUSDPerMTok(p.CacheWrite1hInputPriceUSDPerMTok)
-	if err != nil {
-		return database.ChannelModel{}, fmt.Errorf("cache_write_1h_input_price: %w", err)
-	}
-	highInputPrice, err := database.PricePicoPerTokenFromUSDPerMTok(p.HighInputPriceUSDPerMTok)
-	if err != nil {
-		return database.ChannelModel{}, fmt.Errorf("high_input_price: %w", err)
-	}
-	highCachedInputPrice, err := database.PricePicoPerTokenFromUSDPerMTok(p.HighCachedInputPriceUSDPerMTok)
-	if err != nil {
-		return database.ChannelModel{}, fmt.Errorf("high_cached_input_price: %w", err)
-	}
-	highOutputPrice, err := database.PricePicoPerTokenFromUSDPerMTok(p.HighOutputPriceUSDPerMTok)
-	if err != nil {
-		return database.ChannelModel{}, fmt.Errorf("high_output_price: %w", err)
-	}
-	return database.ChannelModel{
+	model := database.ChannelModel{
 		ModelID:                            p.ModelID,
 		DisplayName:                        p.DisplayName,
-		InputPricePicoPerToken:             inputPrice,
-		OutputPricePicoPerToken:            outputPrice,
-		CachedInputPricePicoPerToken:       cachedInputPrice,
-		CacheWriteInputPricePicoPerToken:   cacheWriteInputPrice,
-		CacheWrite1hInputPricePicoPerToken: cacheWrite1hInputPrice,
+		InputPricePicoPerToken:             p.InputPricePicoPerToken,
+		OutputPricePicoPerToken:            p.OutputPricePicoPerToken,
+		CachedInputPricePicoPerToken:       p.CachedInputPricePicoPerToken,
+		CacheWriteInputPricePicoPerToken:   p.CacheWriteInputPricePicoPerToken,
+		CacheWrite1hInputPricePicoPerToken: p.CacheWrite1hInputPricePicoPerToken,
 		ContextPriceThreshold:              p.ContextPriceThreshold,
-		HighInputPricePicoPerToken:         highInputPrice,
-		HighCachedInputPricePicoPerToken:   highCachedInputPrice,
-		HighOutputPricePicoPerToken:        highOutputPrice,
+		HighInputPricePicoPerToken:         p.HighInputPricePicoPerToken,
+		HighCachedInputPricePicoPerToken:   p.HighCachedInputPricePicoPerToken,
+		HighOutputPricePicoPerToken:        p.HighOutputPricePicoPerToken,
 		MaxContextLength:                   p.MaxContextLength,
 		Weight:                             p.Weight,
 		Status:                             p.Status,
 		EndpointPolicy:                     p.EndpointPolicy,
 		ModerationLevel:                    p.ModerationLevel,
 		ModerationFailMode:                 p.ModerationFailMode,
-	}, nil
+	}
+	if err := database.ValidateChannelModelPricing(&model); err != nil {
+		return database.ChannelModel{}, err
+	}
+	return model, nil
 }
 
 func newChannelModelResponse(cm database.ChannelModel) channelModelResponse {
 	return channelModelResponse{
-		ID:                               cm.ID,
-		ChannelID:                        cm.ChannelID,
-		ModelID:                          cm.ModelID,
-		DisplayName:                      cm.DisplayName,
-		InputPriceUSDPerMTok:             database.PriceUSDPerMTokFromPico(cm.InputPricePicoPerToken),
-		OutputPriceUSDPerMTok:            database.PriceUSDPerMTokFromPico(cm.OutputPricePicoPerToken),
-		CachedInputPriceUSDPerMTok:       database.PriceUSDPerMTokFromPico(cm.CachedInputPricePicoPerToken),
-		CacheWriteInputPriceUSDPerMTok:   database.PriceUSDPerMTokFromPico(cm.CacheWriteInputPricePicoPerToken),
-		CacheWrite1hInputPriceUSDPerMTok: database.PriceUSDPerMTokFromPico(cm.CacheWrite1hInputPricePicoPerToken),
-		ContextPriceThreshold:            cm.ContextPriceThreshold,
-		HighInputPriceUSDPerMTok:         database.PriceUSDPerMTokFromPico(cm.HighInputPricePicoPerToken),
-		HighCachedInputPriceUSDPerMTok:   database.PriceUSDPerMTokFromPico(cm.HighCachedInputPricePicoPerToken),
-		HighOutputPriceUSDPerMTok:        database.PriceUSDPerMTokFromPico(cm.HighOutputPricePicoPerToken),
-		MaxContextLength:                 cm.MaxContextLength,
-		Weight:                           cm.Weight,
-		Status:                           cm.Status,
-		EndpointPolicy:                   cm.EndpointPolicy,
-		ModerationLevel:                  cm.ModerationLevel,
-		ModerationFailMode:               cm.ModerationFailMode,
-		CreatedAt:                        cm.CreatedAt,
-		UpdatedAt:                        cm.UpdatedAt,
+		ID:                                 cm.ID,
+		ChannelID:                          cm.ChannelID,
+		ModelID:                            cm.ModelID,
+		DisplayName:                        cm.DisplayName,
+		InputPricePicoPerToken:             cm.InputPricePicoPerToken,
+		OutputPricePicoPerToken:            cm.OutputPricePicoPerToken,
+		CachedInputPricePicoPerToken:       cm.CachedInputPricePicoPerToken,
+		CacheWriteInputPricePicoPerToken:   cm.CacheWriteInputPricePicoPerToken,
+		CacheWrite1hInputPricePicoPerToken: cm.CacheWrite1hInputPricePicoPerToken,
+		ContextPriceThreshold:              cm.ContextPriceThreshold,
+		HighInputPricePicoPerToken:         cm.HighInputPricePicoPerToken,
+		HighCachedInputPricePicoPerToken:   cm.HighCachedInputPricePicoPerToken,
+		HighOutputPricePicoPerToken:        cm.HighOutputPricePicoPerToken,
+		MaxContextLength:                   cm.MaxContextLength,
+		Weight:                             cm.Weight,
+		Status:                             cm.Status,
+		EndpointPolicy:                     cm.EndpointPolicy,
+		ModerationLevel:                    cm.ModerationLevel,
+		ModerationFailMode:                 cm.ModerationFailMode,
+		CreatedAt:                          cm.CreatedAt,
+		UpdatedAt:                          cm.UpdatedAt,
 	}
 }
 

@@ -18,6 +18,7 @@ import (
 
 	"github.com/gofiber/fiber/v2"
 	"gorm.io/gorm"
+	"gorm.io/gorm/clause"
 )
 
 const (
@@ -420,27 +421,31 @@ func matchUpstreamUsageRecordTx(tx *gorm.DB, rec *database.UpstreamUsageRecord) 
 	}
 
 	now := time.Now()
-	updates := map[string]any{
-		"upstream_provider":        trimForDB(rec.Provider, 64),
-		"upstream_auth_index":      trimForDB(rec.AuthIndex, 64),
-		"upstream_auth_type":       trimForDB(rec.AuthType, 64),
-		"upstream_source":          trimForDB(rec.Source, 255),
-		"upstream_request_id":      trimForDB(rec.RequestID, 64),
-		"upstream_usage_record_id": rec.ID,
-		"upstream_usage_match":     matchReason,
-		"upstream_usage_synced_at": &now,
+	attribution := database.ApiLogAttribution{
+		ApiLogID:                 chosen.ID,
+		UpstreamUsageRecordID:    rec.ID,
+		UpstreamProvider:         trimForDB(rec.Provider, 64),
+		UpstreamAccountAuthIndex: trimForDB(rec.AuthIndex, 64),
+		UpstreamAuthType:         trimForDB(rec.AuthType, 64),
+		UpstreamSource:           trimForDB(rec.Source, 255),
+		UpstreamRequestID:        trimForDB(rec.RequestID, 64),
+		MatchReason:              matchReason,
+		MatchedAt:                now,
 	}
-	if estimate := platformCostEstimateForMatchedLogTx(tx, rec.Provider, rec.AuthIndex, chosen.Cost); estimate > 0 {
-		updates["platform_cost_estimate"] = estimate
-	}
-	res := tx.Model(&database.ApiLog{}).
-		Where("id = ? AND upstream_usage_record_id = 0", chosen.ID).
-		Updates(updates)
+	res := tx.Clauses(clause.OnConflict{
+		Columns:   []clause.Column{{Name: "api_log_id"}},
+		DoNothing: true,
+	}).Create(&attribution)
 	if res.Error != nil {
-		return false, "api_log_update_failed", res.Error
+		return false, "api_log_attribution_insert_failed", res.Error
 	}
 	if res.RowsAffected == 0 {
 		return false, "api_log_already_matched", nil
+	}
+	if estimate := platformCostEstimateForMatchedLogTx(tx, rec.Provider, rec.AuthIndex, chosen.Cost); estimate > 0 {
+		if _, err := insertApiLogCostEstimateTx(tx, chosen.ID, estimate, "capacity_share", now); err != nil {
+			return false, "api_log_cost_estimate_insert_failed", err
+		}
 	}
 	if err := tx.Model(rec).Updates(map[string]any{
 		"matched_api_log_id": chosen.ID,
@@ -460,7 +465,8 @@ func findApiLogCandidatesTx(tx *gorm.DB, rec *database.UpstreamUsageRecord) ([]d
 
 	start, end := usageMatchWindow(rec)
 	q := tx.Model(&database.ApiLog{}).
-		Where("upstream_usage_record_id = 0").
+		Where("api_logs.upstream_usage_record_id = 0").
+		Where("NOT EXISTS (SELECT 1 FROM api_log_attributions WHERE api_log_attributions.api_log_id = api_logs.id)").
 		Where("created_at BETWEEN ? AND ?", start, end).
 		Where("(model_name IN ? OR requested_model IN ? OR served_model IN ?)", names, names, names)
 

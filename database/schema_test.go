@@ -12,7 +12,7 @@ func TestCacheBillingColumnNames(t *testing.T) {
 	if err != nil {
 		t.Fatalf("open sqlite: %v", err)
 	}
-	if err := db.AutoMigrate(&ChannelModel{}, &ApiLog{}, &UpstreamUsageRecord{}, &UpstreamAccountCost{}); err != nil {
+	if err := db.AutoMigrate(&ChannelModel{}, &ApiLog{}, &ApiLogAttribution{}, &ApiLogCostEstimate{}, &UpstreamUsageRecord{}, &UpstreamAccountCost{}); err != nil {
 		t.Fatalf("automigrate: %v", err)
 	}
 
@@ -84,6 +84,33 @@ func TestCacheBillingColumnNames(t *testing.T) {
 	} {
 		if !upstreamUsageColumns[name] {
 			t.Fatalf("upstream_usage_records missing %s: %#v", name, upstreamUsageColumns)
+		}
+	}
+	attributionColumns := sqliteColumnSet(t, db, "api_log_attributions")
+	for _, name := range []string{
+		"api_log_id",
+		"upstream_usage_record_id",
+		"upstream_provider",
+		"upstream_account_auth_index",
+		"upstream_auth_type",
+		"upstream_source",
+		"upstream_request_id",
+		"match_reason",
+		"matched_at",
+	} {
+		if !attributionColumns[name] {
+			t.Fatalf("api_log_attributions missing %s: %#v", name, attributionColumns)
+		}
+	}
+	costEstimateColumns := sqliteColumnSet(t, db, "api_log_cost_estimates")
+	for _, name := range []string{
+		"api_log_id",
+		"platform_cost_micro_usd",
+		"computed_at",
+		"method",
+	} {
+		if !costEstimateColumns[name] {
+			t.Fatalf("api_log_cost_estimates missing %s: %#v", name, costEstimateColumns)
 		}
 	}
 	accountCostColumns := sqliteColumnSet(t, db, "upstream_account_costs")

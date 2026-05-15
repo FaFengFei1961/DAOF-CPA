@@ -3,6 +3,8 @@ package database
 import (
 	"fmt"
 	"log"
+	"math"
+	"math/big"
 	"os"
 	"time"
 
@@ -68,7 +70,8 @@ func InitDB() {
 
 	// 初始化并迁移基础数据表
 	err = DB.AutoMigrate(
-		&User{}, &Channel{}, &ChannelModel{}, &SysConfig{}, &AccessToken{}, &ApiLog{}, &UpstreamUsageRecord{}, &OperationLog{},
+		&User{}, &Channel{}, &ChannelModel{}, &SysConfig{}, &AccessToken{}, &ApiLog{},
+		&ApiLogAttribution{}, &ApiLogCostEstimate{}, &UpstreamUsageRecord{}, &OperationLog{},
 		// 套餐订阅系统
 		&QuotaPlan{}, &Package{}, &PackagePlan{},
 		&UserSubscription{}, &SubscriptionUsage{}, &Notification{},
@@ -140,6 +143,12 @@ func InitDB() {
 	// CPA usage queue 对账：按模型/时间窗口找未归因 ApiLog
 	mustExecIndex("idx_apilog_upstream_match", `CREATE INDEX IF NOT EXISTS idx_apilog_upstream_match
 		ON api_logs(upstream_usage_record_id, model_name, created_at)`)
+	mustExecIndex("idx_apilog_attr_provider_auth", `CREATE INDEX IF NOT EXISTS idx_apilog_attr_provider_auth
+		ON api_log_attributions(upstream_provider, upstream_account_auth_index)`)
+	mustExecIndex("idx_apilog_attr_usage_record", `CREATE INDEX IF NOT EXISTS idx_apilog_attr_usage_record
+		ON api_log_attributions(upstream_usage_record_id)`)
+	mustExecIndex("idx_apilog_cost_computed", `CREATE INDEX IF NOT EXISTS idx_apilog_cost_computed
+		ON api_log_cost_estimates(computed_at)`)
 	mustExecIndex("idx_upusage_match_status", `CREATE INDEX IF NOT EXISTS idx_upusage_match_status
 		ON upstream_usage_records(match_status, timestamp)`)
 	// fix Major M7（claude perf 第十五轮）：cron 清理按 created_at < cutoff 扫描，
@@ -258,13 +267,7 @@ func InitDB() {
 	// 早期创建的 plan 该列默认 0 → admin API 错把 limit=0 当作"不限"。
 	// 一次性扫所有 api_cost_usd plan，把 limit_value(USD float) × 1e6 写入 limit_value_micro_usd。
 	// 已有正确值的不动（limit_value_micro_usd > 0）。
-	if err := DB.Exec(`UPDATE quota_plans
-		SET limit_value_micro_usd = CAST(limit_value * 1000000 AS INTEGER)
-		WHERE limit_unit = 'api_cost_usd'
-		  AND limit_value_micro_usd = 0
-		  AND limit_value > 0`).Error; err != nil {
-		log.Printf("[migrate] backfill quota_plans.limit_value_micro_usd: %v", err)
-	}
+	backfillQuotaPlanLimitMicroUSD()
 
 	log.Println("⚡️ 数据库连接成功，数据库结构迁移完成。")
 }
@@ -302,11 +305,7 @@ func migrateChannelModelFixedPointPricing() {
 		if !sqliteColumnExists("channel_models", m.oldColumn) {
 			continue
 		}
-		if err := DB.Exec(fmt.Sprintf(`UPDATE channel_models
-			SET %s = CAST(ROUND(%s * 1000000000) AS INTEGER)
-			WHERE %s > 0 AND %s = 0`, m.newColumn, m.oldColumn, m.oldColumn, m.newColumn)).Error; err != nil {
-			log.Fatalf("[migrate] backfill channel_models.%s from %s failed: %v", m.newColumn, m.oldColumn, err)
-		}
+		backfillChannelModelFixedPointColumn(m.oldColumn, m.newColumn)
 	}
 
 	for _, m := range mappings {
@@ -342,4 +341,118 @@ func sqliteColumnExists(table, column string) bool {
 		}
 	}
 	return false
+}
+
+func backfillQuotaPlanLimitMicroUSD() {
+	if !sqliteTableExists("quota_plans") ||
+		!sqliteColumnExists("quota_plans", "limit_value") ||
+		!sqliteColumnExists("quota_plans", "limit_value_micro_usd") {
+		return
+	}
+
+	type quotaPlanLimitRow struct {
+		ID         uint
+		LimitValue float64
+	}
+	var rows []quotaPlanLimitRow
+	if err := DB.Raw(`SELECT id, limit_value
+		FROM quota_plans
+		WHERE limit_unit = 'api_cost_usd'
+		  AND limit_value_micro_usd = 0
+		  AND limit_value > 0`).Scan(&rows).Error; err != nil {
+		log.Printf("[migrate] query quota_plans.limit_value_micro_usd backfill: %v", err)
+		return
+	}
+	for _, row := range rows {
+		micro, ok := int64FromScaledFloat(row.LimitValue, MicroPerUSD)
+		if !ok || micro <= 0 {
+			log.Fatalf("[migrate] invalid quota_plans.limit_value id=%d value=%v", row.ID, row.LimitValue)
+		}
+		if err := DB.Exec(`UPDATE quota_plans
+			SET limit_value_micro_usd = ?
+			WHERE id = ? AND limit_value_micro_usd = 0`, micro, row.ID).Error; err != nil {
+			log.Fatalf("[migrate] backfill quota_plans.limit_value_micro_usd id=%d failed: %v", row.ID, err)
+		}
+	}
+
+	var remaining int64
+	if err := DB.Raw(`SELECT COUNT(*) FROM quota_plans
+		WHERE limit_unit = 'api_cost_usd'
+		  AND limit_value_micro_usd = 0
+		  AND limit_value > 0`).Scan(&remaining).Error; err != nil {
+		log.Printf("[migrate] verify quota_plans.limit_value_micro_usd backfill: %v", err)
+		return
+	}
+	if remaining > 0 {
+		log.Fatalf("[migrate] quota_plans.limit_value_micro_usd backfill left %d nonzero legacy rows", remaining)
+	}
+}
+
+func backfillChannelModelFixedPointColumn(oldColumn, newColumn string) {
+	type channelModelPriceRow struct {
+		ID       uint
+		OldValue float64
+	}
+	var rows []channelModelPriceRow
+	if err := DB.Table("channel_models").
+		Select(fmt.Sprintf("id, %s AS old_value", oldColumn)).
+		Where(fmt.Sprintf("%s > 0 AND %s = 0", oldColumn, newColumn)).
+		Scan(&rows).Error; err != nil {
+		log.Fatalf("[migrate] query channel_models.%s backfill failed: %v", newColumn, err)
+	}
+	for _, row := range rows {
+		pico, ok := int64FromScaledFloat(row.OldValue, PicoPerTokenPerUSDPerMTok)
+		if !ok || pico <= 0 || pico > MaxChannelModelPricePicoPerToken {
+			log.Fatalf("[migrate] invalid channel_models.%s id=%d value=%v", oldColumn, row.ID, row.OldValue)
+		}
+		if err := DB.Exec(fmt.Sprintf(`UPDATE channel_models
+			SET %s = ?
+			WHERE id = ? AND %s = 0`, newColumn, newColumn), pico, row.ID).Error; err != nil {
+			log.Fatalf("[migrate] backfill channel_models.%s id=%d failed: %v", newColumn, row.ID, err)
+		}
+	}
+
+	var remaining int64
+	if err := DB.Raw(fmt.Sprintf(`SELECT COUNT(*) FROM channel_models
+		WHERE %s > 0 AND %s = 0`, oldColumn, newColumn)).Scan(&remaining).Error; err != nil {
+		log.Fatalf("[migrate] verify channel_models.%s backfill failed: %v", newColumn, err)
+	}
+	if remaining > 0 {
+		log.Fatalf("[migrate] channel_models.%s backfill left %d nonzero legacy rows", newColumn, remaining)
+	}
+}
+
+func int64FromScaledFloat(value float64, scale int64) (int64, bool) {
+	if math.IsNaN(value) || math.IsInf(value, 0) || scale <= 0 {
+		return 0, false
+	}
+	r := new(big.Rat).SetFloat64(value)
+	if r == nil {
+		return 0, false
+	}
+	r.Mul(r, new(big.Rat).SetInt64(scale))
+	return roundedRatToInt64(r)
+}
+
+func roundedRatToInt64(r *big.Rat) (int64, bool) {
+	if r == nil {
+		return 0, false
+	}
+	quotient := new(big.Int)
+	remainder := new(big.Int)
+	quotient.QuoRem(r.Num(), r.Denom(), remainder)
+
+	absTwiceRemainder := new(big.Int).Abs(remainder)
+	absTwiceRemainder.Mul(absTwiceRemainder, big.NewInt(2))
+	if absTwiceRemainder.Cmp(r.Denom()) >= 0 {
+		if r.Sign() >= 0 {
+			quotient.Add(quotient, big.NewInt(1))
+		} else {
+			quotient.Sub(quotient, big.NewInt(1))
+		}
+	}
+	if !quotient.IsInt64() {
+		return 0, false
+	}
+	return quotient.Int64(), true
 }
