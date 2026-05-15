@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"log"
 	"math"
+	"math/big"
 	"path"
 	"strings"
 
@@ -264,21 +265,32 @@ func applyBillingMultiplier(costMicroUSD int64, multiplier float64) int64 {
 	if costMicroUSD <= 0 {
 		return 0
 	}
-	if !validPositiveMultiplier(multiplier) {
-		multiplier = 1
+	multiplierPPM, ok := multiplierPPMFromFloat(multiplier)
+	if !ok {
+		multiplierPPM = database.MultiplierPPMBase
 	}
-	value := math.Round(float64(costMicroUSD) * multiplier)
-	if value >= float64(math.MaxInt64) {
+
+	value := new(big.Int).Mul(big.NewInt(costMicroUSD), big.NewInt(multiplierPPM))
+	value.Div(value, big.NewInt(database.MultiplierPPMBase))
+	if !value.IsInt64() {
 		return math.MaxInt64
 	}
-	if value < 1 {
-		return 1
-	}
-	return int64(value)
+	return value.Int64()
 }
 
 func validPositiveMultiplier(v float64) bool {
 	return !math.IsNaN(v) && !math.IsInf(v, 0) && v > 0 && v <= 1000
+}
+
+func multiplierPPMFromFloat(v float64) (int64, bool) {
+	if !validPositiveMultiplier(v) {
+		return 0, false
+	}
+	ppm := math.Round(v * float64(database.MultiplierPPMBase))
+	if ppm <= 0 || ppm > float64(database.MaxBillingMultiplierPPM) {
+		return 0, false
+	}
+	return int64(ppm), true
 }
 
 func inferBillingProvider(channelType, modelName string) string {

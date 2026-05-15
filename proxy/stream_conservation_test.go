@@ -171,7 +171,7 @@ func TestStreamConservation_BalanceFallback(t *testing.T) {
 	defer backend.Close()
 	ChannelMapCache[1] = &database.Channel{ID: 1, Type: "openai", BaseURL: backend.URL, Key: "sk-A"}
 	RouteCache["gpt-conserve-bal"] = []*database.ChannelModel{
-		{ChannelID: 1, Weight: 1, InputPrice: 1, OutputPrice: 1},
+		{ChannelID: 1, Weight: 1, InputPricePicoPerToken: pricePicoForTest(1), OutputPricePicoPerToken: pricePicoForTest(1)},
 	}
 
 	beforeMicro := user.Quota
@@ -229,7 +229,7 @@ func TestStreamConservation_FailedUpstreamNoDeduct(t *testing.T) {
 	defer backend.Close()
 	ChannelMapCache[2] = &database.Channel{ID: 2, Type: "openai", BaseURL: backend.URL, Key: "sk-B"}
 	RouteCache["gpt-conserve-fail"] = []*database.ChannelModel{
-		{ChannelID: 2, Weight: 1, InputPrice: 1, OutputPrice: 1},
+		{ChannelID: 2, Weight: 1, InputPricePicoPerToken: pricePicoForTest(1), OutputPricePicoPerToken: pricePicoForTest(1)},
 	}
 
 	beforeMicro := user.Quota
@@ -276,7 +276,7 @@ func TestStreamConservation_BalanceConsumeDisabledNoFallback(t *testing.T) {
 	defer backend.Close()
 	ChannelMapCache[3] = &database.Channel{ID: 3, Type: "openai", BaseURL: backend.URL, Key: "sk-C"}
 	RouteCache["gpt-conserve-disabled"] = []*database.ChannelModel{
-		{ChannelID: 3, Weight: 1, InputPrice: 1, OutputPrice: 1},
+		{ChannelID: 3, Weight: 1, InputPricePicoPerToken: pricePicoForTest(1), OutputPricePicoPerToken: pricePicoForTest(1)},
 	}
 
 	beforeMicro := user.Quota

@@ -1,6 +1,7 @@
 package database
 
 import (
+	"fmt"
 	"log"
 	"os"
 	"time"
@@ -62,6 +63,8 @@ func InitDB() {
 		sqlDB.SetMaxIdleConns(5)
 		sqlDB.SetConnMaxLifetime(time.Hour)
 	}
+
+	migrateChannelModelFixedPointPricing()
 
 	// 初始化并迁移基础数据表
 	err = DB.AutoMigrate(
@@ -266,4 +269,79 @@ func InitDB() {
 	}
 
 	log.Println("⚡️ 数据库连接成功，数据库结构迁移完成。")
+}
+
+func migrateChannelModelFixedPointPricing() {
+	if !sqliteTableExists("channel_models") {
+		return
+	}
+
+	mappings := []struct {
+		oldColumn string
+		newColumn string
+	}{
+		{"input_price", "input_price_pico_per_token"},
+		{"output_price", "output_price_pico_per_token"},
+		{"cached_input_price", "cached_input_price_pico_per_token"},
+		{"cache_write_input_price", "cache_write_input_price_pico_per_token"},
+		{"cache_write_1h_input_price", "cache_write_1h_input_price_pico_per_token"},
+		{"cache_write1h_input_price", "cache_write_1h_input_price_pico_per_token"},
+		{"high_input_price", "high_input_price_pico_per_token"},
+		{"high_cached_input_price", "high_cached_input_price_pico_per_token"},
+		{"high_output_price", "high_output_price_pico_per_token"},
+	}
+
+	for _, m := range mappings {
+		if sqliteColumnExists("channel_models", m.newColumn) {
+			continue
+		}
+		if err := DB.Exec(fmt.Sprintf(`ALTER TABLE channel_models ADD COLUMN %s INTEGER DEFAULT 0`, m.newColumn)).Error; err != nil {
+			log.Fatalf("[migrate] add channel_models.%s failed: %v", m.newColumn, err)
+		}
+	}
+
+	for _, m := range mappings {
+		if !sqliteColumnExists("channel_models", m.oldColumn) {
+			continue
+		}
+		if err := DB.Exec(fmt.Sprintf(`UPDATE channel_models
+			SET %s = CAST(ROUND(%s * 1000000000) AS INTEGER)
+			WHERE %s > 0 AND %s = 0`, m.newColumn, m.oldColumn, m.oldColumn, m.newColumn)).Error; err != nil {
+			log.Fatalf("[migrate] backfill channel_models.%s from %s failed: %v", m.newColumn, m.oldColumn, err)
+		}
+	}
+
+	for _, m := range mappings {
+		if !sqliteColumnExists("channel_models", m.oldColumn) {
+			continue
+		}
+		if err := DB.Exec(fmt.Sprintf(`ALTER TABLE channel_models DROP COLUMN %s`, m.oldColumn)).Error; err != nil {
+			log.Fatalf("[migrate] drop legacy channel_models.%s failed: %v", m.oldColumn, err)
+		}
+	}
+}
+
+func sqliteTableExists(table string) bool {
+	var count int64
+	if err := DB.Raw(`SELECT COUNT(*) FROM sqlite_master WHERE type = 'table' AND name = ?`, table).Scan(&count).Error; err != nil {
+		log.Printf("[migrate] sqlite table lookup failed for %s: %v", table, err)
+		return false
+	}
+	return count > 0
+}
+
+func sqliteColumnExists(table, column string) bool {
+	var rows []struct {
+		Name string
+	}
+	if err := DB.Raw(`PRAGMA table_info(` + table + `)`).Scan(&rows).Error; err != nil {
+		log.Printf("[migrate] sqlite column lookup failed for %s.%s: %v", table, column, err)
+		return false
+	}
+	for _, row := range rows {
+		if row.Name == column {
+			return true
+		}
+	}
+	return false
 }

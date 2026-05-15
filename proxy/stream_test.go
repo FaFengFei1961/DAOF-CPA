@@ -5,10 +5,11 @@ import (
 	"bytes"
 	"fmt"
 	"io"
-	"math"
+	"math/big"
 	"net"
 	"net/http"
 	"net/http/httptest"
+	"strconv"
 	"strings"
 	"testing"
 	"time"
@@ -20,6 +21,42 @@ import (
 	"gorm.io/driver/sqlite"
 	"gorm.io/gorm"
 )
+
+func pricePicoForTest(price float64) int64 {
+	return database.MustPricePicoPerTokenFromUSDPerMTok(price)
+}
+
+func TestCostCalculationZeroBias(t *testing.T) {
+	const iterations = 1_000_000
+	pricePico := pricePicoForTest(1)
+	var sum int64
+	for i := 0; i < iterations; i++ {
+		got, ok := checkedCostMicroUSD(1, pricePico, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0)
+		if !ok {
+			t.Fatalf("checkedCostMicroUSD failed at iteration %d", i)
+		}
+		sum += got
+	}
+
+	expected := new(big.Int).Mul(big.NewInt(iterations), big.NewInt(pricePico))
+	expected.Div(expected, big.NewInt(database.PicoPerMicroUSD))
+	if !expected.IsInt64() {
+		t.Fatalf("test expected value overflowed int64: %s", expected.String())
+	}
+	if sum != expected.Int64() {
+		t.Fatalf("sum=%d want %d", sum, expected.Int64())
+	}
+}
+
+func TestCostCalculationOverflowDefense(t *testing.T) {
+	if strconv.IntSize < 64 {
+		t.Skip("requires 64-bit int tokens to exceed int64 micro_usd after division")
+	}
+	_, ok := checkedCostMicroUSD(int(^uint(0)>>1), database.MaxChannelModelPricePicoPerToken, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0)
+	if ok {
+		t.Fatalf("expected overflow to return ok=false")
+	}
+}
 
 func TestNonStreamUpstreamTimeoutFromSysConfig(t *testing.T) {
 	SysConfigMutex.Lock()
@@ -228,7 +265,7 @@ func TestStreamHandling(t *testing.T) {
 	defer backend.Close()
 
 	ChannelMapCache[1] = &database.Channel{ID: 1, Type: "openai", BaseURL: backend.URL, Key: "sk-A"}
-	RouteCache["gpt-stream"] = []*database.ChannelModel{{ChannelID: 1, Weight: 10, InputPrice: 1, OutputPrice: 1, ModerationLevel: "off", ModerationFailMode: "open"}}
+	RouteCache["gpt-stream"] = []*database.ChannelModel{{ChannelID: 1, Weight: 10, InputPricePicoPerToken: pricePicoForTest(1), OutputPricePicoPerToken: pricePicoForTest(1), ModerationLevel: "off", ModerationFailMode: "open"}}
 
 	app := fiber.New()
 	app.Post("/v1/chat/completions", ChatCompletionProxyHandler)
@@ -286,12 +323,12 @@ func TestEndpointPolicyBlocksNonStreamingChatBeforeUpstream(t *testing.T) {
 
 	ChannelMapCache[1] = &database.Channel{ID: 1, Type: ChannelTypeCLIProxy, BaseURL: backend.URL, Key: "upstream-key"}
 	RouteCache["gpt-5.5"] = []*database.ChannelModel{{
-		ChannelID:       1,
-		Weight:          1,
-		InputPrice:      1,
-		OutputPrice:     1,
-		EndpointPolicy:  database.EndpointPolicyNoChatNonStream,
-		ModerationLevel: "off",
+		ChannelID:               1,
+		Weight:                  1,
+		InputPricePicoPerToken:  pricePicoForTest(1),
+		OutputPricePicoPerToken: pricePicoForTest(1),
+		EndpointPolicy:          database.EndpointPolicyNoChatNonStream,
+		ModerationLevel:         "off",
 	}}
 
 	app := fiber.New()
@@ -421,7 +458,7 @@ func TestCLIProxyChatDropsDeprecatedClaudeOpus47Temperature(t *testing.T) {
 	defer backend.Close()
 
 	ChannelMapCache[1] = &database.Channel{ID: 1, Type: ChannelTypeCLIProxy, BaseURL: backend.URL, Key: "cpa-key"}
-	RouteCache["claude-opus-4-7"] = []*database.ChannelModel{{ChannelID: 1, Weight: 1, InputPrice: 1, OutputPrice: 1, ModerationLevel: "off"}}
+	RouteCache["claude-opus-4-7"] = []*database.ChannelModel{{ChannelID: 1, Weight: 1, InputPricePicoPerToken: pricePicoForTest(1), OutputPricePicoPerToken: pricePicoForTest(1), ModerationLevel: "off"}}
 
 	app := fiber.New()
 	app.Post("/v1/chat/completions", ChatCompletionProxyHandler)
@@ -479,7 +516,7 @@ func TestCLIProxyChannelNormalizesClaudeCountTokensPath(t *testing.T) {
 	defer backend.Close()
 
 	ChannelMapCache[1] = &database.Channel{ID: 1, Type: ChannelTypeCLIProxy, BaseURL: backend.URL, Key: "cpa-key"}
-	RouteCache["claude-sonnet-4-6"] = []*database.ChannelModel{{ChannelID: 1, Weight: 1, InputPrice: 1000, OutputPrice: 1000}}
+	RouteCache["claude-sonnet-4-6"] = []*database.ChannelModel{{ChannelID: 1, Weight: 1, InputPricePicoPerToken: pricePicoForTest(1000), OutputPricePicoPerToken: pricePicoForTest(1000)}}
 
 	app := fiber.New()
 	app.Post("/v1/v1/messages/count_tokens", ChatCompletionProxyHandler)
@@ -561,7 +598,7 @@ func TestGeminiNativeRouteUsesPathModelAndApiKeyHeader(t *testing.T) {
 	defer backend.Close()
 
 	ChannelMapCache[1] = &database.Channel{ID: 1, Type: ChannelTypeCLIProxy, BaseURL: backend.URL, Key: "cpa-key"}
-	RouteCache["gemini-3.1-pro-preview"] = []*database.ChannelModel{{ChannelID: 1, Weight: 1, InputPrice: 1, OutputPrice: 1}}
+	RouteCache["gemini-3.1-pro-preview"] = []*database.ChannelModel{{ChannelID: 1, Weight: 1, InputPricePicoPerToken: pricePicoForTest(1), OutputPricePicoPerToken: pricePicoForTest(1)}}
 
 	app := fiber.New()
 	app.All("/v1beta/models/:modelAction", ChatCompletionProxyHandler)
@@ -623,7 +660,7 @@ func TestGeminiNativeStreamDoesNotAppendOpenAIDone(t *testing.T) {
 	defer backend.Close()
 
 	ChannelMapCache[1] = &database.Channel{ID: 1, Type: ChannelTypeCLIProxy, BaseURL: backend.URL, Key: "cpa-key"}
-	RouteCache["gemini-3.1-pro-preview"] = []*database.ChannelModel{{ChannelID: 1, Weight: 1, InputPrice: 1, OutputPrice: 1}}
+	RouteCache["gemini-3.1-pro-preview"] = []*database.ChannelModel{{ChannelID: 1, Weight: 1, InputPricePicoPerToken: pricePicoForTest(1), OutputPricePicoPerToken: pricePicoForTest(1)}}
 
 	app := fiber.New()
 	app.All("/v1beta/models/:modelAction", ChatCompletionProxyHandler)
@@ -691,7 +728,7 @@ func TestNonStreamSuccessWithoutUsageFailsClosed(t *testing.T) {
 	defer backend.Close()
 
 	ChannelMapCache[1] = &database.Channel{ID: 1, Type: ChannelTypeOpenAI, BaseURL: backend.URL, Key: "upstream-key"}
-	RouteCache["gpt-meter-test"] = []*database.ChannelModel{{ChannelID: 1, Weight: 1, InputPrice: 1, OutputPrice: 1}}
+	RouteCache["gpt-meter-test"] = []*database.ChannelModel{{ChannelID: 1, Weight: 1, InputPricePicoPerToken: pricePicoForTest(1), OutputPricePicoPerToken: pricePicoForTest(1)}}
 
 	app := fiber.New()
 	app.Post("/v1/chat/completions", ChatCompletionProxyHandler)
@@ -748,12 +785,12 @@ func TestStreamSuccessWithoutUsageIsAuditedAsUpstreamUnmetered(t *testing.T) {
 
 	ChannelMapCache[1] = &database.Channel{ID: 1, Type: ChannelTypeOpenAI, BaseURL: backend.URL, Key: "upstream-key"}
 	RouteCache["gpt-stream-unmetered"] = []*database.ChannelModel{{
-		ChannelID:          1,
-		Weight:             1,
-		InputPrice:         1,
-		OutputPrice:        1,
-		ModerationLevel:    "off",
-		ModerationFailMode: "open",
+		ChannelID:               1,
+		Weight:                  1,
+		InputPricePicoPerToken:  pricePicoForTest(1),
+		OutputPricePicoPerToken: pricePicoForTest(1),
+		ModerationLevel:         "off",
+		ModerationFailMode:      "open",
 	}}
 
 	app := fiber.New()
@@ -790,12 +827,12 @@ func TestNonStreamZeroUsageWritesUpstreamUnmeteredBillingState(t *testing.T) {
 		"choices":[{"message":{"content":"ok"}}],
 		"usage":{"prompt_tokens":0,"completion_tokens":0}
 	}`, &database.ChannelModel{
-		ChannelID:          1,
-		Weight:             1,
-		InputPrice:         1,
-		OutputPrice:        1,
-		ModerationLevel:    "off",
-		ModerationFailMode: "open",
+		ChannelID:               1,
+		Weight:                  1,
+		InputPricePicoPerToken:  pricePicoForTest(1),
+		OutputPricePicoPerToken: pricePicoForTest(1),
+		ModerationLevel:         "off",
+		ModerationFailMode:      "open",
 	})
 	defer cleanup()
 
@@ -834,12 +871,12 @@ func TestNonStreamCostCalculationFailureReturns502WithoutBilling(t *testing.T) {
 		"choices":[{"message":{"content":"ok"}}],
 		"usage":{"prompt_tokens":10,"completion_tokens":5}
 	}`, &database.ChannelModel{
-		ChannelID:          1,
-		Weight:             1,
-		InputPrice:         math.Inf(1),
-		OutputPrice:        1,
-		ModerationLevel:    "off",
-		ModerationFailMode: "open",
+		ChannelID:               1,
+		Weight:                  1,
+		InputPricePicoPerToken:  database.MaxChannelModelPricePicoPerToken + 1,
+		OutputPricePicoPerToken: pricePicoForTest(1),
+		ModerationLevel:         "off",
+		ModerationFailMode:      "open",
 	})
 	defer cleanup()
 
@@ -865,12 +902,12 @@ func TestNonStreamCostCalculationFailureReturns502WithoutBilling(t *testing.T) {
 
 func TestStreamCostCalculationFailureWritesPendingReconcile(t *testing.T) {
 	app, cleanup := setupStreamStateTest(t, "gpt-stream-cost-invalid", "data: {\"choices\":[{\"delta\":{\"content\":\"hello\"}}]}\n\ndata: {\"usage\":{\"prompt_tokens\":10,\"completion_tokens\":5}}\n\ndata: [DONE]\n\n", &database.ChannelModel{
-		ChannelID:          1,
-		Weight:             1,
-		InputPrice:         math.Inf(1),
-		OutputPrice:        1,
-		ModerationLevel:    "off",
-		ModerationFailMode: "open",
+		ChannelID:               1,
+		Weight:                  1,
+		InputPricePicoPerToken:  database.MaxChannelModelPricePicoPerToken + 1,
+		OutputPricePicoPerToken: pricePicoForTest(1),
+		ModerationLevel:         "off",
+		ModerationFailMode:      "open",
 	})
 	defer cleanup()
 
@@ -925,12 +962,12 @@ func TestStreamClientDisconnectBeforeUsageWritesPendingReconcile(t *testing.T) {
 	defer backend.Close()
 	ChannelMapCache[1] = &database.Channel{ID: 1, Type: ChannelTypeOpenAI, BaseURL: backend.URL, Key: "upstream-key"}
 	RouteCache["gpt-disconnect-pending"] = []*database.ChannelModel{{
-		ChannelID:          1,
-		Weight:             1,
-		InputPrice:         1,
-		OutputPrice:        1,
-		ModerationLevel:    "off",
-		ModerationFailMode: "open",
+		ChannelID:               1,
+		Weight:                  1,
+		InputPricePicoPerToken:  pricePicoForTest(1),
+		OutputPricePicoPerToken: pricePicoForTest(1),
+		ModerationLevel:         "off",
+		ModerationFailMode:      "open",
 	}}
 
 	app := fiber.New()
@@ -1041,13 +1078,13 @@ func TestBillingUsesConfiguredCacheWritePrice(t *testing.T) {
 		"choices":[{"message":{"content":"ok"}}],
 		"usage":{"prompt_tokens":1000,"cache_creation_input_tokens":200,"completion_tokens":10}
 	}`, &database.ChannelModel{
-		ChannelID:            1,
-		Weight:               1,
-		InputPrice:           1,
-		OutputPrice:          10,
-		CacheWriteInputPrice: 1.25,
-		ModerationLevel:      "off",
-		ModerationFailMode:   "open",
+		ChannelID:                        1,
+		Weight:                           1,
+		InputPricePicoPerToken:           pricePicoForTest(1),
+		OutputPricePicoPerToken:          pricePicoForTest(10),
+		CacheWriteInputPricePicoPerToken: pricePicoForTest(1.25),
+		ModerationLevel:                  "off",
+		ModerationFailMode:               "open",
 	})
 	defer cleanup()
 
@@ -1072,15 +1109,15 @@ func TestBillingSeparatesClaudeCacheWriteTTLPrices(t *testing.T) {
 			"output_tokens":10
 		}
 	}`, &database.ChannelModel{
-		ChannelID:              1,
-		Weight:                 1,
-		InputPrice:             5,
-		CachedInputPrice:       0.5,
-		CacheWriteInputPrice:   6.25,
-		CacheWrite1hInputPrice: 10,
-		OutputPrice:            25,
-		ModerationLevel:        "off",
-		ModerationFailMode:     "open",
+		ChannelID:                          1,
+		Weight:                             1,
+		InputPricePicoPerToken:             pricePicoForTest(5),
+		CachedInputPricePicoPerToken:       pricePicoForTest(0.5),
+		CacheWriteInputPricePicoPerToken:   pricePicoForTest(6.25),
+		CacheWrite1hInputPricePicoPerToken: pricePicoForTest(10),
+		OutputPricePicoPerToken:            pricePicoForTest(25),
+		ModerationLevel:                    "off",
+		ModerationFailMode:                 "open",
 	})
 	defer cleanup()
 
@@ -1099,17 +1136,17 @@ func TestBillingUsesHighCachedInputPriceForLongPrompt(t *testing.T) {
 		"choices":[{"message":{"content":"ok"}}],
 		"usage":{"prompt_tokens":300000,"prompt_tokens_details":{"cached_tokens":200000},"completion_tokens":1000}
 	}`, &database.ChannelModel{
-		ChannelID:             1,
-		Weight:                1,
-		InputPrice:            2.5,
-		CachedInputPrice:      0.25,
-		OutputPrice:           15,
-		ContextPriceThreshold: 272000,
-		HighInputPrice:        5,
-		HighCachedInputPrice:  0.5,
-		HighOutputPrice:       22.5,
-		ModerationLevel:       "off",
-		ModerationFailMode:    "open",
+		ChannelID:                        1,
+		Weight:                           1,
+		InputPricePicoPerToken:           pricePicoForTest(2.5),
+		CachedInputPricePicoPerToken:     pricePicoForTest(0.25),
+		OutputPricePicoPerToken:          pricePicoForTest(15),
+		ContextPriceThreshold:            272000,
+		HighInputPricePicoPerToken:       pricePicoForTest(5),
+		HighCachedInputPricePicoPerToken: pricePicoForTest(0.5),
+		HighOutputPricePicoPerToken:      pricePicoForTest(22.5),
+		ModerationLevel:                  "off",
+		ModerationFailMode:               "open",
 	})
 	defer cleanup()
 
@@ -1128,15 +1165,15 @@ func TestBillingLongContextThresholdUsesPromptTokensOnly(t *testing.T) {
 		"choices":[{"message":{"content":"ok"}}],
 		"usage":{"prompt_tokens":260000,"completion_tokens":20000}
 	}`, &database.ChannelModel{
-		ChannelID:             1,
-		Weight:                1,
-		InputPrice:            1,
-		OutputPrice:           2,
-		ContextPriceThreshold: 272000,
-		HighInputPrice:        10,
-		HighOutputPrice:       20,
-		ModerationLevel:       "off",
-		ModerationFailMode:    "open",
+		ChannelID:                   1,
+		Weight:                      1,
+		InputPricePicoPerToken:      pricePicoForTest(1),
+		OutputPricePicoPerToken:     pricePicoForTest(2),
+		ContextPriceThreshold:       272000,
+		HighInputPricePicoPerToken:  pricePicoForTest(10),
+		HighOutputPricePicoPerToken: pricePicoForTest(20),
+		ModerationLevel:             "off",
+		ModerationFailMode:          "open",
 	})
 	defer cleanup()
 

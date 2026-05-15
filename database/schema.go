@@ -70,22 +70,22 @@ type Channel struct {
 
 // ChannelModel 绑定渠道对某一个特定模型的单价和权重配置
 type ChannelModel struct {
-	ID                     uint    `gorm:"primaryKey" json:"id"`
-	ChannelID              uint    `gorm:"index;not null" json:"channel_id"` // 所属渠道
-	ModelID                string  `gorm:"index;not null" json:"model_id"`   // e.g., "gpt-4o"
-	DisplayName            string  `json:"display_name"`
-	InputPrice             float64 `gorm:"default:0" json:"input_price"`
-	OutputPrice            float64 `gorm:"default:0" json:"output_price"`
-	CachedInputPrice       float64 `gorm:"default:0" json:"cached_input_price"`
-	CacheWriteInputPrice   float64 `gorm:"default:0" json:"cache_write_input_price"`
-	CacheWrite1hInputPrice float64 `gorm:"column:cache_write_1h_input_price;default:0" json:"cache_write_1h_input_price"`
-	ContextPriceThreshold  int     `gorm:"default:0" json:"context_price_threshold"`
-	HighInputPrice         float64 `gorm:"default:0" json:"high_input_price"`
-	HighCachedInputPrice   float64 `gorm:"default:0" json:"high_cached_input_price"`
-	HighOutputPrice        float64 `gorm:"default:0" json:"high_output_price"`
-	MaxContextLength       int     `gorm:"default:0" json:"max_context_length"`
-	Weight                 int     `gorm:"default:1" json:"weight"` // 同模型多渠道的路由比重
-	Status                 int     `gorm:"default:1" json:"status"` // 针对当前渠道的此模型一键封锁
+	ID                                 uint   `gorm:"primaryKey" json:"id"`
+	ChannelID                          uint   `gorm:"index;not null" json:"channel_id"` // 所属渠道
+	ModelID                            string `gorm:"index;not null" json:"model_id"`   // e.g., "gpt-4o"
+	DisplayName                        string `json:"display_name"`
+	InputPricePicoPerToken             int64  `gorm:"default:0" json:"input_price_pico_per_token"`
+	OutputPricePicoPerToken            int64  `gorm:"default:0" json:"output_price_pico_per_token"`
+	CachedInputPricePicoPerToken       int64  `gorm:"default:0" json:"cached_input_price_pico_per_token"`
+	CacheWriteInputPricePicoPerToken   int64  `gorm:"default:0" json:"cache_write_input_price_pico_per_token"`
+	CacheWrite1hInputPricePicoPerToken int64  `gorm:"column:cache_write_1h_input_price_pico_per_token;default:0" json:"cache_write_1h_input_price_pico_per_token"`
+	ContextPriceThreshold              int    `gorm:"default:0" json:"context_price_threshold"`
+	HighInputPricePicoPerToken         int64  `gorm:"default:0" json:"high_input_price_pico_per_token"`
+	HighCachedInputPricePicoPerToken   int64  `gorm:"default:0" json:"high_cached_input_price_pico_per_token"`
+	HighOutputPricePicoPerToken        int64  `gorm:"default:0" json:"high_output_price_pico_per_token"`
+	MaxContextLength                   int    `gorm:"default:0" json:"max_context_length"`
+	Weight                             int    `gorm:"default:1" json:"weight"` // 同模型多渠道的路由比重
+	Status                             int    `gorm:"default:1" json:"status"` // 针对当前渠道的此模型一键封锁
 
 	// EndpointPolicy 控制该渠道模型可接受的客户端端点形态。
 	//
@@ -117,7 +117,41 @@ type ChannelModel struct {
 	DeletedAt gorm.DeletedAt `gorm:"index" json:"-"` // 软删除：与 Channel 的 DeletedAt 配对，channel.go DeleteChannel 时一并 Delete
 }
 
-const MaxChannelModelPricePerMTok = 1_000_000.0
+const (
+	MaxChannelModelPricePerMTok      = 1_000_000.0
+	PicoPerUSD                       = int64(1_000_000_000_000_000)
+	PicoPerMicroUSD                  = int64(1_000_000_000)
+	PicoPerTokenPerUSDPerMTok        = int64(1_000_000_000)
+	MaxChannelModelPricePicoPerToken = int64(MaxChannelModelPricePerMTok) * PicoPerTokenPerUSDPerMTok
+	MultiplierPPMBase                = int64(1_000_000)
+	MaxBillingMultiplierPPM          = int64(1_000_000_000)
+)
+
+func PricePicoPerTokenFromUSDPerMTok(price float64) (int64, error) {
+	if math.IsNaN(price) || math.IsInf(price, 0) || price < 0 || price > MaxChannelModelPricePerMTok {
+		return 0, fmt.Errorf("price must be finite and between 0 and %.0f USD/M tokens", MaxChannelModelPricePerMTok)
+	}
+	pico := math.Round(price * float64(PicoPerTokenPerUSDPerMTok))
+	if pico < 0 || pico > float64(MaxChannelModelPricePicoPerToken) {
+		return 0, fmt.Errorf("price exceeds fixed-point bounds")
+	}
+	return int64(pico), nil
+}
+
+func MustPricePicoPerTokenFromUSDPerMTok(price float64) int64 {
+	pico, err := PricePicoPerTokenFromUSDPerMTok(price)
+	if err != nil {
+		panic(err)
+	}
+	return pico
+}
+
+func PriceUSDPerMTokFromPico(pico int64) float64 {
+	if pico <= 0 {
+		return 0
+	}
+	return float64(pico) / float64(PicoPerTokenPerUSDPerMTok)
+}
 
 // ValidateChannelModelPricing rejects values that can make cost calculation
 // non-finite, negative, or operationally absurd before they enter route cache.
@@ -125,18 +159,18 @@ func ValidateChannelModelPricing(cm *ChannelModel) error {
 	if cm == nil {
 		return fmt.Errorf("channel model is nil")
 	}
-	for name, v := range map[string]float64{
-		"input_price":                cm.InputPrice,
-		"output_price":               cm.OutputPrice,
-		"cached_input_price":         cm.CachedInputPrice,
-		"cache_write_input_price":    cm.CacheWriteInputPrice,
-		"cache_write_1h_input_price": cm.CacheWrite1hInputPrice,
-		"high_input_price":           cm.HighInputPrice,
-		"high_cached_input_price":    cm.HighCachedInputPrice,
-		"high_output_price":          cm.HighOutputPrice,
+	for name, v := range map[string]int64{
+		"input_price_pico_per_token":                cm.InputPricePicoPerToken,
+		"output_price_pico_per_token":               cm.OutputPricePicoPerToken,
+		"cached_input_price_pico_per_token":         cm.CachedInputPricePicoPerToken,
+		"cache_write_input_price_pico_per_token":    cm.CacheWriteInputPricePicoPerToken,
+		"cache_write_1h_input_price_pico_per_token": cm.CacheWrite1hInputPricePicoPerToken,
+		"high_input_price_pico_per_token":           cm.HighInputPricePicoPerToken,
+		"high_cached_input_price_pico_per_token":    cm.HighCachedInputPricePicoPerToken,
+		"high_output_price_pico_per_token":          cm.HighOutputPricePicoPerToken,
 	} {
-		if math.IsNaN(v) || math.IsInf(v, 0) || v < 0 || v > MaxChannelModelPricePerMTok {
-			return fmt.Errorf("%s must be finite and between 0 and %.0f USD/M tokens", name, MaxChannelModelPricePerMTok)
+		if v < 0 || v > MaxChannelModelPricePicoPerToken {
+			return fmt.Errorf("%s must be between 0 and %d pico_usd/token", name, MaxChannelModelPricePicoPerToken)
 		}
 	}
 	if cm.ContextPriceThreshold < 0 {

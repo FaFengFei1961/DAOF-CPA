@@ -10,6 +10,7 @@ import (
 	"io"
 	"log"
 	"math"
+	"math/big"
 	mrand "math/rand/v2"
 	"net"
 	"net/http"
@@ -1134,31 +1135,31 @@ func ChatCompletionProxyHandler(c *fiber.Ctx) error {
 		// 仅写 ApiLog 用作错误统计，cost = 0。
 		failedRequest := status < 200 || status >= 400
 
-		inputPrice := selectedPath.InputPrice
-		outputPrice := selectedPath.OutputPrice
-		cachedInputPrice := selectedPath.CachedInputPrice
+		inputPricePico := selectedPath.InputPricePicoPerToken
+		outputPricePico := selectedPath.OutputPricePicoPerToken
+		cachedInputPricePico := selectedPath.CachedInputPricePicoPerToken
 
 		if selectedPath.ContextPriceThreshold > 0 && promptTokens >= selectedPath.ContextPriceThreshold {
-			if selectedPath.HighInputPrice > 0 {
-				inputPrice = selectedPath.HighInputPrice
+			if selectedPath.HighInputPricePicoPerToken > 0 {
+				inputPricePico = selectedPath.HighInputPricePicoPerToken
 			}
-			if selectedPath.HighCachedInputPrice > 0 {
-				cachedInputPrice = selectedPath.HighCachedInputPrice
+			if selectedPath.HighCachedInputPricePicoPerToken > 0 {
+				cachedInputPricePico = selectedPath.HighCachedInputPricePicoPerToken
 			}
-			if selectedPath.HighOutputPrice > 0 {
-				outputPrice = selectedPath.HighOutputPrice
+			if selectedPath.HighOutputPricePicoPerToken > 0 {
+				outputPricePico = selectedPath.HighOutputPricePicoPerToken
 			}
 		}
-		cacheWriteInputPrice := selectedPath.CacheWriteInputPrice
-		if cacheWriteInputPrice <= 0 {
-			cacheWriteInputPrice = inputPrice
+		cacheWriteInputPricePico := selectedPath.CacheWriteInputPricePicoPerToken
+		if cacheWriteInputPricePico <= 0 {
+			cacheWriteInputPricePico = inputPricePico
 			if strings.Contains(strings.ToLower(modelName), "claude") {
-				cacheWriteInputPrice = inputPrice * 1.25
+				cacheWriteInputPricePico = (inputPricePico * 125) / 100
 			}
 		}
-		cacheWrite1hInputPrice := selectedPath.CacheWrite1hInputPrice
-		if cacheWrite1hInputPrice <= 0 {
-			cacheWrite1hInputPrice = inputPrice * 2
+		cacheWrite1hInputPricePico := selectedPath.CacheWrite1hInputPricePicoPerToken
+		if cacheWrite1hInputPricePico <= 0 {
+			cacheWrite1hInputPricePico = inputPricePico * 2
 		}
 
 		// fix MAJOR M-B5（codex 第二十一轮）：原成本公式漏掉 reasoningTokens（OpenAI o1/o3、Claude
@@ -1180,17 +1181,17 @@ func ChatCompletionProxyHandler(c *fiber.Ctx) error {
 			costMicroUSD, costOK = 0, true
 		} else {
 			costMicroUSD, costOK = checkedCostMicroUSD(
-				standardInputTokens, inputPrice,
-				cachedTokens, cachedInputPrice,
-				cacheWrite5mTokens, cacheWriteInputPrice,
-				cacheWrite1hTokens, cacheWrite1hInputPrice,
-				nonReasoningCompletion, outputPrice,
-				reasoningTokens, outputPrice,
+				standardInputTokens, inputPricePico,
+				cachedTokens, cachedInputPricePico,
+				cacheWrite5mTokens, cacheWriteInputPricePico,
+				cacheWrite1hTokens, cacheWrite1hInputPricePico,
+				nonReasoningCompletion, outputPricePico,
+				reasoningTokens, outputPricePico,
 			)
 			if !costOK {
-				log.Printf("[BILLING-CRITICAL] user=%d model=%s cost overflow/NaN; prompt=%d completion=%d cached_read=%d cache_write=%d cache_write_5m=%d cache_write_1h=%d reasoning=%d inputPrice=%v outputPrice=%v cachedPrice=%v cacheWrite5mPrice=%v cacheWrite1hPrice=%v — failing closed (0 cost)",
+				log.Printf("[BILLING-CRITICAL] user=%d model=%s cost overflow/invalid; prompt=%d completion=%d cached_read=%d cache_write=%d cache_write_5m=%d cache_write_1h=%d reasoning=%d inputPricePico=%d outputPricePico=%d cachedPricePico=%d cacheWrite5mPricePico=%d cacheWrite1hPricePico=%d — failing closed (0 cost)",
 					user.ID, modelName, promptTokens, completionTokens, cachedTokens, cacheWriteTokens, cacheWrite5mTokens, cacheWrite1hTokens, reasoningTokens,
-					inputPrice, outputPrice, cachedInputPrice, cacheWriteInputPrice, cacheWrite1hInputPrice)
+					inputPricePico, outputPricePico, cachedInputPricePico, cacheWriteInputPricePico, cacheWrite1hInputPricePico)
 				if isStream {
 					recordManualBillingState(manualBillingStateInput{
 						BillingState:          database.BillingStatePendingReconcile,
@@ -1877,11 +1878,11 @@ func ChatCompletionProxyHandler(c *fiber.Ctx) error {
 //
 // 找不到路由（极少数情况，路由刚被同步）→ 用保守上界 $30/1M（覆盖 Claude Opus / GPT-4 Turbo）。
 func estimatePrecheckBalanceDelta(modelName string, inputTokens, outputTokens int) int64 {
-	const fallbackPriceUSDPerMTok = 30.0 // 保守上界：$30 是大多数高端模型的中位
-	const minDeltaMicroUSD = int64(100)  // $0.0001 = 100 micro_usd 最低估算下限
+	const fallbackPricePicoPerToken = 30 * database.PicoPerTokenPerUSDPerMTok // $30/M tokens 保守上界
+	const minDeltaMicroUSD = int64(100)                                       // $0.0001 = 100 micro_usd 最低估算下限
 
-	maxInput := 0.0
-	maxOutput := 0.0
+	maxInputPico := int64(0)
+	maxOutputPico := int64(0)
 
 	routeMutex.RLock()
 	routes := RouteCache[modelName]
@@ -1892,34 +1893,34 @@ func estimatePrecheckBalanceDelta(modelName string, inputTokens, outputTokens in
 			continue
 		}
 		// 用 High 价格作为悲观上界（部分模型按 context 长度切档）
-		inP := r.InputPrice
-		if r.HighInputPrice > inP {
-			inP = r.HighInputPrice
+		inP := r.InputPricePicoPerToken
+		if r.HighInputPricePicoPerToken > inP {
+			inP = r.HighInputPricePicoPerToken
 		}
-		outP := r.OutputPrice
-		if r.HighOutputPrice > outP {
-			outP = r.HighOutputPrice
+		outP := r.OutputPricePicoPerToken
+		if r.HighOutputPricePicoPerToken > outP {
+			outP = r.HighOutputPricePicoPerToken
 		}
-		if inP > maxInput {
-			maxInput = inP
+		if inP > maxInputPico {
+			maxInputPico = inP
 		}
-		if outP > maxOutput {
-			maxOutput = outP
+		if outP > maxOutputPico {
+			maxOutputPico = outP
 		}
 	}
-	if maxInput <= 0 {
-		maxInput = fallbackPriceUSDPerMTok
+	if maxInputPico <= 0 {
+		maxInputPico = fallbackPricePicoPerToken
 	}
-	if maxOutput <= 0 {
-		maxOutput = fallbackPriceUSDPerMTok
+	if maxOutputPico <= 0 {
+		maxOutputPico = fallbackPricePicoPerToken
 	}
 
-	// tokens × (USD/1M tok) = micro_usd（恒等：USD/1M tok 单位 × token 数 = USD/1M = micro_usd）
-	// 用 checkedCostMicroUSD 加固以防 NaN/Inf/溢出 → fail-closed 时退到最低估算（避免免费透支）
+	// tokens × pico_usd/token ÷ 1e9 = micro_usd。
+	// 用 checkedCostMicroUSD 加固以防负数/溢出 → fail-closed 时退到最低估算（避免免费透支）
 	delta, ok := checkedCostMicroUSD(
-		inputTokens, maxInput,
+		inputTokens, maxInputPico,
 		0, 0,
-		outputTokens, maxOutput,
+		outputTokens, maxOutputPico,
 		0, 0,
 		0, 0,
 		0, 0,
@@ -2066,52 +2067,37 @@ func usageInt(usage gjson.Result, paths ...string) (int, bool) {
 	return 0, false
 }
 
-// checkedCostMicroUSD 用 NaN/Inf/int64 上下界守护的整数化 cost 计算。
+// checkedCostMicroUSD 用 fixed-point int64 + big.Int 守护的整数化 cost 计算。
 //
-// 公式：sum(tokens_i × pricePerMTok_i) → micro_usd（恒等推导，price 单位 USD/M tokens）
+// 公式：sum(tokens_i × pico_usd_per_token_i) ÷ 1e9 → micro_usd。
 //
-// fix CRITICAL Phase 4-codex（第二十四轮）：原实现 `int64(math.Round(float64(...)))` 不检 NaN/Inf
-// 与 int64 上下界。攻击/异常上游可让 cost 变为：
-//   - NaN（输入含 NaN price/token）→ 转 int64 后未定义行为（Go 实际是 0 或随机值）
-//   - +Inf / -Inf → math.Round 返回 ±Inf → int64 转换溢出
-//   - 极大 token×price → > MaxInt64 → 溢出回绕成负数
+// fix CRITICAL Phase 3：价格从 USD/M-token float 改为 pico_usd/token int64。
+// 所有乘法在 big.Int 中完成，最后只做一次整数除法，杜绝 float round 累积偏差。
 //
-// 任意一种都会破坏财务守恒。本函数 fail-closed：异常返回 (0, false)，调用方不扣不计。
+// 负 token、负价格、异常高价或 int64 溢出都会破坏财务守恒。本函数 fail-closed：
+// 异常返回 (0, false)，调用方不扣不计。
 //
-// 参数采用 (token, pricePerMTok) 6 对，与 deductQuota 费用项对齐。
+// 参数采用 (token, pricePicoPerToken) 6 对，与 deductQuota 费用项对齐。
 // 0 价格档位（如无 cached price）传 0/0 即可，对结果无贡献。
-func checkedCostMicroUSD(t1 int, p1 float64, t2 int, p2 float64, t3 int, p3 float64, t4 int, p4 float64, t5 int, p5 float64, t6 int, p6 float64) (int64, bool) {
-	// 价格 NaN/Inf 直接拒（应是 0 或正有限数）
-	for _, p := range [...]float64{p1, p2, p3, p4, p5, p6} {
-		if math.IsNaN(p) || math.IsInf(p, 0) {
-			return 0, false
+func checkedCostMicroUSD(t1 int, p1 int64, t2 int, p2 int64, t3 int, p3 int64, t4 int, p4 int64, t5 int, p5 int64, t6 int, p6 int64) (int64, bool) {
+	total := new(big.Int)
+	add := func(tokens int, pricePico int64) bool {
+		if tokens < 0 || pricePico < 0 || pricePico > database.MaxChannelModelPricePicoPerToken {
+			return false
 		}
-		if p < 0 || p > database.MaxChannelModelPricePerMTok {
-			return 0, false // 负价格或异常巨大价格无意义
+		if tokens == 0 || pricePico == 0 {
+			return true
 		}
+		term := new(big.Int).Mul(big.NewInt(int64(tokens)), big.NewInt(pricePico))
+		total.Add(total, term)
+		return true
 	}
-	// token 必须 >= 0
-	if t1 < 0 || t2 < 0 || t3 < 0 || t4 < 0 || t5 < 0 || t6 < 0 {
+	if !add(t1, p1) || !add(t2, p2) || !add(t3, p3) || !add(t4, p4) || !add(t5, p5) || !add(t6, p6) {
 		return 0, false
 	}
-	sum := float64(t1)*p1 + float64(t2)*p2 + float64(t3)*p3 + float64(t4)*p4 + float64(t5)*p5 + float64(t6)*p6
-	if math.IsNaN(sum) || math.IsInf(sum, 0) {
+	total.Div(total, big.NewInt(database.PicoPerMicroUSD))
+	if !total.IsInt64() {
 		return 0, false
 	}
-	if sum < 0 {
-		return 0, false // 计算结果不可能为负（前置校验已保证）
-	}
-	rounded := math.Round(sum)
-	// int64 上界检查：float64(MaxInt64) 因 IEEE 754 精度会舍入到 9223372036854775808（>MaxInt64），
-	// 所以用 `>=` 不是 `>`。MinInt64 同理。
-	if rounded >= float64(math.MaxInt64) {
-		return 0, false
-	}
-	if rounded < 0 {
-		return 0, false
-	}
-	if rounded == 0 && sum > 0 {
-		return 1, true
-	}
-	return int64(rounded), true
+	return total.Int64(), true
 }

@@ -17,11 +17,23 @@ func TestCacheBillingColumnNames(t *testing.T) {
 	}
 
 	channelModelColumns := sqliteColumnSet(t, db, "channel_models")
-	if !channelModelColumns["cache_write_1h_input_price"] {
-		t.Fatalf("channel_models missing cache_write_1h_input_price: %#v", channelModelColumns)
+	if !channelModelColumns["cache_write_1h_input_price_pico_per_token"] {
+		t.Fatalf("channel_models missing cache_write_1h_input_price_pico_per_token: %#v", channelModelColumns)
 	}
-	if channelModelColumns["cache_write1h_input_price"] {
-		t.Fatalf("channel_models should not create legacy cache_write1h_input_price")
+	for _, name := range []string{
+		"input_price",
+		"output_price",
+		"cached_input_price",
+		"cache_write_input_price",
+		"cache_write_1h_input_price",
+		"cache_write1h_input_price",
+		"high_input_price",
+		"high_cached_input_price",
+		"high_output_price",
+	} {
+		if channelModelColumns[name] {
+			t.Fatalf("channel_models should not create legacy %s", name)
+		}
 	}
 
 	apiLogColumns := sqliteColumnSet(t, db, "api_logs")

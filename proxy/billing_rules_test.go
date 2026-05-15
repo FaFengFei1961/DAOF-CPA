@@ -1,6 +1,11 @@
 package proxy
 
-import "testing"
+import (
+	"math/big"
+	"testing"
+
+	"daof-ai-hub/database"
+)
 
 func TestResolveBillingRulesDefaults(t *testing.T) {
 	old := replaceSysConfigForTest(map[string]string{})
@@ -92,6 +97,32 @@ func TestResolveBillingRulesFromConfig(t *testing.T) {
 	}
 	if r.PlatformCostEstimateMicro != 40 {
 		t.Fatalf("platform estimate = %d, want 40", r.PlatformCostEstimateMicro)
+	}
+}
+
+func TestMultiplierFixedPoint(t *testing.T) {
+	cases := []struct {
+		cost       int64
+		multiplier float64
+	}{
+		{cost: 101, multiplier: 0.5},
+		{cost: 101, multiplier: 0.333},
+		{cost: 101, multiplier: 3.14},
+		{cost: 999_999_937, multiplier: 3.14},
+	}
+	for _, tc := range cases {
+		ppm, ok := multiplierPPMFromFloat(tc.multiplier)
+		if !ok {
+			t.Fatalf("multiplierPPMFromFloat(%v) failed", tc.multiplier)
+		}
+		expected := new(big.Int).Mul(big.NewInt(tc.cost), big.NewInt(ppm))
+		expected.Div(expected, big.NewInt(database.MultiplierPPMBase))
+		if !expected.IsInt64() {
+			t.Fatalf("test expected overflowed: %s", expected.String())
+		}
+		if got := applyBillingMultiplier(tc.cost, tc.multiplier); got != expected.Int64() {
+			t.Fatalf("cost=%d multiplier=%v got=%d want=%d", tc.cost, tc.multiplier, got, expected.Int64())
+		}
 	}
 }
 

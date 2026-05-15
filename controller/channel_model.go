@@ -58,6 +58,138 @@ var allowedModerationFailModes = map[string]bool{
 	"closed": true,
 }
 
+type channelModelPayload struct {
+	ModelID                          string  `json:"model_id"`
+	DisplayName                      string  `json:"display_name"`
+	InputPriceUSDPerMTok             float64 `json:"input_price"`
+	OutputPriceUSDPerMTok            float64 `json:"output_price"`
+	CachedInputPriceUSDPerMTok       float64 `json:"cached_input_price"`
+	CacheWriteInputPriceUSDPerMTok   float64 `json:"cache_write_input_price"`
+	CacheWrite1hInputPriceUSDPerMTok float64 `json:"cache_write_1h_input_price"`
+	ContextPriceThreshold            int     `json:"context_price_threshold"`
+	HighInputPriceUSDPerMTok         float64 `json:"high_input_price"`
+	HighCachedInputPriceUSDPerMTok   float64 `json:"high_cached_input_price"`
+	HighOutputPriceUSDPerMTok        float64 `json:"high_output_price"`
+	MaxContextLength                 int     `json:"max_context_length"`
+	Weight                           int     `json:"weight"`
+	Status                           int     `json:"status"`
+	EndpointPolicy                   string  `json:"endpoint_policy"`
+	ModerationLevel                  string  `json:"moderation_level"`
+	ModerationFailMode               string  `json:"moderation_fail_mode"`
+}
+
+type channelModelResponse struct {
+	ID                               uint      `json:"id"`
+	ChannelID                        uint      `json:"channel_id"`
+	ModelID                          string    `json:"model_id"`
+	DisplayName                      string    `json:"display_name"`
+	InputPriceUSDPerMTok             float64   `json:"input_price"`
+	OutputPriceUSDPerMTok            float64   `json:"output_price"`
+	CachedInputPriceUSDPerMTok       float64   `json:"cached_input_price"`
+	CacheWriteInputPriceUSDPerMTok   float64   `json:"cache_write_input_price"`
+	CacheWrite1hInputPriceUSDPerMTok float64   `json:"cache_write_1h_input_price"`
+	ContextPriceThreshold            int       `json:"context_price_threshold"`
+	HighInputPriceUSDPerMTok         float64   `json:"high_input_price"`
+	HighCachedInputPriceUSDPerMTok   float64   `json:"high_cached_input_price"`
+	HighOutputPriceUSDPerMTok        float64   `json:"high_output_price"`
+	MaxContextLength                 int       `json:"max_context_length"`
+	Weight                           int       `json:"weight"`
+	Status                           int       `json:"status"`
+	EndpointPolicy                   string    `json:"endpoint_policy"`
+	ModerationLevel                  string    `json:"moderation_level"`
+	ModerationFailMode               string    `json:"moderation_fail_mode"`
+	CreatedAt                        time.Time `json:"created_at"`
+	UpdatedAt                        time.Time `json:"updated_at"`
+}
+
+func (p channelModelPayload) toChannelModel() (database.ChannelModel, error) {
+	inputPrice, err := database.PricePicoPerTokenFromUSDPerMTok(p.InputPriceUSDPerMTok)
+	if err != nil {
+		return database.ChannelModel{}, fmt.Errorf("input_price: %w", err)
+	}
+	outputPrice, err := database.PricePicoPerTokenFromUSDPerMTok(p.OutputPriceUSDPerMTok)
+	if err != nil {
+		return database.ChannelModel{}, fmt.Errorf("output_price: %w", err)
+	}
+	cachedInputPrice, err := database.PricePicoPerTokenFromUSDPerMTok(p.CachedInputPriceUSDPerMTok)
+	if err != nil {
+		return database.ChannelModel{}, fmt.Errorf("cached_input_price: %w", err)
+	}
+	cacheWriteInputPrice, err := database.PricePicoPerTokenFromUSDPerMTok(p.CacheWriteInputPriceUSDPerMTok)
+	if err != nil {
+		return database.ChannelModel{}, fmt.Errorf("cache_write_input_price: %w", err)
+	}
+	cacheWrite1hInputPrice, err := database.PricePicoPerTokenFromUSDPerMTok(p.CacheWrite1hInputPriceUSDPerMTok)
+	if err != nil {
+		return database.ChannelModel{}, fmt.Errorf("cache_write_1h_input_price: %w", err)
+	}
+	highInputPrice, err := database.PricePicoPerTokenFromUSDPerMTok(p.HighInputPriceUSDPerMTok)
+	if err != nil {
+		return database.ChannelModel{}, fmt.Errorf("high_input_price: %w", err)
+	}
+	highCachedInputPrice, err := database.PricePicoPerTokenFromUSDPerMTok(p.HighCachedInputPriceUSDPerMTok)
+	if err != nil {
+		return database.ChannelModel{}, fmt.Errorf("high_cached_input_price: %w", err)
+	}
+	highOutputPrice, err := database.PricePicoPerTokenFromUSDPerMTok(p.HighOutputPriceUSDPerMTok)
+	if err != nil {
+		return database.ChannelModel{}, fmt.Errorf("high_output_price: %w", err)
+	}
+	return database.ChannelModel{
+		ModelID:                            p.ModelID,
+		DisplayName:                        p.DisplayName,
+		InputPricePicoPerToken:             inputPrice,
+		OutputPricePicoPerToken:            outputPrice,
+		CachedInputPricePicoPerToken:       cachedInputPrice,
+		CacheWriteInputPricePicoPerToken:   cacheWriteInputPrice,
+		CacheWrite1hInputPricePicoPerToken: cacheWrite1hInputPrice,
+		ContextPriceThreshold:              p.ContextPriceThreshold,
+		HighInputPricePicoPerToken:         highInputPrice,
+		HighCachedInputPricePicoPerToken:   highCachedInputPrice,
+		HighOutputPricePicoPerToken:        highOutputPrice,
+		MaxContextLength:                   p.MaxContextLength,
+		Weight:                             p.Weight,
+		Status:                             p.Status,
+		EndpointPolicy:                     p.EndpointPolicy,
+		ModerationLevel:                    p.ModerationLevel,
+		ModerationFailMode:                 p.ModerationFailMode,
+	}, nil
+}
+
+func newChannelModelResponse(cm database.ChannelModel) channelModelResponse {
+	return channelModelResponse{
+		ID:                               cm.ID,
+		ChannelID:                        cm.ChannelID,
+		ModelID:                          cm.ModelID,
+		DisplayName:                      cm.DisplayName,
+		InputPriceUSDPerMTok:             database.PriceUSDPerMTokFromPico(cm.InputPricePicoPerToken),
+		OutputPriceUSDPerMTok:            database.PriceUSDPerMTokFromPico(cm.OutputPricePicoPerToken),
+		CachedInputPriceUSDPerMTok:       database.PriceUSDPerMTokFromPico(cm.CachedInputPricePicoPerToken),
+		CacheWriteInputPriceUSDPerMTok:   database.PriceUSDPerMTokFromPico(cm.CacheWriteInputPricePicoPerToken),
+		CacheWrite1hInputPriceUSDPerMTok: database.PriceUSDPerMTokFromPico(cm.CacheWrite1hInputPricePicoPerToken),
+		ContextPriceThreshold:            cm.ContextPriceThreshold,
+		HighInputPriceUSDPerMTok:         database.PriceUSDPerMTokFromPico(cm.HighInputPricePicoPerToken),
+		HighCachedInputPriceUSDPerMTok:   database.PriceUSDPerMTokFromPico(cm.HighCachedInputPricePicoPerToken),
+		HighOutputPriceUSDPerMTok:        database.PriceUSDPerMTokFromPico(cm.HighOutputPricePicoPerToken),
+		MaxContextLength:                 cm.MaxContextLength,
+		Weight:                           cm.Weight,
+		Status:                           cm.Status,
+		EndpointPolicy:                   cm.EndpointPolicy,
+		ModerationLevel:                  cm.ModerationLevel,
+		ModerationFailMode:               cm.ModerationFailMode,
+		CreatedAt:                        cm.CreatedAt,
+		UpdatedAt:                        cm.UpdatedAt,
+	}
+}
+
+func newChannelModelResponses(models []database.ChannelModel) []channelModelResponse {
+	out := make([]channelModelResponse, 0, len(models))
+	for _, model := range models {
+		out = append(out, newChannelModelResponse(model))
+	}
+	return out
+}
+
 // validateChannelModelEndpointPolicy 校验并规范化模型端点兼容策略。
 func validateChannelModelEndpointPolicy(cm *database.ChannelModel) (int, string, string) {
 	policy := database.NormalizeEndpointPolicy(cm.EndpointPolicy)
@@ -229,15 +361,15 @@ func GetPublicPricing(c *fiber.Ctx) error {
 	var results []PricingResult
 	if err := database.DB.Model(&database.ChannelModel{}).
 		Select(`model_id,
-			COALESCE(MIN(NULLIF(input_price, 0)), 0) as min_input_price,
-			COALESCE(MIN(NULLIF(output_price, 0)), 0) as min_output_price,
-			COALESCE(MIN(NULLIF(cached_input_price, 0)), 0) as min_cache_price,
-			COALESCE(MIN(NULLIF(cache_write_input_price, 0)), 0) as min_cache_write_price,
-			COALESCE(MIN(NULLIF(cache_write_1h_input_price, 0)), 0) as min_cache_write_1h_price,
+			COALESCE(MIN(NULLIF(input_price_pico_per_token, 0)), 0) / 1000000000.0 as min_input_price,
+			COALESCE(MIN(NULLIF(output_price_pico_per_token, 0)), 0) / 1000000000.0 as min_output_price,
+			COALESCE(MIN(NULLIF(cached_input_price_pico_per_token, 0)), 0) / 1000000000.0 as min_cache_price,
+			COALESCE(MIN(NULLIF(cache_write_input_price_pico_per_token, 0)), 0) / 1000000000.0 as min_cache_write_price,
+			COALESCE(MIN(NULLIF(cache_write_1h_input_price_pico_per_token, 0)), 0) / 1000000000.0 as min_cache_write_1h_price,
 			MAX(context_price_threshold) as context_threshold,
-			COALESCE(MIN(NULLIF(high_input_price, 0)), 0) as min_high_in_price,
-			COALESCE(MIN(NULLIF(high_cached_input_price, 0)), 0) as min_high_cache_price,
-			COALESCE(MIN(NULLIF(high_output_price, 0)), 0) as min_high_out_price,
+			COALESCE(MIN(NULLIF(high_input_price_pico_per_token, 0)), 0) / 1000000000.0 as min_high_in_price,
+			COALESCE(MIN(NULLIF(high_cached_input_price_pico_per_token, 0)), 0) / 1000000000.0 as min_high_cache_price,
+			COALESCE(MIN(NULLIF(high_output_price_pico_per_token, 0)), 0) / 1000000000.0 as min_high_out_price,
 			MAX(max_context_length) as max_context_length`).
 		Where("status = ?", 1).
 		Group("model_id").
@@ -276,7 +408,7 @@ func GetModelsByChannel(c *fiber.Ctx) error {
 
 	return c.JSON(fiber.Map{
 		"success": true,
-		"data":    models,
+		"data":    newChannelModelResponses(models),
 	})
 }
 
@@ -292,12 +424,20 @@ func AddChannelModel(c *fiber.Ctx) error {
 		})
 	}
 
-	var body database.ChannelModel
-	if err := c.BodyParser(&body); err != nil {
+	var payload channelModelPayload
+	if err := c.BodyParser(&payload); err != nil {
 		return c.Status(400).JSON(fiber.Map{
 			"success":      false,
 			"message_code": "ERR_INVALID_BODY",
 			"message":      "Invalid request body format",
+		})
+	}
+	body, err := payload.toChannelModel()
+	if err != nil {
+		return c.Status(400).JSON(fiber.Map{
+			"success":      false,
+			"message_code": "ERR_INVALID_LIMIT",
+			"message":      err.Error(),
 		})
 	}
 
@@ -366,7 +506,7 @@ func AddChannelModel(c *fiber.Ctx) error {
 
 	return c.JSON(fiber.Map{
 		"success": true,
-		"data":    body,
+		"data":    newChannelModelResponse(body),
 	})
 }
 
@@ -382,12 +522,20 @@ func UpdateChannelModel(c *fiber.Ctx) error {
 		})
 	}
 
-	var body database.ChannelModel
-	if err := c.BodyParser(&body); err != nil {
+	var payload channelModelPayload
+	if err := c.BodyParser(&payload); err != nil {
 		return c.Status(400).JSON(fiber.Map{
 			"success":      false,
 			"message_code": "ERR_INVALID_BODY",
 			"message":      "Invalid parser structure",
+		})
+	}
+	body, err := payload.toChannelModel()
+	if err != nil {
+		return c.Status(400).JSON(fiber.Map{
+			"success":      false,
+			"message_code": "ERR_INVALID_LIMIT",
+			"message":      err.Error(),
 		})
 	}
 
@@ -402,15 +550,15 @@ func UpdateChannelModel(c *fiber.Ctx) error {
 
 	// 允许任意字段的灵活调价覆盖（仅限合法的覆盖模式）
 	chm.DisplayName = body.DisplayName
-	chm.InputPrice = body.InputPrice
-	chm.OutputPrice = body.OutputPrice
-	chm.CachedInputPrice = body.CachedInputPrice
-	chm.CacheWriteInputPrice = body.CacheWriteInputPrice
-	chm.CacheWrite1hInputPrice = body.CacheWrite1hInputPrice
+	chm.InputPricePicoPerToken = body.InputPricePicoPerToken
+	chm.OutputPricePicoPerToken = body.OutputPricePicoPerToken
+	chm.CachedInputPricePicoPerToken = body.CachedInputPricePicoPerToken
+	chm.CacheWriteInputPricePicoPerToken = body.CacheWriteInputPricePicoPerToken
+	chm.CacheWrite1hInputPricePicoPerToken = body.CacheWrite1hInputPricePicoPerToken
 	chm.ContextPriceThreshold = body.ContextPriceThreshold
-	chm.HighInputPrice = body.HighInputPrice
-	chm.HighCachedInputPrice = body.HighCachedInputPrice
-	chm.HighOutputPrice = body.HighOutputPrice
+	chm.HighInputPricePicoPerToken = body.HighInputPricePicoPerToken
+	chm.HighCachedInputPricePicoPerToken = body.HighCachedInputPricePicoPerToken
+	chm.HighOutputPricePicoPerToken = body.HighOutputPricePicoPerToken
 	chm.MaxContextLength = body.MaxContextLength
 	if body.Weight >= 0 {
 		chm.Weight = body.Weight
@@ -482,7 +630,7 @@ func UpdateChannelModel(c *fiber.Ctx) error {
 
 	return c.JSON(fiber.Map{
 		"success": true,
-		"data":    chm,
+		"data":    newChannelModelResponse(chm),
 	})
 }
 

@@ -249,7 +249,7 @@ func TestAddChannelModelMega(t *testing.T) {
 func TestUpdateChannelModelMega(t *testing.T) {
 	app := initializeMegaTestDB()
 	database.DB.Create(&database.ChannelModel{ID: 1, ChannelID: 1, ModelID: "gpt-4"})
-	payload := database.ChannelModel{InputPrice: 0.5, Status: 2}
+	payload := map[string]interface{}{"input_price": 0.5, "status": 2}
 	resp := sendRequest(app, "PUT", "/api/admin/channel_models/1", payload, "")
 	if resp.StatusCode != 200 {
 		t.Errorf("expected 200, got %d", resp.StatusCode)
@@ -305,14 +305,14 @@ func TestGetPublicPricingScansCacheWrite1hAndIgnoresZeroPrices(t *testing.T) {
 		Status:    1,
 	})
 	database.DB.Create(&database.ChannelModel{
-		ChannelID:              1,
-		ModelID:                "claude-opus-4-7",
-		InputPrice:             5,
-		OutputPrice:            25,
-		CachedInputPrice:       0.5,
-		CacheWriteInputPrice:   6.25,
-		CacheWrite1hInputPrice: 10,
-		Status:                 1,
+		ChannelID:                          1,
+		ModelID:                            "claude-opus-4-7",
+		InputPricePicoPerToken:             database.MustPricePicoPerTokenFromUSDPerMTok(5),
+		OutputPricePicoPerToken:            database.MustPricePicoPerTokenFromUSDPerMTok(25),
+		CachedInputPricePicoPerToken:       database.MustPricePicoPerTokenFromUSDPerMTok(0.5),
+		CacheWriteInputPricePicoPerToken:   database.MustPricePicoPerTokenFromUSDPerMTok(6.25),
+		CacheWrite1hInputPricePicoPerToken: database.MustPricePicoPerTokenFromUSDPerMTok(10),
+		Status:                             1,
 	})
 
 	resp := sendRequest(app, "GET", "/api/public/pricing", nil, "")
