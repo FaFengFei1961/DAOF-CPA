@@ -28,6 +28,23 @@ export const fmtTime = (iso) => {
 };
 
 /**
+ * Render an ISO timestamp as "MM/DD HH:mm" (24h, no year).
+ * 对齐 cockpit-tools 显示风格：admin 一眼能看到精确的重置时间点。
+ * @param {string|null|undefined} iso
+ * @returns {string}
+ */
+export const fmtAbsoluteShort = (iso) => {
+  if (!iso || iso === '0001-01-01T00:00:00Z') return '—';
+  const d = new Date(iso);
+  if (Number.isNaN(d.getTime())) return '—';
+  const mm = String(d.getMonth() + 1).padStart(2, '0');
+  const dd = String(d.getDate()).padStart(2, '0');
+  const hh = String(d.getHours()).padStart(2, '0');
+  const mi = String(d.getMinutes()).padStart(2, '0');
+  return `${mm}/${dd} ${hh}:${mi}`;
+};
+
+/**
  * Render an ISO timestamp as relative time from "now" — e.g. "5 分钟后", "2 小时后".
  * Returns null on invalid/zero values, "已重置" on past times.
  * @param {string|null|undefined} iso

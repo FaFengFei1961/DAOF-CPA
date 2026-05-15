@@ -4,7 +4,7 @@ import {
   Zap, Sparkles, Cpu, ServerCrash
 } from 'lucide-react';
 import toast from 'react-hot-toast';
-import { remainingColor, fmtTime, fmtRelativeFromNow, safePct } from '../utils/credits';
+import { remainingColor, fmtTime, fmtAbsoluteShort, safePct } from '../utils/credits';
 
 // ─── Provider 元数据 ──────────────────────────────────────────────────
 const PROVIDER_META = {
@@ -59,7 +59,7 @@ const getProviderMeta = (provider) => {
 const QuotaBar = ({ remaining, label, resetsAt }) => {
   const safeRem = safePct(remaining);
   const color = remainingColor(safeRem);
-  const reset = fmtRelativeFromNow(resetsAt);
+  const reset = fmtAbsoluteShort(resetsAt);
   return (
     <div className="space-y-1.5">
       <div className="flex items-center justify-between text-xs">
@@ -74,9 +74,9 @@ const QuotaBar = ({ remaining, label, resetsAt }) => {
           style={{ width: `${safeRem}%`, background: color, boxShadow: `0 0 12px ${color}80` }}
         />
       </div>
-      {reset && (
-        <div className="flex items-center gap-1 text-[10px] text-outline">
-          <Clock size={10} /> 重置：{reset}
+      {reset && reset !== '—' && (
+        <div className="flex items-center gap-1 text-[10px] text-outline font-mono">
+          <Clock size={10} /> {reset}
         </div>
       )}
     </div>
