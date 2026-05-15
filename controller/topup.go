@@ -87,8 +87,8 @@ func CreateTopup(c *fiber.Ctx) error {
 		return c.Status(400).JSON(fiber.Map{"success": false, "message_code": "ERR_AMOUNT_INVALID"})
 	}
 	// 金额范围（fen int64）
-	minFen := readInt64Config("yifut_min_amount_fen", 100)        // 默认 ¥1.00
-	maxFen := readInt64Config("yifut_max_amount_fen", 1_000_000)  // 默认 ¥10,000.00
+	minFen := readInt64Config("yifut_min_amount_fen", 100)       // 默认 ¥1.00
+	maxFen := readInt64Config("yifut_max_amount_fen", 1_000_000) // 默认 ¥10,000.00
 	if req.AmountFen < minFen || req.AmountFen > maxFen {
 		return c.Status(400).JSON(fiber.Map{
 			"success":      false,
@@ -362,7 +362,7 @@ func YifutNotify(c *fiber.Ctx) error {
 
 	// 金额双校验：回调 money（RMB 元字符串）必须精确等于本地 money_rmb（fen 整数）。
 	//
-	// fix CRITICAL（多模型审计第二十五轮）：原实现 ParseFloat + approxEqual(0.001) 容差，
+	// fix CRITICAL（多模型审计第二十五轮）：原实现 float 解析 + approxEqual(0.001) 容差，
 	// float64 精度问题让攻击者可提交差 0.09 分的金额仍通过校验，等价绕过精确金额校验。
 	// 改为：把回调字符串当作"元.分"格式，按整数 fen 解析（小数点切两段拼接 → int64），
 	// 与本地 order.MoneyRMB（fen）做严格 == 比较，彻底消除浮点误差与人为容差。
@@ -1124,9 +1124,9 @@ func checkYifutNotifyIPAllowed(remoteIP string) bool {
 }
 
 // webhookNonce 由 out_trade_no + sign 前 16 字符拼接，保证：
-//  - 同一订单同一签名只能入账一次（重放被 unique 约束拒绝）
-//  - 不同订单的回调不互相冲突
-//  - sign 缺失时退化为 out_trade_no:notimestamp:no_sign（仍可作 nonce）
+//   - 同一订单同一签名只能入账一次（重放被 unique 约束拒绝）
+//   - 不同订单的回调不互相冲突
+//   - sign 缺失时退化为 out_trade_no:notimestamp:no_sign（仍可作 nonce）
 func webhookNonce(provider string, params map[string]string) string {
 	outTradeNo := strings.TrimSpace(params["out_trade_no"])
 	sign := strings.TrimSpace(params["sign"])
@@ -1217,18 +1217,6 @@ func readBoolConfig(key string, def bool) bool {
 	return def
 }
 
-func readFloatConfig(key string, def float64) float64 {
-	v := readStringConfig(key, "")
-	if v == "" {
-		return def
-	}
-	f, err := strconv.ParseFloat(v, 64)
-	if err != nil || math.IsNaN(f) || math.IsInf(f, 0) {
-		return def
-	}
-	return f
-}
-
 // readInt64Config 读取存为整数字符串的 SysConfig 项。
 // fix CRITICAL Sprint4-M3：fen / micros 等定点金额单位入口，杜绝 float 解析。
 func readInt64Config(key string, def int64) int64 {
@@ -1243,20 +1231,15 @@ func readInt64Config(key string, def int64) int64 {
 	return i
 }
 
-// readMicroUSDConfig 读取存为 USD float string 的 SysConfig 项并转 micro_usd（int64）。
-// fix MAJOR M22-A1 Phase 1：DB schema 已切到 int64 micro_usd，admin SysConfig 仍存 USD 字符串
-// 便于人工配置；这里在边界做一次转换。NaN/Inf/parse 失败返回 defMicroUSD。
+// readMicroUSDConfig 读取存为 micro_usd 整数字符串的 SysConfig 项。
+// fix P0-δ A-10：金额配置入口整数化，拒绝 USD float string。
 func readMicroUSDConfig(key string, defMicroUSD int64) int64 {
 	v := readStringConfig(key, "")
 	if v == "" {
 		return defMicroUSD
 	}
-	f, err := strconv.ParseFloat(v, 64)
-	if err != nil || math.IsNaN(f) || math.IsInf(f, 0) {
-		return defMicroUSD
-	}
-	micro, ok := database.USDToMicro(f)
-	if !ok {
+	micro, err := strconv.ParseInt(v, 10, 64)
+	if err != nil || micro < 0 {
 		return defMicroUSD
 	}
 	return micro
@@ -1277,10 +1260,11 @@ func safeExchangeRateRmbPerUsdMicros() int64 {
 //
 // 公式：usd_micro = fen × 1e10 / rate_rmb_per_usd_micros
 // 推导：
-//   amount_rmb       = fen / 100                  (yuan)
-//   amount_rmb_micros = fen × 1e4                  (RMB × 1e6 微元)
-//   rate             = rate_micros / 1e6            (RMB/USD)
-//   amount_usd_micros = amount_rmb_micros / rate    = fen × 1e4 × 1e6 / rate_micros = fen × 1e10 / rate_micros
+//
+//	amount_rmb       = fen / 100                  (yuan)
+//	amount_rmb_micros = fen × 1e4                  (RMB × 1e6 微元)
+//	rate             = rate_micros / 1e6            (RMB/USD)
+//	amount_usd_micros = amount_rmb_micros / rate    = fen × 1e4 × 1e6 / rate_micros = fen × 1e10 / rate_micros
 //
 // floor 截断（保守入账：用户存 ¥72.5 / 7.2 ¥ rate → $10.069444 USD，floor 不多送）。
 // fix CRITICAL Sprint4-M3：用 big.Int 全整数运算，杜绝 float64 IEEE 754 噪声。
@@ -1331,16 +1315,13 @@ func isSafeReturnPath(p string) bool {
 }
 
 func round2(v float64) float64 {
-	// 字符串化 → 解析回 float，避开浮点尾数
-	s := fmt.Sprintf("%.2f", v)
-	r, _ := strconv.ParseFloat(s, 64)
-	return r
+	return math.Round(v*100) / 100
 }
 
 // parseRMBStringToFen 把 "12.34" / "12" / "12.3" 这类 RMB 元字符串解析为 fen 整数。
 //
 // 设计原因（fix CRITICAL 多模型审计第二十五轮）：
-//   - 易付通回调金额是字符串，原实现 ParseFloat + approxEqual(0.001) 容差有精度漏洞
+//   - 易付通回调金额是字符串，原实现 float 解析 + approxEqual(0.001) 容差有精度漏洞
 //   - 直接整数化后与 order.MoneyRMB（fen int64）做严格 == 比较彻底消除浮点误差
 //
 // 规则：

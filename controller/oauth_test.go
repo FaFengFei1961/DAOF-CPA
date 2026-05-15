@@ -275,6 +275,60 @@ func TestGithubCallback_RejectsMismatchedVerifier(t *testing.T) {
 	}
 }
 
+func TestCompleteProfile_UsesBalanceConsumeDefaultLimitMicroUSD(t *testing.T) {
+	setupOAuthControllerTestDB(t)
+	proxy.SysConfigMutex.Lock()
+	old := proxy.SysConfigCache
+	proxy.SysConfigCache = map[string]string{
+		"signup_bonus":                             "0",
+		"balance_consume_default_enabled":          "true",
+		balanceConsumeDefaultLimitMicroUSDKey:      "1234567",
+		"balance_consume_default_window_secs":      "86400",
+		deprecatedBalanceConsumeDefaultLimitUSDKey: "99.99",
+	}
+	proxy.SysConfigMutex.Unlock()
+	t.Cleanup(func() {
+		proxy.SysConfigMutex.Lock()
+		proxy.SysConfigCache = old
+		proxy.SysConfigMutex.Unlock()
+	})
+
+	tmpToken, err := utils.Encrypt(fmt.Sprintf("clean|gh-limit-default|octo||%d", time.Now().Unix()))
+	if err != nil {
+		t.Fatalf("encrypt tmp token: %v", err)
+	}
+
+	app := fiber.New(fiber.Config{DisableStartupMessage: true})
+	app.Post("/complete-profile", CompleteProfile)
+	body, _ := json.Marshal(map[string]string{
+		"tmp_token": tmpToken,
+		"username":  "limit_user",
+	})
+	req := httptest.NewRequest(http.MethodPost, "/complete-profile", bytes.NewReader(body))
+	req.Header.Set("Content-Type", "application/json")
+	resp, err := app.Test(req)
+	if err != nil {
+		t.Fatalf("complete profile request: %v", err)
+	}
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("complete profile status=%d", resp.StatusCode)
+	}
+
+	var user database.User
+	if err := database.DB.Where("github_id = ?", "gh-limit-default").First(&user).Error; err != nil {
+		t.Fatalf("load created user: %v", err)
+	}
+	if !user.BalanceConsumeEnabled {
+		t.Fatal("BalanceConsumeEnabled=false, want true")
+	}
+	if user.BalanceConsumeLimitUSD != 1234567 {
+		t.Fatalf("BalanceConsumeLimitUSD=%d, want 1234567", user.BalanceConsumeLimitUSD)
+	}
+	if user.BalanceConsumeWindowSeconds != 86400 {
+		t.Fatalf("BalanceConsumeWindowSeconds=%d, want 86400", user.BalanceConsumeWindowSeconds)
+	}
+}
+
 func TestLogout_RevokesSession(t *testing.T) {
 	setupOAuthControllerTestDB(t)
 	user := database.User{Username: "logout_user", Role: "user", Token: "sk-daof-logout", Status: 1}

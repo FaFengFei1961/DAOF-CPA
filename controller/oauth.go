@@ -28,7 +28,10 @@ import (
 
 // registerMu 保护"cap 检查 + 创建用户"为临界区，避免两个并发新注册都通过 cap 检查
 // 之后导致 user 总数超过 max_users。SQLite 的串行写只能部分缓解，不能确定性消除。
-var registerMu sync.Mutex
+var (
+	registerMu                            sync.Mutex
+	deprecatedBalanceConsumeLimitWarnOnce sync.Once
+)
 
 const oauthStateTTL = 5 * time.Minute
 
@@ -193,32 +196,28 @@ type GithubAuthRequest struct {
 }
 
 // resolveBonusConfig 从 SysConfig 读取新用户奖励三参数。
-// 三个 key 都来自加密 SysConfig（值是 USD float string），未配置时给默认值
+// 三个 key 都使用 micro_usd 整数字符串；未配置时给默认值
 // （signup=$1.0, referrer=0, referee=0）。返回 micro_usd（int64）。
 func resolveBonusConfig() (signupMicro, referrerMicro, refereeMicro int64) {
-	proxy.SysConfigMutex.RLock()
-	signupStr := proxy.SysConfigCache["signup_bonus"]
-	referrerStr := proxy.SysConfigCache["referrer_bonus"]
-	refereeStr := proxy.SysConfigCache["referee_bonus"]
-	proxy.SysConfigMutex.RUnlock()
+	return readMicroUSDConfig("signup_bonus", database.MicroPerUSD),
+		readMicroUSDConfig("referrer_bonus", 0),
+		readMicroUSDConfig("referee_bonus", 0)
+}
 
-	signupMicro = database.MicroPerUSD // 默认 $1
-	if v, err := strconv.ParseFloat(strings.TrimSpace(signupStr), 64); err == nil && v >= 0 {
-		if m, ok := database.USDToMicro(v); ok {
-			signupMicro = m
-		}
+func readDefaultBalanceConsumeLimitMicroUSD() int64 {
+	proxy.SysConfigMutex.RLock()
+	_, hasDeprecated := proxy.SysConfigCache[deprecatedBalanceConsumeDefaultLimitUSDKey]
+	proxy.SysConfigMutex.RUnlock()
+	if hasDeprecated {
+		deprecatedBalanceConsumeLimitWarnOnce.Do(func() {
+			log.Printf("[SYSCONFIG] WARN deprecated key %q ignored; use %q", deprecatedBalanceConsumeDefaultLimitUSDKey, balanceConsumeDefaultLimitMicroUSDKey)
+		})
 	}
-	if v, err := strconv.ParseFloat(strings.TrimSpace(referrerStr), 64); err == nil && v >= 0 {
-		if m, ok := database.USDToMicro(v); ok {
-			referrerMicro = m
-		}
+	limit := readInt64Config(balanceConsumeDefaultLimitMicroUSDKey, 0)
+	if limit < 0 {
+		return 0
 	}
-	if v, err := strconv.ParseFloat(strings.TrimSpace(refereeStr), 64); err == nil && v >= 0 {
-		if m, ok := database.USDToMicro(v); ok {
-			refereeMicro = m
-		}
-	}
-	return
+	return limit
 }
 
 // applyReferralBonuses 处理推荐链路奖励发放。
@@ -774,8 +773,8 @@ func CompleteRisk(c *fiber.Ctx) error {
 
 		// 三段消费模型：从 SysConfig 默认值初始化（admin 可全局调整）
 		BalanceConsumeEnabled:       readBoolConfig("balance_consume_default_enabled", false),
-		BalanceConsumeLimitUSD:      readMicroUSDConfig("balance_consume_default_limit_usd", 0),
-		BalanceConsumeWindowSeconds: int(readFloatConfig("balance_consume_default_window_secs", 2592000)),
+		BalanceConsumeLimitUSD:      readDefaultBalanceConsumeLimitMicroUSD(),
+		BalanceConsumeWindowSeconds: int(readInt64Config("balance_consume_default_window_secs", 2592000)),
 	}
 
 	// fix CRITICAL C19-2（codex 第十九轮）：user 创建 + signup_bonus 账单原子化
@@ -915,8 +914,8 @@ func CompleteProfile(c *fiber.Ctx) error {
 
 		// 三段消费模型：从 SysConfig 默认值初始化（避免 GitHub 注册路径漏初始化导致 WindowSeconds=0）
 		BalanceConsumeEnabled:       readBoolConfig("balance_consume_default_enabled", false),
-		BalanceConsumeLimitUSD:      readMicroUSDConfig("balance_consume_default_limit_usd", 0),
-		BalanceConsumeWindowSeconds: int(readFloatConfig("balance_consume_default_window_secs", 2592000)),
+		BalanceConsumeLimitUSD:      readDefaultBalanceConsumeLimitMicroUSD(),
+		BalanceConsumeWindowSeconds: int(readInt64Config("balance_consume_default_window_secs", 2592000)),
 	}
 
 	// fix CRITICAL C19-2（codex 第十九轮）：user 创建 + signup_bonus 账单原子化

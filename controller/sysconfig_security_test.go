@@ -168,14 +168,14 @@ func TestSecurity_ValidateSysConfigPayload_BalanceDefaults(t *testing.T) {
 		{
 			name: "valid",
 			in: map[string]string{
-				"balance_consume_default_enabled":     "true",
-				"balance_consume_default_limit_usd":   "10.50",
-				"balance_consume_default_window_secs": "60",
+				"balance_consume_default_enabled":         "true",
+				"balance_consume_default_limit_micro_usd": "10500000",
+				"balance_consume_default_window_secs":     "60",
 			},
 			ok: true,
 		},
 		{name: "bad bool", in: map[string]string{"balance_consume_default_enabled": "maybe"}, code: "ERR_INVALID_PARAMS"},
-		{name: "negative limit", in: map[string]string{"balance_consume_default_limit_usd": "-1"}, code: "ERR_LIMIT_INVALID"},
+		{name: "negative limit", in: map[string]string{"balance_consume_default_limit_micro_usd": "-1"}, code: "ERR_LIMIT_INVALID"},
 		{name: "short window", in: map[string]string{"balance_consume_default_window_secs": "59"}, code: "ERR_WINDOW_INVALID"},
 	}
 
