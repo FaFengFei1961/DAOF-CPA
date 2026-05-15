@@ -699,14 +699,34 @@ func ChatCompletionProxyHandler(c *fiber.Ctx) error {
 	var successfulUpstreamCancel context.CancelFunc = func() {} // no-op fallback
 
 	for attempt := 0; attempt < maxRetries; attempt++ {
+		// fix CRITICAL Sprint5-M2：重试前指数退避 + jitter，给上游 thundering herd 缓冲
+		// attempt=0 backoff=0 不退避。第 1/2/3/4 次重试退避 100ms / 200ms / 400ms / 800ms（+ 0-50% jitter）。
+		if backoff := computeRetryBackoff(attempt); backoff > 0 {
+			select {
+			case <-time.After(backoff):
+			case <-c.Context().Done():
+				// 用户已断开 → 不再继续重试
+				lastErrStatus = 499
+				lastErrType = "client_disconnect_during_retry"
+				lastErrMessage = "client disconnected during retry backoff"
+				goto retryLoopExhausted
+			}
+		}
+
 		// 1. Filter out failed routes
+		// fix CRITICAL Sprint5-M2：除了本请求内已失败的 channel，还要跳过被 circuit breaker
+		// 打开（open / half-open 已有 probe inflight）的 channel——防止本请求继续打挂的上游。
 		var availableRoutes []*database.ChannelModel
 		totalWeight := 0
 		for _, r := range routes {
-			if !failedChannels[r.ChannelID] {
-				availableRoutes = append(availableRoutes, r)
-				totalWeight += r.Weight
+			if failedChannels[r.ChannelID] {
+				continue
 			}
+			if IsChannelCircuitOpen(r.ChannelID) {
+				continue // 跨请求级 breaker 跳过；本请求不消耗其 retry slot
+			}
+			availableRoutes = append(availableRoutes, r)
+			totalWeight += r.Weight
 		}
 
 		if len(availableRoutes) == 0 {
@@ -850,6 +870,9 @@ func ChatCompletionProxyHandler(c *fiber.Ctx) error {
 		if err != nil {
 			upstreamCancel() // 失败的 upstream ctx 立即释放
 			failedChannels[selectedPath.ChannelID] = true
+			// fix CRITICAL Sprint5-M2：dial / connect 失败也累计到 circuit breaker
+			// （TCP connect failure / DNS / TLS handshake 失败都属上游故障，应触发熔断）
+			MarkChannelFailure(selectedPath.ChannelID, 0)
 			lastErrStatus = 502
 			lastErrType = "bad_gateway"
 			lastErrMessage = err.Error()
@@ -872,6 +895,8 @@ func ChatCompletionProxyHandler(c *fiber.Ctx) error {
 		if resp.StatusCode == 429 || resp.StatusCode == 401 || resp.StatusCode == 403 || resp.StatusCode >= 500 {
 			upstreamCancel() // 失败的 upstream ctx 立即释放
 			failedChannels[selectedPath.ChannelID] = true
+			// fix CRITICAL Sprint5-M2：跨请求级 circuit breaker 标记失败（连续 N 次后 open）
+			MarkChannelFailure(selectedPath.ChannelID, resp.StatusCode)
 			lastErrStatus = resp.StatusCode
 			lastErrType = "upstream_error"
 			// fix Major（codex 第六轮）：原实现把上游 raw body 原样回给客户端，
@@ -894,9 +919,12 @@ func ChatCompletionProxyHandler(c *fiber.Ctx) error {
 		httpResp = resp
 		// 保留这个 cancel 给 SSE 路径，确保最后能取消上游连接
 		successfulUpstreamCancel = upstreamCancel
+		// fix CRITICAL Sprint5-M2：跨请求级 circuit breaker 标记成功（重置失败计数 + 关闭 open 状态）
+		MarkChannelSuccess(selectedPath.ChannelID)
 		break
 	}
 
+retryLoopExhausted:
 	if httpResp == nil {
 		// 全部 upstream 失败：所有 cancel 已在 continue 处调用，无需额外清理
 		if lastErrStatus == 0 {
