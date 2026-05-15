@@ -3,10 +3,11 @@ import {
   Activity, RefreshCw, AlertTriangle, CheckCircle2, XCircle, Clock, Layers,
   Zap, Sparkles, Cpu, ServerCrash
 } from 'lucide-react';
+import { useTranslation } from 'react-i18next';
 import toast from 'react-hot-toast';
 import { remainingColor, fmtTime, fmtAbsoluteShort, safePct } from '../utils/credits';
 
-// ─── Provider 元数据 ──────────────────────────────────────────────────
+// Provider metadata.
 const PROVIDER_META = {
   claude: {
     label: 'Claude (Anthropic OAuth)',
@@ -55,7 +56,7 @@ const getProviderMeta = (provider) => {
   };
 };
 
-// ─── 进度条 ───────────────────────────────────────────────────────────
+// Progress bar.
 const QuotaBar = ({ remaining, label, resetsAt }) => {
   const safeRem = safePct(remaining);
   const color = remainingColor(safeRem);
@@ -83,8 +84,9 @@ const QuotaBar = ({ remaining, label, resetsAt }) => {
   );
 };
 
-// ─── 单条上游账号卡片（memo 化避免父组件 re-render 时全量重绘） ──────────
+// Single upstream account card, memoized to avoid full redraws on parent rerenders.
 const EntryCard = React.memo(function EntryCard({ entry }) {
+  const { t } = useTranslation();
   const meta = getProviderMeta(entry.provider);
   const Icon = meta.Icon;
   return (
@@ -119,15 +121,15 @@ const EntryCard = React.memo(function EntryCard({ entry }) {
         <div className="shrink-0 flex flex-col items-end gap-1">
           {entry.healthy ? (
             <span className="inline-flex items-center gap-1 text-[10px] text-success">
-              <CheckCircle2 size={11} /> 健康
+              <CheckCircle2 size={11} /> {t('CREDITS.STATUS_HEALTHY', '健康')}
             </span>
           ) : entry.last_error ? (
             <span className="inline-flex items-center gap-1 text-[10px] text-error">
-              <XCircle size={11} /> 失败
+              <XCircle size={11} /> {t('CREDITS.STATUS_FAILED', '失败')}
             </span>
           ) : (
             <span className="inline-flex items-center gap-1 text-[10px] text-warning">
-              <AlertTriangle size={11} /> 用尽
+              <AlertTriangle size={11} /> {t('CREDITS.STATUS_EXHAUSTED', '用尽')}
             </span>
           )}
           <span className="text-[10px] text-outline font-mono">
@@ -138,7 +140,7 @@ const EntryCard = React.memo(function EntryCard({ entry }) {
 
       {entry.last_error && (
         <div className="mb-3 px-2 py-1.5 rounded-control bg-error/30 border border-error/40 text-[10px] text-error font-mono break-all">
-          重试 #{entry.retry_count}：{entry.last_error}
+          {t('CREDITS.RETRY_LABEL', '重试 #{{count}}：', { count: entry.retry_count })}{entry.last_error}
         </div>
       )}
 
@@ -154,14 +156,15 @@ const EntryCard = React.memo(function EntryCard({ entry }) {
           ))}
         </div>
       ) : !entry.last_error ? (
-        <div className="text-[11px] text-outline italic">暂无窗口数据（账号有效但上游未返回额度细节）</div>
+        <div className="text-[11px] text-outline italic">{t('CREDITS.NO_WINDOW_DATA', '暂无窗口数据（账号有效但上游未返回额度细节）')}</div>
       ) : null}
     </div>
   );
 });
 
-// ─── Provider 分区 ─────────────────────────────────────────────────────
+// Provider section.
 const ProviderSection = ({ provider, entries }) => {
+  const { t } = useTranslation();
   const meta = getProviderMeta(provider);
   const Icon = meta.Icon;
   const healthyCount = entries.filter((e) => e.healthy).length;
@@ -187,21 +190,21 @@ const ProviderSection = ({ provider, entries }) => {
             <div className="flex items-center gap-3 text-xs mt-0.5">
               <span className="text-success">
                 <CheckCircle2 size={11} className="inline mr-1" />
-                {healthyCount} 健康
+                {t('CREDITS.HEALTHY_COUNT', '{{count}} 健康', { count: healthyCount })}
               </span>
               {failedCount > 0 && (
                 <span className="text-error">
                   <XCircle size={11} className="inline mr-1" />
-                  {failedCount} 失败
+                  {t('CREDITS.FAILED_COUNT', '{{count}} 失败', { count: failedCount })}
                 </span>
               )}
-              <span className="text-outline">/ 共 {entries.length}</span>
+              <span className="text-outline">{t('CREDITS.TOTAL_COUNT_INLINE', '/ 共 {{count}}', { count: entries.length })}</span>
             </div>
           </div>
         </div>
         {aggregateRemaining !== null && (
           <div className="text-right">
-            <div className="text-[10px] text-on-surface-variant uppercase tracking-wider">平均剩余</div>
+            <div className="text-[10px] text-on-surface-variant uppercase tracking-wider">{t('CREDITS.AVG_REMAINING', '平均剩余')}</div>
             <div
               className="text-2xl font-bold font-mono"
               style={{ color: remainingColor(aggregateRemaining) }}
@@ -221,8 +224,9 @@ const ProviderSection = ({ provider, entries }) => {
   );
 };
 
-// ─── 主组件 ──────────────────────────────────────────────────────────
+// Main component.
 const CreditsMonitor = () => {
+  const { t } = useTranslation();
   const [data, setData] = useState({
     entries: [],
     total_count: 0,
@@ -235,7 +239,7 @@ const CreditsMonitor = () => {
   const [loading, setLoading] = useState(true);
   const [refreshing, setRefreshing] = useState(false);
 
-  // 引用用于 cleanup：会话失效时清掉轮询、unmount 时清掉所有 setTimeout
+  // Cleanup refs for polling and pending timeouts.
   const pollIntervalRef = useRef(null);
   const pendingTimeoutsRef = useRef([]);
   const sessionExpiredRef = useRef(false);
@@ -259,7 +263,7 @@ const CreditsMonitor = () => {
       if (res.status === 401 || res.status === 403) {
         sessionExpiredRef.current = true;
         stopPolling();
-        toast.error('管理员会话已过期，请重新登录', { id: 'credits-session-expired' });
+        toast.error(t('CREDITS.SESSION_EXPIRED', '管理员会话已过期，请重新登录'), { id: 'credits-session-expired' });
         return;
       }
       const json = await res.json();
@@ -267,16 +271,16 @@ const CreditsMonitor = () => {
       if (json.success) {
         setData(json.data);
       } else {
-        toast.error(json.message || '号池数据加载失败', { id: 'credits-load-error' });
+        toast.error(json.message || t('CREDITS.LOAD_FAIL', '号池数据加载失败'), { id: 'credits-load-error' });
       }
     } catch (err) {
       if (mountedRef.current) {
-        toast.error('网络异常，无法加载号池数据', { id: 'credits-load-error' });
+        toast.error(t('CREDITS.LOAD_NETWORK_FAIL', '网络异常，无法加载号池数据'), { id: 'credits-load-error' });
       }
     } finally {
       if (mountedRef.current) setLoading(false);
     }
-  }, [stopPolling]);
+  }, [stopPolling, t]);
 
   useEffect(() => {
     mountedRef.current = true;
@@ -285,7 +289,7 @@ const CreditsMonitor = () => {
     return () => {
       mountedRef.current = false;
       stopPolling();
-      // 清除所有 pending setTimeout，避免 unmount 后还在 setState
+      // Clear pending timeouts to avoid setState after unmount.
       pendingTimeoutsRef.current.forEach(clearTimeout);
       pendingTimeoutsRef.current = [];
     };
@@ -295,7 +299,7 @@ const CreditsMonitor = () => {
     if (refreshing || sessionExpiredRef.current) return;
     setRefreshing(true);
 
-    // 清掉之前可能堆积的 pending timeout，防止旧的 load() 与新的混叠
+    // Clear earlier pending timeouts so old load() calls do not overlap new refreshes.
     pendingTimeoutsRef.current.forEach(clearTimeout);
     pendingTimeoutsRef.current = [];
 
@@ -307,24 +311,24 @@ const CreditsMonitor = () => {
       if (res.status === 401 || res.status === 403) {
         sessionExpiredRef.current = true;
         stopPolling();
-        toast.error('管理员会话已过期，请重新登录', { id: 'credits-session-expired' });
+        toast.error(t('CREDITS.SESSION_EXPIRED', '管理员会话已过期，请重新登录'), { id: 'credits-session-expired' });
         return;
       }
       if (res.status === 409) {
-        toast('已有刷新任务在进行中', { id: 'credits-refresh-busy' });
+        toast(t('CREDITS.REFRESH_BUSY', '已有刷新任务在进行中'), { id: 'credits-refresh-busy' });
         return;
       }
       const json = await res.json();
       if (!json.success) {
-        // 后端明确告知失败原因（CPA 未配置 / 不可达 / 鉴权失败 等）
-        toast.error(json.message || '刷新失败', {
+        // Backend returns explicit failure reasons such as CPA missing/unreachable/auth failure.
+        toast.error(json.message || t('CREDITS.REFRESH_FAIL', '刷新失败'), {
           id: 'credits-refresh-fail',
           duration: 6000,
         });
         return;
       }
-      toast.success(json.message || '已触发后台刷新', { id: 'credits-refresh-trigger' });
-      // 阶梯式重新拉取数据，timeout id 收集起来用于 cleanup
+      toast.success(json.message || t('CREDITS.REFRESH_TRIGGERED', '已触发后台刷新'), { id: 'credits-refresh-trigger' });
+      // Stagger reloads and collect timeout ids for cleanup.
       const ids = [
         setTimeout(() => mountedRef.current && load(false), 5000),
         setTimeout(() => mountedRef.current && load(false), 15000),
@@ -332,9 +336,9 @@ const CreditsMonitor = () => {
       ];
       pendingTimeoutsRef.current.push(...ids);
     } catch (err) {
-      toast.error('网络异常');
+      toast.error(t('CREDITS.NETWORK_ERROR', '网络异常'));
     } finally {
-      // session 过期或组件已 unmount 时不再调度 setState（避免在 finally 内 return 吞异常 — 用 if/else 分支）
+      // Avoid scheduling state updates after session expiry or unmount.
       if (sessionExpiredRef.current || !mountedRef.current) {
         setRefreshing(false);
       } else {
@@ -366,7 +370,7 @@ const CreditsMonitor = () => {
 
   const lastFullStr = data.last_full && data.last_full !== '0001-01-01T00:00:00Z'
     ? fmtTime(data.last_full)
-    : '尚未完成首轮';
+    : t('CREDITS.NOT_COMPLETED_FIRST_ROUND', '尚未完成首轮');
 
   return (
     <div className="w-full">
@@ -374,40 +378,44 @@ const CreditsMonitor = () => {
         <div>
           <h1 className="text-xl md:text-2xl font-bold tracking-tight text-on-surface flex items-center gap-3">
             <Activity size={22} className="text-primary" />
-            号池监控
+            {t('CREDITS.TITLE', '号池监控')}
           </h1>
           <p className="text-on-surface-variant mt-2 text-sm">
-            上游账号池的健康度与剩余额度监控。后台 goroutine 按 <span className="text-primary font-mono">credits_refresh_interval</span> 周期自动刷新；失败的会按 <span className="text-primary font-mono">credits_retry_interval</span> 进入重试队列（指数退避封顶 60 分钟）。
+            {t('CREDITS.DESC_PREFIX', '上游账号池的健康度与剩余额度监控。后台 goroutine 按')}{' '}
+            <span className="text-primary font-mono">credits_refresh_interval</span>{' '}
+            {t('CREDITS.DESC_MIDDLE', '周期自动刷新；失败的会按')}{' '}
+            <span className="text-primary font-mono">credits_retry_interval</span>{' '}
+            {t('CREDITS.DESC_SUFFIX', '进入重试队列（指数退避封顶 60 分钟）。')}
           </p>
         </div>
         <button
           onClick={triggerRefresh}
           disabled={refreshing || data.refreshing}
-          aria-label="立即刷新全部号池"
+          aria-label={t('CREDITS.REFRESH_ALL_ARIA', '立即刷新全部号池')}
           className="shrink-0 h-11 px-5 bg-primary text-on-primary font-medium rounded-overlay flex items-center justify-center gap-2 hover:bg-primary-container hover:text-on-primary-container disabled:opacity-50 disabled:cursor-not-allowed"
         >
           <RefreshCw size={16} className={refreshing || data.refreshing ? 'animate-spin' : ''} />
-          {refreshing || data.refreshing ? '刷新中...' : '立即刷新全部'}
+          {refreshing || data.refreshing ? t('CREDITS.REFRESHING', '刷新中...') : t('CREDITS.REFRESH_ALL', '立即刷新全部')}
         </button>
       </div>
 
       <div className="grid grid-cols-2 md:grid-cols-4 gap-3 mb-8">
         <div className="rounded-overlay bg-surface-container border border-outline-variant p-4">
-          <div className="text-xs text-on-surface-variant mb-1">上游账号总数</div>
+          <div className="text-xs text-on-surface-variant mb-1">{t('CREDITS.TOTAL_ACCOUNTS', '上游账号总数')}</div>
           <div className="text-2xl font-bold text-on-surface">{data.total_count || 0}</div>
         </div>
         <div className="rounded-overlay bg-success/20 border border-success/40 p-4">
-          <div className="text-xs text-success mb-1">健康节点</div>
+          <div className="text-xs text-success mb-1">{t('CREDITS.HEALTHY_NODES', '健康节点')}</div>
           <div className="text-2xl font-bold text-success">{data.healthy_count || 0}</div>
         </div>
         <div className="rounded-overlay bg-error/20 border border-error/40 p-4">
-          <div className="text-xs text-error mb-1">异常节点</div>
+          <div className="text-xs text-error mb-1">{t('CREDITS.ABNORMAL_NODES', '异常节点')}</div>
           <div className="text-2xl font-bold text-error">
             {(data.total_count || 0) - (data.healthy_count || 0)}
           </div>
         </div>
         <div className="rounded-overlay bg-surface-container border border-outline-variant p-4">
-          <div className="text-xs text-on-surface-variant mb-1">最近全量刷新</div>
+          <div className="text-xs text-on-surface-variant mb-1">{t('CREDITS.LAST_FULL_REFRESH', '最近全量刷新')}</div>
           <div className="text-sm font-mono text-on-surface mt-1.5 truncate" title={lastFullStr}>
             {lastFullStr}
           </div>
@@ -417,20 +425,20 @@ const CreditsMonitor = () => {
       {loading ? (
         <div className="text-center py-20 text-on-surface-variant">
           <RefreshCw size={28} className="inline animate-spin mb-3" />
-          <div>正在加载号池数据...</div>
+          <div>{t('CREDITS.LOADING_POOL', '正在加载号池数据...')}</div>
         </div>
       ) : sessionExpiredRef.current ? (
         <div className="text-center py-16 bg-error/20 border border-error/40 rounded-overlay">
           <XCircle size={32} className="inline text-error mb-3" />
-          <div className="text-error text-sm">管理员会话已过期，请刷新页面重新登录</div>
+          <div className="text-error text-sm">{t('CREDITS.SESSION_EXPIRED_RELOAD', '管理员会话已过期，请刷新页面重新登录')}</div>
         </div>
       ) : data.total_count === 0 ? (
         <div className="text-center py-16 bg-surface-container border border-outline-variant rounded-overlay">
           <ServerCrash size={32} className="inline text-on-surface-variant mb-3" />
           <div className="text-on-surface-variant text-sm">
-            尚未采集到任何上游账号。
+            {t('CREDITS.EMPTY_TITLE', '尚未采集到任何上游账号。')}
             <br />
-            请检查 CLIProxyAPI 连接配置（常规 tab）和后台日志。
+            {t('CREDITS.EMPTY_DESC', '请检查 CLIProxyAPI 连接配置（常规 tab）和后台日志。')}
           </div>
         </div>
       ) : (

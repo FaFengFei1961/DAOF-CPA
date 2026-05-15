@@ -122,8 +122,7 @@ const AdminNotificationManagement = () => {
       });
       if (json.success && json.data) {
         toast.success(
-          t('NOTIF.ADMIN.SEND_OK', '群发已发送（实际触达 {{count}} 人）')
-            .replace('{{count}}', json.data.recipient_count || 0)
+          t('NOTIF.ADMIN.SEND_OK', '群发已发送（实际触达 {{count}} 人）', { count: json.data.recipient_count || 0 })
         );
         setForm({ ...form, title: '', body: '', action_url: '', action_text: '' });
         setPreviewCount(null);
@@ -167,7 +166,7 @@ const AdminNotificationManagement = () => {
         </h2>
       </div>
 
-      {/* 创建表单 */}
+      {/* Create form */}
       <section className="bg-surface-container-high border border-outline-variant rounded-overlay p-6 space-y-4">
         <h3 className="text-base font-semibold text-on-surface flex items-center gap-2">
           <Send size={16} /> {t('NOTIF.ADMIN.CREATE_TITLE', '创建系统通知')}
@@ -301,7 +300,7 @@ const AdminNotificationManagement = () => {
           </button>
           {previewCount !== null && (
             <span className="text-sm text-primary font-semibold">
-              {t('NOTIF.ADMIN.PREVIEW_COUNT', '预计触达 {{count}} 人').replace('{{count}}', previewCount)}
+              {t('NOTIF.ADMIN.PREVIEW_COUNT', '预计触达 {{count}} 人', { count: previewCount })}
             </span>
           )}
           <div className="flex-1" />
@@ -317,7 +316,7 @@ const AdminNotificationManagement = () => {
         </div>
       </section>
 
-      {/* 历史列表 */}
+      {/* History list */}
       <section className="bg-surface-container-high border border-outline-variant rounded-overlay p-6">
         <div className="flex items-center justify-between mb-4">
           <h3 className="text-base font-semibold text-on-surface">

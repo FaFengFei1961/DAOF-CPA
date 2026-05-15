@@ -8,48 +8,48 @@ import { useModalA11y } from '../hooks/useModalA11y';
 /**
  * AdminGrantSubscriptionModal
  *
- * 管理员赠送订阅对话框。
- * 表单字段：
- *   - 用户选择（按 username / phone / github_id 搜索）
- *   - 套餐选择（来自 /api/admin/packages）
- *   - 数量
- *   - 赠送理由（必填，进审计）
+ * Admin dialog for granting subscriptions.
+ * Form fields:
+ *   - user picker, searchable by username / phone / github_id
+ *   - package picker from /api/admin/packages
+ *   - quantity
+ *   - required grant reason for audit
  *
- * 与后端 POST /api/admin/subscriptions/grant 对齐：
+ * Aligned with backend POST /api/admin/subscriptions/grant:
  *   { user_id, package_id, quantity, reason }
  *
  * Props:
- *   open       - 是否显示
- *   onClose    - 关闭回调（取消 / ESC / 背景点击 / 提交成功）
- *   onSuccess  - 提交成功后回调（父组件可刷新订阅列表）
- *   prefillUser - 可选：预填的用户 { id, username }（从用户管理页直接打开时用）
+ *   open        - whether the dialog is visible
+ *   onClose     - close callback for cancel / ESC / backdrop / success
+ *   onSuccess   - success callback so the parent can refresh
+ *   prefillUser - optional preselected { id, username } from UserManagement
  */
 const AdminGrantSubscriptionModal = ({ open, onClose, onSuccess, prefillUser = null }) => {
   const { t } = useTranslation();
 
-  // 用户搜索状态
+  // User search state.
   const [userQuery, setUserQuery] = useState('');
   const [userSuggestions, setUserSuggestions] = useState([]);
   const [selectedUser, setSelectedUser] = useState(null);
   const [searchingUsers, setSearchingUsers] = useState(false);
 
-  // 套餐选择
+  // Package selection.
   const [packages, setPackages] = useState([]);
   const [selectedPackageId, setSelectedPackageId] = useState('');
   const [loadingPackages, setLoadingPackages] = useState(false);
 
-  // 表单字段
+  // Form fields.
   const [quantity, setQuantity] = useState(1);
   const [reason, setReason] = useState('');
   const [submitting, setSubmitting] = useState(false);
 
   // a11y
   const userInputRef = useRef(null);
-  const modalRef = useRef(null); // C5 第二十轮: focus trap 范围
+  const modalRef = useRef(null); // C5 round 20: focus trap scope.
   const initialFocusRef = prefillUser ? null : userInputRef;
   const { onBackdropClick } = useModalA11y(open, () => !submitting && onClose(), initialFocusRef, modalRef);
 
-  // 初始化 / 重置（每次 open 切 false→true 时清空）
+  // Initialize/reset each time open transitions to true.
   useEffect(() => {
     if (open) {
       setUserQuery(prefillUser?.username || '');
@@ -61,14 +61,14 @@ const AdminGrantSubscriptionModal = ({ open, onClose, onSuccess, prefillUser = n
     }
   }, [open, prefillUser]);
 
-  // 加载套餐列表（admin 端）
+  // Load the admin package list.
   useEffect(() => {
     if (!open) return;
     setLoadingPackages(true);
     authFetch('/api/admin/packages')
       .then((j) => {
         if (j?.success) {
-          // 只保留启用的（Phase 8 后只剩 subscription 类）
+          // Keep enabled packages only; Phase 8 leaves subscription packages only.
           setPackages((j.data || []).filter((p) => p.enabled !== false));
         } else {
           toast.error(j?.message || t('ADMIN_GRANT.LOAD_PKG_FAIL', '套餐列表加载失败'));
@@ -78,8 +78,8 @@ const AdminGrantSubscriptionModal = ({ open, onClose, onSuccess, prefillUser = n
       .finally(() => setLoadingPackages(false));
   }, [open, t]);
 
-  // 搜索用户（debounce 300ms）
-  // fix MAJOR M9（gemini 第二十轮）：reqIdRef 防慢搜索覆盖快搜索
+  // Search users with a 300 ms debounce.
+  // fix MAJOR M9 (gemini round 20): reqIdRef prevents slow searches from overwriting newer results.
   const searchReqRef = useRef(0);
   const searchUsers = useCallback(async (q) => {
     if (!q || q.length < 2) {
@@ -91,14 +91,14 @@ const AdminGrantSubscriptionModal = ({ open, onClose, onSuccess, prefillUser = n
     try {
       const params = new URLSearchParams({ search: q, page: '1', page_size: '10' });
       const j = await authFetch(`/api/admin/users?${params.toString()}`);
-      // 慢搜索回来时，新搜索已发起 → 丢弃结果
+      // Drop stale results when a newer search is already in flight.
       if (myReqId !== searchReqRef.current) return;
       if (j?.success) {
-        // 只显示 role=user 的（赠送目标必须是普通用户）
+        // Only normal users can receive grants.
         setUserSuggestions((j.data || []).filter((u) => u.role === 'user'));
       }
     } catch {
-      // 静默失败：搜索失败不强阻塞，admin 仍可手填 user_id
+      // Search failure should not hard-block the admin.
     } finally {
       if (myReqId === searchReqRef.current) setSearchingUsers(false);
     }
@@ -107,7 +107,7 @@ const AdminGrantSubscriptionModal = ({ open, onClose, onSuccess, prefillUser = n
   useEffect(() => {
     if (!open) return;
     const trimmed = userQuery.trim();
-    // 已选用户且 query 等于 username 时不搜（避免选择后还无谓查询）
+    // Do not re-query after selecting a user whose username matches the input.
     if (selectedUser && trimmed === selectedUser.username) {
       setUserSuggestions([]);
       return;
@@ -118,7 +118,7 @@ const AdminGrantSubscriptionModal = ({ open, onClose, onSuccess, prefillUser = n
 
   if (!open) return null;
 
-  // 表单基础有效性（Submit 按钮 disabled 用，减少无效点击）
+  // Basic form validity for disabling submit and reducing invalid clicks.
   const isFormValid = !!selectedUser?.id && !!selectedPackageId && reason.trim().length > 0;
 
   const submit = async () => {
@@ -161,7 +161,7 @@ const AdminGrantSubscriptionModal = ({ open, onClose, onSuccess, prefillUser = n
         },
       });
       if (json?.success) {
-        toast.success(t('ADMIN_GRANT.SUCCESS', { qty, defaultValue: '已赠送 {{qty}} 份' }));
+        toast.success(t('ADMIN_GRANT.SUCCESS', '已赠送 {{qty}} 份', { qty }));
         onSuccess?.();
         onClose();
       } else {
@@ -203,14 +203,12 @@ const AdminGrantSubscriptionModal = ({ open, onClose, onSuccess, prefillUser = n
 
         {/* Body */}
         <div className="px-5 py-4 space-y-4">
-          {/* 用户选择 */}
+          {/* User selection */}
           <div>
             <label htmlFor="grant-target-user" className="block text-sm text-on-surface mb-1">
               {t('ADMIN_GRANT.TARGET_USER', '目标用户')} <span className="text-error">*</span>
             </label>
-            {/* fix MAJOR M9（gemini 第二十轮）：去掉 role="listbox"/option（需要复杂方向键管理才完整），
-                改为 plain button list + Tab 导航；input 仍用 aria-autocomplete + aria-expanded
-                让屏幕阅读器了解搜索状态。这样既符合 a11y，又不需要写键盘焦点管理。 */}
+            {/* Use a plain button list with Tab navigation instead of partial listbox semantics. */}
             <div className="relative">
               <Search size={14} className="absolute left-3 top-1/2 -translate-y-1/2 text-on-surface-variant" />
               <input
@@ -230,7 +228,7 @@ const AdminGrantSubscriptionModal = ({ open, onClose, onSuccess, prefillUser = n
                 aria-controls="grant-user-suggestions"
               />
             </div>
-            {/* 建议列表：plain button group，Tab 键即可遍历 */}
+            {/* Suggestions: plain button group, traversable with Tab. */}
             {userSuggestions.length > 0 && !selectedUser && (
               <ul
                 id="grant-user-suggestions"
@@ -267,7 +265,7 @@ const AdminGrantSubscriptionModal = ({ open, onClose, onSuccess, prefillUser = n
             )}
           </div>
 
-          {/* 套餐选择 */}
+          {/* Package selection */}
           <div>
             <label htmlFor="grant-package" className="block text-sm text-on-surface mb-1">
               {t('ADMIN_GRANT.PACKAGE', '套餐')} <span className="text-error">*</span>
@@ -288,7 +286,7 @@ const AdminGrantSubscriptionModal = ({ open, onClose, onSuccess, prefillUser = n
             </select>
           </div>
 
-          {/* 数量 */}
+          {/* Quantity */}
           <div>
             <label htmlFor="grant-quantity" className="block text-sm text-on-surface mb-1">
               {t('ADMIN_GRANT.QUANTITY', '数量')}
@@ -327,7 +325,7 @@ const AdminGrantSubscriptionModal = ({ open, onClose, onSuccess, prefillUser = n
             </div>
           </div>
 
-          {/* 信息提示 */}
+          {/* Info notice */}
           <div className="text-xs text-on-surface-variant bg-surface-container-high rounded-control px-3 py-2">
             <div>{t('ADMIN_GRANT.INFO_LINE_1', '• 赠送的订阅会被标记 IsGranted=true，不可退款（防止白送钱）')}</div>
             <div>{t('ADMIN_GRANT.INFO_LINE_2', '• 用户会收到一条系统通知（强制送达，不被偏好屏蔽）')}</div>

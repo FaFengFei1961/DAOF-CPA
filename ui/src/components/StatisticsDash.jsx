@@ -134,7 +134,7 @@ const StatisticsDash = ({ isAdmin = false, isAuthenticated = true }) => {
     const [period, setPeriod] = useState('7d');
     const statsCacheKey = useMemo(() => getStatsCacheKey(isAdmin, period), [isAdmin, period]);
     const [stats, setStats] = useState(() => readStatsCache(getStatsCacheKey(isAdmin, '7d')));
-    // 未登录时不应显示"加载中…"骨架，让 RequireAuth banner 单独负责提示
+    // When unauthenticated, let RequireAuth own the banner instead of showing a loading skeleton.
     const [loading, setLoading] = useState(() => (isAuthenticated || isAdmin) && !readStatsCache(getStatsCacheKey(isAdmin, '7d')));
     const [refreshing, setRefreshing] = useState(false);
     const [selectedModels, setSelectedModels] = useState([]);
@@ -179,7 +179,7 @@ const StatisticsDash = ({ isAdmin = false, isAuthenticated = true }) => {
         try {
             let nextStats = null;
             if (isAdmin) {
-                // ─── 管理员：通过 Go 后端安全代理访问 CLIProxyAPI ───
+                // Admin path: safely proxy CLIProxyAPI through the Go backend.
                 const data = await authFetch('/api/admin/cliproxy/usage', { cache: 'no-store' });
                 if (!data) throw new Error('No response');
                 const usage = data.usage || {};
@@ -263,7 +263,7 @@ const StatisticsDash = ({ isAdmin = false, isAuthenticated = true }) => {
                     summary: { totalReqs, successReqs, failedReqs, totalTokens, totalCached, totalCacheWrite, totalReasoning, avgLatency, rpm, totalCost: 0 }
                 };
             } else {
-                // ─── 普通用户：走原始 one-api 日志接口（接入 authFetch）
+                // User path: use the original one-api logs endpoint via authFetch.
                 const data = await authFetch(`/api/logs/stats?period=${period}`, { cache: 'no-store' });
                 if (data.success) {
                     nextStats = data.data;
@@ -285,7 +285,7 @@ const StatisticsDash = ({ isAdmin = false, isAuthenticated = true }) => {
     }, [isAdmin, isAuthenticated, period, statsCacheKey]);
 
     useEffect(() => {
-        // 未登录跳过 — 避免 401 + 让 RequireAuth banner 提示用户登录
+        // Skip unauthenticated fetches to avoid 401 noise and let RequireAuth prompt the user.
         if (!isAuthenticated && !isAdmin) return;
         fetchStats();
     }, [fetchStats, isAuthenticated, isAdmin]);
@@ -390,7 +390,7 @@ const StatisticsDash = ({ isAdmin = false, isAuthenticated = true }) => {
     }, [filteredLogs, logsPage]);
 
     if (!stats) {
-        // 未登录 / 还没拉到数据：分别提示
+        // Show separate states for unauthenticated and not-yet-loaded data.
         if (!isAuthenticated && !isAdmin) {
             return <div className="p-12 text-center text-on-surface-variant text-sm">{t('STATS.AUTH_REQUIRED', '登录后查看您的使用统计')}</div>;
         }
@@ -426,7 +426,19 @@ const StatisticsDash = ({ isAdmin = false, isAuthenticated = true }) => {
     const handleExportCsv = () => {
         const logs = filteredLogs;
         if (!logs.length) return;
-        const header = ['时间', '模型', '令牌来源', '输入Tokens', '输出Tokens', '缓存读Tokens', '缓存写Tokens', '缓存写5mTokens', '缓存写1hTokens', '思考Tokens', '花费($)'];
+        const header = [
+            t('STATS.TIMESTAMP', '时间'),
+            t('STATS.MODEL_NAME', '模型'),
+            t('STATS.TOKEN_SOURCE', '令牌来源'),
+            t('STATS.INPUT_TOKENS', '输入Tokens'),
+            t('STATS.OUTPUT_TOKENS', '输出Tokens'),
+            t('STATS.CACHED_TOKENS', '缓存读Tokens'),
+            t('STATS.CACHE_WRITE_TOKENS', '缓存写Tokens'),
+            t('STATS.CACHE_WRITE_5M_TOKENS', '缓存写5mTokens'),
+            t('STATS.CACHE_WRITE_1H_TOKENS', '缓存写1hTokens'),
+            t('STATS.REASONING_TOKENS', '思考Tokens'),
+            t('STATS.COST_USD', '花费($)'),
+        ];
         const rows = logs.map(l => [
             l.created_at, l.model_name, l.token_name,
             l.prompt_tokens, l.completion_tokens, l.cached_tokens || 0, l.cache_write_tokens || 0, l.cache_write_5m_tokens || 0, l.cache_write_1h_tokens || 0, l.reasoning_tokens || 0, l.cost
@@ -448,7 +460,7 @@ const StatisticsDash = ({ isAdmin = false, isAuthenticated = true }) => {
 
     return (
         <div className="w-full mb-8">
-            {/* Header — Microsoft Store 标题节奏（大字 + 副标 + 右侧 period chip） */}
+            {/* Header with title, subtitle, and period chips. */}
             <div className="flex flex-col md:flex-row md:items-end md:justify-between mb-8 gap-3">
                 <div>
                     <h1 className="text-3xl md:text-[40px] font-semibold tracking-tight text-on-surface flex items-center gap-3">
@@ -484,9 +496,13 @@ const StatisticsDash = ({ isAdmin = false, isAuthenticated = true }) => {
                     metaNode={
                         <div className="flex flex-col gap-0.5 mt-2">
                            <span className="text-xs text-on-surface-variant flex items-center gap-2">
-                               <span className="w-1.5 h-1.5 rounded-full bg-success"></span>{t('STATS.SUCCESS_REQS') || '成功请求'}: {(summary.successReqs ?? 0).toLocaleString()}
-                               <span className="w-1.5 h-1.5 rounded-full bg-error ml-2"></span>失败请求: {(summary.failedReqs ?? 0).toLocaleString()}
-                               <span className="ml-2">平均延迟: {(summary.totalReqs > 0 && typeof summary.avgLatency === 'number') ? `${summary.avgLatency.toFixed(1)}秒` : '-'}</span>
+                               <span className="w-1.5 h-1.5 rounded-full bg-success"></span>{t('STATS.SUCCESS_REQS', '成功请求')}: {(summary.successReqs ?? 0).toLocaleString()}
+                               <span className="w-1.5 h-1.5 rounded-full bg-error ml-2"></span>{t('STATS.FAILED_REQS', '失败请求')}: {(summary.failedReqs ?? 0).toLocaleString()}
+                               <span className="ml-2">
+                                   {t('STATS.AVG_LATENCY', '平均延迟')}: {(summary.totalReqs > 0 && typeof summary.avgLatency === 'number')
+                                       ? t('STATS.SECONDS_VALUE', '{{value}}秒', { value: summary.avgLatency.toFixed(1) })
+                                       : '-'}
+                               </span>
                            </span>
                         </div>
                     }
@@ -497,8 +513,8 @@ const StatisticsDash = ({ isAdmin = false, isAuthenticated = true }) => {
                     value={formatTokens(summary.totalTokens)}
                     metaNode={
                         <div className="flex flex-col gap-0.5 mt-2 transition-opacity opacity-80 hover:opacity-100">
-                           <span className="text-xs text-on-surface-variant flex items-center gap-2"><span className="w-1.5 h-1.5 rounded-full bg-primary"></span>{t('STATS.CACHED_TOKENS') || '缓存读 Tokens'}: {formatTokens(summary.totalCached)}</span>
-                           <span className="text-xs text-on-surface-variant flex items-center gap-2"><span className="w-1.5 h-1.5 rounded-full bg-primary"></span>{t('STATS.REASONING_TOKENS') || '思考 Tokens'}: {formatTokens(summary.totalReasoning)}</span>
+                            <span className="text-xs text-on-surface-variant flex items-center gap-2"><span className="w-1.5 h-1.5 rounded-full bg-primary"></span>{t('STATS.CACHED_TOKENS', '缓存读 Tokens')}: {formatTokens(summary.totalCached)}</span>
+                            <span className="text-xs text-on-surface-variant flex items-center gap-2"><span className="w-1.5 h-1.5 rounded-full bg-primary"></span>{t('STATS.REASONING_TOKENS', '思考 Tokens')}: {formatTokens(summary.totalReasoning)}</span>
                         </div>
                     }
                     data={globalData} dataKey="tokens" color="#8b5cf6" icon={Zap} bgClass="bg-primary/5"
@@ -595,7 +611,7 @@ const StatisticsDash = ({ isAdmin = false, isAuthenticated = true }) => {
             <div className="grid grid-cols-1 gap-4 mb-6">
                 <div className="bg-surface border border-outline-variant rounded-overlay p-6 ">
                     <div className="flex justify-between items-center mb-6">
-                        <h3 className="text-sm font-semibold text-on-surface-variant">Token 类型分布</h3>
+                        <h3 className="text-sm font-semibold text-on-surface-variant">{t('STATS.TOKEN_DISTRIBUTION', 'Token 类型分布')}</h3>
                     </div>
                     <div className="w-full h-[300px]">
                         <ResponsiveContainer width="100%" height="100%">
@@ -604,11 +620,11 @@ const StatisticsDash = ({ isAdmin = false, isAuthenticated = true }) => {
                                 <XAxis dataKey="date" stroke="#6b7280" fontSize={10} tickMargin={10} minTickGap={20} />
                                 <YAxis stroke="#6b7280" fontSize={10} tickCount={6} axisLine={false} tickLine={false} tickFormatter={formatTokens} />
                                 <Tooltip content={<CustomTooltip />} />
-                                <Area isAnimationActive={false} type="monotone" dataKey="prompt_tokens" name="输入 Tokens" stroke="#9ca3af" fill="#9ca3af" fillOpacity={0.1} strokeWidth={2} activeDot={{ r: 4, strokeWidth: 0 }} />
-                                <Area isAnimationActive={false} type="monotone" dataKey="completion_tokens" name="输出 Tokens" stroke="#10b981" fill="#10b981" fillOpacity={0.1} strokeWidth={2} activeDot={{ r: 4, strokeWidth: 0 }} />
-                                <Area isAnimationActive={false} type="monotone" dataKey="cached_tokens" name="缓存读 Tokens" stroke="#f59e0b" fill="#f59e0b" fillOpacity={0.1} strokeWidth={2} activeDot={{ r: 4, strokeWidth: 0 }} />
-                                <Area isAnimationActive={false} type="monotone" dataKey="cache_write_tokens" name="缓存写 Tokens" stroke="#f97316" fill="#f97316" fillOpacity={0.1} strokeWidth={2} activeDot={{ r: 4, strokeWidth: 0 }} />
-                                <Area isAnimationActive={false} type="monotone" dataKey="reasoning_tokens" name="思考 Tokens" stroke="#8b5cf6" fill="#8b5cf6" fillOpacity={0.1} strokeWidth={2} activeDot={{ r: 4, strokeWidth: 0 }} />
+                                <Area isAnimationActive={false} type="monotone" dataKey="prompt_tokens" name={t('STATS.INPUT_TOKENS', '输入 Tokens')} stroke="#9ca3af" fill="#9ca3af" fillOpacity={0.1} strokeWidth={2} activeDot={{ r: 4, strokeWidth: 0 }} />
+                                <Area isAnimationActive={false} type="monotone" dataKey="completion_tokens" name={t('STATS.OUTPUT_TOKENS', '输出 Tokens')} stroke="#10b981" fill="#10b981" fillOpacity={0.1} strokeWidth={2} activeDot={{ r: 4, strokeWidth: 0 }} />
+                                <Area isAnimationActive={false} type="monotone" dataKey="cached_tokens" name={t('STATS.CACHED_TOKENS', '缓存读 Tokens')} stroke="#f59e0b" fill="#f59e0b" fillOpacity={0.1} strokeWidth={2} activeDot={{ r: 4, strokeWidth: 0 }} />
+                                <Area isAnimationActive={false} type="monotone" dataKey="cache_write_tokens" name={t('STATS.CACHE_WRITE_TOKENS', '缓存写 Tokens')} stroke="#f97316" fill="#f97316" fillOpacity={0.1} strokeWidth={2} activeDot={{ r: 4, strokeWidth: 0 }} />
+                                <Area isAnimationActive={false} type="monotone" dataKey="reasoning_tokens" name={t('STATS.REASONING_TOKENS', '思考 Tokens')} stroke="#8b5cf6" fill="#8b5cf6" fillOpacity={0.1} strokeWidth={2} activeDot={{ r: 4, strokeWidth: 0 }} />
                             </AreaChart>
                         </ResponsiveContainer>
                     </div>
@@ -616,7 +632,7 @@ const StatisticsDash = ({ isAdmin = false, isAuthenticated = true }) => {
 
                 <div className="bg-surface border border-outline-variant rounded-overlay p-6 ">
                     <div className="flex justify-between items-center mb-6">
-                        <h3 className="text-sm font-semibold text-on-surface-variant">花费统计</h3>
+                        <h3 className="text-sm font-semibold text-on-surface-variant">{t('STATS.COST_CHART', '花费统计')}</h3>
                     </div>
                     <div className="w-full h-[300px]">
                         <ResponsiveContainer width="100%" height="100%">
@@ -625,7 +641,7 @@ const StatisticsDash = ({ isAdmin = false, isAuthenticated = true }) => {
                                 <XAxis dataKey="date" stroke="#6b7280" fontSize={10} tickMargin={10} minTickGap={20} />
                                 <YAxis stroke="#6b7280" fontSize={10} tickCount={6} axisLine={false} tickLine={false} tickFormatter={formatMeterCost} />
                                 <Tooltip content={<CustomTooltip formatValue={formatMeterCost} />} />
-                                <Line isAnimationActive={false} type="monotone" dataKey="cost" name="花费" stroke="#f59e0b" strokeWidth={2} dot={{ r: 2, fill: '#f59e0b', strokeWidth: 0 }} activeDot={{ r: 4, strokeWidth: 0 }} />
+                                <Line isAnimationActive={false} type="monotone" dataKey="cost" name={t('STATS.COST_SERIES', '花费')} stroke="#f59e0b" strokeWidth={2} dot={{ r: 2, fill: '#f59e0b', strokeWidth: 0 }} activeDot={{ r: 4, strokeWidth: 0 }} />
                             </LineChart>
                         </ResponsiveContainer>
                     </div>
@@ -736,8 +752,8 @@ const StatisticsDash = ({ isAdmin = false, isAuthenticated = true }) => {
                                 <th className="text-left px-4 py-3 text-xs font-semibold text-on-surface-variant whitespace-nowrap">{t('STATS.INPUT_TOKENS')}</th>
                                 <th className="text-left px-4 py-3 text-xs font-semibold text-on-surface-variant whitespace-nowrap">{t('STATS.OUTPUT_TOKENS')}</th>
                                 <th className="text-left px-4 py-3 text-xs font-semibold text-on-surface-variant whitespace-nowrap">{t('STATS.REASONING_TOKENS')}</th>
-                                <th className="text-left px-4 py-3 text-xs font-semibold text-on-surface-variant whitespace-nowrap" title="来自 usage metadata，不是本平台会话缓存">缓存读 Tokens</th>
-                                <th className="text-left px-4 py-3 text-xs font-semibold text-on-surface-variant whitespace-nowrap" title="来自 usage metadata，不是本平台会话缓存">缓存写 Tokens</th>
+                                <th className="text-left px-4 py-3 text-xs font-semibold text-on-surface-variant whitespace-nowrap" title={t('STATS.USAGE_METADATA_HINT', '来自 usage metadata，不是本平台会话缓存')}>{t('STATS.CACHED_TOKENS', '缓存读 Tokens')}</th>
+                                <th className="text-left px-4 py-3 text-xs font-semibold text-on-surface-variant whitespace-nowrap" title={t('STATS.USAGE_METADATA_HINT', '来自 usage metadata，不是本平台会话缓存')}>{t('STATS.CACHE_WRITE_TOKENS', '缓存写 Tokens')}</th>
                                 <th className="text-left px-4 py-3 text-xs font-semibold text-on-surface-variant whitespace-nowrap">{t('STATS.TOTAL_TOKENS', '总Token数')}</th>
                                 <th className="text-left px-4 py-3 text-xs font-semibold text-on-surface-variant whitespace-nowrap">{t('STATS.COST')}</th>
                             </tr></thead>

@@ -26,8 +26,7 @@ const UserManagement = () => {
     // list queries
     const [searchQuery, setSearchQuery] = useState('');
     const [sortBy, setSortBy] = useState('id_desc');
-    // fix（codex 第十六轮验证）：后端 GetUsers 已加分页（默认 50/页, max 200），
-    // 前端必须传 page/page_size 并消费 meta，否则只能看到第一页数据。
+    // Backend GetUsers is paginated, so the frontend sends page/page_size and consumes meta.
     const [page, setPage] = useState(1);
     const [pageSize] = useState(50);
     const [total, setTotal] = useState(0);
@@ -37,19 +36,18 @@ const UserManagement = () => {
     const [billsModal, setBillsModal] = useState({ isOpen: false, user: null });
     const [couponsModal, setCouponsModal] = useState({ isOpen: false, user: null });
 
-    // 批量选择 state
+    // Bulk selection state.
     const [selectedIds, setSelectedIds] = useState(() => new Set());
     const [bulkModal, setBulkModal] = useState({ isOpen: false, mode: 'add', amount: '' });
     const [bulkCouponModalOpen, setBulkCouponModalOpen] = useState(false);
     const [bulkProcessing, setBulkProcessing] = useState(false);
 
-    // fix Major M8（gemini 第十五轮）：原模态框无 ESC + 背景点击关闭，与 AdminUserBills 标准不一致
+    // Align modal ESC and backdrop behavior with AdminUserBills.
     const closeLogModal = () => setLogModal({ isOpen: false, user: null, logs: [] });
     const closeBulkModal = () => setBulkModal({ isOpen: false, mode: 'add', amount: '' });
-    // fix CRITICAL C22-F1（gemini 第二十二轮）：编辑模态原 closeEditModal 未声明，
-    // linter 已加 editModalRef/editCloseBtnRef 但 closeEditModal 仍漏 → 补声明。
+    // Define closeEditModal referenced by the edit modal.
     const closeEditModal = () => setModalConfig({ isOpen: false, data: null });
-    // fix CRITICAL C-F1（gemini 第二十一轮）：补 modalRef 让 focus trap 真正生效
+    // fix CRITICAL C-F1 (gemini round 21): modal refs make the focus traps effective.
     const logModalRef = useRef(null);
     const bulkModalRef = useRef(null);
     const editModalRef = useRef(null);
@@ -87,12 +85,12 @@ const UserManagement = () => {
     const submitBulkQuota = async () => {
         const amt = parseFloat(bulkModal.amount);
         if (isNaN(amt) || amt < 0) {
-            toast.error('请输入有效的非负金额');
+            toast.error(t('USER_MGMT.BULK_AMOUNT_INVALID', '请输入有效的非负金额'));
             return;
         }
         setBulkProcessing(true);
         try {
-            // 前端 displayCurrency 可能是 CNY，但后端只接受 USD
+            // UI displayCurrency may be CNY, but the backend accepts USD only.
             const usdAmount = displayCurrency === 'CNY' ? amt / exchangeRate : amt;
             const data = await authFetch('/api/admin/users/bulk-quota', {
                 method: 'POST',
@@ -103,21 +101,26 @@ const UserManagement = () => {
                 },
             });
             if (data.success) {
-                toast.success(`已更新 ${data.updated} 人${data.skipped > 0 ? `，跳过 ${data.skipped} 人（管理员保护）` : ''}`);
+                toast.success(t('USER_MGMT.BULK_QUOTA_OK', '已更新 {{updated}} 人{{skippedText}}', {
+                    updated: data.updated,
+                    skippedText: data.skipped > 0
+                        ? t('USER_MGMT.BULK_SKIPPED_ADMINS', '，跳过 {{count}} 人（管理员保护）', { count: data.skipped })
+                        : '',
+                }));
                 setBulkModal({ isOpen: false, mode: 'add', amount: '' });
                 clearSelection();
                 fetchUsers();
             } else {
-                toast.error((data.message_code ? t('API.' + data.message_code) : data.message) || '批量操作失败');
+                toast.error((data.message_code ? t('API.' + data.message_code) : data.message) || t('USER_MGMT.BULK_OP_FAIL', '批量操作失败'));
             }
         } catch (e) {
-            toast.error('网络异常，批量操作失败');
+            toast.error(t('USER_MGMT.BULK_OP_NET_FAIL', '网络异常，批量操作失败'));
         }
         setBulkProcessing(false);
     };
 
     const submitBulkDelete = async () => {
-        if (!(await confirm(`即将物理删除 ${selectedIds.size} 个用户（含其所有 token），不可恢复，确认？`))) return;
+        if (!(await confirm(t('USER_MGMT.BULK_DELETE_CONFIRM', '即将物理删除 {{count}} 个用户（含其所有 token），不可恢复，确认？', { count: selectedIds.size })))) return;
         setBulkProcessing(true);
         try {
             const data = await authFetch('/api/admin/users/bulk-delete', {
@@ -125,14 +128,19 @@ const UserManagement = () => {
                 body: { user_ids: Array.from(selectedIds) },
             });
             if (data.success) {
-                toast.success(`已抹除 ${data.deleted} 个用户${data.skipped > 0 ? `，跳过 ${data.skipped} 个（管理员保护）` : ''}`);
+                toast.success(t('USER_MGMT.BULK_DELETE_OK', '已抹除 {{deleted}} 个用户{{skippedText}}', {
+                    deleted: data.deleted,
+                    skippedText: data.skipped > 0
+                        ? t('USER_MGMT.BULK_DELETE_SKIPPED', '，跳过 {{count}} 个（管理员保护）', { count: data.skipped })
+                        : '',
+                }));
                 clearSelection();
                 fetchUsers();
             } else {
-                toast.error((data.message_code ? t('API.' + data.message_code) : data.message) || '批量删除失败');
+                toast.error((data.message_code ? t('API.' + data.message_code) : data.message) || t('USER_MGMT.BULK_DELETE_FAIL', '批量删除失败'));
             }
         } catch (e) {
-            toast.error('网络异常，批量删除失败');
+            toast.error(t('USER_MGMT.BULK_DELETE_NET_FAIL', '网络异常，批量删除失败'));
         }
         setBulkProcessing(false);
     };
@@ -141,7 +149,7 @@ const UserManagement = () => {
         setLoading(true);
         try {
             const params = new URLSearchParams();
-            // 后端 search 长度 ≥2 ≤64；空字符串不传，前端 query<2 也不传避免 400
+            // Backend accepts search length 2..64; omit empty/too-short values to avoid 400.
             if (query && query.length >= 2 && query.length <= 64) {
                 params.set('search', query);
             }
@@ -174,9 +182,7 @@ const UserManagement = () => {
         }
     };
 
-    // fix Major Codex UX 审查（第二十五轮）：原有 'add' 模式残留 —— 后端无 POST /api/admin/users，
-    // 前端也没有"添加用户"按钮，但 handleOpenModal/handleSubmit 仍含 add 分支。
-    // 项目尚未上线，直接删除 add 模式（用户走 OAuth/SMS 注册自助创建，admin 无需手动添加）。
+    // Project is not live; remove the stale add mode because users self-register through OAuth/SMS.
     const handleOpenModal = (user) => {
         setFormData({ id: user.id, username: user.username, role: user.role, quota: user.quota, status: user.status, ban_reason: user.ban_reason || '' });
         setModalConfig({ isOpen: true, data: user });
@@ -210,7 +216,7 @@ const UserManagement = () => {
     // eslint-disable-next-line react-hooks/exhaustive-deps
     }, [searchQuery, sortBy, page]);
 
-    // search/sort 变化时重置到第一页（page 改了会触发上面的 effect 重新拉取）
+    // Reset to page 1 on search/sort changes; the page effect reloads.
     useEffect(() => { setPage(1); }, [searchQuery, sortBy]);
 
     const openLogModal = async (u) => {
@@ -272,39 +278,39 @@ const UserManagement = () => {
               </div>
             </div>
 
-            {/* 批量操作浮动栏 */}
+            {/* Bulk actions bar */}
             {selectedIds.size > 0 && (
                 <div className="mb-4 flex items-center justify-between bg-primary/10 border border-primary/30 rounded-overlay px-4 py-3 sticky top-2 z-10 backdrop-blur-md">
                     <div className="flex items-center gap-3">
                         <CheckCircle2 size={18} className="text-primary" />
                         <span className="text-sm text-on-surface font-medium">
-                            已选中 <span className="text-primary font-bold">{selectedIds.size}</span> 个用户
+                             {t('USER_MGMT.SELECTED_PREFIX', '已选中')} <span className="text-primary font-bold">{selectedIds.size}</span> {t('USER_MGMT.SELECTED_SUFFIX', '个用户')}
                         </span>
                         <button onClick={clearSelection} className="text-xs text-on-surface-variant hover:text-on-surface underline">
-                            取消选择
+                            {t('USER_MGMT.CLEAR_SELECTION', '取消选择')}
                         </button>
                     </div>
                     <div className="flex items-center gap-2">
                         <button
                             onClick={() => openBulkModal('add')}
                             className="flex items-center gap-1.5 px-3 py-1.5 bg-success/20 hover:bg-success/40 text-success border border-success/40 rounded-control text-xs font-medium transition-colors"
-                            title="为所选用户增加额度"
+                            title={t('USER_MGMT.BULK_ADD_TITLE', '为所选用户增加额度')}
                         >
-                            <Plus size={14} /> 增加额度
+                            <Plus size={14} /> {t('USER_MGMT.BULK_ADD', '增加额度')}
                         </button>
                         <button
                             onClick={() => openBulkModal('sub')}
                             className="flex items-center gap-1.5 px-3 py-1.5 bg-warning/20 hover:bg-warning/40 text-warning border border-warning/40 rounded-control text-xs font-medium transition-colors"
-                            title="为所选用户扣减额度（不会扣到负数）"
+                            title={t('USER_MGMT.BULK_SUB_TITLE', '为所选用户扣减额度（不会扣到负数）')}
                         >
-                            <Minus size={14} /> 减少额度
+                            <Minus size={14} /> {t('USER_MGMT.BULK_SUB', '减少额度')}
                         </button>
                         <button
                             onClick={() => openBulkModal('set')}
                             className="flex items-center gap-1.5 px-3 py-1.5 bg-primary/20 hover:bg-primary/40 text-primary border border-primary/40 rounded-control text-xs font-medium transition-colors"
-                            title="把所选用户的额度直接设置为某值"
+                            title={t('USER_MGMT.BULK_SET_TITLE', '把所选用户的额度直接设置为某值')}
                         >
-                            <Equal size={14} /> 设为定值
+                            <Equal size={14} /> {t('USER_MGMT.BULK_SET', '设为定值')}
                         </button>
                         <div className="w-px h-6 bg-outline-variant mx-1" />
                         <button
@@ -319,9 +325,9 @@ const UserManagement = () => {
                             onClick={submitBulkDelete}
                             disabled={bulkProcessing}
                             className="flex items-center gap-1.5 px-3 py-1.5 bg-error/20 hover:bg-error/40 text-error border border-error/40 rounded-control text-xs font-medium transition-colors disabled:opacity-50"
-                            title="物理删除所选用户（含 token），不可恢复"
+                            title={t('USER_MGMT.BULK_DELETE_TITLE', '物理删除所选用户（含 token），不可恢复')}
                         >
-                            <Trash2 size={14} /> 批量删除
+                            <Trash2 size={14} /> {t('USER_MGMT.BULK_DELETE', '批量删除')}
                         </button>
                     </div>
                 </div>
@@ -339,19 +345,19 @@ const UserManagement = () => {
                                     ref={el => { if (el) el.indeterminate = someSelected; }}
                                     onChange={toggleSelectAll}
                                     className="w-4 h-4 cursor-pointer accent-primary"
-                                    title="全选普通用户（admin 不可选）"
+                                    title={t('USER_MGMT.SELECT_ALL_NORMAL_TITLE', '全选普通用户（admin 不可选）')}
                                 />
                             ),
                             width: 60,
                             render: u => u.role === 'admin' ? (
-                                <span className="text-fuchsia-400 text-xs" title="管理员账号受保护">🔒</span>
+                                <span className="text-fuchsia-400 text-xs" title={t('USER_MGMT.ADMIN_PROTECTED_TITLE', '管理员账号受保护')}>🔒</span>
                             ) : (
                                 <input
                                     type="checkbox"
                                     checked={selectedIds.has(u.id)}
                                     onChange={() => toggleSelect(u.id)}
                                     className="w-4 h-4 cursor-pointer accent-primary"
-                                    aria-label={`选择用户 ${u.username}`}
+                                    aria-label={t('USER_MGMT.SELECT_USER_ARIA', '选择用户 {{username}}', { username: u.username })}
                                 />
                             )
                         },
@@ -451,7 +457,7 @@ const UserManagement = () => {
                 />
             </div>
 
-            {/* 时空审计流弹窗 */}
+            {/* Audit timeline modal */}
             {logModal.isOpen && (
                 <div
                     ref={logModalRef}
@@ -489,17 +495,17 @@ const UserManagement = () => {
                                                         {log.action_type === 'CREATE' ? t('USER_MGMT.ACTION_CREATE') :
                                                          log.action_type === 'UPDATE' ? t('USER_MGMT.ACTION_UPDATE') :
                                                          log.action_type === 'DELETE' ? t('USER_MGMT.ACTION_DELETE') :
-                                                         log.action_type === 'LOGIN' ? '🔓 用户登录' :
-                                                         log.action_type === 'REGISTER' ? '🎉 注册成功' :
-                                                         log.action_type === 'CREATE_TOKEN' ? '🔑 创建 API 令牌' :
-                                                         log.action_type === 'UPDATE_TOKEN' ? '✏️ 修改 API 令牌' :
-                                                         log.action_type === 'DELETE_TOKEN' ? '🗑️ 删除 API 令牌' :
-                                                         log.action_type === 'BULK_QUOTA' ? '💰 批量调整额度' :
-                                                         log.action_type === 'BULK_HARD_DELETE' ? '☢️ 物理抹除' :
-                                                         log.action_type === 'ADMIN_LOGIN' ? '🛡️ 管理员登录' :
-                                                         log.action_type === 'ADMIN_LOGIN_FAIL' ? '⚠️ 管理员登录失败' :
-                                                         log.action_type === 'ADMIN_SETUP' ? '🔧 管理员凭证 setup' :
-                                                         log.action_type === 'ADMIN_CREDENTIALS_UPDATE' ? '🔐 管理员凭证修改' :
+                                                          log.action_type === 'LOGIN' ? t('USER_MGMT.ACTION_LOGIN', '🔓 用户登录') :
+                                                          log.action_type === 'REGISTER' ? t('USER_MGMT.ACTION_REGISTER', '🎉 注册成功') :
+                                                          log.action_type === 'CREATE_TOKEN' ? t('USER_MGMT.ACTION_CREATE_TOKEN', '🔑 创建 API 令牌') :
+                                                          log.action_type === 'UPDATE_TOKEN' ? t('USER_MGMT.ACTION_UPDATE_TOKEN', '✏️ 修改 API 令牌') :
+                                                          log.action_type === 'DELETE_TOKEN' ? t('USER_MGMT.ACTION_DELETE_TOKEN', '🗑️ 删除 API 令牌') :
+                                                          log.action_type === 'BULK_QUOTA' ? t('USER_MGMT.ACTION_BULK_QUOTA', '💰 批量调整额度') :
+                                                          log.action_type === 'BULK_HARD_DELETE' ? t('USER_MGMT.ACTION_BULK_HARD_DELETE', '☢️ 物理抹除') :
+                                                          log.action_type === 'ADMIN_LOGIN' ? t('USER_MGMT.ACTION_ADMIN_LOGIN', '🛡️ 管理员登录') :
+                                                          log.action_type === 'ADMIN_LOGIN_FAIL' ? t('USER_MGMT.ACTION_ADMIN_LOGIN_FAIL', '⚠️ 管理员登录失败') :
+                                                          log.action_type === 'ADMIN_SETUP' ? t('USER_MGMT.ACTION_ADMIN_SETUP', '🔧 管理员凭证 setup') :
+                                                          log.action_type === 'ADMIN_CREDENTIALS_UPDATE' ? t('USER_MGMT.ACTION_ADMIN_CREDENTIALS_UPDATE', '🔐 管理员凭证修改') :
                                                          log.action_type}
                                                     </div>
                                                     <div className="text-xs text-on-surface font-mono bg-surface-container-high px-2 py-0.5 rounded-control">{new Date(log.created_at).toLocaleString('zh-CN', { hour12: false })}</div>
@@ -519,20 +525,44 @@ const UserManagement = () => {
                                                                     if (c.type === 'BAN_REASON') return t('USER_MGMT.LOG_UPDATE_BAN_REASON', { target: c.target, old: c.old || t('USER_MGMT.NONE'), new: c.new || t('USER_MGMT.NONE') });
                                                                     if (c.type === 'CREATE') return t('USER_MGMT.LOG_CREATE', { target: c.target, quota: formatCurrency(Number(c.quota), 2) });
                                                                     if (c.type === 'DELETE') return t('USER_MGMT.LOG_DELETE', { target: c.target });
-                                                                    if (c.type === 'LOGIN') return `通过 [${c.via || 'unknown'}] 登录回归`;
-                                                                    if (c.type === 'REGISTER') return `经 [${c.via || 'unknown'}] 完成注册（用户名 [${c.username}]${c.github_id ? `, gh:${c.github_id}` : ''}${c.phone ? `, 📱${c.phone}` : ''}）`;
-                                                                    if (c.type === 'CREATE_TOKEN') return `创建 API 令牌 [${c.name}]，限额 ${formatCurrency(Number(c.quota_limit) || 0, 2)}（0 表示不限）`;
-                                                                    if (c.type === 'UPDATE_TOKEN') return `修改 API 令牌 [${c.name}]（ID ${c.token_id}）`;
-                                                                    if (c.type === 'DELETE_TOKEN') return `删除 API 令牌 [${c.token_name}]（ID ${c.token_id}）`;
+                                                                    if (c.type === 'LOGIN') return t('USER_MGMT.LOG_LOGIN', '通过 [{{via}}] 登录回归', { via: c.via || 'unknown' });
+                                                                    if (c.type === 'REGISTER') return t('USER_MGMT.LOG_REGISTER', '经 [{{via}}] 完成注册（用户名 [{{username}}]{{extra}}）', {
+                                                                        via: c.via || 'unknown',
+                                                                        username: c.username,
+                                                                        extra: `${c.github_id ? `, gh:${c.github_id}` : ''}${c.phone ? `, phone:${c.phone}` : ''}`,
+                                                                    });
+                                                                    if (c.type === 'CREATE_TOKEN') return t('USER_MGMT.LOG_CREATE_TOKEN', '创建 API 令牌 [{{name}}]，限额 {{quota}}（0 表示不限）', { name: c.name, quota: formatCurrency(Number(c.quota_limit) || 0, 2) });
+                                                                    if (c.type === 'UPDATE_TOKEN') return t('USER_MGMT.LOG_UPDATE_TOKEN', '修改 API 令牌 [{{name}}]（ID {{id}}）', { name: c.name, id: c.token_id });
+                                                                    if (c.type === 'DELETE_TOKEN') return t('USER_MGMT.LOG_DELETE_TOKEN', '删除 API 令牌 [{{name}}]（ID {{id}}）', { name: c.token_name, id: c.token_id });
                                                                     if (c.type === 'BULK_QUOTA') {
-                                                                        const modeText = c.mode === 'add' ? '增加' : c.mode === 'sub' ? '扣减' : '设为';
-                                                                        return `批量${modeText}额度 → 用户 [${c.target}] 从 ${formatCurrency(Number(c.old), 2)} 变为 ${formatCurrency(Number(c.new), 2)}（操作金额 ${formatCurrency(Number(c.amount), 2)}）`;
+                                                                        const modeText = c.mode === 'add'
+                                                                            ? t('USER_MGMT.BULK_MODE_ADD', '增加')
+                                                                            : c.mode === 'sub'
+                                                                                ? t('USER_MGMT.BULK_MODE_SUB', '扣减')
+                                                                                : t('USER_MGMT.BULK_MODE_SET', '设为');
+                                                                        return t('USER_MGMT.LOG_BULK_QUOTA', '批量{{mode}}额度 → 用户 [{{target}}] 从 {{old}} 变为 {{new}}（操作金额 {{amount}}）', {
+                                                                            mode: modeText,
+                                                                            target: c.target,
+                                                                            old: formatCurrency(Number(c.old), 2),
+                                                                            new: formatCurrency(Number(c.new), 2),
+                                                                            amount: formatCurrency(Number(c.amount), 2),
+                                                                        });
                                                                     }
-                                                                    if (c.type === 'BULK_HARD_DELETE') return `物理抹除用户 [${c.target}]（ID ${c.user_id}${c.github_id ? `, gh:${c.github_id}` : ''}）`;
-                                                                    if (c.type === 'ADMIN_LOGIN') return `管理员账号 [${c.username}] 登录成功`;
-                                                                    if (c.type === 'ADMIN_LOGIN_FAIL') return `管理员账号 [${c.username}] 登录失败（密码错误）`;
-                                                                    if (c.type === 'ADMIN_SETUP') return `管理员凭证 setup：[${c.old_username}] → [${c.new_username}]${c.initial_setup ? '（首次安装态）' : '（带旧密码校验）'}`;
-                                                                    if (c.type === 'ADMIN_CREDENTIALS_UPDATE') return `管理员从面板修改凭证：[${c.old_username}] → [${c.new_username}]`;
+                                                                    if (c.type === 'BULK_HARD_DELETE') return t('USER_MGMT.LOG_BULK_HARD_DELETE', '物理抹除用户 [{{target}}]（ID {{id}}{{extra}}）', {
+                                                                        target: c.target,
+                                                                        id: c.user_id,
+                                                                        extra: c.github_id ? `, gh:${c.github_id}` : '',
+                                                                    });
+                                                                    if (c.type === 'ADMIN_LOGIN') return t('USER_MGMT.LOG_ADMIN_LOGIN', '管理员账号 [{{username}}] 登录成功', { username: c.username });
+                                                                    if (c.type === 'ADMIN_LOGIN_FAIL') return t('USER_MGMT.LOG_ADMIN_LOGIN_FAIL', '管理员账号 [{{username}}] 登录失败（密码错误）', { username: c.username });
+                                                                    if (c.type === 'ADMIN_SETUP') return t('USER_MGMT.LOG_ADMIN_SETUP', '管理员凭证 setup：[{{old}}] → [{{next}}]{{mode}}', {
+                                                                        old: c.old_username,
+                                                                        next: c.new_username,
+                                                                        mode: c.initial_setup
+                                                                            ? t('USER_MGMT.LOG_ADMIN_SETUP_INITIAL', '（首次安装态）')
+                                                                            : t('USER_MGMT.LOG_ADMIN_SETUP_WITH_OLD_PASSWORD', '（带旧密码校验）'),
+                                                                    });
+                                                                    if (c.type === 'ADMIN_CREDENTIALS_UPDATE') return t('USER_MGMT.LOG_ADMIN_CREDENTIALS_UPDATE', '管理员从面板修改凭证：[{{old}}] → [{{next}}]', { old: c.old_username, next: c.new_username });
                                                                     return JSON.stringify(c);
                                                                 });
                                                             }
@@ -552,7 +582,7 @@ const UserManagement = () => {
                                                     })()}
                                                 </div>
                                                 <div className="mt-4 flex items-center justify-between text-xs text-on-surface-variant border-t border-outline-variant pt-3">
-                                                    <span>{t('USER_MGMT.LOG_OPERATOR')} <span className="text-warning font-bold">{(log.operator_role === '管理员(Admin)' || log.operator_role === '管理员') ? t('USER_MGMT.LOG_ADMIN') : log.operator_role}</span></span>
+                                                    <span>{t('USER_MGMT.LOG_OPERATOR')} <span className="text-warning font-bold">{(log.operator_role === 'admin' || log.operator_role === 'Admin') ? t('USER_MGMT.LOG_ADMIN') : log.operator_role}</span></span>
                                                     <span>{t('USER_MGMT.LOG_IP')} <span className="text-on-surface font-mono">{log.ip_address}</span></span>
                                                 </div>
                                             </div>
@@ -565,7 +595,7 @@ const UserManagement = () => {
                 </div>
             )}
 
-            {/* 编辑/新建 弹窗 */}
+            {/* Edit modal */}
             {modalConfig.isOpen && (
                 <div
                     ref={editModalRef}
@@ -622,10 +652,7 @@ const UserManagement = () => {
                             {formData.status === 2 && (
                                 <div className="flex flex-col gap-1.5">
                                     <label htmlFor="user-mgmt-ban-reason" className="text-xs font-semibold text-on-surface-variant ml-1">{t('USER_MGMT.MODAL_BAN_REASON')}</label>
-                                    {/* fix M22-F1（codex 第二十二轮）：原 aria-invalid="true" 是误用 ——
-                                        红色边框只是"这是敏感字段"的视觉提示，不是表单校验错误。
-                                        恒真的 aria-invalid 会让屏幕阅读器每键都播报"无效"，反而是噪音。
-                                        ban reason 暂无校验规则，移除 aria-invalid。 */}
+                                    {/* The red border is a sensitive-field cue, not a validation error. */}
                                     <textarea
                                         id="user-mgmt-ban-reason"
                                         value={formData.ban_reason}
@@ -645,7 +672,7 @@ const UserManagement = () => {
                 </div>
             )}
 
-            {/* 批量额度调整弹窗 */}
+            {/* Bulk quota modal */}
             {bulkModal.isOpen && (
                 <div
                     ref={bulkModalRef}
@@ -660,17 +687,19 @@ const UserManagement = () => {
                             <X size={18} />
                         </button>
                         <h2 id="bulk-modal-title" className="text-xl font-bold text-on-surface mb-2 flex items-center gap-2">
-                            {bulkModal.mode === 'add' && <><Plus size={18} className="text-success" /> 批量增加额度</>}
-                            {bulkModal.mode === 'sub' && <><Minus size={18} className="text-warning" /> 批量减少额度</>}
-                            {bulkModal.mode === 'set' && <><Equal size={18} className="text-primary" /> 批量设置额度</>}
+                            {bulkModal.mode === 'add' && <><Plus size={18} className="text-success" /> {t('USER_MGMT.BULK_MODAL_ADD_TITLE', '批量增加额度')}</>}
+                            {bulkModal.mode === 'sub' && <><Minus size={18} className="text-warning" /> {t('USER_MGMT.BULK_MODAL_SUB_TITLE', '批量减少额度')}</>}
+                            {bulkModal.mode === 'set' && <><Equal size={18} className="text-primary" /> {t('USER_MGMT.BULK_MODAL_SET_TITLE', '批量设置额度')}</>}
                         </h2>
                         <p className="text-xs text-on-surface-variant mb-5">
-                            将作用于已选中的 <span className="text-primary font-bold">{selectedIds.size}</span> 个用户。管理员账号会被自动跳过。
+                            {t('USER_MGMT.BULK_MODAL_DESC_PREFIX', '将作用于已选中的')}{' '}
+                            <span className="text-primary font-bold">{selectedIds.size}</span>{' '}
+                            {t('USER_MGMT.BULK_MODAL_DESC_SUFFIX', '个用户。管理员账号会被自动跳过。')}
                         </p>
 
                         <div className="flex flex-col gap-2">
                             <label htmlFor="user-mgmt-bulk-amount" className="text-xs font-semibold text-on-surface-variant ml-1">
-                                金额 ({displayCurrency === 'CNY' ? '￥' : '$'})
+                                {t('USER_MGMT.BULK_AMOUNT_LABEL', '金额')} ({displayCurrency === 'CNY' ? '￥' : '$'})
                             </label>
                             <input
                                 id="user-mgmt-bulk-amount"
@@ -680,13 +709,13 @@ const UserManagement = () => {
                                 autoFocus
                                 value={bulkModal.amount}
                                 onChange={e => setBulkModal({ ...bulkModal, amount: e.target.value })}
-                                placeholder={bulkModal.mode === 'set' ? '例如 1.00' : '例如 0.50'}
+                                placeholder={bulkModal.mode === 'set' ? t('USER_MGMT.BULK_AMOUNT_SET_PLACEHOLDER', '例如 1.00') : t('USER_MGMT.BULK_AMOUNT_DELTA_PLACEHOLDER', '例如 0.50')}
                                 className="w-full h-11 bg-surface-container-high border border-outline rounded-control px-3 text-base text-on-surface focus:border-primary outline-none font-mono"
                             />
                             {bulkModal.mode === 'sub' && (
                                 <p className="text-xs text-warning/80 flex items-start gap-1.5 mt-1">
                                     <AlertTriangle size={12} className="mt-0.5 shrink-0" />
-                                    扣减后若额度低于 0，将自动 clamp 到 0，不会变成负数。
+                                    {t('USER_MGMT.BULK_SUB_HINT', '扣减后若额度低于 0，将自动 clamp 到 0，不会变成负数。')}
                                 </p>
                             )}
                         </div>
@@ -696,21 +725,21 @@ const UserManagement = () => {
                                 onClick={() => setBulkModal({ isOpen: false, mode: 'add', amount: '' })}
                                 className="flex-1 h-10 bg-surface-container-high border border-outline-variant text-on-surface-variant rounded-control hover:bg-surface-variant transition-colors text-sm"
                             >
-                                取消
+                                {t('COMMON.CANCEL', '取消')}
                             </button>
                             <button
                                 onClick={submitBulkQuota}
                                 disabled={bulkProcessing || !bulkModal.amount}
                                 className="flex-1 h-10 bg-primary text-on-primary font-medium rounded-control hover:opacity-90 disabled:opacity-40 transition-opacity text-sm"
                             >
-                                {bulkProcessing ? '处理中...' : '确认应用'}
+                                {bulkProcessing ? t('USER_MGMT.BULK_PROCESSING', '处理中...') : t('USER_MGMT.BULK_APPLY', '确认应用')}
                             </button>
                         </div>
                     </div>
                 </div>
             )}
 
-            {/* 账单查看模态框 */}
+            {/* Billing modal */}
             {billsModal.isOpen && billsModal.user && (
                 <AdminUserBills
                     userId={billsModal.user.id}
@@ -719,7 +748,7 @@ const UserManagement = () => {
                 />
             )}
 
-            {/* 优惠券查看 + 发放模态框（fix R23+2-F2/F3：admin 独立看券+发券入口） */}
+            {/* Coupon view/grant modal */}
             {couponsModal.isOpen && couponsModal.user && (
                 <AdminUserCouponsModal
                     userId={couponsModal.user.id}
@@ -728,7 +757,7 @@ const UserManagement = () => {
                 />
             )}
 
-            {/* 批量发券模态框 */}
+            {/* Bulk coupon grant modal */}
             <BulkGrantCouponModal
                 open={bulkCouponModalOpen}
                 onClose={() => setBulkCouponModalOpen(false)}

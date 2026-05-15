@@ -1,4 +1,5 @@
 import React, { useState, useEffect, useCallback, useRef } from 'react';
+import { useTranslation } from 'react-i18next';
 import { Layers, Plus, Edit, Trash2, X, Save, AlertTriangle, Download, Upload } from 'lucide-react';
 import toast from 'react-hot-toast';
 import { useConfirm } from '../context/ConfirmContext';
@@ -28,16 +29,15 @@ const parseQuotaRow = (r) => ({
   priority: parseInt(r.priority) || 100,
   overflow_strategy: r.overflow_strategy || 'block',
   auto_sync_from_channel_models: r.auto_sync_from_channel_models === '1' || r.auto_sync_from_channel_models === 'true',
-  enabled: r.enabled === '1' || r.enabled === 'true' || r.enabled === '是',
+  enabled: r.enabled === '1' || r.enabled === 'true',
   extra_config: r.extra_config || '{}',
 });
 
-// 配额计划库 admin UI。所有字段都暴露给 admin 自由配置，包括：
+// Quota-plan admin UI. All fields are exposed for admin configuration, including:
 //   - limit_unit: api_cost_usd/request_count/input_tokens/output_tokens/total_tokens/weighted_tokens
-//   - model_match: JSON 数组的 glob 通配
-//   - weight_factor: 灵活 JSON
-//   - overflow_strategy: 仅 block / next_subscription（Sprint2-M4 收敛枚举，
-//     删除了未实现的 allow / degrade_model；后端 isValidOverflowStrategy 强校验）
+//   - model_match: JSON array glob matching
+//   - weight_factor: flexible JSON
+//   - overflow_strategy: block / next_subscription only
 
 const EMPTY_PLAN = {
   name: '', display_name: '', description: '',
@@ -50,6 +50,7 @@ const EMPTY_PLAN = {
 
 const QuotaPlanManagement = () => {
   const confirm = useConfirm();
+  const { t } = useTranslation();
   const [plans, setPlans] = useState([]);
   const [loading, setLoading] = useState(true);
   const [editing, setEditing] = useState(null); // null | EMPTY_PLAN | existing
@@ -61,7 +62,7 @@ const QuotaPlanManagement = () => {
       const json = await res.json();
       if (json.success) setPlans(json.data || []);
     } catch {
-      toast.error('加载失败');
+      toast.error(t('QUOTA_PLAN.LOAD_FAIL', '加载失败'));
     } finally {
       setLoading(false);
     }
@@ -73,21 +74,23 @@ const QuotaPlanManagement = () => {
   const startEdit = (p) => setEditing({ ...p });
   const cancel = () => setEditing(null);
 
-  // fix CRITICAL C-F1（gemini 第二十一轮）：补声明 onEditBackdropClick + editCloseBtnRef + modalRef，
-  // 原代码在 JSX 中引用但从未声明 → 模态打开必抛 ReferenceError。补全 + 启用 focus trap。
+  // fix CRITICAL C-F1 (gemini round 21): define modal refs used by JSX and enable focus trap.
   const editCloseBtnRef = useRef(null);
   const editModalRef = useRef(null);
   const { onBackdropClick: onEditBackdropClick } = useModalA11y(!!editing, cancel, editCloseBtnRef, editModalRef);
 
   const save = async () => {
     if (!editing.name) {
-      toast.error('名称必填');
+      toast.error(t('QUOTA_PLAN.NAME_REQUIRED', '名称必填'));
       return;
     }
-    // JSON 字段格式校验
+    // JSON field validation.
     for (const f of ['model_match', 'weight_factor', 'extra_config']) {
       try { JSON.parse(editing[f] || '{}'); }
-      catch { toast.error(`${f} 必须是合法 JSON`); return; }
+      catch {
+        toast.error(t('QUOTA_PLAN.JSON_INVALID', '{{field}} 必须是合法 JSON', { field: f }));
+        return;
+      }
     }
     setSaving(true);
     const isNew = !editing.id;
@@ -103,42 +106,42 @@ const QuotaPlanManagement = () => {
       );
       const json = await res.json();
       if (json.success) {
-        toast.success(isNew ? '创建成功' : '已更新');
+        toast.success(isNew ? t('QUOTA_PLAN.CREATE_OK', '创建成功') : t('QUOTA_PLAN.UPDATE_OK', '已更新'));
         setEditing(null);
         load();
       } else {
-        toast.error(json.message || '保存失败');
+        toast.error(json.message || t('QUOTA_PLAN.SAVE_FAIL', '保存失败'));
       }
     } catch {
-      toast.error('网络异常');
+      toast.error(t('QUOTA_PLAN.NETWORK_ERROR', '网络异常'));
     } finally {
       setSaving(false);
     }
   };
 
   const remove = async (p) => {
-    if (!(await confirm(`删除配额计划「${p.name}」？`))) return;
+    if (!(await confirm(t('QUOTA_PLAN.DELETE_CONFIRM', '删除配额计划「{{name}}」？', { name: p.name })))) return;
     try {
       const res = await fetch(`/api/admin/quota-plans/${p.id}`, {
         method: 'DELETE', credentials: 'include',
       });
       const json = await res.json();
       if (json.success) {
-        toast.success('已删除');
+        toast.success(t('QUOTA_PLAN.DELETE_OK', '已删除'));
         load();
       } else if (json.message_code === 'ERR_PLAN_IN_USE') {
-        toast.error(`仍被 ${json.ref_count} 个套餐引用`);
+        toast.error(t('QUOTA_PLAN.PLAN_IN_USE', '仍被 {{count}} 个套餐引用', { count: json.ref_count }));
       } else {
-        toast.error(json.message || '删除失败');
+        toast.error(json.message || t('QUOTA_PLAN.DELETE_FAIL', '删除失败'));
       }
     } catch {
-      toast.error('网络异常，删除失败');
+      toast.error(t('QUOTA_PLAN.DELETE_NET_FAIL', '网络异常，删除失败'));
     }
   };
 
   const updateField = (k, v) => setEditing(prev => ({ ...prev, [k]: v }));
 
-  // ─── CSV 导入 / 导出 ───────────────────────────────────────────
+  // CSV import/export.
   const exportCSV = () => {
     const rows = plans.map((p) => ({
       id: p.id,
@@ -159,15 +162,18 @@ const QuotaPlanManagement = () => {
     const csv = toCSV(QP_CSV_COLUMNS, rows);
     const stamp = new Date().toISOString().slice(0, 10);
     downloadCSV(`quota-plans-${stamp}.csv`, csv);
-    toast.success(`已导出 ${rows.length} 条`);
+    toast.success(t('QUOTA_PLAN.EXPORT_OK', '已导出 {{count}} 条', { count: rows.length }));
   };
 
   const importCSV = async () => {
     let text;
     try { text = await pickCSVFile(); } catch { return; }
     const { rows } = parseCSV(text);
-    if (rows.length === 0) { toast.error('CSV 为空或解析失败'); return; }
-    if (!(await confirm(`确认导入 ${rows.length} 条配额计划？\n有 id 的按 id 更新，无 id 的新建。`))) return;
+    if (rows.length === 0) {
+      toast.error(t('QUOTA_PLAN.CSV_EMPTY', 'CSV 为空或解析失败'));
+      return;
+    }
+    if (!(await confirm(t('QUOTA_PLAN.IMPORT_CONFIRM', '确认导入 {{count}} 条配额计划？\n有 id 的按 id 更新，无 id 的新建。', { count: rows.length })))) return;
 
     let ok = 0, fail = 0;
     const failures = [];
@@ -187,19 +193,25 @@ const QuotaPlanManagement = () => {
           ok++;
         } else {
           fail++;
-          failures.push(`「${raw.name || `#${id || '?'}`}」: ${r.message || r.message_code || '未知错误'}`);
+          failures.push(t('QUOTA_PLAN.IMPORT_ROW_FAIL', '「{{name}}」: {{message}}', {
+            name: raw.name || `#${id || '?'}`,
+            message: r.message || r.message_code || t('QUOTA_PLAN.UNKNOWN_ERROR', '未知错误'),
+          }));
         }
       } catch (e) {
         fail++;
-        failures.push(`「${raw.name || `#${id || '?'}`}」: ${e.message || '网络异常'}`);
+        failures.push(t('QUOTA_PLAN.IMPORT_ROW_FAIL', '「{{name}}」: {{message}}', {
+          name: raw.name || `#${id || '?'}`,
+          message: e.message || t('QUOTA_PLAN.NETWORK_ERROR', '网络异常'),
+        }));
       }
     }
     if (fail === 0) {
-      toast.success(`导入成功 ${ok} 条`);
+      toast.success(t('QUOTA_PLAN.IMPORT_OK', '导入成功 {{count}} 条', { count: ok }));
     } else if (ok === 0) {
-      toast.error(`全部 ${fail} 条导入失败：\n${failures.slice(0, 3).join('\n')}`, { duration: 8000 });
+      toast.error(t('QUOTA_PLAN.IMPORT_ALL_FAIL', '全部 {{fail}} 条导入失败：\n{{errors}}', { fail, errors: failures.slice(0, 3).join('\n') }), { duration: 8000 });
     } else {
-      toast.error(`部分失败：成功 ${ok}，失败 ${fail}\n${failures.slice(0, 3).join('\n')}`, { duration: 8000 });
+      toast.error(t('QUOTA_PLAN.IMPORT_PARTIAL_FAIL', '部分失败：成功 {{ok}}，失败 {{fail}}\n{{errors}}', { ok, fail, errors: failures.slice(0, 3).join('\n') }), { duration: 8000 });
     }
     load();
   };
@@ -209,33 +221,33 @@ const QuotaPlanManagement = () => {
       <div className="mb-8 border-b border-outline-variant pb-6 flex flex-col md:flex-row md:items-end md:justify-between gap-4">
         <div>
           <h1 className="text-xl md:text-2xl font-bold text-on-surface flex items-center gap-3">
-            <Layers size={22} className="text-primary" /> 配额计划库
+            <Layers size={22} className="text-primary" /> {t('QUOTA_PLAN.TITLE', '配额计划库')}
           </h1>
           <p className="text-on-surface-variant mt-2 text-sm">
-            最小复用单元，被销售套餐通过引用方式组合使用。支持 CSV 批量导入/导出。
+            {t('QUOTA_PLAN.DESC', '最小复用单元，被销售套餐通过引用方式组合使用。支持 CSV 批量导入/导出。')}
           </p>
         </div>
         <div className="flex flex-wrap items-center gap-2">
           <button type="button" onClick={exportCSV}
             className="h-10 px-4 bg-surface-container-high border border-outline-variant rounded-control text-sm flex items-center gap-1.5 hover:bg-surface-variant">
-            <Download size={14} /> 导出 CSV
+            <Download size={14} /> {t('QUOTA_PLAN.EXPORT_CSV', '导出 CSV')}
           </button>
           <button type="button" onClick={importCSV}
             className="h-10 px-4 bg-surface-container-high border border-outline-variant rounded-control text-sm flex items-center gap-1.5 hover:bg-surface-variant">
-            <Upload size={14} /> 导入 CSV
+            <Upload size={14} /> {t('QUOTA_PLAN.IMPORT_CSV', '导入 CSV')}
           </button>
           <button type="button" onClick={startCreate}
             className="h-10 px-4 bg-primary text-on-primary rounded-control flex items-center gap-1.5 hover:opacity-90 text-sm font-medium">
-            <Plus size={14} /> 新建配额计划
+            <Plus size={14} /> {t('QUOTA_PLAN.NEW_PLAN', '新建配额计划')}
           </button>
         </div>
       </div>
 
       {loading ? (
-        <div className="text-center py-20 text-on-surface-variant">加载中...</div>
+        <div className="text-center py-20 text-on-surface-variant">{t('COMMON.LOADING', '加载中...')}</div>
       ) : plans.length === 0 ? (
         <div className="text-center py-16 bg-surface-container border border-outline-variant rounded-overlay">
-          <p className="text-on-surface-variant text-sm">还没有配额计划，点右上角创建</p>
+          <p className="text-on-surface-variant text-sm">{t('QUOTA_PLAN.EMPTY', '还没有配额计划，点右上角创建')}</p>
         </div>
       ) : (
         <SortableGrid
@@ -250,14 +262,14 @@ const QuotaPlanManagement = () => {
                 body: JSON.stringify({ ids: newOrderIds })
               });
               if (res.success) {
-                toast.success('排序已保存');
+                toast.success(t('QUOTA_PLAN.REORDER_OK', '排序已保存'));
               } else {
                 setPlans(oldItems);
-                toast.error(res.message || '排序保存失败');
+                toast.error(res.message || t('QUOTA_PLAN.REORDER_FAIL', '排序保存失败'));
               }
             } catch (e) {
               setPlans(oldItems);
-              toast.error('网络异常，排序失败');
+              toast.error(t('QUOTA_PLAN.REORDER_NET_FAIL', '网络异常，排序失败'));
             }
           }}
           renderItem={(p, dragHandleProps) => (
@@ -280,14 +292,14 @@ const QuotaPlanManagement = () => {
                 </div>
               </div>
               <div className="space-y-1 text-xs text-on-surface-variant">
-                <div>单位: <span className="text-on-surface font-mono">{p.limit_unit}</span></div>
-                <div>额度: <span className="text-on-surface font-mono">{p.limit_value}</span></div>
-                <div>窗口: <span className="text-on-surface font-mono">{p.window_seconds === 0 ? '套餐周期内' : formatDuration(p.window_seconds)}</span></div>
-                <div>优先级: {p.priority} · 溢出: <span className="text-on-surface font-mono">{p.overflow_strategy}</span></div>
+                <div>{t('QUOTA_PLAN.UNIT_LABEL', '单位:')} <span className="text-on-surface font-mono">{p.limit_unit}</span></div>
+                <div>{t('QUOTA_PLAN.LIMIT_LABEL', '额度:')} <span className="text-on-surface font-mono">{p.limit_value}</span></div>
+                <div>{t('QUOTA_PLAN.WINDOW_LABEL', '窗口:')} <span className="text-on-surface font-mono">{p.window_seconds === 0 ? t('QUOTA_PLAN.WINDOW_PACKAGE', '套餐周期内') : formatDuration(p.window_seconds)}</span></div>
+                <div>{t('QUOTA_PLAN.PRIORITY_LABEL', '优先级:')} {p.priority} · {t('QUOTA_PLAN.OVERFLOW_LABEL', '溢出:')} <span className="text-on-surface font-mono">{p.overflow_strategy}</span></div>
               </div>
               <div className="mt-3 pt-3 border-t border-outline-variant/30 flex items-center justify-between text-xs">
                 <span className={p.enabled ? 'text-success' : 'text-outline'}>
-                  {p.enabled ? '● 启用' : '○ 禁用'}
+                  {p.enabled ? t('QUOTA_PLAN.ENABLED_DOT', '● 启用') : t('QUOTA_PLAN.DISABLED_DOT', '○ 禁用')}
                 </span>
                 <span className="text-outline">ID: {p.id}</span>
               </div>
@@ -307,7 +319,9 @@ const QuotaPlanManagement = () => {
         >
           <div className="relative w-full max-w-3xl bg-surface-container border border-outline-variant rounded-overlay flex flex-col max-h-[92vh] shadow-2xl shadow-black/40">
             <div className="flex items-center justify-between px-4 sm:px-6 py-4 border-b border-outline-variant/60 shrink-0">
-              <h2 id="quota-plan-modal-title" className="text-lg font-bold text-on-surface">{editing.id ? '编辑' : '新建'}配额计划</h2>
+              <h2 id="quota-plan-modal-title" className="text-lg font-bold text-on-surface">
+                {editing.id ? t('QUOTA_PLAN.EDIT', '编辑') : t('QUOTA_PLAN.NEW', '新建')}{t('QUOTA_PLAN.PLAN_SUFFIX', '配额计划')}
+              </h2>
               <button type="button" ref={editCloseBtnRef} onClick={cancel} className="text-on-surface-variant hover:text-on-surface p-1 rounded-control">
                 <X size={18} />
               </button>
@@ -315,33 +329,35 @@ const QuotaPlanManagement = () => {
 
             <div className="px-4 sm:px-6 py-5 overflow-y-auto flex-1 min-h-0">
             <div className="grid grid-cols-1 md:grid-cols-2 gap-4 mb-4">
-              <Field label="内部名 *">
+              <Field label={t('QUOTA_PLAN.FIELD_NAME', '内部名 *')}>
                 <input className={inputCls} value={editing.name}
                   onChange={e => updateField('name', e.target.value)} placeholder="Sonnet-5h" />
               </Field>
-              <Field label="展示名">
+              <Field label={t('QUOTA_PLAN.FIELD_DISPLAY_NAME', '展示名')}>
                 <input className={inputCls} value={editing.display_name}
-                  onChange={e => updateField('display_name', e.target.value)} placeholder="Sonnet 高频" />
+                  onChange={e => updateField('display_name', e.target.value)} placeholder={t('QUOTA_PLAN.DISPLAY_NAME_PLACEHOLDER', 'Sonnet 高频')} />
               </Field>
             </div>
 
-            <Field label="描述（用户可见）">
+            <Field label={t('QUOTA_PLAN.FIELD_DESC', '描述（用户可见）')}>
               <textarea className={inputCls + ' min-h-[60px]'} value={editing.description}
                 onChange={e => updateField('description', e.target.value)} />
             </Field>
 
             <div className="grid grid-cols-1 md:grid-cols-3 gap-4 mt-4">
-              <Field label="计量单位 *" hint="api_cost_usd | request_count | input_tokens | output_tokens | total_tokens | weighted_tokens">
+              <Field label={t('QUOTA_PLAN.FIELD_LIMIT_UNIT', '计量单位 *')} hint="api_cost_usd | request_count | input_tokens | output_tokens | total_tokens | weighted_tokens">
                 <input className={inputCls} value={editing.limit_unit}
                   onChange={e => updateField('limit_unit', e.target.value)} placeholder="api_cost_usd" />
               </Field>
-              <Field label="额度值">
+              <Field label={t('QUOTA_PLAN.FIELD_LIMIT_VALUE', '额度值')}>
                 <input type="number" step="0.0001" className={inputCls} value={editing.limit_value}
                   onChange={e => updateField('limit_value', parseFloat(e.target.value) || 0)} />
               </Field>
               <Field
-                label="刷新窗口"
-                hint={editing.window_seconds === 0 ? '0 = 套餐周期内累计' : `每 ${formatDuration(editing.window_seconds)} 重置`}
+                label={t('QUOTA_PLAN.FIELD_WINDOW', '刷新窗口')}
+                hint={editing.window_seconds === 0
+                  ? t('QUOTA_PLAN.WINDOW_ZERO_HINT', '0 = 套餐周期内累计')
+                  : t('QUOTA_PLAN.WINDOW_RESET_HINT', '每 {{duration}} 重置', { duration: formatDuration(editing.window_seconds) })}
               >
                 <DurationInput
                   value={editing.window_seconds}
@@ -353,38 +369,38 @@ const QuotaPlanManagement = () => {
               </Field>
             </div>
 
-            <Field label="模型匹配 (JSON 数组，glob)" hint='例 ["claude-sonnet-*", "claude-haiku-*"]，[] 表示匹配所有'>
+            <Field label={t('QUOTA_PLAN.FIELD_MODEL_MATCH', '模型匹配 (JSON 数组，glob)')} hint={t('QUOTA_PLAN.MODEL_MATCH_HINT', '例 ["claude-sonnet-*", "claude-haiku-*"]，[] 表示匹配所有')}>
               <textarea className={inputCls + ' font-mono min-h-[60px]'} value={editing.model_match}
                 onChange={e => updateField('model_match', e.target.value)} />
             </Field>
 
-            <Field label="权重系数 (JSON)" hint='仅 weighted_tokens / token 单位需要；api_cost_usd 直接使用本次请求实价'>
+            <Field label={t('QUOTA_PLAN.FIELD_WEIGHT_FACTOR', '权重系数 (JSON)')} hint={t('QUOTA_PLAN.WEIGHT_FACTOR_HINT', '仅 weighted_tokens / token 单位需要；api_cost_usd 直接使用本次请求实价')}>
               <textarea className={inputCls + ' font-mono min-h-[80px]'} value={editing.weight_factor}
                 onChange={e => updateField('weight_factor', e.target.value)} />
             </Field>
 
             <div className="grid grid-cols-1 md:grid-cols-3 gap-4 mt-4">
-              <Field label="优先级 (小先扣)">
+              <Field label={t('QUOTA_PLAN.FIELD_PRIORITY', '优先级 (小先扣)')}>
                 <input type="number" className={inputCls} value={editing.priority}
                   onChange={e => updateField('priority', parseInt(e.target.value) || 100)} />
               </Field>
-              <Field label="溢出策略" hint="block=用尽即停 / next_subscription=软跳到下一订阅">
+              <Field label={t('QUOTA_PLAN.FIELD_OVERFLOW', '溢出策略')} hint={t('QUOTA_PLAN.OVERFLOW_HINT', 'block=用尽即停 / next_subscription=软跳到下一订阅')}>
                 <select className={inputCls} value={editing.overflow_strategy}
                   onChange={e => updateField('overflow_strategy', e.target.value)}>
-                  <option value="next_subscription">next_subscription（软跳过）</option>
-                  <option value="block">block（用尽即停）</option>
+                  <option value="next_subscription">{t('QUOTA_PLAN.OVERFLOW_NEXT', 'next_subscription（软跳过）')}</option>
+                  <option value="block">{t('QUOTA_PLAN.OVERFLOW_BLOCK', 'block（用尽即停）')}</option>
                 </select>
               </Field>
-              <Field label="启用">
+              <Field label={t('QUOTA_PLAN.FIELD_ENABLED', '启用')}>
                 <select className={inputCls} value={editing.enabled ? '1' : '0'}
                   onChange={e => updateField('enabled', e.target.value === '1')}>
-                  <option value="1">是</option>
-                  <option value="0">否</option>
+                  <option value="1">{t('COUPON.YES', '是')}</option>
+                  <option value="0">{t('COUPON.NO', '否')}</option>
                 </select>
               </Field>
             </div>
 
-            <Field label="自由扩展配置 (JSON)" hint="UI、计费等附加字段，自由定义">
+            <Field label={t('QUOTA_PLAN.FIELD_EXTRA_CONFIG', '自由扩展配置 (JSON)')} hint={t('QUOTA_PLAN.EXTRA_CONFIG_HINT', 'UI、计费等附加字段，自由定义')}>
               <textarea className={inputCls + ' font-mono min-h-[60px]'} value={editing.extra_config}
                 onChange={e => updateField('extra_config', e.target.value)} />
             </Field>
@@ -392,16 +408,16 @@ const QuotaPlanManagement = () => {
             <label className="flex items-center gap-2 mt-4 text-sm text-on-surface-variant">
               <input type="checkbox" checked={editing.auto_sync_from_channel_models}
                 onChange={e => updateField('auto_sync_from_channel_models', e.target.checked)} />
-              从 channel_models 同步权重（仅 weighted_tokens 使用；api_cost_usd 不需要）
+              {t('QUOTA_PLAN.AUTO_SYNC_LABEL', '从 channel_models 同步权重（仅 weighted_tokens 使用；api_cost_usd 不需要）')}
             </label>
 
-            </div>{/* 表单滚动区结束 */}
+            </div>{/* Form scroll area end */}
 
             <div className="flex justify-end gap-2 px-4 sm:px-6 py-4 border-t border-outline-variant/60 bg-surface-container-low rounded-control-b-2xl shrink-0">
-              <button type="button" onClick={cancel} className="px-4 py-2 bg-surface-container-high border border-outline-variant rounded-control text-sm hover:bg-surface-variant">取消</button>
+              <button type="button" onClick={cancel} className="px-4 py-2 bg-surface-container-high border border-outline-variant rounded-control text-sm hover:bg-surface-variant">{t('COMMON.CANCEL', '取消')}</button>
               <button type="button" onClick={save} disabled={saving}
                 className="px-5 py-2 bg-primary text-on-primary rounded-control text-sm font-medium flex items-center gap-1.5 disabled:opacity-50 hover:opacity-90">
-                <Save size={14} /> {saving ? '保存中...' : '保存'}
+                <Save size={14} /> {saving ? t('COMMON.SAVING', '保存中...') : t('COMMON.SAVE', '保存')}
               </button>
             </div>
           </div>
@@ -413,7 +429,7 @@ const QuotaPlanManagement = () => {
 
 const inputCls = 'w-full h-10 bg-surface-container-high border border-outline rounded-control px-3 text-sm text-on-surface outline-none focus:border-primary';
 
-// Field 自动给子 input/textarea/select 注入 id，并把 label htmlFor 关联，提升 a11y。
+// Field injects ids into child input/textarea/select elements and connects label htmlFor for a11y.
 const Field = ({ label, hint, children }) => {
   const id = React.useId();
   const enhancedChildren = React.Children.map(children, (child) => {

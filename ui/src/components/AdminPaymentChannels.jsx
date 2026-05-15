@@ -10,15 +10,15 @@ const FIELDS = [
   { key: 'yifut_merchant_private_key', label: 'FIELD_PRIVATE_KEY',      type: 'pem-secret', hint: 'FIELD_PRIVATE_KEY_HINT' },
   { key: 'yifut_platform_public_key',  label: 'FIELD_PUBLIC_KEY',       type: 'pem',        hint: 'FIELD_PUBLIC_KEY_HINT' },
   { key: 'yifut_enabled_methods',      label: 'FIELD_ENABLED_METHODS',  type: 'methods' },
-  // Sprint4-M3：金额单位改为 fen int（admin 配置时直接输入 fen 整数，杜绝 float）
+  // Sprint4-M3: amounts are stored as integer fen; admin enters fen directly to avoid floats.
   { key: 'yifut_preset_amounts_fen',   label: 'FIELD_PRESETS',          type: 'text', hint: 'FIELD_PRESETS_FEN_HINT' },
   { key: 'yifut_min_amount_fen',       label: 'FIELD_MIN',              type: 'number', hint: 'FIELD_FEN_HINT' },
   { key: 'yifut_max_amount_fen',       label: 'FIELD_MAX',              type: 'number', hint: 'FIELD_FEN_HINT' },
   { key: 'yifut_product_name',         label: 'FIELD_PRODUCT_NAME',     type: 'text' },
 ];
 
-// 易付通 V2 RSA 支持的全部支付方式（与 controller/topup.go::allowedPayTypes 对齐）
-// fix Major Codex UX 审查（第二十五轮）：原注释 V1 错误；后端实现已迁移到 V2/RSA。
+// All payment methods supported by Yifut V2 RSA, aligned with controller/topup.go::allowedPayTypes.
+// fix Major Codex UX review round 25: the old V1 comment was wrong; backend has moved to V2/RSA.
 const ALL_PAY_METHODS = [
   { id: 'alipay',    i18n: 'PAY_ALIPAY',    color: 'bg-[#1677ff]', text: 'text-white' },
   { id: 'wxpay',     i18n: 'PAY_WXPAY',     color: 'bg-[#07c160]', text: 'text-white' },
@@ -64,10 +64,10 @@ const AdminPaymentChannels = () => {
   const handleSave = async () => {
     setSaving(true);
     try {
-      // 只发本面板的 yifut_* 字段，避免覆盖其他面板配置
+      // Send only this panel's yifut_* fields to avoid overwriting other config panels.
       const payload = {};
       for (const f of FIELDS) payload[f.key] = values[f.key] ?? '';
-      // ?allow_empty=1 让空值表示"清空"，否则后端会跳过空字段（admin 永远清不了已设置的值）
+      // ?allow_empty=1 lets empty strings mean "clear"; otherwise the backend skips empty fields.
       const json = await authFetch('/api/admin/config?allow_empty=1', {
         method: 'POST',
         body: payload,
@@ -140,7 +140,9 @@ const AdminPaymentChannels = () => {
                       <button
                         type="button"
                         onClick={() => setShowSecret({ ...showSecret, [f.key]: !showSecret[f.key] })}
-                        aria-label={showSecret[f.key] ? '隐藏密钥' : '显示密钥'}
+                        aria-label={showSecret[f.key]
+                          ? t('PAY_ADMIN.HIDE_SECRET_ARIA', '隐藏密钥')
+                          : t('PAY_ADMIN.SHOW_SECRET_ARIA', '显示密钥')}
                         className="text-[11px] text-primary hover:underline ml-auto flex items-center gap-1"
                       >
                         {showSecret[f.key] ? <EyeOff size={12} /> : <Eye size={12} />}
@@ -193,8 +195,8 @@ const AdminPaymentChannels = () => {
   );
 };
 
-// MethodsPicker 多选 chips：每个支付方式一个按钮，点击 toggle，
-// 状态以 CSV 存回父组件（保持后端 SysConfig "alipay,wxpay" 兼容）。
+// MethodsPicker multi-select chips, one toggle button per payment method.
+// State is saved to the parent as CSV for SysConfig compatibility.
 const MethodsPicker = ({ value, onChange, t }) => {
   const selected = new Set(parseMethods(value));
 
@@ -202,7 +204,7 @@ const MethodsPicker = ({ value, onChange, t }) => {
     const next = new Set(selected);
     if (next.has(id)) next.delete(id);
     else next.add(id);
-    // 按 ALL_PAY_METHODS 顺序输出，避免顺序漂移
+    // Preserve ALL_PAY_METHODS order to avoid drift.
     const ordered = ALL_PAY_METHODS.filter(m => next.has(m.id)).map(m => m.id);
     onChange(stringifyMethods(ordered));
   };
@@ -242,9 +244,10 @@ const MethodsPicker = ({ value, onChange, t }) => {
         <span className="font-mono">
           {selected.size === 0
             ? t('PAY_ADMIN.METHODS_NONE', '未启用任何支付方式')
-            : t('PAY_ADMIN.METHODS_ENABLED', '已启用 {{count}} 项：{{list}}')
-                .replace('{{count}}', selected.size)
-                .replace('{{list}}', [...selected].join(', '))}
+            : t('PAY_ADMIN.METHODS_ENABLED', '已启用 {{count}} 项：{{list}}', {
+                count: selected.size,
+                list: [...selected].join(', '),
+              })}
         </span>
       </div>
     </div>

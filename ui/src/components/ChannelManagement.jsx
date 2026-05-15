@@ -49,8 +49,7 @@ const ChannelManagement = () => {
     const [loadingUpstream, setLoadingUpstream] = useState(false);
     const [selectedUpstreamModels, setSelectedUpstreamModels] = useState([]);
 
-    // 按厂商（provider）分组，不再用首字母（之前 gemini/gpt 都落在 "G" 下混在一起）。
-    // 顺序：Anthropic → OpenAI → Google → Other，组内按模型 id 字典序。
+    // Group by provider instead of initial letter, then sort by model id inside each group.
     const upstreamModelsByProvider = useMemo(() => {
         if (!Array.isArray(upstreamModels) || upstreamModels.length === 0) return [];
         const classify = (id) => {
@@ -66,9 +65,9 @@ const ChannelManagement = () => {
             acc[g].push(modelId);
             return acc;
         }, {});
-        // 组内排序
+        // Sort inside each group.
         Object.values(grouped).forEach(arr => arr.sort((a, b) => a.localeCompare(b)));
-        // 组顺序按预设
+        // Preserve preferred group order.
         const order = ['Anthropic', 'OpenAI', 'Google', 'Other'];
         return order.filter(g => grouped[g]?.length).map(g => [g, grouped[g]]);
     }, [upstreamModels]);
@@ -76,11 +75,11 @@ const ChannelManagement = () => {
     const initChanForm = { type: 'cliproxy', name: '', key: '', base_url: '', proxy_url: '', headers: '', weight: 1 };
     const [chanForm, setChanForm] = useState(initChanForm);
 
-    // a11y: 三个模态各自的初始焦点 ref —— 优先聚焦关闭按钮，避免 ESC/Tab 用户卡死
+    // a11y: each modal has its own initial focus ref, preferring the close button.
     const chanModalCloseRef = useRef(null);
     const modelModalCloseRef = useRef(null);
     const upstreamModalCloseRef = useRef(null);
-    // fix CRITICAL C-F1（gemini 第二十一轮）：补 modalRef 让 focus trap 真正生效
+    // fix CRITICAL C-F1 (gemini round 21): modalRef makes the focus trap effective.
     const chanModalRef = useRef(null);
     const modelModalRef = useRef(null);
     const upstreamModalRef = useRef(null);
@@ -89,8 +88,8 @@ const ChannelManagement = () => {
     const { onBackdropClick: onUpstreamBackdropClick } = useModalA11y(isUpstreamModalOpen, () => setIsUpstreamModalOpen(false), upstreamModalCloseRef, upstreamModalRef);
 
     const channelTypes = [
-        { id: 'cliproxy', label: 'CLIProxyAPI 多协议网关' },
-        { id: 'openai', label: 'OpenAI / DeepSeek / 国产模型通用兼容' },
+        { id: 'cliproxy', label: t('CHANNEL_MGMT.TYPE_CLIPROXY', 'CLIProxyAPI 多协议网关') },
+        { id: 'openai', label: t('CHANNEL_MGMT.TYPE_OPENAI_COMPAT', 'OpenAI / DeepSeek / 国产模型通用兼容') },
         { id: 'anthropic', label: 'Anthropic (Claude)' },
         { id: 'gemini', label: 'Google Gemini' },
         { id: 'google-cli', label: 'Google Gemini (CLI/Unofficial)' },
@@ -103,14 +102,14 @@ const ChannelManagement = () => {
         context_price_threshold: 0, high_input_price: 0, high_cached_input_price: 0, high_output_price: 0,
         weight: 1, max_context_length: 0,
         endpoint_policy: 'all',
-        // fix CRITICAL R23：内容审核字段（per-channel-per-model 风控）
+        // fix CRITICAL R23: content moderation fields per channel model.
         moderation_level: 'off',          // off / keyword / moderation / strict
         moderation_fail_mode: 'open',     // open / closed
-        confirm_official_no_moderation: false, // 仅 UI 状态：官方渠道关审核时让 admin 显式 ack 风险
+        confirm_official_no_moderation: false, // UI-only state requiring explicit risk acknowledgement.
     };
     const [modelForm, setModelForm] = useState(initModelForm);
 
-    // 各家官方 API 域名 — 与服务端 controller/channel_model.go officialChannelHosts 保持同步
+    // Official API hosts, kept in sync with controller/channel_model.go officialChannelHosts.
     const OFFICIAL_HOSTS = {
         openai: ['api.openai.com'],
         anthropic: ['api.anthropic.com'],
@@ -144,23 +143,23 @@ const ChannelManagement = () => {
 
     const isOpenAIModel = useMemo(() => isOpenAIModelId(modelForm.model_id), [modelForm.model_id]);
 
-    // 判断当前选中渠道是否指向某家"官方上游"（影响审核默认值与告警）
+    // Detect whether the selected channel points to an official upstream.
     const isOfficialChannel = useMemo(() => {
         if (!selectedChannel) return false;
         const hosts = OFFICIAL_HOSTS[selectedChannel.type] || [];
         if (hosts.length === 0) return false;
         const base = (selectedChannel.base_url || '').trim();
-        if (!base) return true; // 空 base_url = 走 SDK 默认 host = 官方
+        if (!base) return true; // Empty base_url uses the SDK default official host.
         try {
             const u = new URL(base);
             return hosts.includes(u.hostname.toLowerCase());
         } catch {
-            return false; // 非法 URL → 不假设是官方（保守不报警）
+            return false; // Invalid URL is not assumed official.
         }
     }, [selectedChannel]);
 
-    // 一键应用推荐预设：OpenAI 模型固定 strict+closed；官方渠道用 moderation+closed；
-    // 非官方非 OpenAI 模型用 off+open（与服务端默认一致）
+    // Recommended preset: OpenAI models use strict+closed; official channels use moderation+closed;
+    // non-official non-OpenAI models use off+open, matching server defaults.
     const applyRecommendedModerationPreset = () => {
         if (isOpenAIModel) {
             setModelForm(prev => ({ ...prev, moderation_level: 'strict', moderation_fail_mode: 'closed', confirm_official_no_moderation: false }));
@@ -171,7 +170,7 @@ const ChannelManagement = () => {
         }
     };
 
-    // 列表小徽章（off=灰 / keyword=琥珀 / moderation=蓝 / strict=翠绿）—— 与 gemini R23 反馈一致
+    // Small list badges for moderation levels, matching gemini R23 feedback.
     const ModerationBadge = ({ level, failMode }) => {
         const lvl = (level || 'off').toLowerCase();
         const fm = (failMode || 'open').toLowerCase();
@@ -250,8 +249,8 @@ const ChannelManagement = () => {
     const handleOpenChanModal = (chan = null) => {
         if (chan) {
             setCurrentChannel(chan);
-            // 编辑模式：key 字段不预填（后端只下发掩码），留空表示"保持原 key 不变"。
-            // 若用户希望换新 key，可直接在输入框输入新值；否则空着提交。
+            // Edit mode does not prefill the key because the backend only returns a mask.
+            // Leaving it blank keeps the existing key; entering a value replaces it.
             setChanForm({ type: chan.type, name: chan.name || '', key: '', base_url: chan.base_url, proxy_url: chan.proxy_url || '', headers: chan.headers || '', weight: chan.weight });
         } else {
             setCurrentChannel(null);
@@ -271,7 +270,9 @@ const ChannelManagement = () => {
             if (data.success) {
                 fetchChannels();
                 setIsChanModalOpen(false);
-                toast.success(currentChannel ? '渠道已更新' : '渠道已创建');
+                toast.success(currentChannel
+                    ? t('CHANNEL_MGMT.CHANNEL_UPDATED', '渠道已更新')
+                    : t('CHANNEL_MGMT.CHANNEL_CREATED', '渠道已创建'));
             } else {
                 toast.error(data.message || t('API.' + data.message_code));
             }
@@ -288,7 +289,7 @@ const ChannelManagement = () => {
             const data = await authFetch(`/api/admin/channels/${id}`, { method: 'DELETE' });
             if (data.success) {
                 fetchChannels();
-                toast.success('渠道已删除');
+                toast.success(t('CHANNEL_MGMT.CHANNEL_DELETED', '渠道已删除'));
             } else {
                 toast.error(data.message || t('API.' + data.message_code));
             }
@@ -311,7 +312,7 @@ const ChannelManagement = () => {
             })));
         } else {
             setCurrentModel(null);
-            // 新建路径：根据渠道是否官方自动套推荐预设（admin 仍可在 UI 内修改）
+            // New model path applies recommended presets based on official-channel detection.
             const hosts = OFFICIAL_HOSTS[selectedChannel?.type] || [];
             const baseEmpty = !((selectedChannel?.base_url || '').trim());
             let isOfficial = false;
@@ -321,7 +322,7 @@ const ChannelManagement = () => {
                     try {
                         const u = new URL(selectedChannel.base_url);
                         isOfficial = hosts.includes(u.hostname.toLowerCase());
-                    } catch { /* 非法 URL → 不当作官方 */ }
+                    } catch { /* Invalid URL is not treated as official. */ }
                 }
             }
             setModelForm(withEndpointPolicyDefaults(withOpenAIModelModeration({
@@ -369,7 +370,7 @@ const ChannelManagement = () => {
                 weight: parseInt(modelForm.weight) || 1,
                 max_context_length: parseInt(modelForm.max_context_length) || 0,
                 endpoint_policy: modelForm.endpoint_policy || 'all',
-                // fix CRITICAL R23：审核字段透传（默认值在 initModelForm 已设；后端再做 enum 校验）
+                // fix CRITICAL R23: pass moderation fields through; backend validates enums.
                 moderation_level: isOpenAIModel ? 'strict' : (modelForm.moderation_level || 'off'),
                 moderation_fail_mode: isOpenAIModel ? 'closed' : (modelForm.moderation_fail_mode || 'open'),
                 confirm_official_no_moderation: isOpenAIModel ? false : !!modelForm.confirm_official_no_moderation,
@@ -379,7 +380,9 @@ const ChannelManagement = () => {
             if (data.success) {
                 fetchModels(selectedChannel.id);
                 setIsModelModalOpen(false);
-                toast.success(currentModel ? '模型已更新' : '模型已添加');
+                toast.success(currentModel
+                    ? t('CHANNEL_MGMT.MODEL_UPDATED', '模型已更新')
+                    : t('CHANNEL_MGMT.MODEL_ADDED', '模型已添加'));
             } else {
                 toast.error(data.message || t('API.' + data.message_code));
             }
@@ -396,7 +399,7 @@ const ChannelManagement = () => {
             const data = await authFetch(`/api/admin/channel-models/${id}`, { method: 'DELETE' });
             if (data.success) {
                 fetchModels(selectedChannel.id);
-                toast.success('模型已删除');
+                toast.success(t('CHANNEL_MGMT.MODEL_DELETED', '模型已删除'));
             } else {
                 toast.error(data.message || t('API.' + data.message_code));
             }
@@ -438,7 +441,9 @@ const ChannelManagement = () => {
                 setIsUpstreamModalOpen(false);
                 const added = data.data?.added ?? selectedUpstreamModels.length;
                 const skipped = data.data?.skipped ?? 0;
-                toast.success(skipped > 0 ? `已添加 ${added} 个，跳过 ${skipped} 个已存在` : `已添加 ${added} 个模型`);
+                toast.success(skipped > 0
+                    ? t('CHANNEL_MGMT.IMPORT_SUCCESS_SKIPPED', '已添加 {{added}} 个，跳过 {{skipped}} 个已存在', { added, skipped })
+                    : t('CHANNEL_MGMT.IMPORT_SUCCESS', '已添加 {{added}} 个模型', { added }));
             } else {
                 toast.error(data.message || t('API.' + data.message_code));
             }
@@ -615,7 +620,7 @@ const ChannelManagement = () => {
                                 <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
                                     <div>
                                         <label htmlFor="channel-model-max-context" className="block text-xs font-medium text-on-surface-variant mb-1">{t('CHANNEL_MGMT.MODEL.MODAL.MAX_CONTEXT_LENGTH')} <span className="ml-1 text-on-surface-variant/70">(Tokens)</span></label>
-                                        <input id="channel-model-max-context" type="number" min="0" value={modelForm.max_context_length || ''} onChange={e=>setModelForm({...modelForm, max_context_length: parseInt(e.target.value) || 0})} className="w-full bg-surface-container-high border border-outline-variant rounded-overlay px-4 py-2.5 text-on-surface" placeholder="0 = 不限制" />
+                                        <input id="channel-model-max-context" type="number" min="0" value={modelForm.max_context_length || ''} onChange={e=>setModelForm({...modelForm, max_context_length: parseInt(e.target.value) || 0})} className="w-full bg-surface-container-high border border-outline-variant rounded-overlay px-4 py-2.5 text-on-surface" placeholder={t('CHANNEL_MGMT.MODEL.MODAL.NO_LIMIT_PLACEHOLDER', '0 = 不限制')} />
                                         <div className="flex flex-wrap gap-1 mt-2">
                                             {[8000, 32000, 128000, 200000, 1000000].map(v => (
                                                 <button type="button" key={v} onClick={()=>setModelForm({...modelForm, max_context_length: v})} className="px-2 py-0.5 rounded-control text-[10px] border border-outline-variant bg-surface hover:bg-surface-container-high text-on-surface-variant">{formatTokens(v)}</button>
@@ -724,7 +729,7 @@ const ChannelManagement = () => {
                                     </p>
                                 </fieldset>
 
-                                {/* fix CRITICAL R23: per-ChannelModel 内容审核策略 (codex 第二十三轮反馈) */}
+                                {/* fix CRITICAL R23: per-ChannelModel moderation policy. */}
                                 <fieldset className="border border-outline-variant rounded-overlay p-4 mt-2">
                                     <legend className="px-2 text-xs font-semibold text-on-surface flex items-center gap-2">
                                         <AlertTriangle size={13} className={isOfficialChannel ? 'text-warning' : 'text-on-surface-variant'} />
@@ -803,7 +808,7 @@ const ChannelManagement = () => {
                             </div>
                             <div className="p-6 border-t border-outline-variant bg-surface-container-high flex justify-end gap-3 rounded-control-b-2xl">
                                 <button onClick={() => setIsModelModalOpen(false)} className="px-5 py-2.5 text-on-surface-variant hover:text-white hover:bg-surface-container-high rounded-overlay">{t('CHANNEL_MGMT.MODEL.MODAL.BTN_CANCEL')}</button>
-                                {/* fix MINOR R23-m4：官方渠道关审核没勾 confirm 时禁用 Save，省一次后端往返 */}
+                                {/* Disable save until official-channel moderation-off risk is acknowledged. */}
                                 <button
                                     onClick={handleModelSubmit}
                                     disabled={isSubmitting || (!isOpenAIModel && isOfficialChannel && modelForm.moderation_level === 'off' && !modelForm.confirm_official_no_moderation)}
@@ -863,7 +868,7 @@ const ChannelManagement = () => {
                                             </button>
                                         </div>
                                         <div className="space-y-6">
-                                            {/* 按厂商分组（Anthropic / OpenAI / Google / Other），不再按首字母 */}
+                                            {/* Group by provider instead of initial letter. */}
                                             {upstreamModelsByProvider.map(([provider, models]) => (
                                                 <div key={provider} className="space-y-3">
                                                     <h4 className="flex items-center gap-3">
@@ -914,7 +919,7 @@ const ChannelManagement = () => {
                             </div>
 
                             <div className="p-6 border-t border-outline-variant bg-surface-container-high flex justify-between items-center rounded-control-b-2xl">
-                                {/* C-2 修复：用 i18n 插值占位 + JSX 子组件渲染数字，避免 dangerouslySetInnerHTML 注入面 */}
+                                {/* Use Trans interpolation and JSX components to avoid dangerouslySetInnerHTML. */}
                                 <span className="text-sm text-on-surface-variant">
                                     <Trans i18nKey="CHANNEL_MGMT.UPSTREAM_MODAL.SELECTED_COUNT"
                                         components={{ strong: <strong className="text-primary mx-1" /> }}
@@ -1050,11 +1055,11 @@ const ChannelManagement = () => {
                                 <input id="channel-form-base-url" type="text" value={chanForm.base_url} onChange={e=>setChanForm({...chanForm, base_url: e.target.value})} placeholder="https://api.openai.com" className="w-full bg-surface-container-high border border-outline-variant rounded-overlay px-4 py-2.5 text-on-surface" />
                             </div>
                             <div>
-                                <label htmlFor="channel-form-proxy" className="block text-xs font-medium text-on-surface-variant mb-1">代理跳板 (Proxy URL)</label>
-                                <input id="channel-form-proxy" type="text" value={chanForm.proxy_url} onChange={e=>setChanForm({...chanForm, proxy_url: e.target.value})} placeholder="http://127.0.0.1:8080 或 https://proxy.example.com:443" className="w-full bg-surface-container-high border border-outline-variant rounded-overlay px-4 py-2.5 text-on-surface font-mono text-sm" />
+                                <label htmlFor="channel-form-proxy" className="block text-xs font-medium text-on-surface-variant mb-1">{t('CHANNEL_MGMT.MODAL_CHANNEL.PROXY_URL', '代理跳板 (Proxy URL)')}</label>
+                                <input id="channel-form-proxy" type="text" value={chanForm.proxy_url} onChange={e=>setChanForm({...chanForm, proxy_url: e.target.value})} placeholder={t('CHANNEL_MGMT.MODAL_CHANNEL.PROXY_PLACEHOLDER', 'http://127.0.0.1:8080 或 https://proxy.example.com:443')} className="w-full bg-surface-container-high border border-outline-variant rounded-overlay px-4 py-2.5 text-on-surface font-mono text-sm" />
                             </div>
                             <div>
-                                <label htmlFor="channel-form-headers" className="block text-xs font-medium text-on-surface-variant mb-1">自定义网关请求头 (Custom Headers JSON)</label>
+                                <label htmlFor="channel-form-headers" className="block text-xs font-medium text-on-surface-variant mb-1">{t('CHANNEL_MGMT.MODAL_CHANNEL.HEADERS_JSON', '自定义网关请求头 (Custom Headers JSON)')}</label>
                                 <textarea id="channel-form-headers" value={chanForm.headers} onChange={e=>setChanForm({...chanForm, headers: e.target.value})} placeholder='{"x-custom-tenant": "vip-01"}' rows={3} className="w-full bg-surface-container-high border border-outline-variant rounded-overlay px-4 py-2.5 text-on-surface font-mono text-xs"></textarea>
                             </div>
                             <div>

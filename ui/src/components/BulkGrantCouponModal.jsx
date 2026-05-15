@@ -49,7 +49,7 @@ const BulkGrantCouponModal = ({ open, onClose, userIds, onSuccess }) => {
 
         const qty = parseInt(quantity, 10);
         if (isNaN(qty) || qty < 1 || qty > 100) {
-            toast.error('数量必须在 1 到 100 之间');
+            toast.error(t('USER_MGMT.BULK_GRANT_QTY_INVALID', '数量必须在 1 到 100 之间'));
             return;
         }
 
@@ -79,8 +79,8 @@ const BulkGrantCouponModal = ({ open, onClose, userIds, onSuccess }) => {
                 }
             });
 
-            // Sprint3-M5：后端改为单事务全原子。res.success=true ⇒ 全部成功；
-            // res.success=false ⇒ 整批已回滚（不会有部分成功状态）。
+            // Sprint3-M5: backend is fully atomic; res.success=true means all succeeded,
+            // and res.success=false means the full batch was rolled back.
             if (res.success) {
                 toast.success(t('USER_MGMT.BULK_GRANT_SUCCESS', {
                     success: res.summary?.success_count || userIds.length,
@@ -88,14 +88,14 @@ const BulkGrantCouponModal = ({ open, onClose, userIds, onSuccess }) => {
                 }));
                 onSuccess();
             } else if (res.message_code === 'ERR_BULK_GRANT_ABORTED') {
-                // 整批回滚的错误：明确告知 admin 未发出任何券
+                // Batch rollback: clearly tell the admin no coupons were issued.
                 const failedUser = res.failed_user_id ? ` (user_id=${res.failed_user_id})` : '';
-                toast.error(`${res.message || '批量发券失败'}${failedUser}`);
+                toast.error(`${res.message || t('USER_MGMT.BULK_GRANT_FAIL', '批量发券失败')}${failedUser}`);
             } else {
-                toast.error(res.message || t('API.' + res.message_code, '批量发券失败'));
+                toast.error(res.message || t('API.' + res.message_code, t('USER_MGMT.BULK_GRANT_FAIL', '批量发券失败')));
             }
         } catch (e) {
-            toast.error('网络异常，批量发券失败');
+            toast.error(t('USER_MGMT.BULK_GRANT_NET_FAIL', '网络异常，批量发券失败'));
         }
         setGranting(false);
     };
@@ -103,7 +103,7 @@ const BulkGrantCouponModal = ({ open, onClose, userIds, onSuccess }) => {
     return (
         <div className="fixed inset-0 z-[60] flex items-center justify-center p-4 bg-black/60 backdrop-blur-sm">
             <div className="relative w-full max-w-lg bg-surface-container border border-outline-variant rounded-overlay shadow-2xl p-6">
-                <button type="button" onClick={onClose} className="absolute top-4 right-4 text-on-surface-variant hover:text-white" aria-label="Close">
+                <button type="button" onClick={onClose} className="absolute top-4 right-4 text-on-surface-variant hover:text-white" aria-label={t('COMMON.CLOSE', '关闭')}>
                     <X size={18} />
                 </button>
                 <h2 className="text-xl font-bold text-on-surface mb-2 flex items-center gap-2">
@@ -112,26 +112,30 @@ const BulkGrantCouponModal = ({ open, onClose, userIds, onSuccess }) => {
                 </h2>
                 
                 <p className="text-sm text-on-surface-variant mb-6">
-                    将给 <span className="font-bold text-primary">{userIds.length}</span> 个用户每人发放 <span className="font-bold">{quantity}</span> 张选定优惠券。
+                    {t('USER_MGMT.BULK_GRANT_SUMMARY_PREFIX', '将给')}{' '}
+                    <span className="font-bold text-primary">{userIds.length}</span>{' '}
+                    {t('USER_MGMT.BULK_GRANT_SUMMARY_MIDDLE', '个用户每人发放')}{' '}
+                    <span className="font-bold">{quantity}</span>{' '}
+                    {t('USER_MGMT.BULK_GRANT_SUMMARY_SUFFIX', '张选定优惠券。')}
                 </p>
 
                 {loading ? (
-                    <div className="text-center py-6 text-on-surface-variant">加载模板中...</div>
+                    <div className="text-center py-6 text-on-surface-variant">{t('USER_MGMT.BULK_GRANT_LOADING_TEMPLATES', '加载模板中...')}</div>
                 ) : (
                     <div className="flex flex-col gap-4">
                         <div className="flex flex-col gap-1.5">
                             <label className="text-xs font-semibold text-on-surface-variant ml-1">{t('USER_MGMT.BULK_GRANT_TEMPLATE_LABEL')}</label>
                             {templates.length === 0 ? (
-                                <div className="text-sm text-warning p-3 bg-warning/10 rounded-control border border-warning/20">无可用模板</div>
+                                <div className="text-sm text-warning p-3 bg-warning/10 rounded-control border border-warning/20">{t('USER_MGMT.BULK_GRANT_NO_TEMPLATES', '无可用模板')}</div>
                             ) : (
                                 <select 
                                     value={selectedTemplateId} 
                                     onChange={(e) => setSelectedTemplateId(e.target.value)}
                                     className="w-full h-10 bg-surface-container-high border border-outline rounded-control px-3 text-sm text-on-surface focus:border-primary outline-none"
                                 >
-                                    {templates.map(t => (
-                                        <option key={t.id} value={t.id}>
-                                            {t.name} ({t.discount_type === 'FIXED' ? `$${t.discount_value}` : `${t.discount_value}%`}) - {t.valid_days ? `${t.valid_days}天` : '永久'}
+                                    {templates.map((tpl) => (
+                                        <option key={tpl.id} value={tpl.id}>
+                                            {tpl.name} ({tpl.discount_type === 'FIXED' ? `$${tpl.discount_value}` : `${tpl.discount_value}%`}) - {tpl.valid_days ? t('USER_MGMT.BULK_GRANT_VALID_DAYS', '{{count}}天', { count: tpl.valid_days }) : t('USER_MGMT.BULK_GRANT_PERMANENT', '永久')}
                                         </option>
                                     ))}
                                 </select>
@@ -157,7 +161,7 @@ const BulkGrantCouponModal = ({ open, onClose, userIds, onSuccess }) => {
                                 maxLength={500}
                                 className="w-full bg-surface-container-high border border-outline rounded-control p-3 text-sm text-on-surface focus:border-primary outline-none placeholder:text-on-surface-variant/50"
                                 rows={3}
-                                placeholder="选填，将记录在审计日志中..."
+                                placeholder={t('USER_MGMT.BULK_GRANT_REASON_PLACEHOLDER', '选填，将记录在审计日志中...')}
                             />
                         </div>
                     </div>
@@ -168,14 +172,14 @@ const BulkGrantCouponModal = ({ open, onClose, userIds, onSuccess }) => {
                         onClick={onClose} 
                         className="flex-1 h-10 bg-surface-container-high border border-outline-variant text-on-surface-variant rounded-control hover:bg-surface-variant transition-colors text-sm"
                     >
-                        取消
+                        {t('COMMON.CANCEL', '取消')}
                     </button>
                     <button 
                         onClick={handleNext} 
                         disabled={loading || granting || templates.length === 0}
                         className="flex-1 h-10 bg-primary text-on-primary font-medium rounded-control hover:opacity-90 disabled:opacity-40 transition-opacity text-sm"
                     >
-                        {granting ? '处理中...' : '下一步：确认'}
+                        {granting ? t('USER_MGMT.BULK_GRANT_PROCESSING', '处理中...') : t('USER_MGMT.BULK_GRANT_NEXT_CONFIRM', '下一步：确认')}
                     </button>
                 </div>
             </div>

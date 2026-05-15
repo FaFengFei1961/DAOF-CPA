@@ -7,12 +7,12 @@ import { authFetch } from '../utils/authFetch';
 import { logger } from '../utils/logger';
 
 const STATUS_OPTIONS = [
-  { value: 'open', i18n: 'FILTER_OPEN', label: '进行中' },
-  { value: 'closed', i18n: 'FILTER_CLOSED', label: '已关闭' },
-  { value: '', i18n: 'FILTER_ALL', label: '全部' },
+  { value: 'open', label: 'FILTER_OPEN' },
+  { value: 'closed', label: 'FILTER_CLOSED' },
+  { value: '', label: 'FILTER_ALL' },
 ];
 
-// admin 工单管理（替代旧的 AdminCustomerMessages 单条留言）
+// Admin ticket management, replacing the old single-message admin view.
 const AdminCustomerMessages = () => {
   const { t } = useTranslation();
   const confirm = useConfirm();
@@ -26,7 +26,7 @@ const AdminCustomerMessages = () => {
   const [reply, setReply] = useState('');
   const [submitting, setSubmitting] = useState(false);
 
-  // 聊天滚动 UX（与 Tickets.jsx 同款）
+  // Chat scroll behavior mirrors Tickets.jsx.
   const messagesContainerRef = useRef(null);
   const selfSendRef = useRef(false);
   const [showNewMsgBtn, setShowNewMsgBtn] = useState(false);
@@ -44,7 +44,7 @@ const AdminCustomerMessages = () => {
   const handleMessagesScroll = () => {
     if (isNearBottom(messagesContainerRef.current)) setShowNewMsgBtn(false);
   };
-  // 消息数变化分支：自己发的强制滚 / 在底部跟随 / 历史区显示按钮
+  // Message count changes: own sends force-scroll, bottom users follow, history readers see the jump button.
   useEffect(() => {
     const el = messagesContainerRef.current;
     if (!el || activeMessages.length === 0) return;
@@ -59,7 +59,7 @@ const AdminCustomerMessages = () => {
       setShowNewMsgBtn(true);
     }
   }, [activeMessages.length]);
-  // 进入工单 / 切换工单：立即滚到底
+  // Entering or switching tickets scrolls to the latest message immediately.
   useEffect(() => {
     if (view !== 'detail' || !activeTicket) return;
     setShowNewMsgBtn(false);
@@ -106,7 +106,7 @@ const AdminCustomerMessages = () => {
     const body = reply.trim();
     if (!body || !activeTicket) return;
     setSubmitting(true);
-    const ticketId = activeTicket.id; // 锁定本次发送目标
+    const ticketId = activeTicket.id; // Lock the send target for this request.
     try {
       const json = await authFetch(`/api/tickets/${ticketId}/messages`, {
         method: 'POST',
@@ -114,7 +114,7 @@ const AdminCustomerMessages = () => {
       });
       if (json.success) {
         setReply('');
-        // 乐观追加：把后端返回的 message 直接 append（含 id/created_at）
+        // Optimistically append the message returned by the backend, including id/created_at.
         if (json.data && activeTicket && activeTicket.id === ticketId) {
           selfSendRef.current = true;
           setActiveMessages(prev => [...prev, json.data]);
@@ -132,12 +132,12 @@ const AdminCustomerMessages = () => {
     }
   };
 
-  // 详情视图打开时启动 5 秒轮询，让用户新发的消息能自动出现在 admin 面板
+  // Poll while the detail view is open so user replies appear in the admin panel.
   useEffect(() => {
     if (view !== 'detail' || !activeTicket || activeTicket.status === 'closed') return;
     const ticketId = activeTicket.id;
     const tick = async () => {
-      if (document.hidden) return; // tab 在后台时不轮询，省后端
+      if (document.hidden) return; // Skip background tabs to reduce backend load.
       try {
         const json = await authFetch(`/api/tickets/${ticketId}`);
         if (!json.success || !json.data) return;
@@ -149,7 +149,7 @@ const AdminCustomerMessages = () => {
           if (prev.length !== incoming.length || lastPrev !== lastNew) return incoming;
           return prev;
         });
-      } catch { /* 静默 */ }
+      } catch { /* silent */ }
     };
     const timer = setInterval(tick, 5000);
     return () => clearInterval(timer);
@@ -178,7 +178,7 @@ const AdminCustomerMessages = () => {
     }
   };
 
-  // ── 渲染：详情 ──
+  // Detail view
   if (view === 'detail' && activeTicket) {
     const isClosed = activeTicket.status === 'closed';
     return (
@@ -243,7 +243,7 @@ const AdminCustomerMessages = () => {
               );
             })}
           </div>
-          {/* "新消息 ↓" 浮动按钮：用户在历史区时收到新消息才显示 */}
+          {/* Floating new-message button appears only when the admin is reading history. */}
           {showNewMsgBtn && (
             <button
               type="button"
@@ -290,7 +290,7 @@ const AdminCustomerMessages = () => {
     );
   }
 
-  // ── 渲染：列表 ──
+  // List view
   return (
     <div className="space-y-4">
       <header className="flex items-center justify-between">
@@ -308,7 +308,11 @@ const AdminCustomerMessages = () => {
           >
             {STATUS_OPTIONS.map(s => (
               <option key={s.value} value={s.value}>
-                {t(`TICKET.ADMIN.${s.i18n}`, s.label)}
+                {s.label === 'FILTER_OPEN'
+                  ? t('TICKET.ADMIN.FILTER_OPEN', '进行中')
+                  : s.label === 'FILTER_CLOSED'
+                    ? t('TICKET.ADMIN.FILTER_CLOSED', '已关闭')
+                    : t('TICKET.ADMIN.FILTER_ALL', '全部')}
               </option>
             ))}
           </select>

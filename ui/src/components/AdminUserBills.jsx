@@ -1,7 +1,7 @@
-// AdminUserBills - admin 查看任意用户的账单流水。
-// 作为模态弹窗嵌入 UserManagement 行操作 → "账单"按钮。
+// AdminUserBills shows any user's billing ledger for admins.
+// Embedded as a modal from the UserManagement row billing action.
 //
-// 与 BillsPage 共享数据形态但调用 admin endpoint。i18n 复用 BILL.* 命名空间。
+// It shares the BillsPage data shape but calls admin endpoints and reuses BILL.* i18n keys.
 import React, { useState, useEffect, useCallback, useRef } from 'react';
 import { useTranslation } from 'react-i18next';
 import { X, RefreshCw, Download, Receipt, ArrowDownCircle, ArrowUpCircle, Activity } from 'lucide-react';
@@ -11,22 +11,20 @@ import { useModalA11y } from '../hooks/useModalA11y';
 import Pagination from './common/Pagination';
 import { PAGE_SIZE_DEFAULT } from './common/constants';
 
-// fix MAJOR（codex 第十七轮）：补齐 admin_grant_* + api_usage_pending_reconcile，
-// 与后端 allowedBillingTypes 同步——否则 admin 默认隐藏 API 用量时
-// 这两类账单也会被排除掉。
-// Phase 8：旧账单类型已移除。
+// Keep this list in sync with backend allowedBillingTypes, including admin_grant_* and pending reconcile.
+// Phase 8 removed legacy billing types.
 const TYPE_I18N = {
-  topup:                       { i18n: 'BILL.T_TOPUP',          fallback: '充值' },
-  purchase_sub:                { i18n: 'BILL.T_PURCHASE_SUB',   fallback: '购买套餐' },
-  bonus_credit:                { i18n: 'BILL.T_BONUS',          fallback: '奖励入账' },
-  refund_sub:                  { i18n: 'BILL.T_REFUND_SUB',     fallback: '订阅退款' },
-  refund_topup:                { i18n: 'BILL.T_REFUND_TOPUP',   fallback: '充值退款' },
-  admin_adjust:                { i18n: 'BILL.T_ADMIN_ADJUST',   fallback: '管理员调整' },
-  admin_grant_sub:             { i18n: 'BILL.T_ADMIN_GRANT_SUB',   fallback: '管理员赠送订阅' },
-  admin_revoke_grant:          { i18n: 'BILL.T_ADMIN_REVOKE_GRANT', fallback: '管理员收回赠送' },
-  api_consume_balance:         { i18n: 'BILL.T_API_BALANCE',    fallback: '余额扣费' },
-  api_usage_sub:               { i18n: 'BILL.T_API_SUB',        fallback: '套餐扣额度' },
-  api_usage_pending_reconcile: { i18n: 'BILL.T_API_PENDING',    fallback: '待对账' },
+  topup: 'BILL.T_TOPUP',
+  purchase_sub: 'BILL.T_PURCHASE_SUB',
+  bonus_credit: 'BILL.T_BONUS',
+  refund_sub: 'BILL.T_REFUND_SUB',
+  refund_topup: 'BILL.T_REFUND_TOPUP',
+  admin_adjust: 'BILL.T_ADMIN_ADJUST',
+  admin_grant_sub: 'BILL.T_ADMIN_GRANT_SUB',
+  admin_revoke_grant: 'BILL.T_ADMIN_REVOKE_GRANT',
+  api_consume_balance: 'BILL.T_API_BALANCE',
+  api_usage_sub: 'BILL.T_API_SUB',
+  api_usage_pending_reconcile: 'BILL.T_API_PENDING',
 };
 
 const fmtUSD = (n) => {
@@ -45,14 +43,13 @@ const AdminUserBills = ({ userId, username, onClose }) => {
   const [page, setPage] = useState(1);
   const [total, setTotal] = useState(0);
   const closeBtnRef = useRef(null);
-  const modalRef = useRef(null); // C5 第二十轮: focus trap 范围
-  // fix Minor（codex 第十七轮）：抑制 hideUsage 切换的竞态——切换瞬间 page!=1 时
-  // 先 setPage(1) 触发新 load，期间忽略旧 load 的回调避免覆盖新页数据
+  const modalRef = useRef(null); // C5 round 20: focus trap scope.
+  // Suppress races while hideUsage resets the page and triggers a new load.
   const reqIdRef = useRef(0);
 
   const buildQuery = useCallback(() => {
     if (!hideUsage) return '';
-    // 仅在勾选"隐藏 API 用量"时排除 api_usage_sub；其他全部展示（含 admin_grant_* 与 pending_reconcile）
+    // Hide only api_usage_sub when the usage filter is enabled; keep grants and pending reconcile visible.
     const types = Object.keys(TYPE_I18N).filter((k) => k !== 'api_usage_sub');
     return `types=${types.join(',')}`;
   }, [hideUsage]);
@@ -67,7 +64,7 @@ const AdminUserBills = ({ userId, username, onClose }) => {
         authFetch(`/api/admin/billing/users/${userId}?page=${page}&page_size=${PAGE_SIZE_DEFAULT}${qs ? '&' + qs : ''}`),
         authFetch(`/api/admin/billing/users/${userId}/summary${qs ? '?' + qs : ''}`),
       ]);
-      // 旧请求晚于新请求返回时丢弃结果（防 hideUsage 切换覆盖 page=1 新数据）
+      // Drop stale responses so hideUsage toggles cannot overwrite page 1 data.
       if (myReqId !== reqIdRef.current) return;
       if (listJson.success) {
         setEntries(listJson.data || []);
@@ -86,18 +83,17 @@ const AdminUserBills = ({ userId, username, onClose }) => {
 
   useEffect(() => { load(); }, [load]);
 
-  // 切换 hideUsage 筛选时回到第一页（避免新筛选下 page 越界）
+  // Reset to page 1 when toggling hideUsage to avoid out-of-range pages.
   useEffect(() => {
     setPage(1);
   }, [hideUsage]);
 
-  // a11y：ESC 关闭 + 背景点击 + 自动焦点统一走 useModalA11y hook
-  // （第十八轮 H4 修复后 hook 支持 initialFocusRef，不再需要手写 useEffect 聚焦）
+  // a11y: ESC, backdrop click, and initial focus are handled by useModalA11y.
   const { onBackdropClick } = useModalA11y(true, onClose, closeBtnRef, modalRef);
 
   const handleExport = async () => {
     try {
-      // fix Major（codex+gemini）：readAuthState 返回 userToken（非 token）
+      // readAuthState returns userToken, not token.
       const auth = readAuthState();
       const qs = buildQuery();
       const url = `/api/admin/billing/users/${userId}/export${qs ? '?' + qs : ''}`;
@@ -170,7 +166,7 @@ const AdminUserBills = ({ userId, username, onClose }) => {
           </div>
         </div>
 
-        {/* 汇总卡片 */}
+        {/* Summary cards */}
         {summary && (
           <div className="grid grid-cols-2 md:grid-cols-4 gap-3 p-4 border-b border-outline-variant/30 bg-surface-container/40">
             <SumCard label={t('BILL.SUM_IN', '入账')} value={`$${(summary.total_in_usd || 0).toFixed(2)}`} color="text-success" />
@@ -184,7 +180,7 @@ const AdminUserBills = ({ userId, username, onClose }) => {
           </div>
         )}
 
-        {/* 筛选切换 */}
+        {/* Filter toggle */}
         <div className="px-4 py-2 border-b border-outline-variant/30 text-sm">
           <label className="inline-flex items-center gap-1.5">
             <input
@@ -196,8 +192,8 @@ const AdminUserBills = ({ userId, username, onClose }) => {
           </label>
         </div>
 
-        {/* 列表 */}
-        {/* fix CRITICAL（gemini 第十七轮）：移除外层 aria-live 反模式 */}
+        {/* List */}
+        {/* Keep aria-live scoped to the loading status instead of the whole list. */}
         <div className="flex-1 overflow-y-auto">
           {loading ? (
             <div role="status" aria-live="polite" className="text-center py-12 text-on-surface/60">{t('COMMON.LOADING', '加载中…')}</div>
@@ -210,7 +206,7 @@ const AdminUserBills = ({ userId, username, onClose }) => {
           )}
         </div>
 
-        {/* fix MAJOR（gemini 第十七轮）：用共用 Pagination 组件 */}
+        {/* Shared pagination */}
         <Pagination
           page={page}
           pageSize={PAGE_SIZE_DEFAULT}
@@ -238,7 +234,7 @@ const AdminBillRow = ({ entry, t }) => {
   const iconColor = isUsage
     ? 'text-on-surface-variant'
     : isCredit ? 'text-success' : 'text-error';
-  const meta = TYPE_I18N[entry.entry_type] || { i18n: '', fallback: entry.entry_type };
+  const typeKey = TYPE_I18N[entry.entry_type];
 
   return (
     <li className="flex items-center gap-3 px-4 py-3">
@@ -246,7 +242,7 @@ const AdminBillRow = ({ entry, t }) => {
       <div className="flex-1 min-w-0">
         <div className="flex items-center gap-2">
           <span className="text-sm font-medium">
-            {meta.i18n ? t(meta.i18n, meta.fallback) : meta.fallback}
+            {typeKey ? t(typeKey, entry.entry_type) : entry.entry_type}
           </span>
           {entry.model_name && (
             <span className="text-xs px-1.5 py-0.5 rounded-control bg-on-surface/[0.06] text-on-surface/70">

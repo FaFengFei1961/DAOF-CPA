@@ -9,24 +9,24 @@ import Pagination from './common/Pagination';
 import { PAGE_SIZE_DEFAULT } from './common/constants';
 
 /**
- * AdminUserCouponsModal — admin 查看 / 发放 / 撤销 某用户的优惠券。
+ * AdminUserCouponsModal lets admins view, grant, and revoke a user's coupons.
  *
- * 业务规则（用户 2026-05-10 第三次反馈）：
- *   - 退款流程不再触碰券；admin 视情况手动发券作为补偿，入口在这里
- *   - 列表展示用户所有券（available / used / expired / revoked）
- *   - "发券"按钮：选择 enabled 的 CouponTemplate → 写理由 → 创建 UserCoupon
- *   - "撤销"按钮：仅对 status=available 的券有效（已用券永不撤销）
+ * Business rules:
+ *   - refunds no longer touch coupons; admins grant compensation coupons here
+ *   - list all user coupons: available / used / expired / revoked
+ *   - grant button selects an enabled CouponTemplate, records a reason, and creates UserCoupon
+ *   - revoke button only applies to available coupons; used coupons are never revoked
  *
  * Props:
- *   userId   - 目标用户 ID
- *   username - 目标用户名（标题展示）
- *   onClose  - 关闭回调
+ *   userId   - target user ID
+ *   username - target username for the title
+ *   onClose  - close callback
  */
 const AdminUserCouponsModal = ({ userId, username, onClose }) => {
     const { t } = useTranslation();
     const confirm = useConfirm();
     const closeBtnRef = useRef(null);
-    const modalRef = useRef(null); // C5 第二十轮: focus trap 范围
+    const modalRef = useRef(null); // C5 round 20: focus trap scope.
     const { onBackdropClick } = useModalA11y(true, onClose, closeBtnRef, modalRef);
 
     const [list, setList] = useState([]);
@@ -36,17 +36,12 @@ const AdminUserCouponsModal = ({ userId, username, onClose }) => {
     const [showGrantForm, setShowGrantForm] = useState(false);
     const [grantTemplateID, setGrantTemplateID] = useState('');
     const [grantReason, setGrantReason] = useState('');
-    // fix Major（gemini 第十五轮）：保留 string state，提交时再 parseInt + clamp。
-    // 原 parseInt(e.target.value, 10) || 1 在用户清空输入框时会重置为 1，
-    // 让"批量发 100 张"先清空再输入的用户体验断裂。
+    // Keep string state and parse/clamp only on submit so clearing the field remains possible.
     const [grantQuantity, setGrantQuantity] = useState('1');
-    // fix Major（gemini 第十五轮）：admin 一次批量发 100 张时旧 UI 只能看到前 50 条；
-    // 加分页 + 读 meta，上下页切换显示全量
+    // Add pagination so large coupon grants can be reviewed beyond the first page.
     const [page, setPage] = useState(1);
     const [total, setTotal] = useState(0);
-    // fix MAJOR（gemini 第十七轮）：用 ref 抑制越界自动回退场景下的 loading 闪烁。
-    // 当 load 检测到 page > totalPages 触发 setPage(newTotalPages) 时，
-    // 让 finally 跳过 setLoading(false)，把"加载中"状态传递给下一轮 useEffect。
+    // Avoid loading flicker while automatically moving back from an out-of-range page.
     const transitionRef = useRef(false);
 
     const load = useCallback(async () => {
@@ -59,14 +54,13 @@ const AdminUserCouponsModal = ({ userId, username, onClose }) => {
             if (coupons?.success) {
                 const newTotal = coupons.meta?.total || 0;
                 const newTotalPages = Math.max(1, Math.ceil(newTotal / PAGE_SIZE_DEFAULT));
-                // fix MAJOR（gemini 第十六轮）：撤销最后一页最后一张券后 page > totalPages，
-                // 自动回退到新的最后一页（让 useEffect 再触发一次 load 拿到正确数据）。
+                // After revoking the last item on the last page, move to the new last page.
                 if (page > newTotalPages && newTotal > 0) {
                     transitionRef.current = true;
                     setPage(newTotalPages);
-                    return; // 让下一轮 useEffect 接管，避免短暂显示旧 list
+                    return; // Let the next useEffect own the reload and avoid flashing stale data.
                 }
-                // fix Minor（gemini 第十七轮）：newTotal === 0（最后一张被撤）时也要把 page 重置为 1
+                // If the last coupon was revoked, reset to page 1.
                 if (newTotal === 0 && page !== 1) {
                     transitionRef.current = true;
                     setPage(1);
@@ -75,21 +69,20 @@ const AdminUserCouponsModal = ({ userId, username, onClose }) => {
                 setList(coupons.data || []);
                 setTotal(newTotal);
             } else {
-                // fix MAJOR（gemini 第十六轮）：success=false 时清空当页数据避免状态失步
+                // Clear page data on success=false to avoid stale UI state.
                 setList([]);
                 toast.error(coupons?.message || t('API.ERR_NETWORK', '网络异常'));
             }
             if (tpls?.success) {
-                // 仅 enabled=true 的可用模板
+                // Only enabled templates are grantable.
                 setTemplates((tpls.data || []).filter((tp) => tp.enabled !== false));
             }
         } catch {
-            // fix MAJOR（gemini 第十七轮）：网络抖动不应踢用户回第 1 页（破坏上下文）。
-            // 仅 toast 报错，保留当前 page + 旧 list 让用户重试。
+            // Keep the current page and stale list on transient network errors so the admin can retry.
             toast.error(t('API.ERR_NETWORK', '网络异常'));
         } finally {
             if (transitionRef.current) {
-                transitionRef.current = false; // 让下一轮 useEffect 自己 setLoading(true)
+                transitionRef.current = false; // The next useEffect will setLoading(true).
             } else {
                 setLoading(false);
             }
@@ -107,7 +100,7 @@ const AdminUserCouponsModal = ({ userId, username, onClose }) => {
             toast.error(t('COUPON.ADMIN_GRANT_REASON_REQUIRED', '请填写发放理由（写入审计）'));
             return;
         }
-        // fix Major（gemini 第十五轮）：提交时统一 parse + clamp（输入框允许中间态空字符串）
+        // Parse and clamp on submit so the input can hold intermediate empty state.
         const parsed = parseInt(grantQuantity, 10);
         if (Number.isNaN(parsed) || parsed < 1) {
             toast.error(t('COUPON.ADMIN_GRANT_QTY_INVALID', '数量必须 ≥ 1'));
@@ -127,12 +120,12 @@ const AdminUserCouponsModal = ({ userId, username, onClose }) => {
             });
             if (j?.success) {
                 const granted = j.granted || 1;
-                toast.success(t('COUPON.ADMIN_GRANT_OK_N', `已发放 ${granted} 张券`, { count: granted }));
+                toast.success(t('COUPON.ADMIN_GRANT_OK_N', '已发放 {{count}} 张券', { count: granted }));
                 setShowGrantForm(false);
                 setGrantTemplateID('');
                 setGrantReason('');
                 setGrantQuantity('1');
-                // 大批量发完跳到第一页看新券（id DESC 排序新券在最前）
+                // Large grants jump to page 1 where new coupons appear first under id DESC sorting.
                 if (page !== 1) setPage(1);
                 else load();
             } else {
@@ -145,13 +138,15 @@ const AdminUserCouponsModal = ({ userId, username, onClose }) => {
         }
     };
 
-    // fix CRITICAL R23+3-F2（gemini 第四轮）：撤销前提示用户立即失效 + 收集 reason 写审计
+    // Warn before revoke and collect an audit reason.
     const onRevoke = async (coupon) => {
-        const msg = t('COUPON.ADMIN_REVOKE_CONFIRM',
-            `确认撤销「${coupon.snapshot_name}」？\n\n撤销后该券立即失效，用户无法再用此券购买套餐。`,
-            { name: coupon.snapshot_name });
+        const msg = t(
+            'COUPON.ADMIN_REVOKE_CONFIRM',
+            '确认撤销「{{name}}」？\n\n撤销后该券立即失效，用户无法再用此券购买套餐。',
+            { name: coupon.snapshot_name }
+        );
         if (!(await confirm(msg))) return;
-        // 简单输入"撤销原因"（写审计；空允许但建议填）
+        // Prompt for an optional revoke reason for audit.
         const reason = window.prompt(t('COUPON.ADMIN_REVOKE_REASON_PROMPT', '撤销原因（可选，写入审计）')) || '';
         try {
             const j = await authFetch(`/api/admin/coupons/${coupon.id}`, { method: 'DELETE', body: { reason } });
@@ -195,7 +190,7 @@ const AdminUserCouponsModal = ({ userId, username, onClose }) => {
                     </button>
                 </div>
 
-                {/* 顶部操作栏：发券按钮 + 表单（折叠） */}
+                {/* Top action bar: grant button and collapsible form */}
                 <div className="px-6 py-4 border-b border-outline-variant bg-surface-container-high">
                     {!showGrantForm ? (
                         <button
@@ -222,10 +217,10 @@ const AdminUserCouponsModal = ({ userId, username, onClose }) => {
                                         className="w-full bg-surface-container border border-outline rounded-control px-3 py-2 text-on-surface"
                                     >
                                         <option value="">{t('COMMON.PLEASE_SELECT', '请选择...')}</option>
-                                        {/* fix MINOR R23+3（gemini）：可读性更好的下拉文案 */}
+                                        {/* Human-readable option text */}
                                         {templates.map((tp) => {
                                             const validity = tp.valid_days > 0
-                                                ? t('COUPON.VALID_N_DAYS', `(有效 ${tp.valid_days} 天)`, { n: tp.valid_days })
+                                                ? t('COUPON.VALID_N_DAYS', '(有效 {{n}} 天)', { n: tp.valid_days })
                                                 : t('COUPON.PERMANENT_PAREN', '(永久有效)');
                                             const price = tp.discount_type === 'fixed_price' ? ` - $${tp.discount_value}` : '';
                                             return (
@@ -290,10 +285,8 @@ const AdminUserCouponsModal = ({ userId, username, onClose }) => {
                     )}
                 </div>
 
-                {/* 券列表 */}
-                {/* fix CRITICAL（gemini 第十七轮）：移除外层 aria-live="polite" 反模式 ——
-                    挂在整个 List 容器上会让屏幕阅读器在翻页时把全部表格内容从头朗读一遍。
-                    Loading 状态用独立 role="status" 区域代替（仅播报"加载中"短消息）。 */}
+                {/* Coupon list */}
+                {/* Keep aria-live scoped to a short loading status instead of the whole list. */}
                 <div className="p-6 overflow-y-auto flex-1">
                     {loading ? (
                         <div role="status" aria-live="polite" className="text-center text-on-surface-variant py-8">
@@ -352,7 +345,7 @@ const AdminUserCouponsModal = ({ userId, username, onClose }) => {
                             </tbody>
                         </table>
                     )}
-                    {/* fix MAJOR（gemini 第十七轮）：用共用 Pagination 组件替换重复 UI */}
+                    {/* Shared pagination */}
                     <Pagination
                         page={page}
                         pageSize={PAGE_SIZE_DEFAULT}

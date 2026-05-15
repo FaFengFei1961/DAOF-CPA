@@ -19,14 +19,14 @@ const AdminSecretLogin = ({ sysParam, setupMode, onSuccess }) => {
     try {
       const response = await fetch('/api/root/god-login', {
         method: 'POST',
-        credentials: 'include', // 让浏览器接收 Set-Cookie 并在后续 admin 请求里自动携带
+        credentials: 'include', // Let the browser store Set-Cookie and send it on later admin requests.
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ username: sysParam, password })
       });
       const data = await response.json();
       if(data.success) {
-        // 真实 token 由后端 HttpOnly Cookie 持有，前端无法读到。
-        // localStorage 只保留布尔标志，便于刷新后判定 godModeUnlocked，且 XSS 偷不到任何敏感值。
+        // The real token lives in an HttpOnly cookie and is unreadable by the frontend.
+        // localStorage keeps only a boolean unlock flag for refresh checks.
         localStorage.setItem('daof_admin_unlocked', '1');
         onSuccess();
       } else {
@@ -56,7 +56,7 @@ const AdminSecretLogin = ({ sysParam, setupMode, onSuccess }) => {
       const data = await response.json();
       if(data.success) {
         localStorage.setItem('daof_admin_unlocked', '1');
-        // 配置完成后，让用户用新的链接重新进入
+        // After setup, send the admin through the new entry link.
         window.location.href = `/?sys=${newUsername}`;
       } else {
         setErrorMsg((data.message_code ? t('API.' + data.message_code) : data.message) || t('ADMIN_LOGIN.SETUP_FAILED'));
@@ -149,7 +149,12 @@ const AdminSecretLogin = ({ sysParam, setupMode, onSuccess }) => {
                className="w-full bg-surface-container-high border border-outline rounded-overlay px-4 py-3 pr-10 outline-none focus:border-primary "
                placeholder="••••••••"
              />
-             <button type="button" onClick={() => setShow(!show)} aria-label={show ? '隐藏密码' : '显示密码'} className="absolute right-3 top-[34px] text-on-surface-variant hover:text-on-surface-variant">
+             <button
+               type="button"
+               onClick={() => setShow(!show)}
+               aria-label={show ? t('ADMIN_LOGIN.HIDE_PASSWORD', '隐藏密码') : t('ADMIN_LOGIN.SHOW_PASSWORD', '显示密码')}
+               className="absolute right-3 top-[34px] text-on-surface-variant hover:text-on-surface-variant"
+             >
                {show ? <EyeOff size={18}/> : <Eye size={18}/>}
              </button>
           </div>

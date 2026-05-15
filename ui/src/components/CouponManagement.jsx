@@ -7,10 +7,10 @@ import { authFetch } from '../utils/authFetch';
 import { useModalA11y } from '../hooks/useModalA11y';
 
 /**
- * CouponManagement — admin 端优惠券模板 CRUD
+ * CouponManagement is the admin coupon-template CRUD screen.
  *
- * 模板定义"券蓝本"（折扣类型 + 值 + 适用 package + 有效期）；
- * 实际发给用户在 AdminGrantCouponModal（按用户发）或注册自动发（SysConfig 配置）。
+ * Templates define coupon blueprints: discount type, value, package scope, and validity.
+ * Actual grants happen per user or through signup_coupon_template_id SysConfig.
  */
 
 const EMPTY_TEMPLATE = {
@@ -18,7 +18,7 @@ const EMPTY_TEMPLATE = {
   description: '',
   discount_type: 'fixed_price',
   discount_value: 0,
-  package_ids: '', // JSON 数组字符串 "[1,2,3]" 或 ""=全部
+  package_ids: '', // JSON array string like "[1,2,3]", or "" for all.
   valid_days: 0,
   enabled: true,
 };
@@ -33,7 +33,7 @@ const CouponManagement = () => {
   const [saving, setSaving] = useState(false);
 
   const closeBtnRef = useRef(null);
-  const modalRef = useRef(null); // C-F1 第二十一轮: focus trap 范围
+  const modalRef = useRef(null); // C-F1 round 21: focus trap scope.
   const isOpen = !!editing;
   const { onBackdropClick } = useModalA11y(isOpen, () => !saving && setEditing(null), closeBtnRef, modalRef);
 
@@ -77,7 +77,7 @@ const CouponManagement = () => {
   };
 
   const onSave = async () => {
-    // 客户端校验
+    // Client-side validation.
     if (!editing.name?.trim()) {
       toast.error(t('COUPON.NAME_REQUIRED', '名称必填'));
       return;
@@ -113,7 +113,11 @@ const CouponManagement = () => {
   };
 
   const onDelete = async (item) => {
-    if (!(await confirm({ level: 'L1', danger: true, message: t('COUPON.DELETE_CONFIRM', `确认删除模板「${item.name}」？已发出的券不受影响。`) }))) return;
+    if (!(await confirm({
+      level: 'L1',
+      danger: true,
+      message: t('COUPON.DELETE_CONFIRM', '确认删除模板「{{name}}」？已发出的券不受影响。', { name: item.name }),
+    }))) return;
     try {
       const j = await authFetch(`/api/admin/coupon-templates/${item.id}`, { method: 'DELETE' });
       if (j?.success) {

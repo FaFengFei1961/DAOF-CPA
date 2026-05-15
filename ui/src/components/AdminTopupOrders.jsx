@@ -13,17 +13,16 @@ const AdminTopupOrders = () => {
   const [loading, setLoading] = useState(true);
   const [statusFilter, setStatusFilter] = useState('');
   const [refundingId, setRefundingId] = useState(null);
-  // fix Major Codex UX 审查（第二十五轮）：原写死 page=1&page_size=100 忽略 meta.total，
-  // 超过 100 笔订单 admin 看不到。加分页状态 + meta 同步。
+  // fix Major Codex UX review round 25: pagination state is required so admins can see beyond 100 orders.
   const [page, setPage] = useState(1);
   const [pageSize, setPageSize] = useState(20);
   const [total, setTotal] = useState(0);
 
-  // 第十七轮：手动退款工作流模态。admin 必须先在易付通后台退款，再来这里登记。
+  // Manual refund workflow: admin refunds in Yifut first, then records it here.
   const [refundModal, setRefundModal] = useState({
     open: false,
     order: null,
-    step: 1,            // 1=确认已在易付通后台退款 / 2=填金额+扣回选项+退款单号
+    step: 1,            // 1=confirm external refund / 2=amount + reclaim option + refund reference
     confirmedExternal: false,
     moneyRmb: '',
     externalRef: '',
@@ -33,10 +32,10 @@ const AdminTopupOrders = () => {
     open: false, order: null, step: 1, confirmedExternal: false,
     moneyRmb: '', externalRef: '', reclaimQuota: true,
   });
-  // 模态打开时焦点移入"已在易付通后台退款"checkbox（step 1）/ 退款金额输入框（step 2）
+  // Move focus into the step 1 checkbox or step 2 amount input when the modal opens.
   const refundCheckboxRef = useRef(null);
   const refundAmountRef = useRef(null);
-  const refundModalRef = useRef(null); // C5 第二十轮: focus trap 范围
+  const refundModalRef = useRef(null); // C5 round 20: focus trap scope.
   const initialFocusRef = refundModal.step === 1 ? refundCheckboxRef : refundAmountRef;
   const { onBackdropClick: onRefundBackdropClick } = useModalA11y(refundModal.open, closeRefundModal, initialFocusRef, refundModalRef);
 
@@ -57,13 +56,13 @@ const AdminTopupOrders = () => {
     }
   }, [t, statusFilter, page, pageSize]);
 
-  // 切换 statusFilter 时回到第 1 页（避免在第 5 页切到只有 2 页的过滤态导致空数据）
+  // Reset to page 1 when the status filter changes to avoid out-of-range empty pages.
   useEffect(() => { setPage(1); }, [statusFilter]);
   useEffect(() => { load(); }, [load]);
 
   const totalPages = Math.max(1, Math.ceil(total / pageSize));
 
-  // 第十七轮：手动退款工作流。打开模态，admin 必须先勾选"已在易付通后台退款"才能进入第二步。
+  // The admin must confirm the external Yifut refund before entering step 2.
   const openRefundModal = (order) => {
     setRefundModal({
       open: true, order, step: 1, confirmedExternal: false,
@@ -85,7 +84,7 @@ const AdminTopupOrders = () => {
       toast.error(t('PAY_ADMIN.REFUND_AMOUNT_EXCEEDS', '退款金额超过剩余可退'));
       return;
     }
-    // fix CRITICAL C3（codex 第二十轮）：external_refund_ref 必填，前端先校验避免无谓请求
+    // fix CRITICAL C3 (codex round 20): validate required external_refund_ref before sending.
     const cleanedRef = externalRef.trim();
     if (!cleanedRef) {
       toast.error(t('PAY_ADMIN.REFUND_REF_REQUIRED', '请填入易付通后台的商户退款单号'));
@@ -93,8 +92,8 @@ const AdminTopupOrders = () => {
     }
     setRefundingId(order.id);
     try {
-      // fix Sprint4-M3：协议从 money_rmb float 改为 money_fen int64（前端 × 100 转 fen）
-      // amount=0 表示全额退款，对应 money_fen=0
+      // Sprint4-M3: protocol changed from money_rmb float to money_fen int64.
+      // amount=0 means full refund, so money_fen=0.
       const moneyFen = inputStr === '' ? 0 : Math.round(amount * 100);
       const json = await authFetch(`/api/admin/topup/orders/${order.id}/refund`, {
         method: 'POST',
@@ -180,7 +179,7 @@ const AdminTopupOrders = () => {
                       <span className="text-xs text-on-surface-variant ml-1">/ ${o.amount_usd.toFixed(2)}</span>
                       {o.refunded_amount_rmb > 0 && (
                         <div className="text-[10px] text-warning">
-                          已退 ¥{o.refunded_amount_rmb.toFixed(2)}
+                          {t('PAY_ADMIN.REFUNDED_PREFIX', '已退')} ¥{o.refunded_amount_rmb.toFixed(2)}
                         </div>
                       )}
                     </td>
@@ -213,7 +212,7 @@ const AdminTopupOrders = () => {
           </div>
         )}
 
-        {/* 分页 — fix Major Codex UX 审查（第二十五轮） */}
+        {/* Pagination */}
         {!loading && total > 0 && (
           <div className="flex flex-col md:flex-row items-center justify-between gap-3 px-4 py-3 border-t border-outline-variant bg-surface-container">
             <div className="text-xs text-on-surface-variant">
@@ -249,7 +248,7 @@ const AdminTopupOrders = () => {
         )}
       </section>
 
-      {/* 第十七轮：手动退款工作流模态 — 强制 admin 先在易付通后台退款，再回平台登记 */}
+      {/* Manual refund modal: refund in Yifut first, then record in platform. */}
       {refundModal.open && refundModal.order && (
         <div
           ref={refundModalRef}

@@ -52,7 +52,7 @@ const I18nManagement = () => {
                 return;
             }
 
-            // fix MAJOR（多模型审计第二十五轮 P2）：admin 写操作改 authFetch，统一鉴权 + 错误归一化
+            // fix MAJOR multi-model audit round 25 P2: admin writes use authFetch for unified auth/errors.
             const data = await authFetch(`/api/admin/i18n/${langId}`, {
                 method: 'POST',
                 body: jsonData,
@@ -78,7 +78,7 @@ const I18nManagement = () => {
         if (!(await confirm(t('I18N_MGMT.DELETE_CONFIRM', { langId })))) return;
 
         try {
-            // fix MAJOR（多模型审计第二十五轮 P2）：admin 写操作改 authFetch
+            // fix MAJOR multi-model audit round 25 P2: admin writes use authFetch.
             const data = await authFetch(`/api/admin/i18n/${langId}`, { method: 'DELETE' });
 
             if (data.success) {
