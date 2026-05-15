@@ -436,6 +436,7 @@ func AdminListTickets(c *fiber.Ctx) error {
 // 旧实现先 ExtractAdminToken（cookie 优先 Bearer），导致：
 //   - admin 浏览器同时持 admin cookie + 用户 SDK 设的 Bearer header → 被识别为 admin
 //   - 用户在 admin 解锁页面回工单 → ticket message 被记成 admin 行为
+//
 // 新策略：Bearer header = 用户 SDK / curl / 程序化访问；cookie = 浏览器后台。
 // 优先 Bearer 让 SDK 永远走 user 分支；admin 走管理后台必须用 cookie（且自动免疫 CSRF token 抢占）。
 func loadCurrentRole(c *fiber.Ctx) (*database.User, bool, error) {

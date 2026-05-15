@@ -101,7 +101,6 @@ var (
 	startOnce sync.Once
 	stopOnce  sync.Once
 
-
 	// CPA 通用代理调用：30s 超时，连接池避免高频刷新时端口耗尽
 	cpaHTTPClient = &http.Client{
 		Timeout: 30 * time.Second,
@@ -1151,8 +1150,12 @@ func normalizeGoogleTierBadge(raw string) string {
 // 返回经过 normalizeGoogleTierBadge 标准化后的字符串。
 func pickGoogleCodeAssistTier(body []byte) string {
 	var resp struct {
-		PaidTier    *struct{ ID string `json:"id"` } `json:"paidTier"`
-		CurrentTier *struct{ ID string `json:"id"` } `json:"currentTier"`
+		PaidTier *struct {
+			ID string `json:"id"`
+		} `json:"paidTier"`
+		CurrentTier *struct {
+			ID string `json:"id"`
+		} `json:"currentTier"`
 		AllowedTiers []struct {
 			ID        string `json:"id"`
 			IsDefault bool   `json:"isDefault"`
@@ -1303,8 +1306,9 @@ func claudeBuildWindow(def claudeWindowDef, raw map[string]any) CreditWindow {
 //
 // Anthropic API 契约：utilization 始终是 0-100 百分数（不是 0-1 比例）。
 // 例：utilization=2  → 已用 2%
-//     utilization=1  → 已用 1%（不是 100%！）
-//     utilization=99 → 已用 99%
+//
+//	utilization=1  → 已用 1%（不是 100%！）
+//	utilization=99 → 已用 99%
 //
 // 与 CPAMC `parseClaudeUsagePayload` 直接 `normalizeNumberValue(utilization)`
 // 行为对齐（quotaConfigs.ts:924）。之前的 "f ≤ 1.0 视作比例 × 100" 启发式
@@ -1444,9 +1448,9 @@ func fetchAntigravityQuota(ctx context.Context, af authFileLite, entry *CreditEn
 	// 同步 jlcodes99/cockpit-tools quota.rs:fetch_project_id_with_context 的实现。
 	// 失败不影响 windows 主数据，仅 log。
 	caHeaders := map[string]string{
-		"Authorization":    "Bearer $TOKEN$",
-		"Content-Type":     "application/json",
-		"User-Agent":       "antigravity/1.11.5 windows/amd64",
+		"Authorization":     "Bearer $TOKEN$",
+		"Content-Type":      "application/json",
+		"User-Agent":        "antigravity/1.11.5 windows/amd64",
 		"x-goog-api-client": "gl-node/22.10.0",
 	}
 	caPayload, _ := json.Marshal(map[string]any{

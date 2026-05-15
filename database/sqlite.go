@@ -252,10 +252,6 @@ func InitDB() {
 		log.Println("🔑 默认管理员账户 [root] 创建成功。")
 	}
 
-	if err := DB.Exec("UPDATE packages SET product_type='subscription' WHERE product_type='addon'").Error; err != nil {
-		log.Printf("[migrate] addon->subscription: %v", err)
-	}
-
 	// 回填 quota_plans.limit_value_micro_usd：codex 加 int64 字段时只在 seed 路径写新值，
 	// 早期创建的 plan 该列默认 0 → admin API 错把 limit=0 当作"不限"。
 	// 一次性扫所有 api_cost_usd plan，把 limit_value(USD float) × 1e6 写入 limit_value_micro_usd。

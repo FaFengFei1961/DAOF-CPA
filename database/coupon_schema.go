@@ -15,11 +15,12 @@
 //   - 不做：用户输 code 自助领、券与券叠加、复杂活动
 //
 // 流转（用户 2026-05-10 第三次反馈定稿）：
-//   admin 创建模板 → admin 发券（创建 UserCoupon, status=available）
-//   → 用户购买时选用 → status=used + 关联 sub_id
-//   → 用户取消订阅 / admin 退款 → 券保持 used（取消≠退款都**不退权益**）
-//   → admin 撤销 → status=revoked（仅对 status=available 的券有效）
-//   → admin 视情况手动发新券作补偿 → 走 AdminGrantCoupon 独立路径
+//
+//	admin 创建模板 → admin 发券（创建 UserCoupon, status=available）
+//	→ 用户购买时选用 → status=used + 关联 sub_id
+//	→ 用户取消订阅 / admin 退款 → 券保持 used（取消≠退款都**不退权益**）
+//	→ admin 撤销 → status=revoked（仅对 status=available 的券有效）
+//	→ admin 视情况手动发新券作补偿 → 走 AdminGrantCoupon 独立路径
 package database
 
 import (
@@ -33,7 +34,7 @@ import (
 // 确保 admin 修改 template 不影响已发出的券（与 PackageSnapshot 同一思路）。
 type CouponTemplate struct {
 	ID          uint   `gorm:"primaryKey" json:"id"`
-	Name        string `gorm:"not null" json:"name"`        // 内部名（admin 看）
+	Name        string `gorm:"not null" json:"name"`         // 内部名（admin 看）
 	Description string `gorm:"type:text" json:"description"` // 用户端文案
 
 	// 优惠类型（MVP 仅支持 fixed_price）
@@ -75,9 +76,9 @@ type UserCoupon struct {
 	SnapshotValue      int64  `gorm:"not null" json:"snapshot_value"` // micro_usd
 	SnapshotPackageIDs string `gorm:"type:text;default:''" json:"snapshot_package_ids"`
 
-	GrantedBy   uint      `gorm:"default:0" json:"granted_by"` // admin user.ID；0 = 系统自动发
-	GrantReason string    `gorm:"type:text" json:"grant_reason"`
-	GrantedAt   time.Time `json:"granted_at"`
+	GrantedBy   uint       `gorm:"default:0" json:"granted_by"` // admin user.ID；0 = 系统自动发
+	GrantReason string     `gorm:"type:text" json:"grant_reason"`
+	GrantedAt   time.Time  `json:"granted_at"`
 	ExpiresAt   *time.Time `gorm:"index" json:"expires_at"`
 
 	UsedAt        *time.Time `json:"used_at"`

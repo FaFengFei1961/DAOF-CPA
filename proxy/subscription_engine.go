@@ -311,8 +311,9 @@ func trySharedQuota(cs *CachedSubscription, req EngineRequest) EngineDecision {
 	}
 	if !ok {
 		// fix CRITICAL Sprint2-M4：根据失败 plan 的 OverflowStrategy 决定 hard-block vs soft-skip。
-		// 默认 "next_subscription"（向后兼容旧默认行为）；"block" 即时拒绝不再向下尝试。
-		// failSnap 由 consumePlanInTx 在事务内填充，包含触发的 plan 的 OverflowStrategy。
+		// failSnap 为 nil 时（极少数路径：spec 为空被 atomicConsumeMany 提前返回 ok=false）
+		// 取 "next_subscription" 作为安全默认（让 Decide 继续尝试下一订阅，不卡死整链）。
+		// failSnap 由 consumePlanInTx 在事务内填充，包含触发 plan 的 OverflowStrategy。
 		strategy := "next_subscription"
 		if failSnap != nil {
 			strategy = failSnap.OverflowStrategy

@@ -110,7 +110,8 @@ func GetUserActiveSubscriptions(userID uint) ([]*CachedSubscription, error) {
 	// fix MAJOR Sprint2-M4：加 start_at <= now 守卫，防未来生效订阅被提前激活。
 	// 旧实现仅查 status='active' + end_at > now，admin 给用户开 7 天后才生效的订阅
 	// 会立即被引擎拿来扣费（产品/审计语义错位）。
-	// 注：StartAt 是 time.Time，零值（0001-01-01）总是 ≤ now，向后兼容历史数据。
+	// 注：StartAt 是 time.Time，零值（0001-01-01）总是 ≤ now —— 历史未设 StartAt 的行
+	// 也满足守卫，不会被意外排除。
 	var rows []database.UserSubscription
 	if err := database.DB.Where("user_id = ? AND status = ? AND start_at <= ? AND end_at > ?", userID, "active", now, now).
 		Order("consumption_order ASC").Find(&rows).Error; err != nil {

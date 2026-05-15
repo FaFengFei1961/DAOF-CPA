@@ -2112,6 +2112,7 @@ func usageInt(usage gjson.Result, paths ...string) (int, bool) {
 //   - 0 pico → 0 micro_usd（保持）
 //   - 1..1e9 pico → 1 micro_usd（最小 1 micro 收费）
 //   - 1e9+k pico → 2 micro_usd（向上进位 1）
+//
 // 平台侧永不少收。pico 是 1e-15 USD，1 micro_usd 进位上限约 1e-6 USD，单请求误差可忽略。
 func checkedCostMicroUSD(t1 int, p1 int64, t2 int, p2 int64, t3 int, p3 int64, t4 int, p4 int64, t5 int, p5 int64, t6 int, p6 int64) (int64, bool) {
 	total := new(big.Int)

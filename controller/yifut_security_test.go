@@ -1,9 +1,9 @@
 // Package controller / yifut_security_test.go
 //
 // 覆盖易付通 V2 RSA 通知/退货回调相关 CRITICAL 安全不变量：
-//   1. R4 CRITICAL: pid 绑定（防跨商户回调重放）
-//   2. R4: timestamp 漂移检查（防回调旧值重放）
-//   3. R4: 验签失败拒绝
+//  1. R4 CRITICAL: pid 绑定（防跨商户回调重放）
+//  2. R4: timestamp 漂移检查（防回调旧值重放）
+//  3. R4: 验签失败拒绝
 package controller
 
 import (

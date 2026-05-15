@@ -229,18 +229,18 @@ func ptrTime(t time.Time) *time.Time { return &t }
 // fix MAJOR R23+2-B3：parsePackageIDsStrict 区分空 vs 非法
 func TestParsePackageIDsStrict(t *testing.T) {
 	cases := []struct {
-		in       string
-		wantOK   bool
-		wantNil  bool
-		wantLen  int
+		in      string
+		wantOK  bool
+		wantNil bool
+		wantLen int
 	}{
-		{"", true, true, 0},               // 空 = 全适用
-		{"  ", true, true, 0},             // 空白 = 全适用
-		{"[]", true, false, 0},            // 空数组 = 合法
-		{"[1,2,3]", true, false, 3},       // 合法
-		{"not-json", false, true, 0},      // 损坏 → 拒绝
-		{`["abc"]`, false, true, 0},       // 类型不匹配 → 拒绝
-		{"null", true, true, 0},           // null 也是合法 JSON
+		{"", true, true, 0},          // 空 = 全适用
+		{"  ", true, true, 0},        // 空白 = 全适用
+		{"[]", true, false, 0},       // 空数组 = 合法
+		{"[1,2,3]", true, false, 3},  // 合法
+		{"not-json", false, true, 0}, // 损坏 → 拒绝
+		{`["abc"]`, false, true, 0},  // 类型不匹配 → 拒绝
+		{"null", true, true, 0},      // null 也是合法 JSON
 	}
 	for _, tc := range cases {
 		ids, ok := parsePackageIDsStrict(tc.in)

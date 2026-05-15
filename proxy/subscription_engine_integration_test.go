@@ -651,7 +651,7 @@ func TestEngineIntegration_FutureStartAtNotActivated(t *testing.T) {
 		UserID:           userID,
 		PackageID:        1,
 		PackageSnapshot:  snap,
-		StartAt:          now.Add(24 * time.Hour),  // 未来生效
+		StartAt:          now.Add(24 * time.Hour), // 未来生效
 		EndAt:            now.Add(30 * 24 * time.Hour),
 		ConsumptionOrder: 1,
 		StackIndex:       1,
@@ -693,7 +693,7 @@ func TestNormalizeOverflowStrategy_CollapsesUnknownToDefault(t *testing.T) {
 		{"  block  ", "block"},
 		{"next_subscription", "next_subscription"},
 		{"", "next_subscription"},
-		{"allow", "next_subscription"},       // legacy 未实现值
+		{"allow", "next_subscription"},         // legacy 未实现值
 		{"degrade_model", "next_subscription"}, // legacy 未实现值
 		{"任意自定义", "next_subscription"},
 	}

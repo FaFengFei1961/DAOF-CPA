@@ -39,10 +39,10 @@ func TestClaudeBuildWindowTreatsUtilizationAsUsedPercent(t *testing.T) {
 // 否则 cliproxy_usage_sync.FailBody 等错误日志落库时会泄漏凭证。
 func TestSanitizeError_RedactsAllSensitivePatterns(t *testing.T) {
 	cases := []struct {
-		name      string
-		input     string
-		mustMiss  []string // 不能出现在输出中（原始敏感值）
-		mustHave  []string // 必须出现的脱敏标记
+		name     string
+		input    string
+		mustMiss []string // 不能出现在输出中（原始敏感值）
+		mustHave []string // 必须出现的脱敏标记
 	}{
 		{
 			name:     "bearer header",

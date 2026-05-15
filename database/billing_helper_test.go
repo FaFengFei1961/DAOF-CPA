@@ -118,8 +118,8 @@ func TestBilling_WriteEntry_NilSafePtrFields(t *testing.T) {
 		return WriteBillingEntry(tx, BillingEntryInput{
 			UserID:          2,
 			EntryType:       BillingTypeApiConsumeBalance,
-			AmountUSD:       -50_000,    // -$0.05 = -50_000 micro_usd
-			BalanceAfterUSD: 9_950_000,  // $9.95 = 9_950_000 micro_usd
+			AmountUSD:       -50_000,   // -$0.05 = -50_000 micro_usd
+			BalanceAfterUSD: 9_950_000, // $9.95 = 9_950_000 micro_usd
 			ModelName:       "claude-sonnet",
 			TokensTotal:     1500,
 			Description:     "余额扣费 · claude-sonnet · 1500 tokens",

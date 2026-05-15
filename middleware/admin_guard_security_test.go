@@ -1,8 +1,8 @@
 // Package middleware / admin_guard_security_test.go
 //
 // 覆盖 AdminGuard 的 CRITICAL/Major 修复：
-//   1. R4 Major: status=1 强制——封禁 admin（status=2）即使持旧 cookie 也必须 403
-//   2. R8 Major: CSRF Origin/Referer 校验——cookie 写请求必须同源；Bearer 写请求免校验
+//  1. R4 Major: status=1 强制——封禁 admin（status=2）即使持旧 cookie 也必须 403
+//  2. R8 Major: CSRF Origin/Referer 校验——cookie 写请求必须同源；Bearer 写请求免校验
 package middleware
 
 import (

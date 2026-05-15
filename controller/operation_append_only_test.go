@@ -3,10 +3,10 @@
 // 验证 OperationLog 的 append-only 不可篡改保证（Sprint1-P0-7 修复后）。
 //
 // 测试矩阵：
-//   1. INSERT 正常 → 成功
-//   2. UPDATE 字段 → GORM 因 `<-:create` 标签拒绝写入（值不变）
-//   3. 通过 LogOperationBy 写入后 → 字段持久，且后续 Updates 不影响
-//   4. 用户删除流程 → OperationLog 保留（与之前的 Unscoped().Delete 行为对比）
+//  1. INSERT 正常 → 成功
+//  2. UPDATE 字段 → GORM 因 `<-:create` 标签拒绝写入（值不变）
+//  3. 通过 LogOperationBy 写入后 → 字段持久，且后续 Updates 不影响
+//  4. 用户删除流程 → OperationLog 保留（与之前的 Unscoped().Delete 行为对比）
 package controller
 
 import (

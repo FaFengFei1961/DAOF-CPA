@@ -24,8 +24,9 @@ func LogOperationByTx(tx *gorm.DB, operatorID, targetUserID uint, operatorRole, 
 // LogOperationByTxReturning 与 LogOperationByTx 行为一致，但额外返回插入行的主键 ID。
 //
 // 设计原因（fix MAJOR 多模型审计第二十五轮）：
-//   admin 调额场景需要先写 OperationLog 拿到主键 ID，再把 BillingEntry.RelatedID 关联到它，
-//   保证账务流水与审计日志双向可追溯（之前 RelatedID=0 让链路断流，admin 改额无法 join 回审计）。
+//
+//	admin 调额场景需要先写 OperationLog 拿到主键 ID，再把 BillingEntry.RelatedID 关联到它，
+//	保证账务流水与审计日志双向可追溯（之前 RelatedID=0 让链路断流，admin 改额无法 join 回审计）。
 func LogOperationByTxReturning(tx *gorm.DB, operatorID, targetUserID uint, operatorRole, actionType, ipAddress string, details string) (uint, error) {
 	row := database.OperationLog{
 		TargetUserID: targetUserID,

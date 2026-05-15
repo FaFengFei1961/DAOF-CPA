@@ -927,11 +927,11 @@ func AdminRefundTopup(c *fiber.Ctx) error {
 		log.Printf("[TOPUP-REFUND-MANUAL] DUPLICATE external_refund_ref=%q order=%s admin=%d existing_refund_id=%d",
 			req.ExternalRefundRef, order.OutTradeNo, op.ID, dup.existing.ID)
 		return c.Status(409).JSON(fiber.Map{
-			"success":               false,
-			"message":               "该退款单号已被使用过，无法重复入账。如需新一笔退款请使用不同的商户退款单号。",
-			"message_code":          "ERR_REFUND_REF_DUPLICATED",
-			"existing_refund_id":    dup.existing.ID,
-			"existing_refunded_at":  dup.existing.CreatedAt.Format(time.RFC3339),
+			"success":              false,
+			"message":              "该退款单号已被使用过，无法重复入账。如需新一笔退款请使用不同的商户退款单号。",
+			"message_code":         "ERR_REFUND_REF_DUPLICATED",
+			"existing_refund_id":   dup.existing.ID,
+			"existing_refunded_at": dup.existing.CreatedAt.Format(time.RFC3339),
 		})
 	}
 	// fix MAJOR M1：tx 内 fresh-based 校验失败 → 4xx 而非 500

@@ -19,10 +19,10 @@ import (
 // Management Key 存储在服务端加密 SysConfig 中，绝不下发到前端
 //
 // fix Major（codex 第五轮）：
-//   1) cliproxy_url 必须经 ValidateChannelURL 防 SSRF（拒绝云元数据 / 链路本地 / 非 http(s)）
-//   2) HTTP client 必须使用 SafeTransport，dial 时再次校验解析 IP 防 DNS rebinding
-//   3) 限制响应体大小（4MB），避免上游异常时 OOM
-//   4) 不把上游 body 原样返回（含 Management Key 错误也不外泄）
+//  1. cliproxy_url 必须经 ValidateChannelURL 防 SSRF（拒绝云元数据 / 链路本地 / 非 http(s)）
+//  2. HTTP client 必须使用 SafeTransport，dial 时再次校验解析 IP 防 DNS rebinding
+//  3. 限制响应体大小（4MB），避免上游异常时 OOM
+//  4. 不把上游 body 原样返回（含 Management Key 错误也不外泄）
 func ProxyCLIProxyUsage(c *fiber.Ctx) error {
 	// 从加密配置库读取 CLIProxyAPI 连接信息
 	cliproxyURL := getDecryptedConfig("cliproxy_url")

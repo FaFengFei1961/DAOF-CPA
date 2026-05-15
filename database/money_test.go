@@ -174,8 +174,8 @@ func TestCheckedMulInt64(t *testing.T) {
 		{0, math.MaxInt64, 0, true},
 		{1, math.MaxInt64, math.MaxInt64, true},
 		{2, math.MaxInt64 / 2, math.MaxInt64 - 1, true}, // 不溢出
-		{2, math.MaxInt64/2 + 1, 0, false},               // 溢出
-		{-1, math.MinInt64, 0, false},                    // -MinInt64 = MaxInt64+1 溢出
+		{2, math.MaxInt64/2 + 1, 0, false},              // 溢出
+		{-1, math.MinInt64, 0, false},                   // -MinInt64 = MaxInt64+1 溢出
 		{math.MaxInt64, math.MaxInt64, 0, false},
 		{1_000_000, 1_000_000_000_000_000, 0, false}, // 1e15 * 1e6 溢出
 	}
