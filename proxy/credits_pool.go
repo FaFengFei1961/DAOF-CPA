@@ -1137,20 +1137,35 @@ func fetchClaudeQuota(ctx context.Context, af authFileLite, entry *CreditEntry) 
 	} else if pr.StatusCode != 200 {
 		log.Printf("[CREDITS] Claude profile auth=%s HTTP %d", af.AuthIndex, pr.StatusCode)
 	} else {
+		// 同步 Cli-Proxy-API-Management-Center quotaConfigs.ts:resolveClaudePlanType
+		// 优先级：has_claude_max → Max；has_claude_pro → Pro；
+		//        organization_type=claude_team && subscription_status=active → Team；
+		//        else → Free。
+		// 旧实现读 account.plan_type / organization.plan_type — 这两个字段在
+		// Anthropic /api/oauth/profile 响应里实际不存在，永远拿到空字符串 →
+		// 前端 CreditsMonitor plan_type 角标完全不显示。
 		var profile struct {
 			Account struct {
-				PlanType     string `json:"plan_type"`
+				HasClaudeMax bool   `json:"has_claude_max"`
+				HasClaudePro bool   `json:"has_claude_pro"`
 				EmailAddress string `json:"email_address"`
 			} `json:"account"`
 			Organization struct {
-				PlanType string `json:"plan_type"`
+				OrganizationType   string `json:"organization_type"`
+				SubscriptionStatus string `json:"subscription_status"`
 			} `json:"organization"`
 		}
 		if json.Unmarshal(pr.Body, &profile) == nil {
-			if profile.Account.PlanType != "" {
-				entry.PlanType = profile.Account.PlanType
-			} else if profile.Organization.PlanType != "" {
-				entry.PlanType = profile.Organization.PlanType
+			switch {
+			case profile.Account.HasClaudeMax:
+				entry.PlanType = "Max"
+			case profile.Account.HasClaudePro:
+				entry.PlanType = "Pro"
+			case strings.EqualFold(profile.Organization.OrganizationType, "claude_team") &&
+				strings.EqualFold(profile.Organization.SubscriptionStatus, "active"):
+				entry.PlanType = "Team"
+			default:
+				entry.PlanType = "Free"
 			}
 			if entry.Email == "" && profile.Account.EmailAddress != "" {
 				entry.Email = profile.Account.EmailAddress
