@@ -660,9 +660,16 @@
     "MODERATION_DESC": "上游模型池审核 / 关键字 / 缓存 / 长 prompt 限制 / 多模态策略 / 拒绝文案的全局配置"
   },
   "USER_MGMT": {
+    "BULK_GRANT_COUPON": "批量发券",
+    "BULK_GRANT_TITLE": "批量发券给所选用户",
+    "BULK_GRANT_TEMPLATE_LABEL": "选择优惠券模板",
+    "BULK_GRANT_QUANTITY_LABEL": "每人发放数量",
+    "BULK_GRANT_REASON_LABEL": "备注（审计可见）",
+    "BULK_GRANT_CONFIRM_TITLE": "批量发券二次确认",
+    "BULK_GRANT_CONFIRM_MSG": "将给 {{count}} 个用户每人发放 {{qty}} 张「{{name}}」，总计 {{total}} 张券。此操作不可撤回。",
+    "BULK_GRANT_SUCCESS": "已发券给 {{success}}/{{total}} 个用户",
     "TITLE": "用户管理",
-    "DESC": "管理所有注册用户账号与额度状态。",
-    "SEARCH_PLACEHOLDER": "搜索用户名...",
+    "DESC": "管理所有注册用户账号与额度状态。",    "SEARCH_PLACEHOLDER": "搜索用户名...",
     "SORT_ID_DESC": "最新注册",
     "SORT_ID_ASC": "最早注册",
     "SORT_QUOTA_DESC": "最高额度",

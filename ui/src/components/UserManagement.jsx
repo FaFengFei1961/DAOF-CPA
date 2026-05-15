@@ -7,6 +7,7 @@ import toast from 'react-hot-toast';
 import { useConfirm } from '../context/ConfirmContext';
 import { authFetch } from '../utils/authFetch';
 import AdminUserBills from './AdminUserBills';
+import BulkGrantCouponModal from './BulkGrantCouponModal';
 import { useModalA11y } from '../hooks/useModalA11y';
 import DataTable from './ui/DataTable';
 import StatusBadge from './ui/StatusBadge';
@@ -39,6 +40,7 @@ const UserManagement = () => {
     // 批量选择 state
     const [selectedIds, setSelectedIds] = useState(() => new Set());
     const [bulkModal, setBulkModal] = useState({ isOpen: false, mode: 'add', amount: '' });
+    const [bulkCouponModalOpen, setBulkCouponModalOpen] = useState(false);
     const [bulkProcessing, setBulkProcessing] = useState(false);
 
     // fix Major M8（gemini 第十五轮）：原模态框无 ESC + 背景点击关闭，与 AdminUserBills 标准不一致
@@ -303,6 +305,14 @@ const UserManagement = () => {
                             title="把所选用户的额度直接设置为某值"
                         >
                             <Equal size={14} /> 设为定值
+                        </button>
+                        <div className="w-px h-6 bg-outline-variant mx-1" />
+                        <button
+                            onClick={() => setBulkCouponModalOpen(true)}
+                            className="flex items-center gap-1.5 px-3 py-1.5 bg-primary/20 hover:bg-primary/40 text-primary border border-primary/40 rounded-control text-xs font-medium transition-colors"
+                            title={t('USER_MGMT.BULK_GRANT_COUPON', '批量发券')}
+                        >
+                            <Ticket size={14} /> {t('USER_MGMT.BULK_GRANT_COUPON', '批量发券')}
                         </button>
                         <div className="w-px h-6 bg-outline-variant mx-1" />
                         <button
@@ -717,6 +727,18 @@ const UserManagement = () => {
                     onClose={() => setCouponsModal({ isOpen: false, user: null })}
                 />
             )}
+
+            {/* 批量发券模态框 */}
+            <BulkGrantCouponModal
+                open={bulkCouponModalOpen}
+                onClose={() => setBulkCouponModalOpen(false)}
+                userIds={Array.from(selectedIds)}
+                onSuccess={() => {
+                    setBulkCouponModalOpen(false);
+                    clearSelection();
+                    fetchUsers();
+                }}
+            />
         </div>
     );
 };

@@ -312,6 +312,7 @@ func main() {
 	adminApi.Put("/coupon-templates/:id", controller.AdminUpdateCouponTemplate)
 	adminApi.Delete("/coupon-templates/:id", controller.AdminDeleteCouponTemplate)
 	adminApi.Post("/coupons/grant", controller.AdminGrantCoupon)
+	adminApi.Post("/users/bulk-grant-coupon", controller.AdminBulkGrantCoupon)
 	adminApi.Delete("/coupons/:id", controller.AdminRevokeCoupon)
 	adminApi.Get("/users/:userId/coupons", controller.AdminListUserCoupons)
 

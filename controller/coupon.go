@@ -417,6 +417,167 @@ func AdminGrantCoupon(c *fiber.Ctx) error {
 	})
 }
 
+// ─── admin: 批量发券 ─────────────────────────────────────────────────────
+
+type bulkGrantCouponPayload struct {
+	UserIDs    []uint `json:"user_ids"`
+	TemplateID uint   `json:"template_id"`
+	Reason     string `json:"reason"`
+	Quantity   *int   `json:"quantity"`
+}
+
+type bulkGrantUserResult struct {
+	UserID    uint   `json:"user_id"`
+	Success   bool   `json:"success"`
+	Reason    string `json:"reason,omitempty"`
+	CouponIDs []uint `json:"coupon_ids,omitempty"`
+}
+
+// AdminBulkGrantCoupon POST /api/admin/users/bulk-grant-coupon
+// 给一批用户每人发放 qty 张同款券。**每个用户独立事务**，单个失败不影响其它。
+// 限制：max 500 users / max 100 quantity（与单条 AdminGrantCoupon 对齐）。
+// 复用 lockUserForUpdate → 锁 template → buildCouponFromTemplate → LogOperationByTx 同款链路。
+func AdminBulkGrantCoupon(c *fiber.Ctx) error {
+	var p bulkGrantCouponPayload
+	if err := c.BodyParser(&p); err != nil {
+		return c.Status(400).JSON(fiber.Map{"success": false, "message_code": "ERR_PARSE_PAYLOAD"})
+	}
+	if len(p.UserIDs) == 0 || p.TemplateID == 0 {
+		return c.Status(400).JSON(fiber.Map{"success": false, "message_code": "ERR_REQUIRED"})
+	}
+	if len(p.UserIDs) > 500 {
+		return c.Status(400).JSON(fiber.Map{
+			"success":      false,
+			"message":      "批量发券最多支持 500 个用户",
+			"message_code": "ERR_BULK_LIMIT",
+		})
+	}
+	qty := 1
+	if p.Quantity != nil {
+		if *p.Quantity < 1 {
+			return c.Status(400).JSON(fiber.Map{"success": false, "message_code": "ERR_INVALID_QUANTITY"})
+		}
+		qty = *p.Quantity
+	}
+	if qty > 100 {
+		return c.Status(400).JSON(fiber.Map{"success": false, "message_code": "ERR_QUANTITY_TOO_LARGE",
+			"message": "单次最多发放 100 张同款券"})
+	}
+	reason := strings.TrimSpace(p.Reason)
+	if runeLen := len([]rune(reason)); runeLen > grantReasonMaxLen {
+		return c.Status(400).JSON(fiber.Map{
+			"success":      false,
+			"message":      fmt.Sprintf("reason 长度不能超过 %d 字符（当前 %d）", grantReasonMaxLen, runeLen),
+			"message_code": "ERR_REASON_TOO_LONG",
+		})
+	}
+	for _, r := range reason {
+		if unicode.IsControl(r) {
+			return c.Status(400).JSON(fiber.Map{"success": false, "message_code": "ERR_REASON_CTRL_CHAR"})
+		}
+	}
+	p.Reason = reason
+
+	// 预验 template（快路径），事务内仍会 SELECT FOR UPDATE 重读
+	var tpl database.CouponTemplate
+	if err := database.DB.First(&tpl, p.TemplateID).Error; err != nil {
+		return c.Status(404).JSON(fiber.Map{"success": false, "message_code": "ERR_TEMPLATE_NOT_FOUND"})
+	}
+	if !tpl.IsEnabled() {
+		return c.Status(400).JSON(fiber.Map{"success": false, "message_code": "ERR_TEMPLATE_DISABLED"})
+	}
+
+	// dedupe user_ids（admin 可能重复传同 id）
+	seen := make(map[uint]bool, len(p.UserIDs))
+	uniqueIDs := make([]uint, 0, len(p.UserIDs))
+	for _, id := range p.UserIDs {
+		if id > 0 && !seen[id] {
+			seen[id] = true
+			uniqueIDs = append(uniqueIDs, id)
+		}
+	}
+
+	operatorID := getOperatorID(c)
+	results := make([]bulkGrantUserResult, 0, len(uniqueIDs))
+	successCount := 0
+	totalGranted := 0
+
+	for _, uid := range uniqueIDs {
+		var createdIDs []uint
+		txErr := database.DB.Transaction(func(tx *gorm.DB) error {
+			if err := lockUserForUpdate(tx, uid); err != nil {
+				return fmt.Errorf("lock user: %w", err)
+			}
+			var freshU database.User
+			if err := tx.Select("id, status").First(&freshU, uid).Error; err != nil {
+				return fmt.Errorf("re-read user: %w", err)
+			}
+			if freshU.Status != 1 {
+				return errTargetUserChanged
+			}
+			var freshTpl database.CouponTemplate
+			if err := tx.Clauses(clause.Locking{Strength: "UPDATE"}).First(&freshTpl, p.TemplateID).Error; err != nil {
+				return fmt.Errorf("re-read template: %w", err)
+			}
+			if !freshTpl.IsEnabled() {
+				return errCouponTemplateChanged
+			}
+			for i := 0; i < qty; i++ {
+				uc, err := buildCouponFromTemplate(uid, &freshTpl, operatorID, p.Reason)
+				if err != nil {
+					return fmt.Errorf("build coupon #%d: %w", i+1, err)
+				}
+				if err := tx.Create(&uc).Error; err != nil {
+					return fmt.Errorf("create coupon #%d: %w", i+1, err)
+				}
+				createdIDs = append(createdIDs, uc.ID)
+			}
+			details, jerr := json.Marshal(map[string]interface{}{
+				"template_id": freshTpl.ID,
+				"coupon_ids":  createdIDs,
+				"quantity":    qty,
+				"reason":      p.Reason,
+				"bulk":        true,
+			})
+			if jerr != nil {
+				return fmt.Errorf("marshal audit: %w", jerr)
+			}
+			return LogOperationByTx(tx, operatorID, uid, "admin", "GRANT_COUPON_BULK", c.IP(), string(details))
+		})
+		if txErr != nil {
+			var reasonStr string
+			switch {
+			case errors.Is(txErr, errCouponTemplateChanged):
+				reasonStr = "ERR_TEMPLATE_DISABLED"
+			case errors.Is(txErr, errTargetUserChanged):
+				reasonStr = "ERR_USER_CHANGED"
+			default:
+				reasonStr = truncateLog(txErr.Error(), 200)
+			}
+			results = append(results, bulkGrantUserResult{UserID: uid, Success: false, Reason: reasonStr})
+		} else {
+			results = append(results, bulkGrantUserResult{UserID: uid, Success: true, CouponIDs: createdIDs})
+			successCount++
+			totalGranted += qty
+		}
+	}
+
+	log.Printf("[COUPON-BULK-GRANT] admin=%d tpl=%d users=%d/%d granted=%d qty/user=%d",
+		operatorID, tpl.ID, successCount, len(uniqueIDs), totalGranted, qty)
+
+	return c.JSON(fiber.Map{
+		"success":      true,
+		"message_code": "SUCCESS_BULK_GRANTED",
+		"summary": fiber.Map{
+			"total_users":   len(uniqueIDs),
+			"success_count": successCount,
+			"failed_count":  len(uniqueIDs) - successCount,
+			"total_granted": totalGranted,
+		},
+		"results": results,
+	})
+}
+
 // buildCouponFromTemplate 用 template 构造未保存的 UserCoupon（含快照 + 过期时间 + code）。
 //
 // fix MAJOR R23+2-B3：generateCouponCode 失败时返回错误，让调用方决定降级策略

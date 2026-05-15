@@ -660,9 +660,16 @@
     "MODERATION_DESC": "上游模型池审核 / 关键字 / 缓存 / 长 prompt 限制 / 多模态策略 / 拒绝文案的全局配置"
   },
   "USER_MGMT": {
+    "BULK_GRANT_COUPON": "Bulk Grant Coupon",
+    "BULK_GRANT_TITLE": "Bulk grant coupon to selected users",
+    "BULK_GRANT_TEMPLATE_LABEL": "Select coupon template",
+    "BULK_GRANT_QUANTITY_LABEL": "Quantity per user",
+    "BULK_GRANT_REASON_LABEL": "Reason (audit visible)",
+    "BULK_GRANT_CONFIRM_TITLE": "Confirm bulk grant",
+    "BULK_GRANT_CONFIRM_MSG": "You are about to grant {{qty}}x \"{{name}}\" to {{count}} users (total: {{total}} coupons). This action cannot be undone.",
+    "BULK_GRANT_SUCCESS": "Granted to {{success}}/{{total}} users successfully",
     "TITLE": "User Management Center",
-    "DESC": "Manage all registered users and their API quotas across the platform.",
-    "SEARCH_PLACEHOLDER": "Retrieve by username...",
+    "DESC": "Manage all registered users and their API quotas across the platform.",    "SEARCH_PLACEHOLDER": "Retrieve by username...",
     "SORT_ID_DESC": "Latest Registration",
     "SORT_ID_ASC": "Earliest Registration",
     "SORT_QUOTA_DESC": "Highest Quota",
