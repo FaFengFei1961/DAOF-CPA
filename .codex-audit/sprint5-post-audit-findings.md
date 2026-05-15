@@ -9,14 +9,46 @@
 
 ## 一、统计
 
-| 严重度 | 数量 | 说明 |
-|--------|------|------|
-| CRITICAL | 2 | 必须立即修复 |
-| HIGH | 21 | P0 范围 |
-| MEDIUM | 39 | P1 范围 |
-| LOW | 18 | P2 范围 |
-| NOTE | 13 | 设计警示 |
-| **总计** | **93** |  |
+| 严重度 | 数量 | 已修复 | 剩余 |
+|--------|------|--------|------|
+| CRITICAL | 2 | **2** (A-1, B-1) | 0 |
+| HIGH | 21 | **8** (A-2/3/4/5/6/7/8 + C-1/2/4 + D-1) | 13 |
+| MEDIUM | 39 | **6** (A-9/10 + B-4 + D-5) | 33 |
+| LOW | 18 | 0 | 18 |
+| NOTE | 13 | 0 | 13 |
+| **总计** | **93** | **17 (18%)** | **76** |
+
+## 一·二、P0 第 1 批战报（2026-05-15）
+
+**4 个并行 codex 全部完成，零冲突，全验证绿。** 修复 17 项 finding，含 **2/2 CRITICAL + 11/21 HIGH + 4/39 MEDIUM**。
+
+| codex | commit | 范围 | finding |
+|-------|--------|------|---------|
+| P0-α | `ba81cd8` | admin/user/token DTO + 封禁撤 session | A-3, A-4, A-5, A-7, D-5 |
+| P0-β | `73a1dd5` | ApiLog 拆 side table + 模型价格根源 + 上游成本 + SQL 迁移 | A-2, A-8, A-9, B-1, B-4 |
+| P0-γ | `eb2b5a0` + `3129783` | 订阅退款 int64 + Coupon cost_floor 双修 + AuthLogout | **A-1**, A-6, **C-1**, **C-2**, **C-4**, **D-1** |
+| P0-δ | `978ff35` | SysConfig int64 + 删 readFloatConfig | A-10 |
+
+**验证全绿：**
+- `go build ./...` 通过
+- `go test ./... -count=1` 通过（controller / database / middleware / proxy / utils 全 ok）
+- `npm run build` 通过（vite 1.03s）
+
+**关键修复细节：**
+
+- **A-1**（CRITICAL）：AdminRefundSubscription DTO 改 `AmountMicroUSD int64`，整数路径上限校验
+- **B-1**（CRITICAL）：ApiLog **保留原字段全加 `<-:create`** + GORM hook 把 UPDATE/DELETE 变 no-op + 新建 `ApiLogAttribution` / `ApiLogCostEstimate` side table + cron 清理关闭
+- **C-1**：`couponPackageEffectiveLowerBoundMicroUSD` helper —— `cost_floor=0` 时兜底用 `price_amount`（最严格策略）
+- **C-2**：`lockAndApplyCoupon` 加 `errCouponSnapshotBelowCostFloor` 哨兵 + 双语 `ERR_COUPON_SNAPSHOT_BELOW_COST_FLOOR`
+- **D-1**：AuthLogout 同步调 `proxy.EvictUserToken(user.Token)`
+- **A-2**：ChannelModel 价格 DTO 改 pico int64
+- **A-10**：删除 `readFloatConfig` 函数 + key 改名 `balance_consume_default_limit_micro_usd`（不留 alias）
+
+**工程亮点：**
+- 4 个 codex 白名单严格互不重叠，零文件冲突
+- Codex 15 第一次误塞 25 文件入 commit，自检 `git restore --source=HEAD^` + `amend` 修正只留 11 个白名单文件
+- 所有新增 message_code 全字面量字符串（无字符串拼接绕过 AST 扫描）
+- Codex 18 / 17 / 16 commit 时 P0-α 已 commit，跑全量测试全绿（互相完美咬合）
 
 ## 二、标签约定
 
@@ -66,7 +98,7 @@
 - **问题**：DTO `AmountUSD float64` → `math.Round(req.AmountUSD*100)/100` → `USDToMicro(refundAmountUSD)` 完整 float 路径穿透到 `refundAmountMicro` 与 `purchasedPriceMicro` 比较
 - **失效**：admin 输入 `$13.89` 经多次 float 运算，比较结果不可信；与 `AdminRefundTopup` 走 fen int64 → big.Int 整数路径不一致
 - **修复**：DTO 改 int64 micro_usd 或 decimal string，big.Int 整数路径处理
-- **状态**：`pending`
+- **状态**：`done` (commit `eb2b5a0` / P0-γ)
 
 ## A-2 `[BUG]` `[CRITICAL]` ChannelModel 价格矩阵 float64 污染全链路计费
 
@@ -75,7 +107,7 @@
 - **问题**：价格 payload `float64` → `PricePicoPerTokenFromUSDPerMTok` + `math.Round(price * 1e9)` 落 pico
 - **失效**：模型单价是**所有 API cost 的源头**，根上 float 整条链路都脏；高精度或 tie 值价格会先丢 decimal 语义
 - **修复**：价格 API 改收 pico integer 或 decimal string；前端展示层不允许 float 进价格配置
-- **状态**：`pending`
+- **状态**：`done` (commit `73a1dd5` / P0-β)
 
 ## A-3 `[BUG]` `[HIGH]` controller/user.go 多处 USD float 入口
 
@@ -84,7 +116,7 @@
 - **问题**：用户额度更新、批量配额调整等多个 admin 接口接收 USD float → `USDToMicro` 转换
 - **失效**：边界值受 IEEE-754 舍入；admin 设置额度时精度漂移
 - **修复**：写接口改收 `*_micro_usd int64` 或 decimal string；服务端用 decimal/big.Rat 解析
-- **状态**：`pending`
+- **状态**：`done` (commit `ba81cd8` / P0-α)
 
 ## A-4 `[BUG]` `[HIGH]` controller/token.go API Token 限额 float 入口
 
@@ -93,7 +125,7 @@
 - **问题**：API token 创建/更新 quota_limit 接收 USD float
 - **失效**：用户/admin 设置 token 限额时精度漂移
 - **修复**：DTO 改 int64 micro_usd
-- **状态**：`pending`
+- **状态**：`done` (commit `ba81cd8` / P0-α)
 
 ## A-5 `[BUG]` `[HIGH]` controller/balance_consume.go 余额消费限额 float 入口
 
@@ -102,7 +134,7 @@
 - **问题**：用户余额消费偏好接口接收 USD float
 - **失效**：用户自设余额消费上限精度漂移
 - **修复**：DTO 改 int64 micro_usd
-- **状态**：`pending`
+- **状态**：`done` (commit `ba81cd8` / P0-α)
 
 ## A-6 `[BUG]` `[HIGH]` controller/coupon.go 优惠券价格 float 入口
 
@@ -111,7 +143,7 @@
 - **问题**：admin 创建优惠券模板 fixed_price 通过 USD float 输入
 - **失效**：fixed_price 精度漂移可能导致 cost_floor 校验边界值错误
 - **修复**：DTO 改 int64 micro_usd 或 decimal string
-- **状态**：`pending`
+- **状态**：`done` (commit `eb2b5a0` / P0-γ)
 
 ## A-7 `[BUG]` `[HIGH]` controller/package_admin.go 套餐价格 float 入口
 
@@ -120,7 +152,7 @@
 - **问题**：admin 创建/更新套餐价格通过 USD float 输入
 - **失效**：套餐价格精度漂移 → 套餐购买结算偏差
 - **修复**：DTO 改 int64 micro_usd
-- **状态**：`pending`
+- **状态**：`done` (commit `ba81cd8` / P0-α)
 
 ## A-8 `[BUG]` `[HIGH]` controller/upstream_cost.go 上游成本配置 float 入口
 
@@ -129,7 +161,7 @@
 - **问题**：上游账号成本配置接收 float；平台成本/毛利分摊 `math.Round(float64(rawCost) * float64(monthlyCost) / float64(capacity))`
 - **失效**：金额累计超 2^53 micro 丢精度；毛利报表偏差；估算结果回写历史 ApiLog（结合 C-2 双重风险）
 - **修复**：用 big.Int/big.Rat 做比例分摊；估算结果写 append-only 估算表
-- **状态**：`pending`
+- **状态**：`done` (commit `73a1dd5` / P0-β)
 
 ## A-9 `[BUG]` `[MEDIUM]` SQLite 迁移用 SQL REAL/CAST 做金额单位转换
 
@@ -138,7 +170,7 @@
 - **问题**：`CAST(limit_value * 1000000 AS INTEGER)` + `CAST(ROUND(%s * 1000000000) AS INTEGER)` 在 SQL 层做 float 乘法 + 截断
 - **失效**：历史 `quota_plans.limit_value` 回填 micro_usd 时直接截断，不是 decimal round；老数据可能少 1 micro
 - **修复**：迁移逻辑用 Go decimal/big.Rat 逐行转换；对已迁移数据做校验/重算
-- **状态**：`pending`
+- **状态**：`done` (commit `73a1dd5` / P0-β)
 
 ## A-10 `[BUG]` `[MEDIUM]` OAuth 默认余额限额走 SysConfig float string
 
@@ -147,7 +179,7 @@
 - **问题**：`balance_consume_default_limit_usd` 用 `ParseFloat` 校验；`readMicroUSDConfig` / `readFloatConfig` 再 `ParseFloat` + `USDToMicro`；注册时写入 `BalanceConsumeLimitUSD`
 - **失效**：新人注册默认消费限额受 float 解析影响
 - **修复**：改为 `balance_consume_default_limit_micro_usd` 整数字段，一次性 decimal 迁移
-- **状态**：`pending`
+- **状态**：`done` (commit `978ff35` / P0-δ)
 
 ## A-11 `[DEBT]` `[MEDIUM]` SubscriptionUsage.ConsumedValue float64 字段
 
@@ -218,7 +250,7 @@
   2. 上游匹配、平台成本估算放到 append-only side table（如 `ApiLogUpstreamAttribution` / `ApiLogCostEstimate`）；
   3. 历史保留用归档/脱敏（不删除）；
   4. DB trigger 禁止 `api_logs` UPDATE/DELETE 兜底
-- **状态**：`pending`
+- **状态**：`done` (commit `73a1dd5` / P0-β) — 采用方案 A：保留 ApiLog 原字段 + 全字段加 `<-:create` + GORM hook 把 UPDATE/DELETE 变 no-op；新建 `ApiLogAttribution` / `ApiLogCostEstimate` 两张 side table；cron 清理已关闭等专用归档
 
 ## B-2 `[BUG]` `[HIGH]` BillingEntry RelatedID 指向虚空（用户删除时硬删源表）
 
@@ -248,7 +280,7 @@
 - **问题**：OperationLog/TopupRefund/PaymentWebhookReceipt 的 CreatedAt 都打了 `<-:create`，独 BillingEntry 漏掉
 - **失效**：admin 可通过 GORM struct Update 修改 `billing_entries.created_at`，破坏时间戳审计链
 - **修复**：`CreatedAt time.Time \`gorm:"<-:create" json:"created_at"\``
-- **状态**：`pending`
+- **状态**：`done` (commit `73a1dd5` / P0-β)
 
 ## B-5 `[BUG]` `[MEDIUM]` BillingEntry 无 (related_type, related_id, entry_type) 唯一约束
 
@@ -300,7 +332,7 @@
 - **问题**：`validateTemplateFixedPriceCostFloor` 用 `WHERE cost_floor_micro_usd > 0` 排除 cost_floor=0 套餐
 - **攻击场景**：admin 故意不设 cost_floor（保持 0）的套餐 → 可发 $0.01 券薅羊毛
 - **修复**：cost_floor=0 时退而使用 `price_amount * 最低毛利率` 作为事实下限；或强制要求所有 public 套餐配 cost_floor
-- **状态**：`pending`
+- **状态**：`done` (commit `eb2b5a0` / P0-γ) — 采用 `couponPackageEffectiveLowerBoundMicroUSD()` helper：`cost_floor > 0` 用 cost_floor，否则兜底用 `price_amount`（最严格）
 
 ## C-2 `[BUG]` `[HIGH]` coupon 兑换不重新校验 cost_floor
 
@@ -309,7 +341,7 @@
 - **问题**：已发券的 SnapshotValue 不随 template/package 更新；`SnapshotEffectivePrice` 无 cost_floor 检查；购买路径 `lockAndApplyCoupon` 也不校验
 - **攻击场景**：admin 先发 fixed_price=$8 券，后提价 cost_floor=$15，历史券仍按 $8 兑换 → 亏损
 - **修复**：`lockAndApplyCoupon` 内重新校验 `coupon.SnapshotValue >= pkg.CostFloorMicroUSD`，不满足则拒绝
-- **状态**：`pending`
+- **状态**：`done` (commit `eb2b5a0` / P0-γ) — 新增 `errCouponSnapshotBelowCostFloor` 哨兵 + `ERR_COUPON_SNAPSHOT_BELOW_COST_FLOOR` 双语 message_code
 
 ## C-3 `[BUG]` `[HIGH]` User.Status 状态机跨路径不一致
 
@@ -334,7 +366,7 @@
 - **问题**：`validateTemplate` 已锁死 `fixed_price`，但 `dto.go:189` 有 `if t.DiscountType != "percent"` 残留
 - **失效**：admin 若绕过 validateTemplate 直接 raw SQL 改 DB，`SnapshotEffectivePrice` 走 default 返回原价（券无效但无报错）
 - **修复**：删除 percent 特判，统一为 `microUSDToFloat(t.DiscountValue)`；`SnapshotEffectivePrice` default 分支加 log warning
-- **状态**：`pending`
+- **状态**：`done` (commit `eb2b5a0` / P0-γ)
 
 ## C-5 `[BUG]` `[LOW]` lockAndApplyCoupon 条件 UPDATE 缺 expires_at 守卫（TOCTOU）
 
@@ -362,7 +394,7 @@
 - **问题**：AuthLogout 仅撤 Session 表，AuthCache（Bearer sk-daof-xxx 路径）不失效，直到下次 SyncCacheConfig 全量刷新
 - **攻击场景**：用户 logout 后老 API token 仍能通过 LookupUserByToken 鉴权
 - **修复**：AuthLogout 内根据 sessionID 找 user，同步调 `proxy.EvictUserToken(user.Token)`
-- **状态**：`pending`
+- **状态**：`done` (commit `eb2b5a0` / P0-γ)
 
 ## D-2 `[BUG]` `[HIGH]` tmp_token 无服务端单次消费（可重放）
 
@@ -403,7 +435,7 @@
 - **问题**：admin 改用户后只 `SyncCacheConfig + EvictUserToken`，**漏调 `RevokeSessionsForUser`**
 - **失效**：封禁后浏览器 session 行仍有效；解封后旧 session 立即恢复无需重新登录；叠加 C-3 (User.Status) 漏洞更严重
 - **修复**：用户 status 从 active 变为非 active 时，同事务（或 tx 成功后）撤销该用户所有 session
-- **状态**：`pending`
+- **状态**：`done` (commit `ba81cd8` / P0-α)
 
 ## D-6 `[BUG]` `[MEDIUM]` AdminLogout 旧 token 路径不撤 Session（架构空白）
 
