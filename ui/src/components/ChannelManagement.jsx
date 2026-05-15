@@ -48,18 +48,28 @@ const ChannelManagement = () => {
     const [loadingUpstream, setLoadingUpstream] = useState(false);
     const [selectedUpstreamModels, setSelectedUpstreamModels] = useState([]);
 
-    // fix MAJOR F2（gemini 第二十一轮）：upstreamModels reduce + sort 原本在 render 内每次都重算
-    // （甚至弹窗开关也触发重 render）。当 upstream 模型 100+ 时是 O(N log N) 的不必要开销。
-    // 用 useMemo 缓存按首字母分组排序的结果，仅在 upstreamModels 变化时重建。
-    const upstreamModelsByLetter = useMemo(() => {
+    // 按厂商（provider）分组，不再用首字母（之前 gemini/gpt 都落在 "G" 下混在一起）。
+    // 顺序：Anthropic → OpenAI → Google → Other，组内按模型 id 字典序。
+    const upstreamModelsByProvider = useMemo(() => {
         if (!Array.isArray(upstreamModels) || upstreamModels.length === 0) return [];
+        const classify = (id) => {
+            const s = (id || '').toLowerCase();
+            if (s.startsWith('claude') || s.startsWith('anthropic')) return 'Anthropic';
+            if (s.startsWith('gemini') || s.startsWith('imagen') || s.startsWith('palm') || s.startsWith('bison')) return 'Google';
+            if (s.startsWith('gpt') || s.startsWith('chatgpt') || s.startsWith('codex') || s.startsWith('o1') || s.startsWith('o3') || s.startsWith('o4') || s.startsWith('dall') || s.startsWith('whisper') || s.startsWith('tts') || s.startsWith('text-embedding')) return 'OpenAI';
+            return 'Other';
+        };
         const grouped = upstreamModels.reduce((acc, modelId) => {
-            const firstChar = (modelId[0] || '?').toUpperCase();
-            if (!acc[firstChar]) acc[firstChar] = [];
-            acc[firstChar].push(modelId);
+            const g = classify(modelId);
+            if (!acc[g]) acc[g] = [];
+            acc[g].push(modelId);
             return acc;
         }, {});
-        return Object.entries(grouped).sort(([a], [b]) => a.localeCompare(b));
+        // 组内排序
+        Object.values(grouped).forEach(arr => arr.sort((a, b) => a.localeCompare(b)));
+        // 组顺序按预设
+        const order = ['Anthropic', 'OpenAI', 'Google', 'Other'];
+        return order.filter(g => grouped[g]?.length).map(g => [g, grouped[g]]);
     }, [upstreamModels]);
 
     const initChanForm = { type: 'cliproxy', name: '', key: '', base_url: '', proxy_url: '', headers: '', weight: 1 };
@@ -852,11 +862,13 @@ const ChannelManagement = () => {
                                             </button>
                                         </div>
                                         <div className="space-y-6">
-                                            {/* fix MAJOR F2（gemini 第二十一轮）：用 useMemo 缓存的分组结果替代 render 内重计算 */}
-                                            {upstreamModelsByLetter.map(([letter, models]) => (
-                                                <div key={letter} className="space-y-3">
-                                                    <h4 className="flex items-center gap-2">
-                                                        <span className="bg-surface-variant text-on-surface-variant font-bold w-6 h-6 flex items-center justify-center rounded-control text-xs">{letter}</span>
+                                            {/* 按厂商分组（Anthropic / OpenAI / Google / Other），不再按首字母 */}
+                                            {upstreamModelsByProvider.map(([provider, models]) => (
+                                                <div key={provider} className="space-y-3">
+                                                    <h4 className="flex items-center gap-3">
+                                                        <span className="bg-primary/10 text-primary border border-primary/30 font-semibold px-2.5 py-0.5 flex items-center rounded-control text-xs whitespace-nowrap">
+                                                            {provider} <span className="ml-1.5 text-on-surface-variant font-mono">{models.length}</span>
+                                                        </span>
                                                         <span className="flex-1 border-t border-outline-variant/80"></span>
                                                     </h4>
                                                     <div className="grid grid-cols-2 md:grid-cols-3 gap-3">
