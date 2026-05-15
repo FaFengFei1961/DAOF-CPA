@@ -64,11 +64,15 @@ func loadModerationAutobanConfig() moderationAutobanConfig {
 		return n
 	}
 
+	// fix CRITICAL Sprint2-M7：autoban 默认阈值从 1 提升到 3，避免一次命中即封号误判。
+	// 单次关键词/规则命中可能是合法学术讨论 / 测试 prompt，不应直接封禁正常用户。
+	// admin 可在 SysConfig 显式降低阈值用于严格场景（如安全合规高危关键词）。
+	// 阈值=0 仍表示禁用该类型 autoban（保持原语义）。
 	cfg := moderationAutobanConfig{
 		Enabled:            getBool("moderation_autoban_enabled", false),
 		WindowSeconds:      getInt("moderation_autoban_window_seconds", 86400),
-		KeywordThreshold:   getInt("moderation_autoban_keyword_threshold", 1),
-		RiskRuleThreshold:  getInt("moderation_autoban_risk_rule_threshold", 1),
+		KeywordThreshold:   getInt("moderation_autoban_keyword_threshold", 3),
+		RiskRuleThreshold:  getInt("moderation_autoban_risk_rule_threshold", 3),
 		RiskScoreThreshold: getInt("moderation_autoban_risk_score_threshold", 0),
 		PolicyThreshold:    getInt("moderation_autoban_policy_threshold", 0),
 		ImageThreshold:     getInt("moderation_autoban_image_threshold", 2),

@@ -23,6 +23,7 @@ import (
 	"fmt"
 	"log"
 	"net/http"
+	"os"
 	"sort"
 	"strconv"
 	"strings"
@@ -244,20 +245,36 @@ var (
 	moderationCacheSecretMu sync.RWMutex
 )
 
-// loadOrGenerateCacheSecret 启动时从 SysConfig 读 moderation_cache_secret；空则随机生成 256bit + 写回。
-// secret 用于 HMAC 防侧信道（攻击者无法构造特定 prompt 来探测缓存）。
+// loadOrGenerateCacheSecret 解析审核 cache HMAC secret。secret 用于防侧信道：
+// 攻击者无法构造特定 prompt 来探测哪些内容在 cache 中。
+//
+// 优先级（fix CRITICAL Sprint2-M7）：
+//  1. 环境变量 MODERATION_CACHE_SECRET（运维侧静态注入，最高优先级）
+//  2. SysConfig.moderation_cache_secret（admin 通过 UI 设置）
+//  3. CSPRNG 随机生成 256-bit + 落库
+//  4. CSPRNG 失败 → fail-closed（panic）
+//
+// 旧实现使用硬编码 fallback "daof-moderation-fallback-secret-please-set"，
+// 在生产环境 CSPRNG 异常时整个集群共享同一可预测 secret → cache 探测攻击可行。
+// 改为启动 panic：CSPRNG 不可用本身是 OS/容器异常信号，应让进程崩溃由编排系统重启。
 func loadOrGenerateCacheSecret() []byte {
+	// 1. 环境变量优先
+	if env := strings.TrimSpace(os.Getenv("MODERATION_CACHE_SECRET")); env != "" {
+		return []byte(env)
+	}
+	// 2. SysConfig
 	SysConfigMutex.RLock()
 	cur := strings.TrimSpace(SysConfigCache["moderation_cache_secret"])
 	SysConfigMutex.RUnlock()
 	if cur != "" {
 		return []byte(cur)
 	}
-	// 随机生成 + 加密入库（入库失败仍返回随机值用，下次启动再写）
+	// 3. CSPRNG 生成 + 落库
 	buf := make([]byte, 32)
 	if _, err := rand.Read(buf); err != nil {
-		log.Printf("[MODERATION] rand secret failed: %v (using static fallback)", err)
-		return []byte("daof-moderation-fallback-secret-please-set")
+		// 4. fail-closed：CSPRNG 异常时绝不返回可预测 secret
+		log.Printf("[MODERATION-FATAL] crypto/rand failed: %v — refusing to use static fallback secret", err)
+		panic(fmt.Sprintf("moderation cache secret unavailable: crypto/rand failed (%v). Set MODERATION_CACHE_SECRET env var or fix the OS RNG source", err))
 	}
 	hexed := hex.EncodeToString(buf)
 	enc, err := utils.Encrypt(hexed)
