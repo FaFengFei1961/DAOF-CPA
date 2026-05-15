@@ -1104,6 +1104,66 @@ func computeHealthy(e *CreditEntry) bool {
 	return false
 }
 
+// normalizeGoogleTierBadge 把 Google Cloud Code Assist 返回的 raw tier id
+// 归一为 PRO / ULTRA / FREE / UNKNOWN，对齐 cockpit-tools 显示风格。
+// 参考 src/types/gemini.ts:resolveGeminiPlanBucket
+func normalizeGoogleTierBadge(raw string) string {
+	lower := strings.ToLower(strings.TrimSpace(raw))
+	if lower == "" {
+		return "UNKNOWN"
+	}
+	if strings.Contains(lower, "ultra") {
+		return "ULTRA"
+	}
+	if lower == "standard-tier" {
+		return "FREE"
+	}
+	if strings.Contains(lower, "pro") || strings.Contains(lower, "premium") {
+		return "PRO"
+	}
+	if lower == "free-tier" || strings.Contains(lower, "free") {
+		return "FREE"
+	}
+	return "UNKNOWN"
+}
+
+// pickGoogleCodeAssistTier 从 loadCodeAssist 响应中按优先级抽取套餐：
+// 1) paidTier.id（已付费）
+// 2) currentTier.id（当前激活）
+// 3) allowedTiers 中 isDefault=true 的 id（账号被授权使用的默认 tier）
+// 返回经过 normalizeGoogleTierBadge 标准化后的字符串。
+func pickGoogleCodeAssistTier(body []byte) string {
+	var resp struct {
+		PaidTier    *struct{ ID string `json:"id"` } `json:"paidTier"`
+		CurrentTier *struct{ ID string `json:"id"` } `json:"currentTier"`
+		AllowedTiers []struct {
+			ID        string `json:"id"`
+			IsDefault bool   `json:"isDefault"`
+		} `json:"allowedTiers"`
+	}
+	if json.Unmarshal(body, &resp) != nil {
+		return ""
+	}
+	var raw string
+	switch {
+	case resp.PaidTier != nil && resp.PaidTier.ID != "":
+		raw = resp.PaidTier.ID
+	case resp.CurrentTier != nil && resp.CurrentTier.ID != "":
+		raw = resp.CurrentTier.ID
+	default:
+		for _, t := range resp.AllowedTiers {
+			if t.IsDefault && t.ID != "" {
+				raw = t.ID
+				break
+			}
+		}
+	}
+	if raw == "" {
+		return ""
+	}
+	return normalizeGoogleTierBadge(raw)
+}
+
 // ─── Provider Fetcher: Claude / Anthropic ────────────────────────────────
 
 const (
@@ -1415,17 +1475,8 @@ func fetchAntigravityQuota(ctx context.Context, af authFileLite, entry *CreditEn
 			af.AuthIndex, status, errStr, body)
 	})
 	if err == nil && r != nil && r.StatusCode == 200 {
-		var resp struct {
-			PaidTier    *struct{ ID string `json:"id"` } `json:"paidTier"`
-			CurrentTier *struct{ ID string `json:"id"` } `json:"currentTier"`
-		}
-		if json.Unmarshal(r.Body, &resp) == nil {
-			switch {
-			case resp.PaidTier != nil && resp.PaidTier.ID != "":
-				entry.PlanType = resp.PaidTier.ID
-			case resp.CurrentTier != nil && resp.CurrentTier.ID != "":
-				entry.PlanType = resp.CurrentTier.ID
-			}
+		if tier := pickGoogleCodeAssistTier(r.Body); tier != "" {
+			entry.PlanType = tier
 		}
 	} else if err != nil {
 		log.Printf("[CREDITS] Antigravity loadCodeAssist auth=%s 失败: %s", af.AuthIndex, sanitizeError(err.Error(), 200))
@@ -1809,17 +1860,8 @@ func fetchGeminiCliQuota(ctx context.Context, af authFileLite, entry *CreditEntr
 			af.AuthIndex, status, errStr, body)
 	})
 	if err2 == nil && r2 != nil && r2.StatusCode == 200 {
-		var resp struct {
-			PaidTier    *struct{ ID string `json:"id"` } `json:"paidTier"`
-			CurrentTier *struct{ ID string `json:"id"` } `json:"currentTier"`
-		}
-		if json.Unmarshal(r2.Body, &resp) == nil {
-			switch {
-			case resp.PaidTier != nil && resp.PaidTier.ID != "":
-				entry.PlanType = resp.PaidTier.ID
-			case resp.CurrentTier != nil && resp.CurrentTier.ID != "":
-				entry.PlanType = resp.CurrentTier.ID
-			}
+		if tier := pickGoogleCodeAssistTier(r2.Body); tier != "" {
+			entry.PlanType = tier
 		}
 	} else if err2 != nil {
 		log.Printf("[CREDITS] Gemini-CLI loadCodeAssist auth=%s 失败: %s", af.AuthIndex, sanitizeError(err2.Error(), 200))
