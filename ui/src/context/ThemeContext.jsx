@@ -109,7 +109,7 @@ export const ThemeProvider = ({ children }) => {
     } catch {
       /* MD3 palette gen failed, fallback to default Tailwind colors */
     }
-    
+
     // Listen for System preference changes if set to 'system'
     const mediaQuery = window.matchMedia('(prefers-color-scheme: dark)');
     const handleChange = (e) => {
@@ -120,7 +120,7 @@ export const ThemeProvider = ({ children }) => {
         applyMD3Theme(seedColor, e.matches);
       }
     };
-    
+
     mediaQuery.addEventListener('change', handleChange);
     return () => mediaQuery.removeEventListener('change', handleChange);
 

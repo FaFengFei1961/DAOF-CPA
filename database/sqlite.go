@@ -246,5 +246,9 @@ func InitDB() {
 		log.Println("🔑 默认管理员账户 [root] 创建成功。")
 	}
 
+	if err := DB.Exec("UPDATE packages SET product_type='subscription' WHERE product_type='addon'").Error; err != nil {
+		log.Printf("[migrate] addon->subscription: %v", err)
+	}
+
 	log.Println("⚡️ 数据库连接成功，数据库结构迁移完成。")
 }

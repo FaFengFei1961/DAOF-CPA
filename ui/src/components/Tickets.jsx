@@ -312,9 +312,9 @@ const Tickets = () => {
             <div className="flex-1 min-w-0">
               <h2 className="text-base font-bold text-on-surface truncate">{activeTicket.subject}</h2>
               <div className="text-xs text-on-surface-variant mt-1 flex items-center gap-2 flex-wrap">
-                <span className={`px-2 py-0.5 rounded font-mono ${isClosed
+                <span className={`px-2 py-0.5 rounded-control font-mono ${isClosed
                   ? 'bg-on-surface/10 text-on-surface-variant'
-                  : 'bg-emerald-500/15 text-emerald-400'}`}>
+                  : 'bg-success/15 text-success'}`}>
                   {isClosed ? t('TICKET.STATUS_CLOSED', '已关闭') : t('TICKET.STATUS_OPEN', '进行中')}
                 </span>
                 <span>#{activeTicket.id}</span>
@@ -325,7 +325,7 @@ const Tickets = () => {
               <button
                 type="button"
                 onClick={handleClose}
-                className="h-8 px-3 text-xs border border-outline-variant rounded-lg hover:bg-on-surface/[0.04] flex items-center gap-1"
+                className="h-8 px-3 text-xs border border-outline-variant rounded-control hover:bg-on-surface/[0.04] flex items-center gap-1"
               >
                 <CheckCircle2 size={12} /> {t('TICKET.CLOSE_BTN', '结束会话')}
               </button>
@@ -347,8 +347,8 @@ const Tickets = () => {
               const fromAdmin = m.sender === 'admin';
               return (
                 <div key={m.id} className={`flex ${fromAdmin ? 'justify-start' : 'justify-end'}`}>
-                  <div className={`max-w-[75%] rounded-2xl px-4 py-2.5 text-sm ${fromAdmin
-                    ? 'bg-emerald-500/10 border border-emerald-500/20 text-on-surface'
+                  <div className={`max-w-[75%] rounded-overlay px-4 py-2.5 text-sm ${fromAdmin
+                    ? 'bg-success/10 border border-success/20 text-on-surface'
                     : 'bg-primary text-on-primary'}`}>
                     <div className="text-[10px] opacity-70 mb-1">
                       {fromAdmin ? t('TICKET.SENDER_ADMIN', '客服') : t('TICKET.SENDER_USER', '我')} · {new Date(m.created_at).toLocaleString('zh-CN', { hour12: false })}
@@ -365,7 +365,7 @@ const Tickets = () => {
             <button
               type="button"
               onClick={() => scrollMessagesToBottom(true)}
-              className="absolute right-4 bottom-3 z-10 inline-flex items-center gap-1.5 h-8 px-3 rounded-full bg-primary text-on-primary text-xs font-semibold shadow-lg hover:brightness-110 active:scale-[0.97] transition animate-in fade-in slide-in-from-bottom-2"
+              className="absolute right-4 bottom-3 z-10 inline-flex items-center gap-1.5 h-8 px-3 rounded-control-full bg-primary text-on-primary text-xs font-semibold hover:brightness-110 active:scale-[0.97] transition animate-in fade-in slide-in-from-bottom-2"
               aria-label={t('TICKET.NEW_MSG_BELOW', '新消息')}
             >
               <ArrowDown size={12} />
@@ -383,7 +383,7 @@ const Tickets = () => {
                 onChange={e => setReplyBody(e.target.value)}
                 maxLength={5000}
                 placeholder={t('TICKET.REPLY_PLACEHOLDER', '输入回复内容')}
-                className="w-full bg-surface-container-high border border-outline rounded-lg px-3 py-2 text-sm text-on-surface focus:border-primary outline-none resize-y"
+                className="w-full bg-surface-container-high border border-outline rounded-control px-3 py-2 text-sm text-on-surface focus:border-primary outline-none resize-y"
               />
               <div className="flex items-center justify-between gap-3">
                 <span className="text-[11px] text-on-surface-variant">{replyBody.length} / 5000</span>
@@ -391,7 +391,7 @@ const Tickets = () => {
                   type="button"
                   onClick={handleReply}
                   disabled={submitting || !replyBody.trim()}
-                  className="h-9 px-4 bg-primary text-on-primary rounded-lg text-sm font-semibold hover:opacity-90 disabled:opacity-50 transition flex items-center gap-2"
+                  className="h-9 px-4 bg-primary text-on-primary rounded-control text-sm font-semibold hover:opacity-90 disabled:opacity-50 transition flex items-center gap-2"
                 >
                   <Send size={12} />
                   {submitting ? t('TICKET.SENDING', '发送中...') : t('TICKET.SEND', '发送')}
@@ -434,7 +434,7 @@ const Tickets = () => {
               value={composingSubject}
               onChange={e => setComposingSubject(e.target.value)}
               maxLength={200}
-              className="w-full h-10 bg-surface-container-high border border-outline rounded-lg px-3 text-sm focus:border-primary outline-none"
+              className="w-full h-10 bg-surface-container-high border border-outline rounded-control px-3 text-sm focus:border-primary outline-none"
               placeholder={t('TICKET.SUBJECT_PLACEHOLDER', '一句话描述问题')}
             />
           </div>
@@ -448,7 +448,7 @@ const Tickets = () => {
               value={composingBody}
               onChange={e => setComposingBody(e.target.value)}
               maxLength={5000}
-              className="w-full bg-surface-container-high border border-outline rounded-lg px-3 py-2 text-sm focus:border-primary outline-none resize-y"
+              className="w-full bg-surface-container-high border border-outline rounded-control px-3 py-2 text-sm focus:border-primary outline-none resize-y"
               placeholder={t('TICKET.BODY_PLACEHOLDER', '尽量提供订单号、报错截图描述等信息')}
             />
             <div className="text-[11px] text-on-surface-variant text-right">{composingBody.length} / 5000</div>
@@ -457,7 +457,7 @@ const Tickets = () => {
             type="button"
             onClick={handleCreate}
             disabled={submitting || !composingSubject.trim() || !composingBody.trim()}
-            className="h-10 px-5 bg-primary text-on-primary rounded-lg text-sm font-semibold hover:opacity-90 disabled:opacity-50 flex items-center gap-2"
+            className="h-10 px-5 bg-primary text-on-primary rounded-control text-sm font-semibold hover:opacity-90 disabled:opacity-50 flex items-center gap-2"
           >
             <Send size={14} />
             {submitting ? t('TICKET.SUBMITTING', '提交中...') : t('TICKET.SUBMIT', '提交工单')}
@@ -522,13 +522,13 @@ const Tickets = () => {
                 <div className="flex-1 min-w-0">
                   <div className="flex items-center gap-2 flex-wrap mb-1">
                     <span className="font-semibold text-sm truncate">{t2.subject}</span>
-                    <span className={`text-[10px] px-2 py-0.5 rounded font-mono ${isClosed
+                    <span className={`text-[10px] px-2 py-0.5 rounded-control font-mono ${isClosed
                       ? 'bg-on-surface/10 text-on-surface-variant'
-                      : 'bg-emerald-500/15 text-emerald-400'}`}>
+                      : 'bg-success/15 text-success'}`}>
                       {isClosed ? t('TICKET.STATUS_CLOSED', '已关闭') : t('TICKET.STATUS_OPEN', '进行中')}
                     </span>
                     {unread > 0 && (
-                      <span className="text-[10px] px-2 py-0.5 rounded-full bg-red-500 text-white font-mono">
+                      <span className="text-[10px] px-2 py-0.5 rounded-control-full bg-error text-white font-mono">
                         {unread}
                       </span>
                     )}

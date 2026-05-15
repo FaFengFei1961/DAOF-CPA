@@ -130,7 +130,7 @@ const UsersUsageOverviewPage = () => {
       const r = u.total_requests || 0;
       const rate = r ? (u.failed_requests || 0) / r : 0;
       return (
-        <span className={rate > 0.1 ? 'text-red-300' : 'text-on-surface-variant'}>
+        <span className={rate > 0.1 ? 'text-error' : 'text-on-surface-variant'}>
           {(u.failed_requests || 0).toLocaleString()}
           <span className="text-[10px] ml-1">{formatPercent(rate)}</span>
         </span>
@@ -152,12 +152,12 @@ const UsersUsageOverviewPage = () => {
         placeholder="搜索用户…"
         value={searchTerm}
         onChange={(e) => setSearchTerm(e.target.value)}
-        className="bg-surface-container-high border border-outline-variant text-on-surface text-sm rounded px-3 py-1.5 w-44 focus:border-primary outline-none"
+        className="bg-surface-container-high border border-outline-variant text-on-surface text-sm rounded-control px-3 py-1.5 w-44 focus:border-primary outline-none"
       />
       <select
         value={sortKey}
         onChange={(e) => setSortKey(e.target.value)}
-        className="bg-surface-container-high border border-outline-variant text-on-surface text-sm rounded px-2 py-1.5 outline-none"
+        className="bg-surface-container-high border border-outline-variant text-on-surface text-sm rounded-control px-2 py-1.5 outline-none"
       >
         {SORTS.map(s => <option key={s.value} value={s.value}>{s.label}</option>)}
       </select>
@@ -165,7 +165,7 @@ const UsersUsageOverviewPage = () => {
       <button
         type="button"
         onClick={() => { fetchOverview(); fetchChart(); }}
-        className="p-2 rounded border border-outline-variant text-on-surface-variant hover:text-on-surface hover:border-outline transition"
+        className="p-2 rounded-control border border-outline-variant text-on-surface-variant hover:text-on-surface hover:border-outline transition"
         aria-label="刷新"
         title="刷新"
       >
@@ -186,31 +186,31 @@ const UsersUsageOverviewPage = () => {
       <div className="grid grid-cols-2 lg:grid-cols-4 gap-3">
         <StatCard
           icon={Users}
-          iconColor="text-blue-400"
-          iconBg="bg-blue-500/10"
+          iconColor="text-primary"
+          iconBg="bg-primary/10"
           label="活跃用户"
           value={`${summary.active_users ?? 0} / ${summary.total_users ?? 0}`}
           sub={`${period} 内有调用`}
         />
         <StatCard
           icon={Activity}
-          iconColor="text-emerald-400"
-          iconBg="bg-emerald-500/10"
+          iconColor="text-success"
+          iconBg="bg-success/10"
           label="总请求数"
           value={(summary.total_requests ?? 0).toLocaleString()}
           sub={`失败 ${failedTotal.toLocaleString()}`}
         />
         <StatCard
           icon={Zap}
-          iconColor="text-violet-400"
-          iconBg="bg-violet-500/10"
+          iconColor="text-primary"
+          iconBg="bg-primary/10"
           label="总 Token"
           value={formatTokens(summary.total_tokens)}
         />
         <StatCard
           icon={Coins}
-          iconColor="text-amber-400"
-          iconBg="bg-amber-500/10"
+          iconColor="text-warning"
+          iconBg="bg-warning/10"
           label="总花费"
           value={formatMeterCost(summary.total_cost ?? 0)}
         />
@@ -243,7 +243,7 @@ const UsersUsageOverviewPage = () => {
                 key={v}
                 type="button"
                 onClick={() => setChartMetric(v)}
-                className={`px-2 py-1 text-xs rounded ${
+                className={`px-2 py-1 text-xs rounded-control ${
                   chartMetric === v ? 'bg-primary text-on-primary' : 'text-on-surface-variant hover:text-on-surface'
                 }`}
               >{l}</button>
@@ -299,14 +299,14 @@ const UsersUsageOverviewPage = () => {
 };
 
 const PeriodSwitch = ({ value, onChange }) => (
-  <div className="flex items-center gap-1 bg-surface-container p-0.5 rounded border border-outline-variant">
+  <div className="flex items-center gap-1 bg-surface-container p-0.5 rounded-control border border-outline-variant">
     {PERIODS.map(p => (
       <button
         key={p.value}
         type="button"
         onClick={() => onChange(p.value)}
-        className={`px-3 py-1 text-xs font-medium rounded ${
-          value === p.value ? 'bg-surface-variant text-on-surface shadow-sm' : 'text-on-surface-variant hover:text-on-surface'
+        className={`px-3 py-1 text-xs font-medium rounded-control ${
+          value === p.value ? 'bg-surface-variant text-on-surface ' : 'text-on-surface-variant hover:text-on-surface'
         }`}
       >{p.label}</button>
     ))}

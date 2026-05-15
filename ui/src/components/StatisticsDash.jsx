@@ -26,7 +26,7 @@ const writeStatsCache = (key, data) => {
 /* ═══════════════ StatCard (sparkline) ═══════════════ */
 /* ═══════════════ StatCard (sparkline) ═══════════════ */
 const StatCard = ({ title, value, subLabel, metaNode, data, dataKey, color, bgClass, icon: Icon }) => (
-    <div className={`rounded-xl p-5 border border-outline-variant shadow-lg relative overflow-hidden flex flex-col justify-between ${bgClass} bg-opacity-40`}>
+    <div className={`rounded-overlay p-5 border border-outline-variant  relative overflow-hidden flex flex-col justify-between ${bgClass} bg-opacity-40`}>
         <div className="flex items-start justify-between relative z-10 mb-2">
             <div className="flex flex-col gap-1 w-full relative z-20">
                 <div className="flex items-center gap-2 mb-1">
@@ -36,7 +36,7 @@ const StatCard = ({ title, value, subLabel, metaNode, data, dataKey, color, bgCl
                 {subLabel && <span className="text-xs text-on-surface-variant font-medium mt-1">{subLabel}</span>}
                 {metaNode && <div className="mt-2 space-y-1 z-30">{metaNode}</div>}
             </div>
-            <div className="p-2 rounded-lg opacity-80 shadow-md shrink-0 z-20" style={{ backgroundColor: `${color}20`, color, border: `1px solid ${color}40` }}>
+            <div className="p-2 rounded-control opacity-80 shrink-0 z-20" style={{ backgroundColor: `${color}20`, color, border: `1px solid ${color}40` }}>
                 <Icon size={20} />
             </div>
         </div>
@@ -61,12 +61,12 @@ const StatCard = ({ title, value, subLabel, metaNode, data, dataKey, color, bgCl
 const CustomTooltip = ({ active, payload, label, formatValue }) => {
     if (!active || !payload?.length) return null;
     return (
-        <div className="bg-surface-container-high border border-outline-variant p-3 rounded-lg shadow-xl shadow-black/50 text-xs">
+        <div className="bg-surface-container-high border border-outline-variant p-3 rounded-control shadow-black/50 text-xs">
             <p className="font-mono text-on-surface-variant mb-2 border-b border-outline-variant/50 pb-1">{label}</p>
             {payload.map((entry, i) => (
                 <div key={i} className="flex justify-between items-center gap-4 py-0.5">
                     <span className="flex items-center gap-1.5 min-w-[100px]">
-                        <span className="w-2 h-2 rounded-full" style={{ backgroundColor: entry.color }} />
+                        <span className="w-2 h-2 rounded-control-full" style={{ backgroundColor: entry.color }} />
                         <span className="text-on-surface-variant font-medium truncate">{entry.name}</span>
                     </span>
                     <span className="text-on-surface font-mono">{formatValue ? formatValue(entry.value) : (typeof entry.value === 'number' ? entry.value.toLocaleString() : entry.value)}</span>
@@ -100,28 +100,28 @@ const StatsLoadingShell = ({ t }) => (
     <div className="w-full mb-8 animate-pulse">
         <div className="flex flex-col md:flex-row md:items-end md:justify-between mb-8 gap-3">
             <div>
-                <div className="h-10 w-48 rounded-lg bg-surface-container-high border border-outline-variant" />
-                <div className="h-4 w-80 max-w-full rounded bg-surface-container-high border border-outline-variant mt-3" />
+                <div className="h-10 w-48 rounded-control bg-surface-container-high border border-outline-variant" />
+                <div className="h-4 w-80 max-w-full rounded-control bg-surface-container-high border border-outline-variant mt-3" />
             </div>
             <div className="flex items-center gap-2 bg-surface-container/40 p-1 rounded-control">
                 {['24h', '7d', '30d'].map(p => (
-                    <div key={p} className="h-8 w-14 rounded-md bg-surface-container-high" />
+                    <div key={p} className="h-8 w-14 rounded-control bg-surface-container-high" />
                 ))}
             </div>
         </div>
         <div className="grid grid-cols-1 lg:grid-cols-2 gap-4 mb-4">
             {[0, 1].map(i => (
-                <div key={i} className="h-40 rounded-xl border border-outline-variant bg-surface-container" />
+                <div key={i} className="h-40 rounded-overlay border border-outline-variant bg-surface-container" />
             ))}
         </div>
         <div className="grid grid-cols-1 sm:grid-cols-3 gap-4 mb-6">
             {[0, 1, 2].map(i => (
-                <div key={i} className="h-32 rounded-xl border border-outline-variant bg-surface-container" />
+                <div key={i} className="h-32 rounded-overlay border border-outline-variant bg-surface-container" />
             ))}
         </div>
-        <div className="rounded-xl border border-outline-variant bg-surface-container p-6">
-            <div className="h-4 w-36 rounded bg-surface-container-high mb-5" />
-            <div className="h-64 rounded-lg bg-surface-container-high" />
+        <div className="rounded-overlay border border-outline-variant bg-surface-container p-6">
+            <div className="h-4 w-36 rounded-control bg-surface-container-high mb-5" />
+            <div className="h-64 rounded-control bg-surface-container-high" />
         </div>
         <span className="sr-only">{t('STATS.LOADING')}</span>
     </div>
@@ -325,10 +325,10 @@ const StatisticsDash = ({ isAdmin = false, isAuthenticated = true }) => {
                 expectedDates.push(`${d.getUTCFullYear()}-${String(d.getUTCMonth() + 1).padStart(2, '0')}-${String(d.getUTCDate()).padStart(2, '0')}`);
             }
         }
-        
+
         const mergedSet = new Set([...expectedDates, ...Object.keys(timeMap)]);
         const sortedDates = Array.from(mergedSet).sort();
-        
+
         const gData = sortedDates.map(d => {
             const row = timeMap[d] || { reqs: 0, tokens: 0, cost: 0, prompt_tokens: 0, completion_tokens: 0, cached_tokens: 0, cache_write_tokens: 0, reasoning_tokens: 0 };
             return { date: d, reqs: row.reqs, tokens: row.tokens, cost: row.cost, prompt_tokens: row.prompt_tokens, completion_tokens: row.completion_tokens, cached_tokens: row.cached_tokens, cache_write_tokens: row.cache_write_tokens, reasoning_tokens: row.reasoning_tokens };
@@ -466,7 +466,7 @@ const StatisticsDash = ({ isAdmin = false, isAuthenticated = true }) => {
                             setSelectedModels([]);
                             setPeriod(p);
                         }}
-                            className={`px-4 py-1.5 text-xs font-semibold rounded-md ${period === p ? 'bg-surface-variant text-on-surface shadow-sm' : 'text-on-surface-variant hover:text-on-surface'}`}>
+                            className={`px-4 py-1.5 text-xs font-semibold rounded-control ${period === p ? 'bg-surface-variant text-on-surface ' : 'text-on-surface-variant hover:text-on-surface'}`}>
                             {p === '24h' ? t('STATS.RANGE_24H') : p === '7d' ? t('STATS.RANGE_7D') : t('STATS.RANGE_30D')}
                         </button>
                     ))}
@@ -478,56 +478,56 @@ const StatisticsDash = ({ isAdmin = false, isAuthenticated = true }) => {
 
             {/* Stat Cards */}
             <div className="grid grid-cols-1 lg:grid-cols-2 gap-4 mb-4">
-                <StatCard 
-                    title={t('STATS.TOTAL_REQS')} 
-                    value={(summary.totalReqs || 0).toLocaleString()} 
+                <StatCard
+                    title={t('STATS.TOTAL_REQS')}
+                    value={(summary.totalReqs || 0).toLocaleString()}
                     metaNode={
                         <div className="flex flex-col gap-0.5 mt-2">
                            <span className="text-xs text-on-surface-variant flex items-center gap-2">
-                               <span className="w-1.5 h-1.5 rounded-full bg-[#10b981]"></span>{t('STATS.SUCCESS_REQS') || '成功请求'}: {(summary.successReqs ?? 0).toLocaleString()}
-                               <span className="w-1.5 h-1.5 rounded-full bg-red-500 ml-2"></span>失败请求: {(summary.failedReqs ?? 0).toLocaleString()}
+                               <span className="w-1.5 h-1.5 rounded-control-full bg-success"></span>{t('STATS.SUCCESS_REQS') || '成功请求'}: {(summary.successReqs ?? 0).toLocaleString()}
+                               <span className="w-1.5 h-1.5 rounded-control-full bg-error ml-2"></span>失败请求: {(summary.failedReqs ?? 0).toLocaleString()}
                                <span className="ml-2">平均延迟: {(summary.totalReqs > 0 && typeof summary.avgLatency === 'number') ? `${summary.avgLatency.toFixed(1)}秒` : '-'}</span>
                            </span>
                         </div>
                     }
-                    data={globalData} dataKey="reqs" color="#8b8680" icon={Activity} bgClass="bg-[#8b8680]/5" 
+                    data={globalData} dataKey="reqs" color="#8b8680" icon={Activity} bgClass="bg-surface-variant/5"
                 />
-                <StatCard 
-                    title={t('STATS.TOTAL_TOKENS')} 
-                    value={formatTokens(summary.totalTokens)} 
+                <StatCard
+                    title={t('STATS.TOTAL_TOKENS')}
+                    value={formatTokens(summary.totalTokens)}
                     metaNode={
                         <div className="flex flex-col gap-0.5 mt-2 transition-opacity opacity-80 hover:opacity-100">
-                           <span className="text-xs text-on-surface-variant flex items-center gap-2"><span className="w-1.5 h-1.5 rounded-full bg-[#3b82f6]"></span>{t('STATS.CACHED_TOKENS') || '缓存读 Tokens'}: {formatTokens(summary.totalCached)}</span>
-                           <span className="text-xs text-on-surface-variant flex items-center gap-2"><span className="w-1.5 h-1.5 rounded-full bg-[#a855f7]"></span>{t('STATS.REASONING_TOKENS') || '思考 Tokens'}: {formatTokens(summary.totalReasoning)}</span>
+                           <span className="text-xs text-on-surface-variant flex items-center gap-2"><span className="w-1.5 h-1.5 rounded-control-full bg-primary"></span>{t('STATS.CACHED_TOKENS') || '缓存读 Tokens'}: {formatTokens(summary.totalCached)}</span>
+                           <span className="text-xs text-on-surface-variant flex items-center gap-2"><span className="w-1.5 h-1.5 rounded-control-full bg-primary"></span>{t('STATS.REASONING_TOKENS') || '思考 Tokens'}: {formatTokens(summary.totalReasoning)}</span>
                         </div>
                     }
-                    data={globalData} dataKey="tokens" color="#8b5cf6" icon={Zap} bgClass="bg-[#8b5cf6]/5" 
+                    data={globalData} dataKey="tokens" color="#8b5cf6" icon={Zap} bgClass="bg-primary/5"
                 />
             </div>
             <div className="grid grid-cols-1 sm:grid-cols-3 gap-4 mb-6">
-                <StatCard 
-                    title={t('STATS.RPM')} 
-                    value={typeof summary.rpm === 'number' ? summary.rpm.toFixed(2) : '0.00'} 
+                <StatCard
+                    title={t('STATS.RPM')}
+                    value={typeof summary.rpm === 'number' ? summary.rpm.toFixed(2) : '0.00'}
                     metaNode={<span className="text-xs text-on-surface-variant opacity-70">{t('STATS.RPM_DESC')}</span>}
-                    data={globalData} dataKey="reqs" color="#22c55e" icon={Activity} bgClass="bg-[#22c55e]/5" 
+                    data={globalData} dataKey="reqs" color="#22c55e" icon={Activity} bgClass="bg-success/5"
                 />
-                <StatCard 
-                    title={t('STATS.TPM')} 
-                    value={typeof summary.tpm === 'number' ? Math.round(summary.tpm).toLocaleString() : '0'} 
+                <StatCard
+                    title={t('STATS.TPM')}
+                    value={typeof summary.tpm === 'number' ? Math.round(summary.tpm).toLocaleString() : '0'}
                     metaNode={<span className="text-xs text-on-surface-variant opacity-70">{t('STATS.TPM_DESC')}</span>}
-                    data={globalData} dataKey="tokens" color="#f97316" icon={Zap} bgClass="bg-[#f97316]/5" 
+                    data={globalData} dataKey="tokens" color="#f97316" icon={Zap} bgClass="bg-warning/5"
                 />
-                <StatCard 
-                    title={t('STATS.COST')} 
+                <StatCard
+                    title={t('STATS.COST')}
                     value={formatMeterCost(summary.totalCost)}
                     metaNode={<span className="text-xs text-on-surface-variant opacity-70">{t('STATS.COST_DESC')}</span>}
-                    data={globalData} dataKey="cost" color="#f59e0b" icon={Coins} bgClass="bg-[#f59e0b]/5" 
+                    data={globalData} dataKey="cost" color="#f59e0b" icon={Coins} bgClass="bg-warning/5"
                 />
             </div>
 
             {/* Chart Line Selector */}
             {uniqueModels.length > 0 && (
-                <div className="bg-surface border border-outline-variant rounded-xl p-4 mb-4 shadow-lg">
+                <div className="bg-surface border border-outline-variant rounded-overlay p-4 mb-4 ">
                     <div className="flex items-center justify-between mb-4">
                         <h3 className="text-sm font-semibold text-on-surface-variant">{t('STATS.CHART_LINES')}</h3>
                         <span className="text-xs text-on-surface-variant font-mono">{selectedModels.length} / 9</span>
@@ -540,8 +540,8 @@ const StatisticsDash = ({ isAdmin = false, isAuthenticated = true }) => {
                             return (
                                 <button key={m} onClick={() => toggleModel(m)}
                                     style={isSelected ? { borderColor: activeColor, backgroundColor: `${activeColor}15` } : {}}
-                                    className={`flex items-center gap-2 pl-2 pr-3 py-1.5 border rounded-lg ${isSelected ? 'text-on-surface' : 'border-outline-variant text-on-surface-variant hover:border-outline'}`}>
-                                    <div className="w-4 h-4 rounded-[4px] flex items-center justify-center" style={{ backgroundColor: isSelected ? activeColor : 'transparent', border: isSelected ? 'none' : '1px solid #444' }}>
+                                    className={`flex items-center gap-2 pl-2 pr-3 py-1.5 border rounded-control ${isSelected ? 'text-on-surface' : 'border-outline-variant text-on-surface-variant hover:border-outline'}`}>
+                                    <div className="w-4 h-4 rounded-control-[4px] flex items-center justify-center" style={{ backgroundColor: isSelected ? activeColor : 'transparent', border: isSelected ? 'none' : '1px solid #444' }}>
                                         {isSelected && <Check size={12} className="text-surface" strokeWidth={4} />}
                                     </div>
                                     <span className="text-xs font-mono">{m}</span>
@@ -557,7 +557,7 @@ const StatisticsDash = ({ isAdmin = false, isAuthenticated = true }) => {
 
             {/* Trend Charts */}
             <div className="grid grid-cols-1 2xl:grid-cols-2 gap-4 mb-6">
-                <div className="bg-surface border border-outline-variant rounded-xl p-6 shadow-lg min-h-[400px]">
+                <div className="bg-surface border border-outline-variant rounded-overlay p-6 min-h-[400px]">
                     <h3 className="text-sm font-semibold text-on-surface-variant mb-6">{t('STATS.REQ_TREND')}</h3>
                     <div className="w-full h-[300px]">
                         <ResponsiveContainer width="100%" height="100%">
@@ -573,7 +573,7 @@ const StatisticsDash = ({ isAdmin = false, isAuthenticated = true }) => {
                         </ResponsiveContainer>
                     </div>
                 </div>
-                <div className="bg-surface border border-outline-variant rounded-xl p-6 shadow-lg min-h-[400px]">
+                <div className="bg-surface border border-outline-variant rounded-overlay p-6 min-h-[400px]">
                     <h3 className="text-sm font-semibold text-on-surface-variant mb-6">{t('STATS.TOKENS_TREND')}</h3>
                     <div className="w-full h-[300px]">
                         <ResponsiveContainer width="100%" height="100%">
@@ -593,7 +593,7 @@ const StatisticsDash = ({ isAdmin = false, isAuthenticated = true }) => {
 
             {/* Token Distribution and Cost Charts */}
             <div className="grid grid-cols-1 gap-4 mb-6">
-                <div className="bg-surface border border-outline-variant rounded-xl p-6 shadow-lg">
+                <div className="bg-surface border border-outline-variant rounded-overlay p-6 ">
                     <div className="flex justify-between items-center mb-6">
                         <h3 className="text-sm font-semibold text-on-surface-variant">Token 类型分布</h3>
                     </div>
@@ -613,8 +613,8 @@ const StatisticsDash = ({ isAdmin = false, isAuthenticated = true }) => {
                         </ResponsiveContainer>
                     </div>
                 </div>
-                
-                <div className="bg-surface border border-outline-variant rounded-xl p-6 shadow-lg">
+
+                <div className="bg-surface border border-outline-variant rounded-overlay p-6 ">
                     <div className="flex justify-between items-center mb-6">
                         <h3 className="text-sm font-semibold text-on-surface-variant">花费统计</h3>
                     </div>
@@ -635,7 +635,7 @@ const StatisticsDash = ({ isAdmin = false, isAuthenticated = true }) => {
             {/* API Details (by token_name) + Model Stats */}
             <div className="grid grid-cols-1 xl:grid-cols-2 gap-4 mb-6">
                 {/* API Details Card */}
-                <div className="bg-surface border border-outline-variant rounded-xl p-6 shadow-lg">
+                <div className="bg-surface border border-outline-variant rounded-overlay p-6 ">
                     <h3 className="text-sm font-semibold text-on-surface-variant mb-4">{t('STATS.API_DETAILS')}</h3>
                     {sortedTokenStats.length > 0 ? (
                         <div className="overflow-x-auto">
@@ -664,7 +664,7 @@ const StatisticsDash = ({ isAdmin = false, isAuthenticated = true }) => {
                 </div>
 
                 {/* Model Stats Card */}
-                <div className="bg-surface border border-outline-variant rounded-xl p-6 shadow-lg">
+                <div className="bg-surface border border-outline-variant rounded-overlay p-6 ">
                     <h3 className="text-sm font-semibold text-on-surface-variant mb-4">{t('STATS.MODEL_STATS')}</h3>
                     {sortedModelStats.length > 0 ? (
                         <div className="overflow-x-auto">
@@ -694,12 +694,12 @@ const StatisticsDash = ({ isAdmin = false, isAuthenticated = true }) => {
             </div>
 
             {/* Request Events Details */}
-            <div className="bg-surface border border-outline-variant rounded-xl p-6 shadow-lg">
+            <div className="bg-surface border border-outline-variant rounded-overlay p-6 ">
                 <div className="flex flex-col sm:flex-row items-start sm:items-center justify-between mb-4 gap-3">
                     <h3 className="text-sm font-semibold text-on-surface-variant">{t('STATS.REQUEST_EVENTS')}</h3>
                     <div className="flex items-center gap-2 flex-wrap">
-                        <button onClick={() => { setFilterModel(''); setFilterToken(''); setLogsPage(1); }} className="text-xs text-on-surface-variant hover:text-on-surface px-2 py-1 rounded border border-outline-variant hover:border-outline">{t('STATS.CLEAR_FILTERS')}</button>
-                        <button onClick={handleExportCsv} disabled={!filteredLogs.length} className="text-xs text-on-surface-variant hover:text-on-surface px-2 py-1 rounded border border-outline-variant hover:border-outline disabled:opacity-30 flex items-center gap-1"><Download size={12} />{t('STATS.EXPORT_CSV')}</button>
+                        <button onClick={() => { setFilterModel(''); setFilterToken(''); setLogsPage(1); }} className="text-xs text-on-surface-variant hover:text-on-surface px-2 py-1 rounded-control border border-outline-variant hover:border-outline">{t('STATS.CLEAR_FILTERS')}</button>
+                        <button onClick={handleExportCsv} disabled={!filteredLogs.length} className="text-xs text-on-surface-variant hover:text-on-surface px-2 py-1 rounded-control border border-outline-variant hover:border-outline disabled:opacity-30 flex items-center gap-1"><Download size={12} />{t('STATS.EXPORT_CSV')}</button>
                     </div>
                 </div>
 
@@ -707,14 +707,14 @@ const StatisticsDash = ({ isAdmin = false, isAuthenticated = true }) => {
                 <div className="flex flex-wrap gap-4 mb-4">
                     <div className="flex items-center gap-2">
                         <span className="text-xs text-on-surface-variant">{t('STATS.MODEL_NAME')}</span>
-                        <select value={filterModel} onChange={e => { setFilterModel(e.target.value); setLogsPage(1); }} className="bg-surface-container-high border border-outline-variant text-xs text-on-surface-variant rounded-lg px-2 py-1.5 outline-none">
+                        <select value={filterModel} onChange={e => { setFilterModel(e.target.value); setLogsPage(1); }} className="bg-surface-container-high border border-outline-variant text-xs text-on-surface-variant rounded-control px-2 py-1.5 outline-none">
                             <option value="">{t('STATS.FILTER_ALL')}</option>
                             {logModels.map(m => <option key={m} value={m}>{m}</option>)}
                         </select>
                     </div>
                     <div className="flex items-center gap-2">
                         <span className="text-xs text-on-surface-variant">{t('STATS.TOKEN_SOURCE')}</span>
-                        <select value={filterToken} onChange={e => { setFilterToken(e.target.value); setLogsPage(1); }} className="bg-surface-container-high border border-outline-variant text-xs text-on-surface-variant rounded-lg px-2 py-1.5 outline-none">
+                        <select value={filterToken} onChange={e => { setFilterToken(e.target.value); setLogsPage(1); }} className="bg-surface-container-high border border-outline-variant text-xs text-on-surface-variant rounded-control px-2 py-1.5 outline-none">
                             <option value="">{t('STATS.FILTER_ALL')}</option>
                             {logTokens.map(tk => <option key={tk} value={tk}>{tk}</option>)}
                         </select>
@@ -746,7 +746,7 @@ const StatisticsDash = ({ isAdmin = false, isAuthenticated = true }) => {
                                     <tr key={log.id} className="border-b border-outline-variant/30 hover:bg-surface-variant/50">
                                         <td className="px-4 py-3 text-xs text-on-surface-variant font-mono whitespace-nowrap">{new Date(log.created_at).toLocaleString()}</td>
                                         <td className="px-4 py-3 text-xs font-mono">
-                                            <span className={`px-2 py-0.5 rounded flex items-center justify-center w-max text-[10px] font-bold ${log.status >= 200 && log.status < 300 ? 'bg-green-500/20 text-green-400' : 'bg-red-500/20 text-red-400'}`}>
+                                            <span className={`px-2 py-0.5 rounded-control flex items-center justify-center w-max text-[10px] font-bold ${log.status >= 200 && log.status < 300 ? 'bg-success/20 text-success' : 'bg-error/20 text-error'}`}>
                                                 {(log.status >= 200 && log.status < 300) ? t('STATS.SUCCESS', '成功') : (log.status || t('STATS.FAIL', '失败'))}
                                             </span>
                                         </td>
@@ -756,12 +756,12 @@ const StatisticsDash = ({ isAdmin = false, isAuthenticated = true }) => {
                                         <td className="px-4 py-3 text-xs text-on-surface-variant font-mono">{formatLatency(log.latency ?? log.latency_ms)}</td>
                                         <td className="px-4 py-3 text-xs text-on-surface">{(log.prompt_tokens || 0).toLocaleString()}</td>
                                         <td className="px-4 py-3 text-xs text-on-surface">{(log.completion_tokens || 0).toLocaleString()}</td>
-                                        <td className="px-4 py-3 text-xs text-purple-400">{(log.reasoning_tokens || 0).toLocaleString()}</td>
+                                        <td className="px-4 py-3 text-xs text-primary">{(log.reasoning_tokens || 0).toLocaleString()}</td>
                                         <td className="px-4 py-3 text-xs text-primary">{(log.cached_tokens || 0).toLocaleString()}</td>
-                                        <td className="px-4 py-3 text-xs text-orange-400">
+                                        <td className="px-4 py-3 text-xs text-warning">
                                             <div>{(log.cache_write_tokens || 0).toLocaleString()}</div>
                                             {((log.cache_write_5m_tokens || 0) > 0 || (log.cache_write_1h_tokens || 0) > 0) && (
-                                                <div className="text-[10px] text-orange-300/70 whitespace-nowrap">
+                                                <div className="text-[10px] text-warning/70 whitespace-nowrap">
                                                     5m {(log.cache_write_5m_tokens || 0).toLocaleString()} · 1h {(log.cache_write_1h_tokens || 0).toLocaleString()}
                                                 </div>
                                             )}
@@ -780,9 +780,9 @@ const StatisticsDash = ({ isAdmin = false, isAuthenticated = true }) => {
                 {/* Pagination */}
                 {logsTotalPages > 1 && (
                     <div className="flex items-center justify-center gap-3 mt-4 pt-4 border-t border-outline-variant">
-                        <button onClick={() => setLogsPage(p => Math.max(1, p - 1))} disabled={logsPage <= 1} className="p-1.5 rounded-lg border border-outline-variant text-on-surface-variant hover:text-white hover:border-gray-500 disabled:opacity-30"><ChevronLeft size={16} /></button>
+                        <button onClick={() => setLogsPage(p => Math.max(1, p - 1))} disabled={logsPage <= 1} className="p-1.5 rounded-control border border-outline-variant text-on-surface-variant hover:text-white hover:border-outline-variant disabled:opacity-30"><ChevronLeft size={16} /></button>
                         <span className="text-xs text-on-surface-variant font-mono">{logsPage} / {logsTotalPages}</span>
-                        <button onClick={() => setLogsPage(p => Math.min(logsTotalPages, p + 1))} disabled={logsPage >= logsTotalPages} className="p-1.5 rounded-lg border border-outline-variant text-on-surface-variant hover:text-white hover:border-gray-500 disabled:opacity-30"><ChevronRight size={16} /></button>
+                        <button onClick={() => setLogsPage(p => Math.min(logsTotalPages, p + 1))} disabled={logsPage >= logsTotalPages} className="p-1.5 rounded-control border border-outline-variant text-on-surface-variant hover:text-white hover:border-outline-variant disabled:opacity-30"><ChevronRight size={16} /></button>
                     </div>
                 )}
             </div>

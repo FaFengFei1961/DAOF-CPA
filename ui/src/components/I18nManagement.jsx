@@ -40,7 +40,7 @@ const I18nManagement = () => {
         }
 
         const langId = file.name.replace('.json', '');
-        
+
         try {
             setUploading(true);
             const text = await file.text();
@@ -114,7 +114,7 @@ const I18nManagement = () => {
                     </p>
                 </div>
                 <div>
-                   <label className="cursor-pointer bg-gradient-to-r from-blue-600 to-indigo-600 text-on-surface px-5 py-2.5 rounded-xl font-medium flex items-center gap-2 hover:opacity-90 shadow-lg shadow-blue-500/20 ">
+                   <label className="cursor-pointer bg-gradient-to-r from-blue-600 to-indigo-600 text-on-surface px-5 py-2.5 rounded-overlay font-medium flex items-center gap-2 hover:opacity-90 /20 ">
                        {uploading ? <RefreshCw size={18} className="animate-spin" /> : <Upload size={18} />}
                        <span>{t('I18N_MGMT.BTN_UPLOAD')}</span>
                        <input type="file" accept=".json" className="hidden" onChange={handleFileUpload} disabled={uploading} />
@@ -122,7 +122,7 @@ const I18nManagement = () => {
                 </div>
             </div>
 
-            <div className="bg-surface-container border border-outline-variant rounded-2xl overflow-hidden shadow-sm">
+            <div className="bg-surface-container border border-outline-variant rounded-overlay overflow-hidden ">
                 <div className="overflow-x-auto">
                     <table className="w-full min-w-[800px] text-left text-sm text-on-surface-variant table-fixed">
                         <thead className="bg-surface-container-high text-xs uppercase font-mono tracking-wider text-on-surface-variant border-b border-outline-variant">
@@ -146,27 +146,27 @@ const I18nManagement = () => {
                                 locales.map(loc => {
                                     const isCore = loc.id === 'zh-CN' || loc.id === 'en-US';
                                     return (
-                                        <tr key={loc.id} className="hover:bg-[#1a1b1e]  group">
+                                        <tr key={loc.id} className="hover:bg-surface group">
                                             <td className="px-6 py-4">
                                                 <div className="flex items-center gap-2">
-                                                    <FileJson size={16} className={isCore ? 'text-orange-500' : 'text-primary'} />
+                                                    <FileJson size={16} className={isCore ? 'text-warning' : 'text-primary'} />
                                                     <span className="text-on-surface font-mono font-medium">{loc.id}.json</span>
-                                                    {isCore && <span className="text-xs bg-orange-900/30 text-orange-400 border border-orange-900/50 px-1.5 py-0.5 rounded ml-2 uppercase font-bold tracking-widest">{t('I18N_MGMT.CORE')}</span>}
+                                                    {isCore && <span className="text-xs bg-warning/30 text-warning border border-warning/50 px-1.5 py-0.5 rounded-control ml-2 uppercase font-bold tracking-widest">{t('I18N_MGMT.CORE')}</span>}
                                                 </div>
                                             </td>
                                             <td className="px-6 py-4">
-                                                <span className="text-on-surface-variant bg-[#2b2b2b]/50 px-2.5 py-1 rounded-md">{loc.name}</span>
+                                                <span className="text-on-surface-variant bg-surface-container-high/50 px-2.5 py-1 rounded-control">{loc.name}</span>
                                             </td>
                                             <td className="px-6 py-4 font-mono text-xs">
                                                 {loc.size > 1024 ? `${(loc.size/1024).toFixed(1)} KB` : `${loc.size} Bytes`}
                                             </td>
                                             <td className="px-6 py-4 text-right">
                                                 <div className="flex items-center justify-end gap-4 opacity-70 group-hover:opacity-100 -opacity whitespace-nowrap">
-                                                    <button onClick={() => triggerDownload(loc.id)} className="text-on-surface-variant hover:text-green-400  tooltip flex items-center justify-center" title={t('I18N_MGMT.DOWNLOAD_TOOLTIP')}>
+                                                    <button onClick={() => triggerDownload(loc.id)} className="text-on-surface-variant hover:text-success tooltip flex items-center justify-center" title={t('I18N_MGMT.DOWNLOAD_TOOLTIP')}>
                                                         <Download size={16} />
                                                     </button>
                                                     {!isCore && (
-                                                        <button onClick={() => handleDelete(loc.id)} className="text-on-surface-variant hover:text-red-500  tooltip flex items-center justify-center" title={t('I18N_MGMT.DELETE_TOOLTIP')}>
+                                                        <button onClick={() => handleDelete(loc.id)} className="text-on-surface-variant hover:text-error tooltip flex items-center justify-center" title={t('I18N_MGMT.DELETE_TOOLTIP')}>
                                                             <Trash2 size={16} />
                                                         </button>
                                                     )}

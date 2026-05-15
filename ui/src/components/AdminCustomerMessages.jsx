@@ -191,14 +191,14 @@ const AdminCustomerMessages = () => {
           <ArrowLeft size={14} /> {t('TICKET.ADMIN.BACK', '返回列表')}
         </button>
 
-        <div className="bg-surface-container-high border border-outline-variant rounded-2xl overflow-hidden">
+        <div className="bg-surface-container-high border border-outline-variant rounded-overlay overflow-hidden">
           <div className="px-4 sm:px-6 py-4 border-b border-outline-variant/40 flex items-center justify-between gap-3 flex-wrap">
             <div className="flex-1 min-w-0">
               <h2 className="text-base font-bold truncate">{activeTicket.subject}</h2>
               <div className="text-xs text-on-surface-variant mt-1 flex items-center gap-2 flex-wrap">
-                <span className={`px-2 py-0.5 rounded font-mono ${isClosed
+                <span className={`px-2 py-0.5 rounded-control font-mono ${isClosed
                   ? 'bg-on-surface/10 text-on-surface-variant'
-                  : 'bg-emerald-500/15 text-emerald-400'}`}>
+                  : 'bg-success/15 text-success'}`}>
                   {isClosed ? t('TICKET.STATUS_CLOSED', '已关闭') : t('TICKET.STATUS_OPEN', '进行中')}
                 </span>
                 <span>#{activeTicket.id}</span>
@@ -210,7 +210,7 @@ const AdminCustomerMessages = () => {
               <button
                 type="button"
                 onClick={handleClose}
-                className="h-8 px-3 text-xs border border-outline-variant rounded-lg hover:bg-on-surface/[0.04] flex items-center gap-1"
+                className="h-8 px-3 text-xs border border-outline-variant rounded-control hover:bg-on-surface/[0.04] flex items-center gap-1"
               >
                 <CheckCircle2 size={12} /> {t('TICKET.ADMIN.CLOSE_BTN', '关闭工单')}
               </button>
@@ -231,7 +231,7 @@ const AdminCustomerMessages = () => {
               const fromAdmin = m.sender === 'admin';
               return (
                 <div key={m.id} className={`flex ${fromAdmin ? 'justify-end' : 'justify-start'}`}>
-                  <div className={`max-w-[75%] rounded-2xl px-4 py-2.5 text-sm ${fromAdmin
+                  <div className={`max-w-[75%] rounded-overlay px-4 py-2.5 text-sm ${fromAdmin
                     ? 'bg-primary text-on-primary'
                     : 'bg-surface-container-high border border-outline-variant text-on-surface'}`}>
                     <div className="text-[10px] opacity-70 mb-1">
@@ -248,7 +248,7 @@ const AdminCustomerMessages = () => {
             <button
               type="button"
               onClick={() => scrollMessagesToBottom(true)}
-              className="absolute right-4 bottom-3 z-10 inline-flex items-center gap-1.5 h-8 px-3 rounded-full bg-primary text-on-primary text-xs font-semibold shadow-lg hover:brightness-110 active:scale-[0.97] transition animate-in fade-in slide-in-from-bottom-2"
+              className="absolute right-4 bottom-3 z-10 inline-flex items-center gap-1.5 h-8 px-3 rounded-control-full bg-primary text-on-primary text-xs font-semibold hover:brightness-110 active:scale-[0.97] transition animate-in fade-in slide-in-from-bottom-2"
               aria-label={t('TICKET.NEW_MSG_BELOW', '新消息')}
             >
               <ArrowDown size={12} />
@@ -265,7 +265,7 @@ const AdminCustomerMessages = () => {
                 onChange={e => setReply(e.target.value)}
                 maxLength={5000}
                 placeholder={t('TICKET.ADMIN.REPLY_PLACEHOLDER', '输入回复内容（提交后会以站内通知形式发给用户）')}
-                className="w-full bg-surface-container border border-outline rounded-lg px-3 py-2 text-sm focus:border-primary outline-none resize-y"
+                className="w-full bg-surface-container border border-outline rounded-control px-3 py-2 text-sm focus:border-primary outline-none resize-y"
               />
               <div className="flex items-center justify-between gap-3">
                 <span className="text-[11px] text-on-surface-variant">{reply.length} / 5000</span>
@@ -273,7 +273,7 @@ const AdminCustomerMessages = () => {
                   type="button"
                   onClick={handleReply}
                   disabled={submitting || !reply.trim()}
-                  className="h-9 px-4 bg-primary text-on-primary rounded-lg text-sm font-semibold hover:opacity-90 disabled:opacity-50 flex items-center gap-2"
+                  className="h-9 px-4 bg-primary text-on-primary rounded-control text-sm font-semibold hover:opacity-90 disabled:opacity-50 flex items-center gap-2"
                 >
                   <Send size={12} />
                   {submitting ? t('TICKET.ADMIN.SENDING', '发送中...') : t('TICKET.ADMIN.SEND', '回复')}
@@ -304,7 +304,7 @@ const AdminCustomerMessages = () => {
           <select
             value={statusFilter}
             onChange={e => setStatusFilter(e.target.value)}
-            className="h-9 bg-surface-container border border-outline-variant rounded-lg px-3 text-sm"
+            className="h-9 bg-surface-container border border-outline-variant rounded-control px-3 text-sm"
           >
             {STATUS_OPTIONS.map(s => (
               <option key={s.value} value={s.value}>
@@ -315,14 +315,14 @@ const AdminCustomerMessages = () => {
           <button
             type="button"
             onClick={loadList}
-            className="h-9 w-9 flex items-center justify-center rounded-lg bg-surface-container hover:bg-on-surface/[0.04]"
+            className="h-9 w-9 flex items-center justify-center rounded-control bg-surface-container hover:bg-on-surface/[0.04]"
           >
             <RefreshCw size={14} className={loading ? 'animate-spin' : ''} />
           </button>
         </div>
       </header>
 
-      <section className="bg-surface-container-high border border-outline-variant rounded-2xl overflow-hidden">
+      <section className="bg-surface-container-high border border-outline-variant rounded-overlay overflow-hidden">
         {list.length === 0 ? (
           <div className="text-center py-12 text-sm text-on-surface-variant">
             {t('TICKET.ADMIN.EMPTY', '暂无工单')}
@@ -341,9 +341,9 @@ const AdminCustomerMessages = () => {
                   <div className="flex-1 min-w-0">
                     <div className="flex items-center gap-2 flex-wrap mb-1">
                       <span className="text-sm font-semibold truncate">{it.subject}</span>
-                      <span className={`text-[10px] px-2 py-0.5 rounded font-mono ${isClosed
+                      <span className={`text-[10px] px-2 py-0.5 rounded-control font-mono ${isClosed
                         ? 'bg-on-surface/10 text-on-surface-variant'
-                        : 'bg-emerald-500/15 text-emerald-400'}`}>
+                        : 'bg-success/15 text-success'}`}>
                         {isClosed
                           ? t('TICKET.STATUS_CLOSED', '已关闭')
                           : t('TICKET.STATUS_OPEN', '进行中')}
@@ -352,7 +352,7 @@ const AdminCustomerMessages = () => {
                         @{username || `user${it.user_id}`}
                       </span>
                       {unread > 0 && (
-                        <span className="text-[10px] px-2 py-0.5 rounded-full bg-red-500 text-white font-mono">
+                        <span className="text-[10px] px-2 py-0.5 rounded-control-full bg-error text-white font-mono">
                           {unread}
                         </span>
                       )}

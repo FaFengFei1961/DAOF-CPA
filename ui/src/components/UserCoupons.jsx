@@ -84,10 +84,10 @@ const UserCoupons = () => {
         return (
           <div key={status}>
             <h3 className="text-sm font-semibold text-on-surface-variant mb-3 flex items-center gap-2">
-              {status === 'available' && <Check size={14} className="text-emerald-400" aria-hidden="true" />}
-              {status === 'used' && <Check size={14} className="text-zinc-400" aria-hidden="true" />}
-              {status === 'expired' && <Clock size={14} className="text-amber-400" aria-hidden="true" />}
-              {status === 'revoked' && <X size={14} className="text-rose-400" aria-hidden="true" />}
+              {status === 'available' && <Check size={14} className="text-success" aria-hidden="true" />}
+              {status === 'used' && <Check size={14} className="text-on-surface-variant" aria-hidden="true" />}
+              {status === 'expired' && <Clock size={14} className="text-warning" aria-hidden="true" />}
+              {status === 'revoked' && <X size={14} className="text-error" aria-hidden="true" />}
               {groupTitles[status]} ({items.length})
             </h3>
             <ul className="space-y-2">
@@ -105,11 +105,11 @@ const CouponCard = ({ coupon, t }) => {
   const expires = coupon.expires_at ? new Date(coupon.expires_at).toLocaleDateString() : null;
   return (
     <li className={`fl-card p-4 flex items-start gap-3 ${isAvailable ? 'border-l-4 border-l-emerald-400' : 'opacity-60'}`}>
-      <Ticket size={20} className={isAvailable ? 'text-emerald-400 mt-0.5' : 'text-on-surface-variant mt-0.5'} aria-hidden="true" />
+      <Ticket size={20} className={isAvailable ? 'text-success mt-0.5' : 'text-on-surface-variant mt-0.5'} aria-hidden="true" />
       <div className="flex-1 min-w-0">
         <div className="font-semibold text-on-surface">{coupon.snapshot_name}</div>
         {coupon.snapshot_type === 'fixed_price' && (
-          <div className="text-xs text-emerald-400 mt-0.5">
+          <div className="text-xs text-success mt-0.5">
             {t('COUPON.CARD_FIXED', '券价：${{p}}', { p: coupon.snapshot_value })}
           </div>
         )}

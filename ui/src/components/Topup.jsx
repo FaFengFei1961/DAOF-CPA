@@ -14,8 +14,8 @@ const PAY_METHOD_META = {
   alipay:    { i18n: 'PAY_ALIPAY',    color: 'bg-[#1677ff]', text: 'text-white' },
   wxpay:     { i18n: 'PAY_WXPAY',     color: 'bg-[#07c160]', text: 'text-white' },
   qqpay:     { i18n: 'PAY_QQPAY',     color: 'bg-[#12b7f5]', text: 'text-white' },
-  bank:      { i18n: 'PAY_BANK',      color: 'bg-red-600',   text: 'text-white' },
-  jdpay:     { i18n: 'PAY_JDPAY',     color: 'bg-red-500',   text: 'text-white' },
+  bank:      { i18n: 'PAY_BANK',      color: 'bg-error',   text: 'text-white' },
+  jdpay:     { i18n: 'PAY_JDPAY',     color: 'bg-error',   text: 'text-white' },
   paypal:    { i18n: 'PAY_PAYPAL',    color: 'bg-[#003087]', text: 'text-white' },
   douyinpay: { i18n: 'PAY_DOUYINPAY', color: 'bg-black',     text: 'text-white' },
 };
@@ -218,8 +218,8 @@ const Topup = ({ isAuthenticated }) => {
     return (
       <div className="max-w-3xl mx-auto py-8">
         <StorePage title={t('TOPUP.TITLE', '余额充值')} icon={Wallet}>
-          <div className="fl-card p-10 text-center border-amber-700/40">
-            <Wallet size={48} className="mx-auto mb-4 text-amber-500" />
+          <div className="fl-card p-10 text-center border-warning/40">
+            <Wallet size={48} className="mx-auto mb-4 text-warning" />
             <p className="text-sm text-on-surface-variant">
               {t('TOPUP.UNAVAILABLE', '充值功能尚未配置，请联系管理员')}
             </p>
@@ -260,7 +260,7 @@ const Topup = ({ isAuthenticated }) => {
               value={amount}
               onChange={e => setAmount(e.target.value)}
               placeholder={`${opts.min_amount_rmb} - ${opts.max_amount_rmb}`}
-              className="flex-1 h-12 bg-surface-container border border-outline rounded-lg px-3 text-lg text-on-surface focus:border-primary outline-none font-mono"
+              className="flex-1 h-12 bg-surface-container border border-outline rounded-control px-3 text-lg text-on-surface focus:border-primary outline-none font-mono"
             />
           </div>
 
@@ -274,7 +274,7 @@ const Topup = ({ isAuthenticated }) => {
                     key={v}
                     type="button"
                     onClick={() => setAmount(String(v))}
-                    className={`px-4 py-2 rounded-lg text-sm font-semibold border transition ${
+                    className={`px-4 py-2 rounded-control text-sm font-semibold border transition ${
                       active
                         ? 'bg-primary text-on-primary border-primary'
                         : 'bg-surface-container text-on-surface-variant border-outline-variant hover:border-primary hover:text-primary'
@@ -326,9 +326,9 @@ const Topup = ({ isAuthenticated }) => {
                   // 改用 aria-pressed 让按钮回归普通切换语义，Tab+Enter/Space 即可操作。
                   aria-pressed={active}
                   onClick={() => setPayType(m)}
-                  className={`relative h-12 rounded-lg flex items-center justify-center gap-2 border transition font-medium ${
+                  className={`relative h-12 rounded-control flex items-center justify-center gap-2 border transition font-medium ${
                     active
-                      ? `${meta.color} ${meta.text} border-transparent shadow-md`
+                      ? `${meta.color} ${meta.text} border-transparent `
                       : 'bg-surface-container text-on-surface border-outline-variant hover:border-primary'
                   }`}
                 >
@@ -345,7 +345,7 @@ const Topup = ({ isAuthenticated }) => {
           type="button"
           onClick={handleSubmit}
           disabled={submitting || !amount || !payType}
-          className="w-full h-12 bg-primary text-on-primary rounded-lg text-base font-semibold hover:opacity-90 disabled:opacity-50 transition"
+          className="w-full h-12 bg-primary text-on-primary rounded-control text-base font-semibold hover:opacity-90 disabled:opacity-50 transition"
         >
           {submitting ? t('TOPUP.SUBMITTING', '下单中...') : t('TOPUP.SUBMIT', '立即支付')}
         </button>
@@ -353,10 +353,10 @@ const Topup = ({ isAuthenticated }) => {
 
       {/* 下单结果：二维码 / 跳转链接 */}
       {orderResult && (
-        <section className="fl-card p-8 flex flex-col items-center gap-5 border-primary/40 shadow-lg shadow-primary/5">
+        <section className="fl-card p-8 flex flex-col items-center gap-5 border-primary/40 shadow-primary/5">
           <div className="text-center">
             <div className="text-base font-semibold text-on-surface flex items-center justify-center gap-2">
-              <span className={`w-2 h-2 rounded-full bg-primary animate-pulse`} />
+              <span className={`w-2 h-2 rounded-control-full bg-primary animate-pulse`} />
               {t('TOPUP.WAITING_PAYMENT', '等待支付中…')}
             </div>
             <p className="text-xs text-on-surface-variant mt-1">
@@ -365,7 +365,7 @@ const Topup = ({ isAuthenticated }) => {
           </div>
 
           {showQRCode && (
-            <div className="bg-white p-4 rounded-xl shadow-md flex items-center justify-center">
+            <div className="bg-white p-4 rounded-overlay flex items-center justify-center">
               <QRCodeSVG value={payInfo} size={224} level="M" />
             </div>
           )}
@@ -382,7 +382,7 @@ const Topup = ({ isAuthenticated }) => {
               href={payInfo}
               target="_blank"
               rel="noopener noreferrer"
-              className="inline-flex items-center gap-2 px-6 h-11 bg-primary text-on-primary rounded-lg font-semibold hover:opacity-90 transition"
+              className="inline-flex items-center gap-2 px-6 h-11 bg-primary text-on-primary rounded-control font-semibold hover:opacity-90 transition"
             >
               <ExternalLink size={16} />
               {t('TOPUP.GO_PAY', '前往支付页面')}
@@ -390,7 +390,7 @@ const Topup = ({ isAuthenticated }) => {
           )}
 
           {showRawPayInfo && (
-            <div className="w-full rounded-lg border border-outline-variant bg-surface-container p-3 text-left">
+            <div className="w-full rounded-control border border-outline-variant bg-surface-container p-3 text-left">
               <div className="text-xs font-semibold text-on-surface-variant mb-2">
                 {t('TOPUP.PAY_INFO_LABEL', '支付参数')}
               </div>
@@ -482,9 +482,9 @@ const Topup = ({ isAuthenticated }) => {
 
 const statusClass = (s) => {
   switch (s) {
-    case 'paid': return 'text-emerald-400 text-xs';
-    case 'created': return 'text-amber-400 text-xs';
-    case 'failed': return 'text-red-400 text-xs';
+    case 'paid': return 'text-success text-xs';
+    case 'created': return 'text-warning text-xs';
+    case 'failed': return 'text-error text-xs';
     case 'refunded': return 'text-on-surface-variant text-xs line-through';
     default: return 'text-on-surface-variant text-xs';
   }

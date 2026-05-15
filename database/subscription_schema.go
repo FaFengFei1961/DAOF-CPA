@@ -74,7 +74,7 @@ type Package struct {
 
 	// ProductType 决定消费引擎排序优先级
 	//   subscription = 周期套餐（先扣，默认 30 天周期）
-	// Phase 8：addon（增量包）已移除，所有套餐都是 subscription。
+	// Phase 8：所有套餐都是 subscription。
 	ProductType string `gorm:"index;not null;default:'subscription';size:16" json:"product_type"`
 
 	// 视觉元数据（admin 自由配）

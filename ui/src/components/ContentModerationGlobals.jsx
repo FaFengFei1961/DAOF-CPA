@@ -43,11 +43,11 @@ const riskActionOptions = [
 const actionLabels = Object.fromEntries(riskActionOptions.filter(([value]) => value !== 'ALL'));
 
 const actionTone = (action) => {
-    if (action === 'SECURITY_AUTOBAN') return 'border-red-500/30 bg-red-500/10 text-red-300';
-    if (String(action || '').includes('BLOCK')) return 'border-amber-500/30 bg-amber-500/10 text-amber-300';
-    if (action === 'MODERATION_UNAVAILABLE_CLOSED') return 'border-red-500/25 bg-red-500/10 text-red-300';
-    if (action === 'MODERATION_FAIL_OPEN') return 'border-sky-500/30 bg-sky-500/10 text-sky-300';
-    return 'border-violet-500/30 bg-violet-500/10 text-violet-300';
+    if (action === 'SECURITY_AUTOBAN') return 'border-error/30 bg-error/10 text-error';
+    if (String(action || '').includes('BLOCK')) return 'border-warning/30 bg-warning/10 text-warning';
+    if (action === 'MODERATION_UNAVAILABLE_CLOSED') return 'border-error/25 bg-error/10 text-error';
+    if (action === 'MODERATION_FAIL_OPEN') return 'border-primary/30 bg-primary/10 text-primary';
+    return 'border-primary/30 bg-primary/10 text-primary';
 };
 
 const actionIcon = (action) => {
@@ -101,9 +101,9 @@ const getSegmentScope = (data = {}) => {
 const formatSegmentScope = (scope) => segmentScopeLabels[scope] || scope;
 
 const segmentScopeTone = (scope) => {
-    if (scope === 'user_message') return 'border-red-500/25 bg-red-500/10 text-red-200';
+    if (scope === 'user_message') return 'border-error/25 bg-error/10 text-error';
     if (scope === 'non_user_context' || scope === 'tool_context' || scope === 'client_context' || scope === 'tool_result' || scope === 'function_output') {
-        return 'border-emerald-500/25 bg-emerald-500/10 text-emerald-200';
+        return 'border-success/25 bg-success/10 text-success';
     }
     return 'border-outline-variant bg-surface-container-high text-on-surface-variant';
 };
@@ -119,19 +119,19 @@ const riskBadgesForEvent = (evt) => {
         badges.push({ label, value: String(value), tone });
     };
 
-    push('模型', data.model || data.trigger_model, 'border-sky-500/25 bg-sky-500/10 text-sky-200');
+    push('模型', data.model || data.trigger_model, 'border-primary/25 bg-primary/10 text-primary');
     const segmentScope = getSegmentScope(data);
     push('来源', formatSegmentScope(segmentScope), segmentScopeTone(segmentScope));
-    push('分类', data.highest_cat || firstMatch?.category, 'border-amber-500/25 bg-amber-500/10 text-amber-200');
-    push('分数', formatRiskScore(data.highest_score ?? data.total_score ?? firstMatch?.score), 'border-violet-500/25 bg-violet-500/10 text-violet-200');
+    push('分类', data.highest_cat || firstMatch?.category, 'border-warning/25 bg-warning/10 text-warning');
+    push('分数', formatRiskScore(data.highest_score ?? data.total_score ?? firstMatch?.score), 'border-primary/25 bg-primary/10 text-primary');
     push('规则', firstMatch?.id || data.trigger_keyword || data.auto_ban_group);
     push('缓存', typeof data.from_cache === 'boolean' ? (data.from_cache ? '是' : '否') : undefined);
-    push('错误', data.err_tag || data.upstream_error_type, 'border-red-500/25 bg-red-500/10 text-red-200');
-    push('命中', data.hit_count && data.threshold ? `${data.hit_count}/${data.threshold}` : undefined, 'border-red-500/25 bg-red-500/10 text-red-200');
-    push('长度', data.len && data.max ? `${data.len}/${data.max}` : undefined, 'border-orange-500/25 bg-orange-500/10 text-orange-200');
-    push('内容', data.content_runes ? `${Number(data.content_runes).toLocaleString()} 字符` : undefined, 'border-emerald-500/25 bg-emerald-500/10 text-emerald-200');
-    push('预览', data.content_truncated ? '已截断' : undefined, 'border-emerald-500/25 bg-emerald-500/10 text-emerald-200');
-    push('脱敏', data.content_redacted ? '是' : undefined, 'border-emerald-500/25 bg-emerald-500/10 text-emerald-200');
+    push('错误', data.err_tag || data.upstream_error_type, 'border-error/25 bg-error/10 text-error');
+    push('命中', data.hit_count && data.threshold ? `${data.hit_count}/${data.threshold}` : undefined, 'border-error/25 bg-error/10 text-error');
+    push('长度', data.len && data.max ? `${data.len}/${data.max}` : undefined, 'border-warning/25 bg-warning/10 text-warning');
+    push('内容', data.content_runes ? `${Number(data.content_runes).toLocaleString()} 字符` : undefined, 'border-success/25 bg-success/10 text-success');
+    push('预览', data.content_truncated ? '已截断' : undefined, 'border-success/25 bg-success/10 text-success');
+    push('脱敏', data.content_redacted ? '是' : undefined, 'border-success/25 bg-success/10 text-success');
     push('原因', data.trigger_reason || data.reason);
 
     return { parsed, badges, segmentScope };
@@ -381,10 +381,10 @@ const ContentModerationGlobals = ({ configs, handleChange }) => {
     }, [riskEvents]);
 
     const testTone = testResult?.success && testResult?.status === 'ok'
-        ? 'border-emerald-500/30 bg-emerald-500/10 text-emerald-300'
+        ? 'border-success/30 bg-success/10 text-success'
         : testResult?.success
-            ? 'border-amber-500/30 bg-amber-500/10 text-amber-300'
-            : 'border-red-500/30 bg-red-500/10 text-red-300';
+            ? 'border-warning/30 bg-warning/10 text-warning'
+            : 'border-error/30 bg-error/10 text-error';
     const TestIcon = testResult?.success && testResult?.status === 'ok'
         ? CheckCircle2
         : testResult?.success
@@ -405,7 +405,7 @@ const ContentModerationGlobals = ({ configs, handleChange }) => {
             </div>
 
             {/* ── Smart moderation provider ─────────────────────────────────── */}
-            <section className="bg-surface-container border border-outline-variant rounded-2xl p-4 md:p-6 mb-6 shadow-sm">
+            <section className="bg-surface-container border border-outline-variant rounded-overlay p-4 md:p-6 mb-6 ">
                 <div className="mb-4 pb-3 border-b border-outline-variant/50 flex flex-col gap-3 lg:flex-row lg:items-start lg:justify-between">
                     <div>
                         <h3 className="text-sm font-semibold text-on-surface flex items-center gap-2">
@@ -420,7 +420,7 @@ const ContentModerationGlobals = ({ configs, handleChange }) => {
                         type="button"
                         onClick={runModerationTest}
                         disabled={testing}
-                        className="inline-flex items-center justify-center gap-2 rounded-lg border border-primary/40 bg-primary/10 px-3 py-2 text-xs font-semibold text-primary hover:bg-primary/15 disabled:cursor-not-allowed disabled:opacity-60"
+                        className="inline-flex items-center justify-center gap-2 rounded-control border border-primary/40 bg-primary/10 px-3 py-2 text-xs font-semibold text-primary hover:bg-primary/15 disabled:cursor-not-allowed disabled:opacity-60"
                     >
                         {testing ? <RotateCw size={15} className="animate-spin" /> : <PlugZap size={15} />}
                         {testing ? t('MODERATION.TESTING', '测试中...') : t('MODERATION.TEST_BUTTON', '测试已保存配置')}
@@ -428,7 +428,7 @@ const ContentModerationGlobals = ({ configs, handleChange }) => {
                 </div>
 
                 {testResult && (
-                    <div className={`mb-4 rounded-xl border px-3 py-3 ${testTone}`}>
+                    <div className={`mb-4 rounded-overlay border px-3 py-3 ${testTone}`}>
                         <div className="flex items-start gap-2">
                             <TestIcon size={17} className="mt-0.5 shrink-0" />
                             <div className="min-w-0">
@@ -513,7 +513,7 @@ const ContentModerationGlobals = ({ configs, handleChange }) => {
                         <span className="block text-xs font-medium text-on-surface-variant mb-1.5">
                             {t('MODERATION.PROVIDER', '审核供应商')}
                         </span>
-                        <div className="w-full rounded-lg border border-outline bg-surface-container-high px-3 py-2 text-on-surface">
+                        <div className="w-full rounded-control border border-outline bg-surface-container-high px-3 py-2 text-on-surface">
                             {t('MODERATION.PROVIDER_CLIPROXY_MODEL', '上游模型池')}
                         </div>
                         <p className="text-[11px] text-on-surface-variant mt-1">
@@ -530,7 +530,7 @@ const ContentModerationGlobals = ({ configs, handleChange }) => {
                             value={configs[moderationModelKey] || ''}
                             onChange={e => handleChange(moderationModelKey, e.target.value)}
                             placeholder={moderationModelFallback}
-                            className="w-full bg-surface-container-high border border-outline rounded-lg px-3 py-2 text-on-surface outline-none focus:border-primary"
+                            className="w-full bg-surface-container-high border border-outline rounded-control px-3 py-2 text-on-surface outline-none focus:border-primary"
                         />
                         <p className="text-[11px] text-on-surface-variant mt-1">
                             {t('MODERATION.MODEL_HINT', '推荐使用 gpt-5.4-mini 做默认二审；也可以换成 上游模型池里额度更宽裕的模型。')}
@@ -570,7 +570,7 @@ const ContentModerationGlobals = ({ configs, handleChange }) => {
                             value={configs.moderation_api_timeout_seconds || ''}
                             onChange={e => handleChange('moderation_api_timeout_seconds', e.target.value)}
                             placeholder="15"
-                            className="w-full bg-surface-container-high border border-outline rounded-lg px-3 py-2 text-on-surface outline-none focus:border-primary"
+                            className="w-full bg-surface-container-high border border-outline rounded-control px-3 py-2 text-on-surface outline-none focus:border-primary"
                         />
                         <p className="text-[11px] text-on-surface-variant mt-1">
                             {t('MODERATION.API_TIMEOUT_HINT', '上游模型池二审的总等待时间。gpt-5.4-mini 实测常见 4-6 秒，默认 15 秒更稳。')}
@@ -580,9 +580,9 @@ const ContentModerationGlobals = ({ configs, handleChange }) => {
             </section>
 
             {/* ── 关键字词库 ───────────────────────────────────────────────── */}
-            <section className="bg-surface-container border border-outline-variant rounded-2xl p-4 md:p-6 mb-6 shadow-sm">
+            <section className="bg-surface-container border border-outline-variant rounded-overlay p-4 md:p-6 mb-6 ">
                 <h3 className="text-sm font-semibold text-on-surface flex items-center gap-2 mb-4 pb-3 border-b border-outline-variant/50">
-                    <AlertTriangle size={16} className="text-amber-400" />
+                    <AlertTriangle size={16} className="text-warning" />
                     {t('MODERATION.SECTION_KEYWORDS', '关键字快扫词库')}
                 </h3>
                 <p className="text-xs text-on-surface-variant mb-3">
@@ -598,13 +598,13 @@ const ContentModerationGlobals = ({ configs, handleChange }) => {
                     onChange={e => setKeywordText(e.target.value)}
                     onBlur={flushKeywords}
                     placeholder={'Kiro_workspace\nkiro_session_id\nDAN mode\nignore previous instructions'}
-                    className="w-full bg-surface-container-high border border-outline rounded-lg px-3 py-2 text-on-surface font-mono text-xs outline-none focus:border-primary"
+                    className="w-full bg-surface-container-high border border-outline rounded-control px-3 py-2 text-on-surface font-mono text-xs outline-none focus:border-primary"
                 />
                 <p className="text-[11px] text-on-surface-variant mt-1">
                     {t('MODERATION.KEYWORDS_HINT', '当前 {{count}} 条关键字。修改后点页面底部的「保存」按钮生效。', { count: keywordList.length })}
                 </p>
 
-                <div className="mt-5 rounded-xl border border-outline-variant bg-surface/40 p-4">
+                <div className="mt-5 rounded-overlay border border-outline-variant bg-surface/40 p-4">
                     <div className="flex flex-col gap-3 lg:flex-row lg:items-start lg:justify-between">
                         <div>
                             <h4 className="text-sm font-semibold text-on-surface flex items-center gap-2">
@@ -622,14 +622,14 @@ const ContentModerationGlobals = ({ configs, handleChange }) => {
                                 max="200"
                                 value={configs.moderation_keyword_ai_max_candidates || '80'}
                                 onChange={e => handleChange('moderation_keyword_ai_max_candidates', e.target.value)}
-                                className="h-9 w-24 rounded-lg border border-outline bg-surface-container-high px-3 text-sm text-on-surface outline-none focus:border-primary"
+                                className="h-9 w-24 rounded-control border border-outline bg-surface-container-high px-3 text-sm text-on-surface outline-none focus:border-primary"
                                 aria-label={t('MODERATION.KEYWORD_AI_MAX', '候选数量')}
                             />
                             <button
                                 type="button"
                                 onClick={generateKeywordCandidates}
                                 disabled={generatingKeywords}
-                                className="inline-flex h-9 items-center justify-center gap-2 rounded-lg border border-primary/40 bg-primary/10 px-3 text-xs font-semibold text-primary hover:bg-primary/15 disabled:opacity-60"
+                                className="inline-flex h-9 items-center justify-center gap-2 rounded-control border border-primary/40 bg-primary/10 px-3 text-xs font-semibold text-primary hover:bg-primary/15 disabled:opacity-60"
                             >
                                 {generatingKeywords ? <RotateCw size={15} className="animate-spin" /> : <Bot size={15} />}
                                 {generatingKeywords ? t('MODERATION.KEYWORD_AI_RUNNING', '生成中...') : t('MODERATION.KEYWORD_AI_BUTTON', '生成候选')}
@@ -641,10 +641,10 @@ const ContentModerationGlobals = ({ configs, handleChange }) => {
                         value={keywordAIFocus}
                         onChange={e => setKeywordAIFocus(e.target.value)}
                         placeholder={t('MODERATION.KEYWORD_AI_FOCUS_PLACEHOLDER', '可选：补充本轮重点，例如“Claude Code 破甲、泄露系统提示词、伪造工具调用”')}
-                        className="mt-3 w-full rounded-lg border border-outline bg-surface-container-high px-3 py-2 text-xs text-on-surface outline-none focus:border-primary"
+                        className="mt-3 w-full rounded-control border border-outline bg-surface-container-high px-3 py-2 text-xs text-on-surface outline-none focus:border-primary"
                     />
                     {keywordCandidates.length > 0 && (
-                        <div className="mt-4 overflow-hidden rounded-xl border border-outline-variant">
+                        <div className="mt-4 overflow-hidden rounded-overlay border border-outline-variant">
                             <div className="flex items-center justify-between gap-3 border-b border-outline-variant bg-surface-container-high px-3 py-2">
                                 <span className="text-xs font-semibold text-on-surface">
                                     {t('MODERATION.KEYWORD_AI_CANDIDATES', '候选词')} · {keywordCandidates.length}
@@ -652,7 +652,7 @@ const ContentModerationGlobals = ({ configs, handleChange }) => {
                                 <button
                                     type="button"
                                     onClick={mergeSelectedCandidates}
-                                    className="inline-flex items-center gap-1.5 rounded-lg bg-primary px-3 py-1.5 text-xs font-medium text-on-primary hover:opacity-90"
+                                    className="inline-flex items-center gap-1.5 rounded-control bg-primary px-3 py-1.5 text-xs font-medium text-on-primary hover:opacity-90"
                                 >
                                     <ListChecks size={14} />
                                     {t('MODERATION.KEYWORD_AI_MERGE', '合并已选')}
@@ -670,8 +670,8 @@ const ContentModerationGlobals = ({ configs, handleChange }) => {
                                         <div className="min-w-0">
                                             <div className="flex flex-wrap items-center gap-2">
                                                 <span className="font-mono text-xs text-on-surface break-all">{c.keyword}</span>
-                                                <span className="rounded-full bg-primary/10 px-2 py-0.5 text-[10px] uppercase text-primary">{c.category || 'jailbreak'}</span>
-                                                <span className="rounded-full bg-amber-500/10 px-2 py-0.5 text-[10px] uppercase text-amber-300">{c.severity || 'medium'}</span>
+                                                <span className="rounded-control-full bg-primary/10 px-2 py-0.5 text-[10px] uppercase text-primary">{c.category || 'jailbreak'}</span>
+                                                <span className="rounded-control-full bg-warning/10 px-2 py-0.5 text-[10px] uppercase text-warning">{c.severity || 'medium'}</span>
                                             </div>
                                             {c.reason && <p className="mt-1 text-[11px] text-on-surface-variant">{c.reason}</p>}
                                         </div>
@@ -684,7 +684,7 @@ const ContentModerationGlobals = ({ configs, handleChange }) => {
             </section>
 
             {/* ── 风险规则层 ───────────────────────────────────────────────── */}
-            <section className="bg-surface-container border border-outline-variant rounded-2xl p-4 md:p-6 mb-6 shadow-sm">
+            <section className="bg-surface-container border border-outline-variant rounded-overlay p-4 md:p-6 mb-6 ">
                 <h3 className="text-sm font-semibold text-on-surface flex items-center gap-2 mb-4 pb-3 border-b border-outline-variant/50">
                     <ListChecks size={16} className="text-primary" />
                     {t('MODERATION.SECTION_RISK_RULES', '组合规则与风险打分')}
@@ -702,21 +702,21 @@ const ContentModerationGlobals = ({ configs, handleChange }) => {
                     onChange={e => setRiskRulesText(e.target.value)}
                     onBlur={flushRiskRules}
                     spellCheck={false}
-                    className="w-full bg-surface-container-high border border-outline rounded-lg px-3 py-2 text-on-surface font-mono text-xs outline-none focus:border-primary"
+                    className="w-full bg-surface-container-high border border-outline rounded-control px-3 py-2 text-on-surface font-mono text-xs outline-none focus:border-primary"
                 />
                 <p className="text-[11px] text-on-surface-variant mt-1">
                     {t('MODERATION.RISK_RULES_HINT', '当前 {{count}} 条规则。修改后失焦会校验 JSON，点击页面底部「保存」后生效。', { count: riskRuleCount })}
                 </p>
                 <div className="mt-3 grid grid-cols-1 gap-3 text-[11px] text-on-surface-variant md:grid-cols-3">
-                    <div className="rounded-lg border border-outline-variant bg-surface/40 p-3">
+                    <div className="rounded-control border border-outline-variant bg-surface/40 p-3">
                         <span className="font-semibold text-on-surface">block</span>
                         <p className="mt-1">{t('MODERATION.RISK_RULES_BLOCK_HINT', '极低误伤规则，命中后直接拒绝。')}</p>
                     </div>
-                    <div className="rounded-lg border border-outline-variant bg-surface/40 p-3">
+                    <div className="rounded-control border border-outline-variant bg-surface/40 p-3">
                         <span className="font-semibold text-on-surface">model_review</span>
                         <p className="mt-1">{t('MODERATION.RISK_RULES_REVIEW_HINT', '高风险但需上下文判断，命中后走智能审核 provider 二审。')}</p>
                     </div>
-                    <div className="rounded-lg border border-outline-variant bg-surface/40 p-3">
+                    <div className="rounded-control border border-outline-variant bg-surface/40 p-3">
                         <span className="font-semibold text-on-surface">score_only</span>
                         <p className="mt-1">{t('MODERATION.RISK_RULES_SCORE_HINT', '中风险信号，只写审计和累计风险。')}</p>
                     </div>
@@ -724,11 +724,11 @@ const ContentModerationGlobals = ({ configs, handleChange }) => {
             </section>
 
             {/* ── 自动处置与风控记录 ───────────────────────────────────────── */}
-            <section className="bg-surface-container border border-outline-variant rounded-2xl p-4 md:p-6 mb-6 shadow-sm">
+            <section className="bg-surface-container border border-outline-variant rounded-overlay p-4 md:p-6 mb-6 ">
                 <div className="mb-4 flex flex-col gap-3 border-b border-outline-variant/50 pb-3 lg:flex-row lg:items-start lg:justify-between">
                     <div>
                         <h3 className="text-sm font-semibold text-on-surface flex items-center gap-2">
-                            <Ban size={16} className="text-red-400" />
+                            <Ban size={16} className="text-error" />
                             {t('MODERATION.SECTION_AUTOBAN', '自动处置与风控记录')}
                         </h3>
                         <p className="text-[11px] text-on-surface-variant mt-1 max-w-2xl">
@@ -739,7 +739,7 @@ const ContentModerationGlobals = ({ configs, handleChange }) => {
                         type="button"
                         onClick={loadRiskEvents}
                         disabled={riskEventsLoading}
-                        className="inline-flex h-9 items-center justify-center gap-2 rounded-lg border border-outline bg-surface-container-high px-3 text-xs font-semibold text-on-surface hover:border-primary disabled:opacity-60"
+                        className="inline-flex h-9 items-center justify-center gap-2 rounded-control border border-outline bg-surface-container-high px-3 text-xs font-semibold text-on-surface hover:border-primary disabled:opacity-60"
                     >
                         <RotateCw size={15} className={riskEventsLoading ? 'animate-spin' : ''} />
                         {t('SYSTEM.REFRESH', '刷新')}
@@ -747,7 +747,7 @@ const ContentModerationGlobals = ({ configs, handleChange }) => {
                 </div>
 
                 <div className="grid grid-cols-1 gap-4 md:grid-cols-2 xl:grid-cols-5">
-                    <label className="flex min-h-[72px] cursor-pointer items-center justify-between gap-3 rounded-xl border border-outline bg-surface-container-high px-3 py-3 xl:col-span-1">
+                    <label className="flex min-h-[72px] cursor-pointer items-center justify-between gap-3 rounded-overlay border border-outline bg-surface-container-high px-3 py-3 xl:col-span-1">
                         <span>
                             <span className="block text-xs font-semibold text-on-surface">{t('MODERATION.AUTOBAN_ENABLED', '自动封禁')}</span>
                             <span className="mt-1 block text-[11px] text-on-surface-variant">{t('MODERATION.AUTOBAN_ENABLED_HINT', '命中阈值后直接限制账户')}</span>
@@ -775,7 +775,7 @@ const ContentModerationGlobals = ({ configs, handleChange }) => {
                                 max="100"
                                 value={configs[key] || fallback}
                                 onChange={e => handleChange(key, e.target.value)}
-                                className="w-full rounded-lg border border-outline bg-surface-container-high px-3 py-2 text-sm text-on-surface outline-none focus:border-primary"
+                                className="w-full rounded-control border border-outline bg-surface-container-high px-3 py-2 text-sm text-on-surface outline-none focus:border-primary"
                             />
                             <p className="mt-1 text-[10px] text-on-surface-variant">{t('MODERATION.AUTOBAN_ZERO_OFF', '0 表示关闭该类自动封禁')}</p>
                         </div>
@@ -789,13 +789,13 @@ const ContentModerationGlobals = ({ configs, handleChange }) => {
                             min="60"
                             value={configs.moderation_autoban_window_seconds || '86400'}
                             onChange={e => handleChange('moderation_autoban_window_seconds', e.target.value)}
-                            className="w-full rounded-lg border border-outline bg-surface-container-high px-3 py-2 text-sm text-on-surface outline-none focus:border-primary"
+                            className="w-full rounded-control border border-outline bg-surface-container-high px-3 py-2 text-sm text-on-surface outline-none focus:border-primary"
                         />
                     </div>
                 </div>
 
-                <div className="mt-5 rounded-xl border border-outline-variant bg-surface/30">
-                    <div className="grid grid-cols-2 gap-px overflow-hidden rounded-t-xl border-b border-outline-variant bg-outline-variant/60 md:grid-cols-4 xl:grid-cols-7">
+                <div className="mt-5 rounded-overlay border border-outline-variant bg-surface/30">
+                    <div className="grid grid-cols-2 gap-px overflow-hidden rounded-control-t-xl border-b border-outline-variant bg-outline-variant/60 md:grid-cols-4 xl:grid-cols-7">
                         {[
                             [t('MODERATION.RISK_SUMMARY_SHOWN', '当前显示'), riskSummary.shown],
                             [t('MODERATION.RISK_SUMMARY_BLOCKED', '请求拦截'), riskSummary.blocked],
@@ -821,7 +821,7 @@ const ContentModerationGlobals = ({ configs, handleChange }) => {
                             <select
                                 value={riskEventAction}
                                 onChange={e => setRiskEventAction(e.target.value)}
-                                className="w-full rounded-lg border border-outline bg-surface-container-high px-3 py-2 text-xs text-on-surface outline-none focus:border-primary"
+                                className="w-full rounded-control border border-outline bg-surface-container-high px-3 py-2 text-xs text-on-surface outline-none focus:border-primary"
                             >
                                 {riskActionOptions.map(([value, label]) => (
                                     <option key={value} value={value}>{label}</option>
@@ -839,7 +839,7 @@ const ContentModerationGlobals = ({ configs, handleChange }) => {
                                 value={riskEventUserID}
                                 onChange={e => setRiskEventUserID(e.target.value)}
                                 placeholder={t('MODERATION.RISK_FILTER_USER_PLACEHOLDER', '全部用户')}
-                                className="w-full rounded-lg border border-outline bg-surface-container-high px-3 py-2 text-xs text-on-surface outline-none focus:border-primary"
+                                className="w-full rounded-control border border-outline bg-surface-container-high px-3 py-2 text-xs text-on-surface outline-none focus:border-primary"
                             />
                         </label>
                         <label className="block">
@@ -852,14 +852,14 @@ const ContentModerationGlobals = ({ configs, handleChange }) => {
                                 max="200"
                                 value={riskEventLimit}
                                 onChange={e => setRiskEventLimit(e.target.value)}
-                                className="w-full rounded-lg border border-outline bg-surface-container-high px-3 py-2 text-xs text-on-surface outline-none focus:border-primary"
+                                className="w-full rounded-control border border-outline bg-surface-container-high px-3 py-2 text-xs text-on-surface outline-none focus:border-primary"
                             />
                         </label>
                         <button
                             type="button"
                             onClick={loadRiskEvents}
                             disabled={riskEventsLoading}
-                            className="inline-flex h-9 items-center justify-center gap-2 rounded-lg bg-primary px-3 text-xs font-semibold text-on-primary hover:bg-primary/90 disabled:opacity-60"
+                            className="inline-flex h-9 items-center justify-center gap-2 rounded-control bg-primary px-3 text-xs font-semibold text-on-primary hover:bg-primary/90 disabled:opacity-60"
                         >
                             <RotateCw size={14} className={riskEventsLoading ? 'animate-spin' : ''} />
                             {t('MODERATION.RISK_APPLY_FILTERS', '应用筛选')}
@@ -894,7 +894,7 @@ const ContentModerationGlobals = ({ configs, handleChange }) => {
                                 <div key={evt.id} className="px-3 py-3 text-xs">
                                     <div className="grid grid-cols-1 gap-3 lg:grid-cols-[1.25fr,1fr,2fr]">
                                         <div className="min-w-0">
-                                            <div className={`inline-flex max-w-full items-center gap-2 rounded-full border px-2.5 py-1 ${actionTone(evt.action_type)}`}>
+                                            <div className={`inline-flex max-w-full items-center gap-2 rounded-control-full border px-2.5 py-1 ${actionTone(evt.action_type)}`}>
                                                 <Icon size={14} className="shrink-0" />
                                                 <span className="truncate font-semibold">
                                                     {actionLabels[evt.action_type] || evt.action_type}
@@ -904,7 +904,7 @@ const ContentModerationGlobals = ({ configs, handleChange }) => {
                                                 {evt.action_type}
                                             </div>
                                             {segmentScope && (
-                                                <div className={`mt-2 inline-flex max-w-full items-center gap-1 rounded-full border px-2 py-1 text-[11px] ${segmentScopeTone(segmentScope)}`}>
+                                                <div className={`mt-2 inline-flex max-w-full items-center gap-1 rounded-control-full border px-2 py-1 text-[11px] ${segmentScopeTone(segmentScope)}`}>
                                                     <span className="shrink-0 text-on-surface-variant">{t('MODERATION.RISK_SEGMENT_SCOPE', '来源')}</span>
                                                     <span className="truncate font-mono">{formatSegmentScope(segmentScope)}</span>
                                                 </div>
@@ -932,7 +932,7 @@ const ContentModerationGlobals = ({ configs, handleChange }) => {
                                         <div className="min-w-0">
                                             <div className="flex flex-wrap gap-1.5">
                                                 {badges.length > 0 ? badges.map((badge, idx) => (
-                                                    <span key={`${badge.label}-${idx}`} className={`inline-flex max-w-full items-center gap-1 rounded-full border px-2 py-1 text-[11px] ${badge.tone}`}>
+                                                    <span key={`${badge.label}-${idx}`} className={`inline-flex max-w-full items-center gap-1 rounded-control-full border px-2 py-1 text-[11px] ${badge.tone}`}>
                                                         <span className="shrink-0 text-on-surface-variant">{badge.label}</span>
                                                         <span className="truncate font-mono">{badge.value}</span>
                                                     </span>
@@ -941,9 +941,9 @@ const ContentModerationGlobals = ({ configs, handleChange }) => {
                                                 )}
                                             </div>
                                             {parsed.data?.content_preview && (
-                                                <div className="mt-2 rounded-lg border border-emerald-500/20 bg-emerald-500/5">
-                                                    <div className="flex flex-wrap items-center justify-between gap-2 border-b border-emerald-500/10 px-3 py-2">
-                                                        <span className="text-[11px] font-semibold text-emerald-200">
+                                                <div className="mt-2 rounded-control border border-success/20 bg-success/5">
+                                                    <div className="flex flex-wrap items-center justify-between gap-2 border-b border-success/10 px-3 py-2">
+                                                        <span className="text-[11px] font-semibold text-success">
                                                             {t('MODERATION.RISK_CONTENT_PREVIEW', '命中内容预览（已脱敏）')}
                                                         </span>
                                                         {parsed.data.content_sha256 && (
@@ -958,7 +958,7 @@ const ContentModerationGlobals = ({ configs, handleChange }) => {
                                                 </div>
                                             )}
                                             {parsed.formatted && (
-                                                <details className="mt-2 rounded-lg border border-outline-variant bg-surface-container-high/60">
+                                                <details className="mt-2 rounded-control border border-outline-variant bg-surface-container-high/60">
                                                     <summary className="cursor-pointer px-3 py-2 text-[11px] font-medium text-on-surface-variant">
                                                         {t('MODERATION.RISK_RAW_DETAILS', '查看原始详情')}
                                                     </summary>
@@ -977,7 +977,7 @@ const ContentModerationGlobals = ({ configs, handleChange }) => {
             </section>
 
             {/* ── 缓存参数 ────────────────────────────────────────────────── */}
-            <section className="bg-surface-container border border-outline-variant rounded-2xl p-4 md:p-6 mb-6 shadow-sm">
+            <section className="bg-surface-container border border-outline-variant rounded-overlay p-4 md:p-6 mb-6 ">
                 <h3 className="text-sm font-semibold text-on-surface mb-4 pb-3 border-b border-outline-variant/50">
                     {t('MODERATION.SECTION_CACHE', '缓存与防侧信道')}
                 </h3>
@@ -993,7 +993,7 @@ const ContentModerationGlobals = ({ configs, handleChange }) => {
                             value={configs.moderation_cache_ttl_sec || ''}
                             onChange={e => handleChange('moderation_cache_ttl_sec', e.target.value)}
                             placeholder="300"
-                            className="w-full bg-surface-container-high border border-outline rounded-lg px-3 py-2 text-on-surface outline-none focus:border-primary"
+                            className="w-full bg-surface-container-high border border-outline rounded-control px-3 py-2 text-on-surface outline-none focus:border-primary"
                         />
                     </div>
                     <div>
@@ -1007,7 +1007,7 @@ const ContentModerationGlobals = ({ configs, handleChange }) => {
                             value={configs.moderation_cache_max_entries || ''}
                             onChange={e => handleChange('moderation_cache_max_entries', e.target.value)}
                             placeholder="10000"
-                            className="w-full bg-surface-container-high border border-outline rounded-lg px-3 py-2 text-on-surface outline-none focus:border-primary"
+                            className="w-full bg-surface-container-high border border-outline rounded-control px-3 py-2 text-on-surface outline-none focus:border-primary"
                         />
                     </div>
                     <div className="md:col-span-2">
@@ -1021,7 +1021,7 @@ const ContentModerationGlobals = ({ configs, handleChange }) => {
                                 value={configs.moderation_cache_secret || ''}
                                 onChange={e => handleChange('moderation_cache_secret', e.target.value)}
                                 placeholder={t('MODERATION.HMAC_AUTO', '留空让后端首次启动时自动生成 256bit 随机密钥')}
-                                className="w-full bg-surface-container-high border border-outline rounded-lg pl-3 pr-20 py-2 text-on-surface font-mono text-xs outline-none focus:border-primary"
+                                className="w-full bg-surface-container-high border border-outline rounded-control pl-3 pr-20 py-2 text-on-surface font-mono text-xs outline-none focus:border-primary"
                             />
                             <div className="absolute right-2 top-1/2 -translate-y-1/2 flex gap-1">
                                 <button
@@ -1036,7 +1036,7 @@ const ContentModerationGlobals = ({ configs, handleChange }) => {
                                     type="button"
                                     onClick={resetHmacSecret}
                                     aria-label={t('MODERATION.HMAC_RESET', '重置')}
-                                    className="p-1 text-amber-400 hover:text-amber-300"
+                                    className="p-1 text-warning hover:text-warning"
                                 >
                                     <RotateCw size={16} />
                                 </button>
@@ -1050,7 +1050,7 @@ const ContentModerationGlobals = ({ configs, handleChange }) => {
             </section>
 
             {/* ── 长 prompt 处理 ──────────────────────────────────────────── */}
-            <section className="bg-surface-container border border-outline-variant rounded-2xl p-4 md:p-6 mb-6 shadow-sm">
+            <section className="bg-surface-container border border-outline-variant rounded-overlay p-4 md:p-6 mb-6 ">
                 <h3 className="text-sm font-semibold text-on-surface mb-4 pb-3 border-b border-outline-variant/50">
                     {t('MODERATION.SECTION_LIMITS', '长 Prompt 限制')}
                 </h3>
@@ -1066,7 +1066,7 @@ const ContentModerationGlobals = ({ configs, handleChange }) => {
                             value={configs.moderation_max_chars || ''}
                             onChange={e => handleChange('moderation_max_chars', e.target.value)}
                             placeholder="262144"
-                            className="w-full bg-surface-container-high border border-outline rounded-lg px-3 py-2 text-on-surface outline-none focus:border-primary"
+                            className="w-full bg-surface-container-high border border-outline rounded-control px-3 py-2 text-on-surface outline-none focus:border-primary"
                         />
                     </div>
                     <div>
@@ -1080,7 +1080,7 @@ const ContentModerationGlobals = ({ configs, handleChange }) => {
                             value={configs.moderation_chunk_chars || ''}
                             onChange={e => handleChange('moderation_chunk_chars', e.target.value)}
                             placeholder="28672"
-                            className="w-full bg-surface-container-high border border-outline rounded-lg px-3 py-2 text-on-surface outline-none focus:border-primary"
+                            className="w-full bg-surface-container-high border border-outline rounded-control px-3 py-2 text-on-surface outline-none focus:border-primary"
                         />
                     </div>
                     <div>
@@ -1094,7 +1094,7 @@ const ContentModerationGlobals = ({ configs, handleChange }) => {
                             value={configs.moderation_max_chunks || ''}
                             onChange={e => handleChange('moderation_max_chunks', e.target.value)}
                             placeholder="8"
-                            className="w-full bg-surface-container-high border border-outline rounded-lg px-3 py-2 text-on-surface outline-none focus:border-primary"
+                            className="w-full bg-surface-container-high border border-outline rounded-control px-3 py-2 text-on-surface outline-none focus:border-primary"
                         />
                     </div>
                     <div>
@@ -1108,7 +1108,7 @@ const ContentModerationGlobals = ({ configs, handleChange }) => {
                             value={configs.moderation_long_context_min_tokens || ''}
                             onChange={e => handleChange('moderation_long_context_min_tokens', e.target.value)}
                             placeholder="800000"
-                            className="w-full bg-surface-container-high border border-outline rounded-lg px-3 py-2 text-on-surface outline-none focus:border-primary"
+                            className="w-full bg-surface-container-high border border-outline rounded-control px-3 py-2 text-on-surface outline-none focus:border-primary"
                         />
                     </div>
                     <div>
@@ -1122,7 +1122,7 @@ const ContentModerationGlobals = ({ configs, handleChange }) => {
                             value={configs.moderation_long_context_max_chars || ''}
                             onChange={e => handleChange('moderation_long_context_max_chars', e.target.value)}
                             placeholder="4194304"
-                            className="w-full bg-surface-container-high border border-outline rounded-lg px-3 py-2 text-on-surface outline-none focus:border-primary"
+                            className="w-full bg-surface-container-high border border-outline rounded-control px-3 py-2 text-on-surface outline-none focus:border-primary"
                         />
                     </div>
                     <div>
@@ -1136,7 +1136,7 @@ const ContentModerationGlobals = ({ configs, handleChange }) => {
                             value={configs.moderation_long_context_max_chunks || ''}
                             onChange={e => handleChange('moderation_long_context_max_chunks', e.target.value)}
                             placeholder="12"
-                            className="w-full bg-surface-container-high border border-outline rounded-lg px-3 py-2 text-on-surface outline-none focus:border-primary"
+                            className="w-full bg-surface-container-high border border-outline rounded-control px-3 py-2 text-on-surface outline-none focus:border-primary"
                         />
                     </div>
                 </div>
@@ -1146,7 +1146,7 @@ const ContentModerationGlobals = ({ configs, handleChange }) => {
             </section>
 
             {/* ── 多模态图片策略 ───────────────────────────────────────────── */}
-            <section className="bg-surface-container border border-outline-variant rounded-2xl p-4 md:p-6 mb-6 shadow-sm">
+            <section className="bg-surface-container border border-outline-variant rounded-overlay p-4 md:p-6 mb-6 ">
                 <h3 className="text-sm font-semibold text-on-surface mb-4 pb-3 border-b border-outline-variant/50">
                     {t('MODERATION.SECTION_IMAGE', '多模态图片策略')}
                 </h3>
@@ -1166,7 +1166,7 @@ const ContentModerationGlobals = ({ configs, handleChange }) => {
                         id="mod-image-policy"
                         value={configs.moderation_image_policy || 'submit'}
                         onChange={e => handleChange('moderation_image_policy', e.target.value)}
-                        className="bg-surface-container-high border border-outline text-on-surface rounded-lg px-4 py-2 outline-none text-sm w-full md:w-48 cursor-pointer hover:border-primary focus:border-primary focus:ring-2 focus:ring-primary/40"
+                        className="bg-surface-container-high border border-outline text-on-surface rounded-control px-4 py-2 outline-none text-sm w-full md:w-48 cursor-pointer hover:border-primary focus:border-primary focus:ring-2 focus:ring-primary/40"
                     >
                         <option value="submit">{t('MODERATION.IMAGE_SUBMIT', 'submit — 预留，当前会按审核不可达处理')}</option>
                         <option value="skip">{t('MODERATION.IMAGE_SKIP', 'skip — 跳过图片')}</option>
@@ -1176,7 +1176,7 @@ const ContentModerationGlobals = ({ configs, handleChange }) => {
             </section>
 
             {/* ── 拒绝文案 ────────────────────────────────────────────────── */}
-            <section className="bg-surface-container border border-outline-variant rounded-2xl p-4 md:p-6 mb-6 shadow-sm">
+            <section className="bg-surface-container border border-outline-variant rounded-overlay p-4 md:p-6 mb-6 ">
                 <h3 className="text-sm font-semibold text-on-surface mb-4 pb-3 border-b border-outline-variant/50">
                     {t('MODERATION.SECTION_MESSAGES', '拒绝文案（按 Accept-Language 自动选）')}
                 </h3>
@@ -1190,7 +1190,7 @@ const ContentModerationGlobals = ({ configs, handleChange }) => {
                             rows={3}
                             value={configs.moderation_block_message_zh || ''}
                             onChange={e => handleChange('moderation_block_message_zh', e.target.value)}
-                            className="w-full bg-surface-container-high border border-outline rounded-lg px-3 py-2 text-on-surface outline-none focus:border-primary"
+                            className="w-full bg-surface-container-high border border-outline rounded-control px-3 py-2 text-on-surface outline-none focus:border-primary"
                         />
                     </div>
                     <div>
@@ -1202,7 +1202,7 @@ const ContentModerationGlobals = ({ configs, handleChange }) => {
                             rows={3}
                             value={configs.moderation_block_message_en || ''}
                             onChange={e => handleChange('moderation_block_message_en', e.target.value)}
-                            className="w-full bg-surface-container-high border border-outline rounded-lg px-3 py-2 text-on-surface outline-none focus:border-primary"
+                            className="w-full bg-surface-container-high border border-outline rounded-control px-3 py-2 text-on-surface outline-none focus:border-primary"
                         />
                     </div>
                     <div>
@@ -1214,7 +1214,7 @@ const ContentModerationGlobals = ({ configs, handleChange }) => {
                             rows={3}
                             value={configs.moderation_unavailable_message_zh || ''}
                             onChange={e => handleChange('moderation_unavailable_message_zh', e.target.value)}
-                            className="w-full bg-surface-container-high border border-outline rounded-lg px-3 py-2 text-on-surface outline-none focus:border-primary"
+                            className="w-full bg-surface-container-high border border-outline rounded-control px-3 py-2 text-on-surface outline-none focus:border-primary"
                         />
                     </div>
                     <div>
@@ -1226,7 +1226,7 @@ const ContentModerationGlobals = ({ configs, handleChange }) => {
                             rows={3}
                             value={configs.moderation_unavailable_message_en || ''}
                             onChange={e => handleChange('moderation_unavailable_message_en', e.target.value)}
-                            className="w-full bg-surface-container-high border border-outline rounded-lg px-3 py-2 text-on-surface outline-none focus:border-primary"
+                            className="w-full bg-surface-container-high border border-outline rounded-control px-3 py-2 text-on-surface outline-none focus:border-primary"
                         />
                     </div>
                 </div>

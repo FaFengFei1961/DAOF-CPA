@@ -59,7 +59,7 @@ function calculateServiceHealthData(logs, globalSummary) {
         let idx = Math.floor((t - minTime) / blockDuration);
         if (idx >= BLOCKS_COUNT) idx = BLOCKS_COUNT - 1;
         if (idx < 0) idx = 0;
-        
+
         if (log.failed) {
             blocks[idx].failure++;
         } else {
@@ -184,15 +184,15 @@ export function HealthMonitor({ logs, summary }) {
     const renderTooltip = (detail, tooltipState) => {
         const total = detail.success + detail.failure;
         const timeRange = `${formatDateTime(detail.startTime)} - ${formatDateTime(detail.endTime)}`;
-        
+
         const tooltip = (
-            <div role="tooltip" className="fixed z-50 bg-surface-container-high border border-outline-variant p-3 rounded-lg shadow-xl shadow-black/50 pointer-events-none"
+            <div role="tooltip" className="fixed z-50 bg-surface-container-high border border-outline-variant p-3 rounded-control shadow-black/50 pointer-events-none"
                  style={{ left: `${tooltipState.left}px`, top: `${tooltipState.top}px`, transform: tooltipState.transform }}>
                 <div className="text-[10px] text-on-surface-variant mb-1.5 whitespace-nowrap">{timeRange}</div>
                 {total > 0 ? (
                     <div className="flex items-center gap-3 text-xs">
-                        <span className="text-emerald-400 font-mono">成功: {detail.success}</span>
-                        <span className="text-red-400 font-mono">失败: {detail.failure}</span>
+                        <span className="text-success font-mono">成功: {detail.success}</span>
+                        <span className="text-error font-mono">失败: {detail.failure}</span>
                         <span className="text-on-surface font-mono">({(detail.rate * 100).toFixed(1)}%)</span>
                     </div>
                 ) : (
@@ -204,33 +204,33 @@ export function HealthMonitor({ logs, summary }) {
     };
 
     return (
-        <div className="bg-surface border border-outline-variant rounded-xl p-5 shadow-lg w-full mb-6 relative overflow-hidden group">
+        <div className="bg-surface border border-outline-variant rounded-overlay p-5 w-full mb-6 relative overflow-hidden group">
             <div className="flex items-center justify-between mb-4">
                 <div className="flex items-center gap-2">
                     <h3 className="text-sm font-semibold text-on-surface-variant">服务健康监测</h3>
-                    <div className="px-2 py-0.5 rounded text-[10px] bg-surface-container border border-outline-variant text-on-surface-variant">最近日志</div>
+                    <div className="px-2 py-0.5 rounded-control text-[10px] bg-surface-container border border-outline-variant text-on-surface-variant">最近日志</div>
                 </div>
                 <div className="flex items-center gap-2">
                     <span className="text-xs text-on-surface-variant">整体可用率</span>
-                    <span className={`text-sm font-bold font-mono ${healthData.successRate >= 90 ? 'text-emerald-400' : healthData.successRate >= 50 ? 'text-amber-400' : 'text-red-400'}`}>
+                    <span className={`text-sm font-bold font-mono ${healthData.successRate >= 90 ? 'text-success' : healthData.successRate >= 50 ? 'text-warning' : 'text-error'}`}>
                         {hasData ? `${healthData.successRate.toFixed(1)}%` : '--'}
                     </span>
                 </div>
             </div>
-            
+
             <div className="w-full flex justify-between gap-1 h-12">
                 {healthData.blockDetails.map((detail, idx) => {
                     const isIdle = detail.rate === -1;
-                    const blockStyle = { 
+                    const blockStyle = {
                         backgroundColor: rateToColor(detail.rate),
                         opacity: isIdle ? 0.3 : 1
                     };
                     const isActive = activeTooltip?.idx === idx;
-                    
+
                     return (
                         <div
                             key={idx}
-                            className={`flex-1 h-full rounded-[2px] transition-all duration-200 cursor-pointer ${isActive ? 'scale-110 brightness-125 z-10' : 'hover:scale-105 hover:brightness-110'}`}
+                            className={`flex-1 h-full rounded-control-[2px] transition-all duration-200 cursor-pointer ${isActive ? 'scale-110 brightness-125 z-10' : 'hover:scale-105 hover:brightness-110'}`}
                             style={blockStyle}
                             onPointerEnter={(e) => handlePointerEnter(e, idx)}
                             onPointerLeave={handlePointerLeave}
@@ -241,17 +241,17 @@ export function HealthMonitor({ logs, summary }) {
                     );
                 })}
             </div>
-            
+
             <div className="flex items-center justify-between mt-3 px-1 text-[10px] text-on-surface-variant font-mono">
                 <span>{hasData ? formatDateTime(healthData.blockDetails[0].startTime) : '很久以前'}</span>
-                
+
                 <div className="flex items-center gap-3">
-                    <div className="flex items-center gap-1"><span className="w-2 h-2 rounded-[1px] bg-white/10"></span>闲置</div>
-                    <div className="flex items-center gap-1"><span className="w-2 h-2 rounded-[1px] bg-red-500"></span>故障</div>
-                    <div className="flex items-center gap-1"><span className="w-2 h-2 rounded-[1px] bg-amber-500"></span>部分可用</div>
-                    <div className="flex items-center gap-1"><span className="w-2 h-2 rounded-[1px] bg-emerald-500"></span>正常</div>
+                    <div className="flex items-center gap-1"><span className="w-2 h-2 rounded-control-[1px] bg-white/10"></span>闲置</div>
+                    <div className="flex items-center gap-1"><span className="w-2 h-2 rounded-control-[1px] bg-error"></span>故障</div>
+                    <div className="flex items-center gap-1"><span className="w-2 h-2 rounded-control-[1px] bg-warning"></span>部分可用</div>
+                    <div className="flex items-center gap-1"><span className="w-2 h-2 rounded-control-[1px] bg-success"></span>正常</div>
                 </div>
-                
+
                 <span>现在</span>
             </div>
         </div>

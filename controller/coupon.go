@@ -3,8 +3,9 @@
 // 优惠券系统的所有 HTTP handler + helper。
 //
 // 路径划分：
-//   admin: 模板 CRUD + 给指定用户发券 + 撤销已发但未用券
-//   user:  我的券列表 + 购买时选用某张券（在 PurchasePackage 路径里）
+//
+//	admin: 模板 CRUD + 给指定用户发券 + 撤销已发但未用券
+//	user:  我的券列表 + 购买时选用某张券（在 PurchasePackage 路径里）
 package controller
 
 import (
@@ -50,9 +51,10 @@ func generateCouponCode(userID, templateID uint) (string, error) {
 }
 
 // parsePackageIDsStrict 严格解析 SnapshotPackageIDs。区分三种状态：
-//   ("", true)        — 空字符串，视为"全适用"
-//   ([1,2,3], true)   — 合法 JSON 数组
-//   (nil, false)      — 损坏 JSON，调用方应当拒绝消费券（fail-closed）
+//
+//	("", true)        — 空字符串，视为"全适用"
+//	([1,2,3], true)   — 合法 JSON 数组
+//	(nil, false)      — 损坏 JSON，调用方应当拒绝消费券（fail-closed）
 //
 // fix MAJOR R23+2-B3（codex 二轮）：原 parsePackageIDsJSON 把"损坏 JSON"和"空"当同样处理，
 // 让限制券在 snapshot 损坏时变成全适用——攻击面。
@@ -162,7 +164,7 @@ func AdminListCouponTemplates(c *fiber.Ctx) error {
 		log.Printf("[COUPON-LIST] %v", err)
 		return c.Status(500).JSON(fiber.Map{"success": false, "message_code": "ERR_DB_QUERY"})
 	}
-	return c.JSON(fiber.Map{"success": true, "data": list})
+	return c.JSON(fiber.Map{"success": true, "data": couponTemplateViewsFrom(list)})
 }
 
 // couponTemplateJSON admin 端 JSON 表示（USD float），handler 内转 micro_usd。

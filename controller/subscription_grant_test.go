@@ -156,7 +156,7 @@ func TestGrant_RejectDeprecatedApplyBonus(t *testing.T) {
 	}
 }
 
-// TestGrant_AddonProductType — Phase 8 移除增量包，本测试已无意义（删）
+// Phase 8 只保留订阅产品类型。
 
 // TestGrant_RejectSelf admin 不能给自己赠送。
 func TestGrant_RejectSelf(t *testing.T) {

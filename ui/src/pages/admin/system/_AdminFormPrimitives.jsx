@@ -19,7 +19,7 @@ export const SaveBar = ({ loading, onSave }) => {
         type="button"
         onClick={() => onSave()}
         disabled={loading}
-        className="h-11 px-6 bg-primary text-on-primary hover:bg-primary-container hover:text-on-primary-container font-medium rounded-xl flex items-center justify-center gap-2 shadow-[0_0_15px_rgba(37,99,235,0.2)] disabled:opacity-50"
+        className="fl-btn fl-btn-prominent flex items-center justify-center gap-2 disabled:opacity-50"
       >
         {loading ? t('SETTINGS.BTN_SAVING', '保存中…') : (
           <>
@@ -47,7 +47,7 @@ export const SecretInputField = ({ label, id, val, onChange, show, onToggle, isP
           value={val ?? ''}
           onChange={(e) => onChange(id, e.target.value)}
           placeholder="••••••••••••"
-          className="w-full h-11 bg-surface-container-high border border-outline group-hover:border-primary/50 rounded-lg pl-10 pr-10 text-sm text-on-surface outline-none focus:border-primary font-mono placeholder:text-on-surface-variant/50"
+          className="w-full h-8 bg-surface-container-high border border-outline group-hover:border-primary/50 rounded-control pl-8 pr-8 text-sm text-on-surface outline-none focus:border-primary font-mono placeholder:text-on-surface-variant/50"
         />
         <button
           type="button"
@@ -64,13 +64,13 @@ export const SecretInputField = ({ label, id, val, onChange, show, onToggle, isP
 
 /**
  * SectionCard — admin form 子区块卡片（带左侧色条 + 标题）
- * 取代 Settings.jsx 内重复的 `<div className="bg-surface-container border... rounded-2xl p-6">` 模板
+ * 取代 Settings.jsx 内重复的 `<div className="bg-surface-container border... rounded-overlay p-6">` 模板
  */
 export const SectionCard = ({ title, sub, accent = 'bg-primary text-on-primary', children, className = '' }) => (
-  <div className={`bg-surface-container border border-outline-variant rounded-2xl p-4 md:p-6 mb-8 shadow-sm w-full ${className}`}>
+  <div className={`fl-card p-4 md:p-6 mb-6 w-full ${className}`}>
     {(title || sub) && (
       <header className="flex items-center gap-2 mb-6">
-        <div className={`w-1 h-5 ${accent} rounded-r-md`} />
+        <div className={`w-1 h-5 ${accent} rounded-r-control`} />
         <div>
           <h2 className="text-lg font-semibold text-on-surface">{title}</h2>
           {sub && <p className="text-xs text-on-surface-variant mt-0.5">{sub}</p>}

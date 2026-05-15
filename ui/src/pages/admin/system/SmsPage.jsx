@@ -26,7 +26,7 @@ const SmsPage = () => {
 
       <SectionCard
         title={t('SETTINGS.SMS_RAM_TITLE', 'RAM 子账号 AccessKey')}
-        accent="bg-orange-500"
+        accent="bg-warning"
       >
         <div className="flex flex-col gap-6">
           <SecretInputField
@@ -45,7 +45,7 @@ const SmsPage = () => {
 
       <SectionCard
         title={t('SETTINGS.SMS_TPL_TITLE', '签名与模板')}
-        accent="bg-orange-500"
+        accent="bg-warning"
       >
         <div className="flex flex-col gap-6">
           <SecretInputField

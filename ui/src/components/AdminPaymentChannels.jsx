@@ -22,8 +22,8 @@ const ALL_PAY_METHODS = [
   { id: 'alipay',    i18n: 'PAY_ALIPAY',    color: 'bg-[#1677ff]', text: 'text-white' },
   { id: 'wxpay',     i18n: 'PAY_WXPAY',     color: 'bg-[#07c160]', text: 'text-white' },
   { id: 'qqpay',     i18n: 'PAY_QQPAY',     color: 'bg-[#12b7f5]', text: 'text-white' },
-  { id: 'bank',      i18n: 'PAY_BANK',      color: 'bg-red-600',   text: 'text-white' },
-  { id: 'jdpay',     i18n: 'PAY_JDPAY',     color: 'bg-red-500',   text: 'text-white' },
+  { id: 'bank',      i18n: 'PAY_BANK',      color: 'bg-error',   text: 'text-white' },
+  { id: 'jdpay',     i18n: 'PAY_JDPAY',     color: 'bg-error',   text: 'text-white' },
   { id: 'paypal',    i18n: 'PAY_PAYPAL',    color: 'bg-[#003087]', text: 'text-white' },
   { id: 'douyinpay', i18n: 'PAY_DOUYINPAY', color: 'bg-black',     text: 'text-white' },
 ];
@@ -101,7 +101,7 @@ const AdminPaymentChannels = () => {
         </div>
       </header>
 
-      <section className="bg-surface-container-high border border-outline-variant rounded-2xl p-6 grid grid-cols-1 md:grid-cols-2 gap-4">
+      <section className="bg-surface-container-high border border-outline-variant rounded-overlay p-6 grid grid-cols-1 md:grid-cols-2 gap-4">
         {FIELDS.map(f => {
           const fullWidth = f.type === 'methods' || f.type === 'pem' || f.type === 'pem-secret' || f.key === 'yifut_gateway';
           const isPEM = f.type === 'pem' || f.type === 'pem-secret';
@@ -127,7 +127,7 @@ const AdminPaymentChannels = () => {
                     value={values[f.key] || ''}
                     onChange={e => setValues({ ...values, [f.key]: e.target.value })}
                     placeholder={isSecretPEM ? '-----BEGIN PRIVATE KEY-----\n...\n-----END PRIVATE KEY-----' : '-----BEGIN PUBLIC KEY-----\n...\n-----END PUBLIC KEY-----'}
-                    className={`w-full bg-surface-container border border-outline rounded-lg px-3 py-2 text-xs text-on-surface focus:border-primary outline-none font-mono resize-y ${isSecretPEM && !showSecret[f.key] ? 'blur-sm focus:blur-none' : ''}`}
+                    className={`w-full bg-surface-container border border-outline rounded-control px-3 py-2 text-xs text-on-surface focus:border-primary outline-none font-mono resize-y ${isSecretPEM && !showSecret[f.key] ? 'blur-sm focus:blur-none' : ''}`}
                   />
                   <div className="flex items-center justify-between">
                     {f.hint && (
@@ -155,7 +155,7 @@ const AdminPaymentChannels = () => {
                     type="text"
                     value={values[f.key] || ''}
                     onChange={e => setValues({ ...values, [f.key]: e.target.value })}
-                    className="w-full h-10 bg-surface-container border border-outline rounded-lg px-3 text-sm text-on-surface focus:border-primary outline-none font-mono"
+                    className="w-full h-10 bg-surface-container border border-outline rounded-control px-3 text-sm text-on-surface focus:border-primary outline-none font-mono"
                   />
                 </div>
               )}
@@ -169,7 +169,7 @@ const AdminPaymentChannels = () => {
           type="button"
           onClick={handleSave}
           disabled={saving}
-          className="h-10 px-6 bg-primary text-on-primary rounded-lg text-sm font-semibold hover:opacity-90 disabled:opacity-50 transition flex items-center gap-2"
+          className="h-10 px-6 bg-primary text-on-primary rounded-control text-sm font-semibold hover:opacity-90 disabled:opacity-50 transition flex items-center gap-2"
         >
           <Save size={14} />
           {saving ? '...' : t('PAY_ADMIN.SAVE', '保存设置')}
@@ -184,7 +184,7 @@ const AdminPaymentChannels = () => {
           {t('PAY_ADMIN.HINT_RETURN_URL', ' 同步跳转：')}
           <code className="text-primary">{'{server_address}/api/payment/return/yifut'}</code>
         </p>
-        <p className="text-amber-400">
+        <p className="text-warning">
           {t('PAY_ADMIN.HINT_SERVER_ADDRESS', '注意：必须先在 财务工作区 → 基础设置 中配置 server_address 才能创建充值订单。')}
         </p>
       </div>
@@ -221,13 +221,13 @@ const MethodsPicker = ({ value, onChange, t }) => {
               key={m.id}
               type="button"
               onClick={() => toggle(m.id)}
-              className={`px-3 py-1.5 rounded-full text-xs font-semibold border transition flex items-center gap-1.5 ${
+              className={`px-3 py-1.5 rounded-control-full text-xs font-semibold border transition flex items-center gap-1.5 ${
                 active
-                  ? `${m.color} ${m.text} border-transparent shadow-sm`
+                  ? `${m.color} ${m.text} border-transparent `
                   : 'bg-surface-container text-on-surface-variant border-outline-variant hover:border-primary hover:text-primary'
               }`}
             >
-              <span className={`w-1.5 h-1.5 rounded-full ${active ? 'bg-white/80' : 'bg-on-surface-variant/40'}`} />
+              <span className={`w-1.5 h-1.5 rounded-control-full ${active ? 'bg-white/80' : 'bg-on-surface-variant/40'}`} />
               {t(`TOPUP.${m.i18n}`, m.id)}
             </button>
           );

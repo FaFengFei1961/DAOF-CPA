@@ -20,6 +20,8 @@ var validLangPattern = regexp.MustCompile(`^[A-Za-z0-9_-]+$`)
 // 上传 JSON 大小上限（字节）。超出拒绝，避免 OOM。
 const maxLocaleUploadBytes = 1 << 20 // 1 MiB
 
+const MessageCodeInvalidProductType = "ERR_INVALID_PRODUCT_TYPE"
+
 // safeLocalePath 校验 lang 标识并解析到 i18n 目录内的安全路径。
 // 防御 Windows 反斜杠 / URL 编码绕过 / 符号链接逃逸。
 // 返回的绝对路径保证仍位于 I18nDir 内。

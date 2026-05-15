@@ -70,7 +70,7 @@ const OAuthPage = () => {
           <button
             type="button"
             onClick={() => navigate('/admin/finance')}
-            className="bg-surface-container-high border border-outline rounded-lg px-4 py-2 text-sm text-on-surface hover:border-primary transition-colors"
+            className="bg-surface-container-high border border-outline rounded-control px-4 py-2 text-sm text-on-surface hover:border-primary transition-colors"
           >
             去财务工作区
           </button>

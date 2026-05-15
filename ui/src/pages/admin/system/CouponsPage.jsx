@@ -70,7 +70,7 @@ const CouponsPage = () => {
             type="button"
             onClick={fetchTemplates}
             disabled={templatesLoading}
-            className="h-9 px-3 bg-surface-container-high border border-outline rounded-lg text-xs text-on-surface hover:border-primary disabled:opacity-50 flex items-center gap-2"
+            className="h-9 px-3 bg-surface-container-high border border-outline rounded-control text-xs text-on-surface hover:border-primary disabled:opacity-50 flex items-center gap-2"
           >
             <RefreshCw size={14} className={templatesLoading ? 'animate-spin' : ''} />
             {t('SYSTEM.REFRESH', '刷新')}
@@ -81,7 +81,7 @@ const CouponsPage = () => {
           <select
             value={configs.signup_coupon_template_id || '0'}
             onChange={(e) => handleChange('signup_coupon_template_id', e.target.value)}
-            className="h-10 flex-1 bg-surface-container-high border border-outline rounded-lg px-3 text-sm text-on-surface focus:border-primary outline-none"
+            className="h-10 flex-1 bg-surface-container-high border border-outline rounded-control px-3 text-sm text-on-surface focus:border-primary outline-none"
           >
             <option value="0">{t('SETTINGS.SIGNUP_COUPON_NONE', '不自动发放')}</option>
             {templates.map((tpl) => (
@@ -94,7 +94,7 @@ const CouponsPage = () => {
             type="button"
             onClick={saveSignupCoupon}
             disabled={configsLoading || templatesLoading || signupSaving}
-            className="h-10 px-5 bg-primary text-on-primary rounded-lg text-sm font-medium hover:opacity-90 disabled:opacity-50 flex items-center justify-center gap-2"
+            className="h-10 px-5 bg-primary text-on-primary rounded-control text-sm font-medium hover:opacity-90 disabled:opacity-50 flex items-center justify-center gap-2"
           >
             <Save size={16} />
             {(configsLoading || signupSaving) ? t('SETTINGS.BTN_SAVING', '保存中…') : t('SETTINGS.SIGNUP_COUPON_SAVE', '保存新人券')}

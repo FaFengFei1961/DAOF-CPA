@@ -52,7 +52,7 @@ const Pagination = ({
                     type="button"
                     onClick={handlePrev}
                     disabled={page <= 1 || loading}
-                    className="px-3 py-1 rounded border border-outline-variant/40 hover:bg-on-surface/[0.04] disabled:opacity-40 disabled:cursor-not-allowed"
+                    className="px-3 py-1 rounded-control border border-outline-variant/40 hover:bg-on-surface/[0.04] disabled:opacity-40 disabled:cursor-not-allowed"
                 >
                     {t('COMMON.PREV', '上一页')}
                 </button>
@@ -61,7 +61,7 @@ const Pagination = ({
                     type="button"
                     onClick={handleNext}
                     disabled={page >= totalPages || loading}
-                    className="px-3 py-1 rounded border border-outline-variant/40 hover:bg-on-surface/[0.04] disabled:opacity-40 disabled:cursor-not-allowed"
+                    className="px-3 py-1 rounded-control border border-outline-variant/40 hover:bg-on-surface/[0.04] disabled:opacity-40 disabled:cursor-not-allowed"
                 >
                     {t('COMMON.NEXT', '下一页')}
                 </button>

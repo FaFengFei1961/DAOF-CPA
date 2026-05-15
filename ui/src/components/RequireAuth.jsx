@@ -18,7 +18,7 @@ const RequireAuth = ({ isAuthenticated, onSignIn, children }) => {
     <div className="space-y-4">
       <div className="fl-card flex items-center justify-between gap-3 px-4 py-3 border-primary/40 bg-primary-container/30">
         <div className="flex items-center gap-3 min-w-0">
-          <div className="w-8 h-8 rounded bg-primary text-on-primary flex items-center justify-center shrink-0">
+          <div className="w-8 h-8 rounded-control bg-primary text-on-primary flex items-center justify-center shrink-0">
             <Lock size={16} />
           </div>
           <div className="min-w-0">

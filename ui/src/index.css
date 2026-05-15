@@ -36,6 +36,31 @@
   --color-error: var(--color-error);
   --color-on-error: var(--color-on-error);
 
+  --color-success: var(--color-success);
+  --color-on-success: var(--color-on-success);
+  --color-success-container: var(--color-success-container);
+  --color-on-success-container: var(--color-on-success-container);
+
+  --color-warning: var(--color-warning);
+  --color-on-warning: var(--color-on-warning);
+  --color-warning-container: var(--color-warning-container);
+  --color-on-warning-container: var(--color-on-warning-container);
+
+  --color-info: var(--color-info);
+  --color-on-info: var(--color-on-info);
+
+  /* Clear default radii and shadows (Tailwind v4 way) */
+  --radius-*: initial;
+  --radius-none: 0;
+  --radius-full: 9999px;
+  --radius-control: 4px;
+  --radius-overlay: 8px;
+
+  --shadow-*: initial;
+  --shadow-none: none;
+  --shadow-modal: 0 25px 50px -12px rgb(0 0 0 / 0.4);
+  --shadow-dropdown: 0 10px 15px -3px rgb(0 0 0 / 0.3);
+
   /*
    * Fluent 2 / Win11 圆角规则（Microsoft Learn 官方）：
    *   - 4px：所有页内常规控件（Button、CheckBox、TextBox、ListView、ChipBar）
@@ -136,6 +161,17 @@
     --color-outline-variant: #c3c6cf;
     --color-error: #ba1a1a;
     --color-on-error: #ffffff;
+
+    --color-success: #10b981;
+    --color-on-success: #ffffff;
+    --color-success-container: #d1fae5;
+    --color-on-success-container: #022c22;
+    --color-warning: #f59e0b;
+    --color-on-warning: #ffffff;
+    --color-warning-container: #fef3c7;
+    --color-on-warning-container: #451a03;
+    --color-info: #6366f1;
+    --color-on-info: #ffffff;
   }
 
   .dark {
@@ -153,6 +189,11 @@
     --color-outline-variant: #43474e;
     --color-error: #ffb4ab;
     --color-on-error: #690005;
+
+    --color-success: #4ade80;
+    --color-success-container: #14532d;
+    --color-warning: #fbbf24;
+    --color-warning-container: #78350f;
   }
 
   body {

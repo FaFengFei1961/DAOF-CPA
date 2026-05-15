@@ -35,7 +35,7 @@ const RiskPage = () => {
           <select
             value={configs.reg_strategy || 'dynamic'}
             onChange={(e) => handleChange('reg_strategy', e.target.value)}
-            className="bg-surface-container-high border border-outline text-on-surface-variant rounded-lg px-4 py-2 outline-none text-sm w-full md:w-64 cursor-pointer hover:border-primary/50"
+            className="bg-surface-container-high border border-outline text-on-surface-variant rounded-control px-4 py-2 outline-none text-sm w-full md:w-64 cursor-pointer hover:border-primary/50"
           >
             <option value="trust">{t('SETTINGS.STRATEGY_TRUST', '宽松（信任模式）')}</option>
             <option value="dynamic">{t('SETTINGS.STRATEGY_DYNAMIC', '动态（推荐）')}</option>
@@ -53,7 +53,7 @@ const RiskPage = () => {
               type="number"
               value={configs.reg_ip_limit || '3'}
               onChange={(e) => handleChange('reg_ip_limit', e.target.value)}
-              className="w-full md:w-32 bg-surface-container-high border border-outline rounded-lg pl-4 pr-10 py-2 text-on-surface outline-none text-right focus:border-primary"
+              className="w-full md:w-32 bg-surface-container-high border border-outline rounded-control pl-4 pr-10 py-2 text-on-surface outline-none text-right focus:border-primary"
             />
             <span className="absolute right-4 top-2.5 text-on-surface-variant text-sm pointer-events-none">{t('SETTINGS.UNIT_COUNT', '次')}</span>
           </div>
@@ -70,7 +70,7 @@ const RiskPage = () => {
               value={configs.max_users ?? '0'}
               onChange={(e) => handleChange('max_users', e.target.value)}
               placeholder="0"
-              className="w-full md:w-32 bg-surface-container-high border border-outline rounded-lg pl-4 pr-10 py-2 text-on-surface outline-none text-right focus:border-primary"
+              className="w-full md:w-32 bg-surface-container-high border border-outline rounded-control pl-4 pr-10 py-2 text-on-surface outline-none text-right focus:border-primary"
             />
             <span className="absolute right-4 top-2.5 text-on-surface-variant text-sm pointer-events-none">人</span>
           </div>
@@ -100,7 +100,7 @@ const RiskPage = () => {
                 value={configs[item.key] ?? item.defaultVal}
                 onChange={(e) => handleChange(item.key, e.target.value)}
                 placeholder={item.placeholder}
-                className="w-full bg-surface-container-high border border-outline rounded-lg pl-7 pr-3 py-2 text-on-surface outline-none text-right focus:border-primary"
+                className="w-full bg-surface-container-high border border-outline rounded-control pl-7 pr-3 py-2 text-on-surface outline-none text-right focus:border-primary"
               />
             </div>
           </div>
@@ -115,8 +115,8 @@ const RiskPage = () => {
       >
         {[
           { key: 'credits_refresh_interval', label: '全量刷新周期', hint: '每隔多少分钟把所有上游账号的额度全量重新拉一遍。建议 10-30 分钟，过短会被上游限流。', unit: '分钟', placeholder: '15', defaultVal: '15', min: 1, max: 1440 },
-          { key: 'credits_max_retries', label: '失败重试次数', hint: <>单个上游账号连续失败时最多重试几次后放弃，等下一轮全量周期。<span className="text-amber-400 font-mono">0</span> = 无限重试，仍带指数退避（封顶 60 分钟）防止雪崩。</>, unit: '次', placeholder: '3', defaultVal: '3', min: 0, max: 100 },
-          { key: 'credits_retry_interval', label: '重试间隔（基础值）', hint: <>每次重试之间等待多少分钟。<span className="text-amber-400">实际间隔会按指数退避（base × 2^retry_count），封顶 60 分钟</span>，避免上游持续被冲击。</>, unit: '分钟', placeholder: '5', defaultVal: '5', min: 1, max: 1440 },
+          { key: 'credits_max_retries', label: '失败重试次数', hint: <>单个上游账号连续失败时最多重试几次后放弃，等下一轮全量周期。<span className="text-warning font-mono">0</span> = 无限重试，仍带指数退避（封顶 60 分钟）防止雪崩。</>, unit: '次', placeholder: '3', defaultVal: '3', min: 0, max: 100 },
+          { key: 'credits_retry_interval', label: '重试间隔（基础值）', hint: <>每次重试之间等待多少分钟。<span className="text-warning">实际间隔会按指数退避（base × 2^retry_count），封顶 60 分钟</span>，避免上游持续被冲击。</>, unit: '分钟', placeholder: '5', defaultVal: '5', min: 1, max: 1440 },
         ].map((item, idx, arr) => (
           <div key={item.key} className={`flex flex-col md:flex-row md:items-center justify-between py-3 ${idx === arr.length - 1 ? '' : 'border-b border-outline-variant/20'} gap-3`}>
             <div className="flex flex-col gap-1 w-full md:w-2/3">
@@ -129,7 +129,7 @@ const RiskPage = () => {
                 value={configs[item.key] ?? item.defaultVal}
                 onChange={(e) => handleChange(item.key, e.target.value)}
                 placeholder={item.placeholder}
-                className="w-full bg-surface-container-high border border-outline rounded-lg pl-3 pr-12 py-2 text-on-surface outline-none text-right focus:border-primary"
+                className="w-full bg-surface-container-high border border-outline rounded-control pl-3 pr-12 py-2 text-on-surface outline-none text-right focus:border-primary"
               />
               <span className="absolute right-3 top-2.5 text-on-surface-variant text-sm pointer-events-none">{item.unit}</span>
             </div>

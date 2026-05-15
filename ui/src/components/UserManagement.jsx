@@ -16,7 +16,7 @@ const UserManagement = () => {
     const [users, setUsers] = useState([]);
     const [loading, setLoading] = useState(true);
     const [modalConfig, setModalConfig] = useState({ isOpen: false, data: null });
-    
+
     // modal form state
     const [formData, setFormData] = useState({ id: null, username: '', role: 'user', quota: 1.0, status: 1, ban_reason: '' });
 
@@ -238,18 +238,18 @@ const UserManagement = () => {
                   {t('USER_MGMT.DESC')}
                 </p>
               </div>
-              
+
               <div className="flex items-center gap-3">
                  <div className="relative group">
                     <div className="absolute inset-y-0 left-3 flex items-center pointer-events-none">
                         <Search size={16} className="text-on-surface-variant group-focus-within:text-primary" />
                     </div>
-                    <input 
+                    <input
                         type="text"
                         placeholder={t('USER_MGMT.SEARCH_PLACEHOLDER')}
                         value={searchQuery}
                         onChange={e => setSearchQuery(e.target.value)}
-                        className="h-10 pl-9 pr-4 bg-surface-container-high border border-outline-variant rounded-xl text-sm text-on-surface focus:border-primary focus:bg-surface-container outline-none w-64 placeholder:text-on-surface-variant"
+                        className="h-10 pl-9 pr-4 bg-surface-container-high border border-outline-variant rounded-overlay text-sm text-on-surface focus:border-primary focus:bg-surface-container outline-none w-64 placeholder:text-on-surface-variant"
                     />
                  </div>
 
@@ -257,7 +257,7 @@ const UserManagement = () => {
                     <select
                         value={sortBy}
                         onChange={e => setSortBy(e.target.value)}
-                        className="h-10 pl-10 pr-8 bg-surface-container-high border border-outline-variant rounded-xl text-sm text-on-surface-variant focus:border-primary outline-none appearance-none cursor-pointer"
+                        className="h-10 pl-10 pr-8 bg-surface-container-high border border-outline-variant rounded-overlay text-sm text-on-surface-variant focus:border-primary outline-none appearance-none cursor-pointer"
                     >
                         <option value="id_desc">{t('USER_MGMT.SORT_ID_DESC')}</option>
                         <option value="id_asc">{t('USER_MGMT.SORT_ID_ASC')}</option>
@@ -272,7 +272,7 @@ const UserManagement = () => {
 
             {/* 批量操作浮动栏 */}
             {selectedIds.size > 0 && (
-                <div className="mb-4 flex items-center justify-between bg-primary/10 border border-primary/30 rounded-xl px-4 py-3 shadow-sm sticky top-2 z-10 backdrop-blur-md">
+                <div className="mb-4 flex items-center justify-between bg-primary/10 border border-primary/30 rounded-overlay px-4 py-3 sticky top-2 z-10 backdrop-blur-md">
                     <div className="flex items-center gap-3">
                         <CheckCircle2 size={18} className="text-primary" />
                         <span className="text-sm text-on-surface font-medium">
@@ -285,21 +285,21 @@ const UserManagement = () => {
                     <div className="flex items-center gap-2">
                         <button
                             onClick={() => openBulkModal('add')}
-                            className="flex items-center gap-1.5 px-3 py-1.5 bg-emerald-600/20 hover:bg-emerald-600/40 text-emerald-300 border border-emerald-500/40 rounded-lg text-xs font-medium transition-colors"
+                            className="flex items-center gap-1.5 px-3 py-1.5 bg-success/20 hover:bg-success/40 text-success border border-success/40 rounded-control text-xs font-medium transition-colors"
                             title="为所选用户增加额度"
                         >
                             <Plus size={14} /> 增加额度
                         </button>
                         <button
                             onClick={() => openBulkModal('sub')}
-                            className="flex items-center gap-1.5 px-3 py-1.5 bg-amber-600/20 hover:bg-amber-600/40 text-amber-300 border border-amber-500/40 rounded-lg text-xs font-medium transition-colors"
+                            className="flex items-center gap-1.5 px-3 py-1.5 bg-warning/20 hover:bg-warning/40 text-warning border border-warning/40 rounded-control text-xs font-medium transition-colors"
                             title="为所选用户扣减额度（不会扣到负数）"
                         >
                             <Minus size={14} /> 减少额度
                         </button>
                         <button
                             onClick={() => openBulkModal('set')}
-                            className="flex items-center gap-1.5 px-3 py-1.5 bg-blue-600/20 hover:bg-blue-600/40 text-blue-300 border border-blue-500/40 rounded-lg text-xs font-medium transition-colors"
+                            className="flex items-center gap-1.5 px-3 py-1.5 bg-primary/20 hover:bg-primary/40 text-primary border border-primary/40 rounded-control text-xs font-medium transition-colors"
                             title="把所选用户的额度直接设置为某值"
                         >
                             <Equal size={14} /> 设为定值
@@ -308,7 +308,7 @@ const UserManagement = () => {
                         <button
                             onClick={submitBulkDelete}
                             disabled={bulkProcessing}
-                            className="flex items-center gap-1.5 px-3 py-1.5 bg-red-600/20 hover:bg-red-600/40 text-red-300 border border-red-500/40 rounded-lg text-xs font-medium transition-colors disabled:opacity-50"
+                            className="flex items-center gap-1.5 px-3 py-1.5 bg-error/20 hover:bg-error/40 text-error border border-error/40 rounded-control text-xs font-medium transition-colors disabled:opacity-50"
                             title="物理删除所选用户（含 token），不可恢复"
                         >
                             <Trash2 size={14} /> 批量删除
@@ -317,7 +317,7 @@ const UserManagement = () => {
                 </div>
             )}
 
-            <div className="bg-surface-container border border-outline-variant rounded-2xl overflow-hidden shadow-sm">
+            <div className="bg-surface-container border border-outline-variant rounded-overlay overflow-hidden ">
                 <div className="overflow-x-auto">
                     <table className="w-full min-w-[900px] text-left text-sm text-on-surface-variant table-fixed">
                         <thead className="bg-surface-container-high text-xs uppercase font-mono tracking-wider text-on-surface-variant border-b border-outline-variant">
@@ -344,7 +344,7 @@ const UserManagement = () => {
                             {loading ? (
                                 <tr>
                                     <td colSpan="7" className="px-6 py-12 text-center text-on-surface-variant">
-                                        <RefreshCw size={24} className="mx-auto  mb-2" />
+                                        <RefreshCw size={24} className="mx-auto mb-2" />
                                         {t('USER_MGMT.LOADING_TEXT')}
                                     </td>
                                 </tr>
@@ -378,32 +378,32 @@ const UserManagement = () => {
                                         </td>
                                         <td className="px-6 py-4">
                                             <div className="flex flex-col gap-1">
-                                                {u.github_id ? <span className="text-xs text-on-surface-variant bg-surface-variant px-2 py-0.5 rounded w-max">{t('USER_MGMT.GITHUB_BOUND', { id: u.github_id })}</span> : <span className="text-xs text-outline-variant italic">{t('USER_MGMT.GITHUB_UNBOUND')}</span>}
-                                                {u.phone ? <span className="text-xs text-orange-400 bg-orange-400/10 px-2 py-0.5 rounded w-max">{t('USER_MGMT.PHONE_BOUND', { phone: u.phone })}</span> : <span className="text-xs text-outline-variant italic">{t('USER_MGMT.PHONE_UNBOUND')}</span>}
+                                                {u.github_id ? <span className="text-xs text-on-surface-variant bg-surface-variant px-2 py-0.5 rounded-control w-max">{t('USER_MGMT.GITHUB_BOUND', { id: u.github_id })}</span> : <span className="text-xs text-outline-variant italic">{t('USER_MGMT.GITHUB_UNBOUND')}</span>}
+                                                {u.phone ? <span className="text-xs text-warning bg-warning/10 px-2 py-0.5 rounded-control w-max">{t('USER_MGMT.PHONE_BOUND', { phone: u.phone })}</span> : <span className="text-xs text-outline-variant italic">{t('USER_MGMT.PHONE_UNBOUND')}</span>}
                                             </div>
                                         </td>
                                         <td className="px-6 py-4 text-xs text-on-surface-variant">
                                             {new Date(u.created_at).toLocaleString('zh-CN', { hour12: false })}
                                         </td>
                                         <td className="px-6 py-4 font-mono">
-                                            {u.role === 'admin' 
+                                            {u.role === 'admin'
                                                 ? <span className="text-fuchsia-400 font-bold tracking-widest text-lg">∞</span>
-                                                : <span className={u.quota > 0 ? "text-green-500" : "text-on-surface-variant"}>{formatCurrency(u.quota, 2)}</span>}
+                                                : <span className={u.quota > 0 ? "text-success" : "text-on-surface-variant"}>{formatCurrency(u.quota, 2)}</span>}
                                         </td>
                                         <td className="px-6 py-4 text-center">
-                                            {u.status === 1 
-                                                ? <div className="flex items-center gap-2 justify-center"><span className="w-2 h-2 rounded-full bg-green-500 shadow-[0_0_8px_rgba(34,197,94,0.6)]"></span> <span className="text-xs text-green-500">{t('USER_MGMT.STATUS_NORMAL')}</span></div>
-                                                : <div className="flex items-center gap-2 justify-center"><span className="w-2 h-2 rounded-full bg-error"></span> <span className="text-xs text-error">{t('USER_MGMT.STATUS_BANNED')}</span></div>
+                                            {u.status === 1
+                                                ? <div className="flex items-center gap-2 justify-center"><span className="w-2 h-2 rounded-control-full bg-success "></span> <span className="text-xs text-success">{t('USER_MGMT.STATUS_NORMAL')}</span></div>
+                                                : <div className="flex items-center gap-2 justify-center"><span className="w-2 h-2 rounded-control-full bg-error"></span> <span className="text-xs text-error">{t('USER_MGMT.STATUS_BANNED')}</span></div>
                                             }
                                         </td>
                                         <td className="px-6 py-4 text-right">
                                             <div className="flex items-center justify-end gap-3 opacity-50 group-hover:opacity-100 -opacity">
-                                                <button onClick={() => openLogModal(u)} className="text-on-surface-variant hover:text-green-400  tooltip" aria-label={t('USER_MGMT.LOG_TOOLTIP')} title={t('USER_MGMT.LOG_TOOLTIP')}>
+                                                <button onClick={() => openLogModal(u)} className="text-on-surface-variant hover:text-success tooltip" aria-label={t('USER_MGMT.LOG_TOOLTIP')} title={t('USER_MGMT.LOG_TOOLTIP')}>
                                                     <History size={16} />
                                                 </button>
                                                 <button
                                                     onClick={() => setBillsModal({ isOpen: true, user: u })}
-                                                    className="text-on-surface-variant hover:text-blue-400 tooltip"
+                                                    className="text-on-surface-variant hover:text-primary tooltip"
                                                     aria-label={t('USER_MGMT.BILLS_TOOLTIP', '查看账单')}
                                                     title={t('USER_MGMT.BILLS_TOOLTIP', '查看账单')}
                                                 >
@@ -450,7 +450,7 @@ const UserManagement = () => {
                                 type="button"
                                 disabled={page <= 1}
                                 onClick={() => setPage(p => Math.max(1, p - 1))}
-                                className="px-3 py-1.5 rounded border border-outline-variant disabled:opacity-40 hover:bg-on-surface/[0.04]"
+                                className="px-3 py-1.5 rounded-control border border-outline-variant disabled:opacity-40 hover:bg-on-surface/[0.04]"
                             >
                                 ← {t('COMMON.PREV', '上一页')}
                             </button>
@@ -458,7 +458,7 @@ const UserManagement = () => {
                                 type="button"
                                 disabled={page >= totalPages}
                                 onClick={() => setPage(p => Math.min(totalPages, p + 1))}
-                                className="px-3 py-1.5 rounded border border-outline-variant disabled:opacity-40 hover:bg-on-surface/[0.04]"
+                                className="px-3 py-1.5 rounded-control border border-outline-variant disabled:opacity-40 hover:bg-on-surface/[0.04]"
                             >
                                 {t('COMMON.NEXT', '下一页')} →
                             </button>
@@ -477,10 +477,10 @@ const UserManagement = () => {
                     onClick={onLogBackdropClick}
                     className="fixed inset-0 z-[60] flex items-center justify-center p-4 bg-black/70 backdrop-blur-md animate-in fade-in "
                 >
-                    <div className="relative w-full max-w-4xl max-h-[80vh] flex flex-col bg-surface-container-high border border-outline-variant rounded-2xl shadow-2xl overflow-hidden">
+                    <div className="relative w-full max-w-4xl max-h-[80vh] flex flex-col bg-surface-container-high border border-outline-variant rounded-overlay shadow-2xl shadow-black/40 overflow-hidden">
                         <div className="p-5 border-b border-outline-variant flex items-center justify-between bg-surface-container">
                             <div className="flex items-center gap-3">
-                                <History className="text-green-500" size={20} />
+                                <History className="text-success" size={20} />
                                 <h3 id="log-modal-title" className="text-lg font-bold text-on-surface">{t('USER_MGMT.LOG_MODAL_TITLE', { id: logModal.user?.id })}</h3>
                             </div>
                             <button onClick={closeLogModal} className="text-on-surface-variant hover:text-white" aria-label={t('COMMON.CLOSE', '关闭')}>
@@ -489,17 +489,17 @@ const UserManagement = () => {
                         </div>
                         <div className="p-6 overflow-y-auto flex-1 bg-surface-container">
                             {logModal.loading ? (
-                                <div className="text-center py-10 text-on-surface-variant"><RefreshCw size={24} className="mx-auto  mb-2" /> {t('USER_MGMT.LOG_MODAL_LOADING')}</div>
+                                <div className="text-center py-10 text-on-surface-variant"><RefreshCw size={24} className="mx-auto mb-2" /> {t('USER_MGMT.LOG_MODAL_LOADING')}</div>
                             ) : logModal.logs.length === 0 ? (
                                 <div className="text-center py-10 text-outline-variant">{t('USER_MGMT.LOG_MODAL_EMPTY')}</div>
                             ) : (
                                 <div className="space-y-4 relative before:absolute before:inset-0 before:ml-5 before:-translate-x-px md:before:mx-auto md:before:translate-x-0 before:h-full before:w-0.5 before:bg-gradient-to-b before:from-transparent before:via-[#2b2b2b] before:to-transparent">
                                     {logModal.logs.map((log) => (
                                         <div key={log.id} className="relative flex items-center justify-between md:justify-normal md:odd:flex-row-reverse group is-active">
-                                            <div className="flex items-center justify-center w-6 h-6 rounded-full border-2 border-surface bg-surface-variant text-on-surface-variant group-hover:bg-primary group-hover:text-on-primary shadow shrink-0 md:order-1 md:group-odd:-translate-x-1/2 md:group-even:translate-x-1/2 z-10 font-mono text-xs">
+                                            <div className="flex items-center justify-center w-6 h-6 rounded-control-full border-2 border-surface bg-surface-variant text-on-surface-variant group-hover:bg-primary group-hover:text-on-primary shadow shrink-0 md:order-1 md:group-odd:-translate-x-1/2 md:group-even:translate-x-1/2 z-10 font-mono text-xs">
                                                 {log.id}
                                             </div>
-                                            <div className="w-[calc(100%-2.5rem)] md:w-[calc(50%-2rem)] p-4 rounded-xl border border-outline-variant bg-surface-container shadow-sm">
+                                            <div className="w-[calc(100%-2.5rem)] md:w-[calc(50%-2rem)] p-4 rounded-overlay border border-outline-variant bg-surface-container ">
                                                 <div className="flex items-center justify-between mb-2">
                                                     <div className="text-sm font-bold text-primary">
                                                         {log.action_type === 'CREATE' ? t('USER_MGMT.ACTION_CREATE') :
@@ -518,7 +518,7 @@ const UserManagement = () => {
                                                          log.action_type === 'ADMIN_CREDENTIALS_UPDATE' ? '🔐 管理员凭证修改' :
                                                          log.action_type}
                                                     </div>
-                                                    <div className="text-xs text-on-surface font-mono bg-surface-container-high px-2 py-0.5 rounded">{new Date(log.created_at).toLocaleString('zh-CN', { hour12: false })}</div>
+                                                    <div className="text-xs text-on-surface font-mono bg-surface-container-high px-2 py-0.5 rounded-control">{new Date(log.created_at).toLocaleString('zh-CN', { hour12: false })}</div>
                                                 </div>
                                                 <div className="text-base text-on-surface font-medium mt-3 mb-3 leading-relaxed break-all">
                                                     {(() => {
@@ -555,12 +555,12 @@ const UserManagement = () => {
                                                         } catch (e) {
                                                             lines = log.details.split('；');
                                                         }
-                                                        
+
                                                         return lines.map((line, i) => (
                                                             <div key={i} className="mb-1.5">
                                                                 {line.split(/\[([^\]]+)\]/g).map((part, index) => (
-                                                                    index % 2 === 1 
-                                                                        ? <span key={index} className="text-primary font-bold tracking-wide mx-0.5">{part}</span> 
+                                                                    index % 2 === 1
+                                                                        ? <span key={index} className="text-primary font-bold tracking-wide mx-0.5">{part}</span>
                                                                         : <span key={index}>{part}</span>
                                                                 ))}
                                                             </div>
@@ -568,7 +568,7 @@ const UserManagement = () => {
                                                     })()}
                                                 </div>
                                                 <div className="mt-4 flex items-center justify-between text-xs text-on-surface-variant border-t border-outline-variant pt-3">
-                                                    <span>{t('USER_MGMT.LOG_OPERATOR')} <span className="text-orange-500 font-bold">{(log.operator_role === '管理员(Admin)' || log.operator_role === '管理员') ? t('USER_MGMT.LOG_ADMIN') : log.operator_role}</span></span>
+                                                    <span>{t('USER_MGMT.LOG_OPERATOR')} <span className="text-warning font-bold">{(log.operator_role === '管理员(Admin)' || log.operator_role === '管理员') ? t('USER_MGMT.LOG_ADMIN') : log.operator_role}</span></span>
                                                     <span>{t('USER_MGMT.LOG_IP')} <span className="text-on-surface font-mono">{log.ip_address}</span></span>
                                                 </div>
                                             </div>
@@ -591,7 +591,7 @@ const UserManagement = () => {
                     onClick={onEditBackdropClick}
                     className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/60 backdrop-blur-sm animate-in fade-in "
                 >
-                    <div className="relative w-full max-w-sm bg-surface-container border border-outline-variant rounded-2xl shadow-2xl p-6">
+                    <div className="relative w-full max-w-sm bg-surface-container border border-outline-variant rounded-overlay shadow-2xl shadow-black/40 p-6">
                         <button type="button" ref={editCloseBtnRef} onClick={closeEditModal} className="absolute top-4 right-4 text-on-surface-variant hover:text-white ">
                             <X size={18} />
                         </button>
@@ -606,7 +606,7 @@ const UserManagement = () => {
                                     type="text" required
                                     value={formData.username}
                                     onChange={e => setFormData({...formData, username: e.target.value})}
-                                    className="w-full h-10 bg-surface-container-high border border-outline rounded-lg px-3 text-sm text-on-surface focus:border-primary outline-none"
+                                    className="w-full h-10 bg-surface-container-high border border-outline rounded-control px-3 text-sm text-on-surface focus:border-primary outline-none"
                                 />
                             </div>
 
@@ -618,7 +618,7 @@ const UserManagement = () => {
                                         type="number" required step="0.001" min="0"
                                         value={displayCurrency === 'CNY' ? (formData.quota * exchangeRate).toFixed(2) : formData.quota}
                                         onChange={e => setFormData({...formData, quota: (parseFloat(e.target.value) || 0) / (displayCurrency === 'CNY' ? exchangeRate : 1)})}
-                                        className="w-full h-10 bg-surface-container-high border border-outline rounded-lg px-3 text-sm text-on-surface focus:border-primary outline-none"
+                                        className="w-full h-10 bg-surface-container-high border border-outline rounded-control px-3 text-sm text-on-surface focus:border-primary outline-none"
                                     />
                                 </div>
                                 <div className="flex flex-col gap-1.5 flex-1">
@@ -627,7 +627,7 @@ const UserManagement = () => {
                                         id="user-mgmt-status"
                                         value={formData.status}
                                         onChange={e => setFormData({...formData, status: parseInt(e.target.value)})}
-                                        className="w-full h-10 bg-surface-container-high border border-outline rounded-lg px-3 text-sm text-on-surface focus:border-primary outline-none"
+                                        className="w-full h-10 bg-surface-container-high border border-outline rounded-control px-3 text-sm text-on-surface focus:border-primary outline-none"
                                     >
                                         <option value={1}>{t('USER_MGMT.STATUS_NORMAL_OPT')}</option>
                                         <option value={2}>{t('USER_MGMT.STATUS_BANNED_OPT')}</option>
@@ -646,14 +646,14 @@ const UserManagement = () => {
                                         id="user-mgmt-ban-reason"
                                         value={formData.ban_reason}
                                         onChange={e => setFormData({...formData, ban_reason: e.target.value})}
-                                        className="w-full bg-surface-container-high border border-error/30 rounded-lg p-3 text-sm text-error focus:border-error outline-none placeholder:text-on-surface-variant"
+                                        className="w-full bg-surface-container-high border border-error/30 rounded-control p-3 text-sm text-error focus:border-error outline-none placeholder:text-on-surface-variant"
                                         rows={2}
                                         placeholder={t('USER_MGMT.MODAL_BAN_PLACEHOLDER')}
                                     />
                                 </div>
                             )}
 
-                            <button type="submit" className="w-full h-10 mt-4 bg-gradient-to-r from-blue-600 to-cyan-500 text-on-surface font-medium rounded-lg hover:opacity-90 -opacity">
+                            <button type="submit" className="w-full h-10 mt-4 bg-gradient-to-r from-blue-600 to-cyan-500 text-on-surface font-medium rounded-control hover:opacity-90 -opacity">
                                 {t('USER_MGMT.BTN_SUBMIT')}
                             </button>
                         </form>
@@ -671,14 +671,14 @@ const UserManagement = () => {
                     onClick={onBulkBackdropClick}
                     className="fixed inset-0 z-[55] flex items-center justify-center p-4 bg-black/60 backdrop-blur-sm"
                 >
-                    <div className="relative w-full max-w-sm bg-surface-container border border-outline-variant rounded-2xl shadow-2xl p-6">
+                    <div className="relative w-full max-w-sm bg-surface-container border border-outline-variant rounded-overlay shadow-2xl shadow-black/40 p-6">
                         <button type="button" onClick={closeBulkModal} className="absolute top-4 right-4 text-on-surface-variant hover:text-white" aria-label={t('COMMON.CLOSE', '关闭')}>
                             <X size={18} />
                         </button>
                         <h2 id="bulk-modal-title" className="text-xl font-bold text-on-surface mb-2 flex items-center gap-2">
-                            {bulkModal.mode === 'add' && <><Plus size={18} className="text-emerald-400" /> 批量增加额度</>}
-                            {bulkModal.mode === 'sub' && <><Minus size={18} className="text-amber-400" /> 批量减少额度</>}
-                            {bulkModal.mode === 'set' && <><Equal size={18} className="text-blue-400" /> 批量设置额度</>}
+                            {bulkModal.mode === 'add' && <><Plus size={18} className="text-success" /> 批量增加额度</>}
+                            {bulkModal.mode === 'sub' && <><Minus size={18} className="text-warning" /> 批量减少额度</>}
+                            {bulkModal.mode === 'set' && <><Equal size={18} className="text-primary" /> 批量设置额度</>}
                         </h2>
                         <p className="text-xs text-on-surface-variant mb-5">
                             将作用于已选中的 <span className="text-primary font-bold">{selectedIds.size}</span> 个用户。管理员账号会被自动跳过。
@@ -697,10 +697,10 @@ const UserManagement = () => {
                                 value={bulkModal.amount}
                                 onChange={e => setBulkModal({ ...bulkModal, amount: e.target.value })}
                                 placeholder={bulkModal.mode === 'set' ? '例如 1.00' : '例如 0.50'}
-                                className="w-full h-11 bg-surface-container-high border border-outline rounded-lg px-3 text-base text-on-surface focus:border-primary outline-none font-mono"
+                                className="w-full h-11 bg-surface-container-high border border-outline rounded-control px-3 text-base text-on-surface focus:border-primary outline-none font-mono"
                             />
                             {bulkModal.mode === 'sub' && (
-                                <p className="text-xs text-amber-500/80 flex items-start gap-1.5 mt-1">
+                                <p className="text-xs text-warning/80 flex items-start gap-1.5 mt-1">
                                     <AlertTriangle size={12} className="mt-0.5 shrink-0" />
                                     扣减后若额度低于 0，将自动 clamp 到 0，不会变成负数。
                                 </p>
@@ -710,14 +710,14 @@ const UserManagement = () => {
                         <div className="flex gap-3 mt-6">
                             <button
                                 onClick={() => setBulkModal({ isOpen: false, mode: 'add', amount: '' })}
-                                className="flex-1 h-10 bg-surface-container-high border border-outline-variant text-on-surface-variant rounded-lg hover:bg-surface-variant transition-colors text-sm"
+                                className="flex-1 h-10 bg-surface-container-high border border-outline-variant text-on-surface-variant rounded-control hover:bg-surface-variant transition-colors text-sm"
                             >
                                 取消
                             </button>
                             <button
                                 onClick={submitBulkQuota}
                                 disabled={bulkProcessing || !bulkModal.amount}
-                                className="flex-1 h-10 bg-primary text-on-primary font-medium rounded-lg hover:opacity-90 disabled:opacity-40 transition-opacity text-sm"
+                                className="flex-1 h-10 bg-primary text-on-primary font-medium rounded-control hover:opacity-90 disabled:opacity-40 transition-opacity text-sm"
                             >
                                 {bulkProcessing ? '处理中...' : '确认应用'}
                             </button>

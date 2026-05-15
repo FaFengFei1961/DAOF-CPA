@@ -41,7 +41,7 @@ const parseRow = (r) => ({
 });
 
 const EMPTY_PKG = {
-  product_type: 'subscription', // subscription | addon
+  product_type: 'subscription',
   name: '', description: '',
   icon_key: 'Package', badge_color: '', gradient: '', highlight_tag: '',
   price_amount: 0, price_currency: 'USD',
@@ -280,7 +280,7 @@ const PackageManagement = () => {
           <button
             type="button"
             onClick={exportCSV}
-            className="h-10 px-4 bg-surface-container-high border border-outline-variant rounded-lg text-sm flex items-center gap-1.5 hover:bg-surface-variant"
+            className="h-10 px-4 bg-surface-container-high border border-outline-variant rounded-control text-sm flex items-center gap-1.5 hover:bg-surface-variant"
             title="导出当前所有套餐为 CSV（Excel 可直接打开）"
           >
             <Download size={14} /> 导出 CSV
@@ -288,7 +288,7 @@ const PackageManagement = () => {
           <button
             type="button"
             onClick={importCSV}
-            className="h-10 px-4 bg-surface-container-high border border-outline-variant rounded-lg text-sm flex items-center gap-1.5 hover:bg-surface-variant"
+            className="h-10 px-4 bg-surface-container-high border border-outline-variant rounded-control text-sm flex items-center gap-1.5 hover:bg-surface-variant"
             title="从 CSV 批量导入套餐（有 id 则更新，无 id 则新建）"
           >
             <Upload size={14} /> 导入 CSV
@@ -296,7 +296,7 @@ const PackageManagement = () => {
           <button
             type="button"
             onClick={startCreate}
-            className="h-10 px-4 bg-primary text-on-primary rounded-lg flex items-center gap-1.5 hover:opacity-90 text-sm font-medium"
+            className="h-10 px-4 bg-primary text-on-primary rounded-control flex items-center gap-1.5 hover:opacity-90 text-sm font-medium"
           >
             <Plus size={14} /> 新建套餐
           </button>
@@ -305,18 +305,18 @@ const PackageManagement = () => {
 
       {loading ? <div className="text-center py-20 text-on-surface-variant">加载中...</div>
         : pkgs.length === 0 ? (
-          <div className="text-center py-16 bg-surface-container border border-outline-variant rounded-2xl">
+          <div className="text-center py-16 bg-surface-container border border-outline-variant rounded-overlay">
             <p className="text-on-surface-variant text-sm">还没有套餐，点右上角创建</p>
           </div>
         ) : (
           <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-4">
             {pkgs.map(p => (
-              <div key={p.id} className="bg-surface-container border border-outline-variant rounded-xl p-5">
+              <div key={p.id} className="bg-surface-container border border-outline-variant rounded-overlay p-5">
                 <div className="flex items-start justify-between mb-3">
                   <div className="flex-1 min-w-0">
                     <div className="font-bold text-on-surface flex items-center gap-2">
                       {p.name}
-                      {p.highlight_tag && <span className="text-[10px] px-1.5 py-0.5 rounded bg-primary/20 text-primary">{p.highlight_tag}</span>}
+                      {p.highlight_tag && <span className="text-[10px] px-1.5 py-0.5 rounded-control bg-primary/20 text-primary">{p.highlight_tag}</span>}
                     </div>
                     <div className="text-xs text-outline mt-0.5">
                       {p.price_currency} {p.price_amount} / {formatDuration(p.billing_period_seconds)}
@@ -324,7 +324,7 @@ const PackageManagement = () => {
                   </div>
                   <div className="flex gap-1 shrink-0">
                     <button onClick={() => startEdit(p)} className="p-1.5 text-on-surface-variant hover:text-primary"><Edit size={14} /></button>
-                    <button onClick={() => remove(p)} className="p-1.5 text-on-surface-variant hover:text-red-400"><Trash2 size={14} /></button>
+                    <button onClick={() => remove(p)} className="p-1.5 text-on-surface-variant hover:text-error"><Trash2 size={14} /></button>
                   </div>
                 </div>
                 <div className="space-y-1 text-xs text-on-surface-variant">
@@ -332,8 +332,8 @@ const PackageManagement = () => {
                   <div>计划数: {p.plan_count || 0} · 活跃订阅: {p.active_subs_count || 0}</div>
                 </div>
                 <div className="mt-3 pt-3 border-t border-outline-variant/30 flex items-center justify-between text-xs">
-                  <span className={p.public ? 'text-emerald-400' : 'text-amber-400'}>{p.public ? '● 公开销售' : '○ 内部'}</span>
-                  <span className={p.enabled ? 'text-emerald-400' : 'text-outline'}>{p.enabled ? '启用' : '禁用'}</span>
+                  <span className={p.public ? 'text-success' : 'text-warning'}>{p.public ? '● 公开销售' : '○ 内部'}</span>
+                  <span className={p.enabled ? 'text-success' : 'text-outline'}>{p.enabled ? '启用' : '禁用'}</span>
                 </div>
               </div>
             ))}
@@ -349,51 +349,17 @@ const PackageManagement = () => {
           onClick={onEditBackdropClick}
           className="fixed inset-0 z-[100] flex items-start sm:items-center justify-center p-2 sm:p-4 bg-black/80 backdrop-blur-sm"
         >
-          <div className="relative w-full max-w-4xl bg-surface-container border border-outline-variant rounded-2xl flex flex-col max-h-[92vh] shadow-2xl">
+          <div className="relative w-full max-w-4xl bg-surface-container border border-outline-variant rounded-overlay flex flex-col max-h-[92vh] shadow-2xl shadow-black/40">
             {/* 标题栏（固定不滚动） */}
             <div className="flex items-center justify-between px-4 sm:px-6 py-4 border-b border-outline-variant/60 shrink-0">
               <h2 id="package-edit-modal-title" className="text-lg font-bold text-on-surface">{editing.id ? '编辑套餐' : '新建套餐'}</h2>
-              <button ref={editCloseBtnRef} type="button" onClick={cancel} aria-label="关闭" className="text-on-surface-variant hover:text-on-surface p-1 rounded">
+              <button ref={editCloseBtnRef} type="button" onClick={cancel} aria-label="关闭" className="text-on-surface-variant hover:text-on-surface p-1 rounded-control">
                 <X size={18} />
               </button>
             </div>
 
             {/* 表单（独立滚动区域） */}
             <div className="px-4 sm:px-6 py-5 space-y-6 overflow-y-auto flex-1 min-h-0">
-              {/* 产品类型（消费引擎按此排序：subscription 先扣，addon 后扣） */}
-              <Section title="产品类型">
-                <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
-                  {[
-                    { id: 'subscription', label: '订阅', desc: '周期套餐，每月刷新额度（最先扣）', defaultPeriod: 30 * 86400 },
-                    { id: 'addon', label: '增量包', desc: '临时补充包，订阅用完后才扣', defaultPeriod: 7 * 86400 },
-                  ].map(t => {
-                    const active = (editing.product_type || 'subscription') === t.id;
-                    return (
-                      <button
-                        key={t.id}
-                        type="button"
-                        onClick={() => {
-                          updateField('product_type', t.id);
-                          // 切换类型时若周期是默认值，自动改成对应类型默认（用户改过就不动）
-                          if (editing.billing_period_seconds === 30 * 86400 || editing.billing_period_seconds === 7 * 86400) {
-                            updateField('billing_period_seconds', t.defaultPeriod);
-                          }
-                        }}
-                        className={`text-left p-4 rounded-lg border transition ${active
-                          ? 'bg-primary/10 border-primary text-on-surface'
-                          : 'bg-surface border-outline-variant text-on-surface-variant hover:border-primary'}`}
-                      >
-                        <div className="font-semibold text-sm flex items-center gap-2">
-                          <span className={`w-2 h-2 rounded-full ${active ? 'bg-primary' : 'bg-outline-variant'}`} />
-                          {t.label}
-                        </div>
-                        <div className="text-[11px] mt-1 text-on-surface-variant">{t.desc}</div>
-                      </button>
-                    );
-                  })}
-                </div>
-              </Section>
-
               {/* 基础信息 */}
               <Section title="基础信息">
                 <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
@@ -462,7 +428,7 @@ const PackageManagement = () => {
               {/* 配额计划组合 */}
               <Section title="配额计划组合" hint={allPlans.length === 0 ? '尚未创建任何配额计划' : `已选 ${(editing.plan_ids || []).length} / ${allPlans.length}`}>
                 {allPlans.length === 0 ? (
-                  <div className="text-xs text-on-surface-variant text-center py-6 border border-dashed border-outline-variant rounded">
+                  <div className="text-xs text-on-surface-variant text-center py-6 border border-dashed border-outline-variant rounded-control">
                     去"配额计划库"先创建几个计划
                   </div>
                 ) : (
@@ -471,7 +437,7 @@ const PackageManagement = () => {
                       const idx = (editing.plan_ids || []).indexOf(plan.id);
                       const checked = idx >= 0;
                       return (
-                        <label key={plan.id} className={`flex items-center gap-2 p-2 rounded border cursor-pointer transition ${checked ? 'border-primary bg-primary/5' : 'border-outline-variant/40 hover:border-outline-variant'}`}>
+                        <label key={plan.id} className={`flex items-center gap-2 p-2 rounded-control border cursor-pointer transition ${checked ? 'border-primary bg-primary/5' : 'border-outline-variant/40 hover:border-outline-variant'}`}>
                           <input type="checkbox" checked={checked} onChange={() => togglePlan(plan.id)} />
                           <div className="flex-1 min-w-0">
                             <div className="text-sm text-on-surface truncate">{plan.display_name || plan.name}</div>
@@ -481,7 +447,7 @@ const PackageManagement = () => {
                             <input
                               type="number"
                               step="0.1"
-                              className="w-16 h-7 text-xs bg-surface border border-outline-variant rounded px-2"
+                              className="w-16 h-7 text-xs bg-surface border border-outline-variant rounded-control px-2"
                               value={editing.plan_multipliers[idx] || 1.0}
                               onChange={e => setMultiplier(idx, e.target.value)}
                               onClick={(e) => e.preventDefault()}
@@ -530,12 +496,12 @@ const PackageManagement = () => {
             </div>
 
             {/* 操作栏（固定不滚动） */}
-            <div className="flex justify-end gap-2 px-4 sm:px-6 py-4 border-t border-outline-variant/60 bg-surface-container-low rounded-b-2xl shrink-0">
-              <button type="button" onClick={cancel} className="px-4 py-2 bg-surface-container-high border border-outline-variant rounded-lg text-sm hover:bg-surface-variant">
+            <div className="flex justify-end gap-2 px-4 sm:px-6 py-4 border-t border-outline-variant/60 bg-surface-container-low rounded-control-b-2xl shrink-0">
+              <button type="button" onClick={cancel} className="px-4 py-2 bg-surface-container-high border border-outline-variant rounded-control text-sm hover:bg-surface-variant">
                 取消
               </button>
               <button type="button" onClick={save} disabled={saving}
-                className="px-5 py-2 bg-primary text-on-primary rounded-lg text-sm font-medium flex items-center gap-1.5 disabled:opacity-50 hover:opacity-90">
+                className="px-5 py-2 bg-primary text-on-primary rounded-control text-sm font-medium flex items-center gap-1.5 disabled:opacity-50 hover:opacity-90">
                 <Save size={14} /> {saving ? '保存中…' : '保存'}
               </button>
             </div>
@@ -546,13 +512,13 @@ const PackageManagement = () => {
   );
 };
 
-const inputCls = 'w-full h-10 bg-surface border border-outline-variant rounded-lg px-3 text-sm text-on-surface outline-none focus:border-primary';
+const inputCls = 'w-full h-10 bg-surface border border-outline-variant rounded-control px-3 text-sm text-on-surface outline-none focus:border-primary';
 
 // 表单分组：可选 collapsible，统一标题 + 内边距
 const Section = ({ title, hint, collapsible = false, children }) => {
   const [open, setOpen] = useState(!collapsible);
   return (
-    <div className="rounded-lg border border-outline-variant bg-surface-container-high">
+    <div className="rounded-control border border-outline-variant bg-surface-container-high">
       <button
         type="button"
         onClick={() => collapsible && setOpen(!open)}
@@ -584,7 +550,7 @@ const Field = ({ label, hint, required, children }) => {
     <div className="space-y-1 min-w-0">
       <label htmlFor={id} className="block text-xs font-medium text-on-surface-variant">
         {label}
-        {required && <span className="text-red-500 ml-0.5">*</span>}
+        {required && <span className="text-error ml-0.5">*</span>}
       </label>
       {enhancedChildren && enhancedChildren.length > 0 && hint
         ? React.Children.map(enhancedChildren, (child) =>

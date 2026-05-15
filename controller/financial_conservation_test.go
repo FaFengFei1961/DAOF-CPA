@@ -9,8 +9,8 @@
 // 其中：
 //   - ΔQuota = user.Quota(t1) - user.Quota(t0)
 //   - AmountUSD 单位 micro_usd（int64）
-//   - api_usage_sub / api_usage_addon / admin_grant_sub / admin_grant_addon /
-//     api_usage_pending_reconcile 类型 AmountUSD 必为 0（仅审计、不动 quota）
+//   - api_usage_sub / admin_grant_sub / api_usage_pending_reconcile 类型
+//     AmountUSD 必为 0（仅审计、不动 quota）
 //
 // 一旦该不变量被打破，任何对账查询（按 billing 重建用户余额）都会与 user.Quota 不一致，
 // 财务被信任度降到 0。Phase 1 切换到 int64 micro_usd 后，整数算术保证不再有浮点漂移；
@@ -374,7 +374,7 @@ func TestConservation_EndToEnd(t *testing.T) {
 	}
 }
 
-// TestConservation_ApiUsageType_ZeroAmount api_usage_sub / api_usage_addon / admin_grant_sub
+// TestConservation_ApiUsageType_ZeroAmount api_usage_sub / admin_grant_sub
 // 等"仅审计"类型必须 AmountUSD == 0，否则 IsZeroAmountBillingType invariant 会被
 // WriteBillingEntry 拒绝写入（fix Minor m3）。
 //

@@ -1282,6 +1282,7 @@
     "ERR_INVALID_OAUTH_CODE": "Invalid OAuth code.",
     "ERR_INVALID_PACKAGE": "Invalid package configuration.",
     "ERR_INVALID_PARAMS": "Invalid request parameters.",
+    "ERR_INVALID_PRODUCT_TYPE": "Only subscription product type is supported.",
     "ERR_INVALID_PASS_STATE": "Invalid clean pass state",
     "ERR_INVALID_PAYLOAD_VULN": "Invalid request parameters submitted.",
     "ERR_INVALID_PRIORITY": "Invalid priority.",

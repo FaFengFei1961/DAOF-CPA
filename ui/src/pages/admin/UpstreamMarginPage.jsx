@@ -21,14 +21,14 @@ import { authFetch } from '../../utils/authFetch';
 import { PERIODS, formatPercent, makeFormatMeterCost } from './shared';
 
 const PeriodSwitch = ({ value, onChange }) => (
-  <div className="flex items-center gap-1 bg-surface-container p-0.5 rounded border border-outline-variant">
+  <div className="flex items-center gap-1 bg-surface-container p-0.5 rounded-control border border-outline-variant">
     {PERIODS.map(p => (
       <button
         key={p.value}
         type="button"
         onClick={() => onChange(p.value)}
-        className={`px-3 py-1 text-xs font-medium rounded ${
-          value === p.value ? 'bg-surface-variant text-on-surface shadow-sm' : 'text-on-surface-variant hover:text-on-surface'
+        className={`px-3 py-1 text-xs font-medium rounded-control ${
+          value === p.value ? 'bg-surface-variant text-on-surface ' : 'text-on-surface-variant hover:text-on-surface'
         }`}
       >{p.label}</button>
     ))}
@@ -208,7 +208,7 @@ const UpstreamMarginPage = () => {
             {r.auth_index || '未归因'}
           </div>
           {r.missing_cost_config && (
-            <span className="inline-block mt-1 text-[10px] px-1.5 py-0.5 rounded bg-red-500/10 text-red-300 border border-red-500/20">
+            <span className="inline-block mt-1 text-[10px] px-1.5 py-0.5 rounded-control bg-error/10 text-error border border-error/20">
               缺成本配置
             </span>
           )}
@@ -229,7 +229,7 @@ const UpstreamMarginPage = () => {
     ) },
     { key: 'platform', header: '平台成本', align: 'right', mono: true, render: r => formatMeterCost(r.platform_cost_estimate_usd || 0) },
     { key: 'margin', header: '毛利', align: 'right', mono: true, render: r => (
-      <span className={`font-semibold ${(r.gross_margin_usd || 0) >= 0 ? 'text-emerald-400' : 'text-red-400'}`}>
+      <span className={`font-semibold ${(r.gross_margin_usd || 0) >= 0 ? 'text-success' : 'text-error'}`}>
         {formatMeterCost(r.gross_margin_usd || 0)}
         <div className="text-[10px] font-normal text-on-surface-variant">{formatPercent(r.gross_margin_rate)}</div>
       </span>
@@ -243,7 +243,7 @@ const UpstreamMarginPage = () => {
         <button
           type="button"
           onClick={openBulk}
-          className="px-3 py-1.5 rounded text-xs font-medium bg-primary text-on-primary"
+          className="px-3 py-1.5 rounded-control text-xs font-medium bg-primary text-on-primary"
         >
           批量配置 {selectedKeys.length} 个
         </button>
@@ -252,7 +252,7 @@ const UpstreamMarginPage = () => {
       <button
         type="button"
         onClick={fetchData}
-        className="p-2 rounded border border-outline-variant text-on-surface-variant hover:text-on-surface transition"
+        className="p-2 rounded-control border border-outline-variant text-on-surface-variant hover:text-on-surface transition"
         aria-label="刷新"
       >
         <RefreshCw size={14} className={loading ? 'animate-spin' : ''} />
@@ -271,40 +271,40 @@ const UpstreamMarginPage = () => {
       <div className="grid grid-cols-2 lg:grid-cols-5 gap-3">
         <StatCard
           icon={Activity}
-          iconColor="text-cyan-400"
-          iconBg="bg-cyan-500/10"
+          iconColor="text-primary"
+          iconBg="bg-primary/10"
           label="请求数"
           value={(summary.requests || 0).toLocaleString()}
           sub={`归因率 ${formatPercent(summary.configured_request_ratio)}`}
         />
         <StatCard
           icon={Coins}
-          iconColor="text-blue-400"
-          iconBg="bg-blue-500/10"
+          iconColor="text-primary"
+          iconBg="bg-primary/10"
           label="扣减 Credits"
           value={formatMeterCost(summary.charged_cost_usd || 0)}
           sub="套餐 / credits 核销口径"
         />
         <StatCard
           icon={Zap}
-          iconColor="text-orange-400"
-          iconBg="bg-orange-500/10"
+          iconColor="text-warning"
+          iconBg="bg-warning/10"
           label="平台成本"
           value={formatMeterCost(summary.platform_cost_estimate_usd || 0)}
           sub="账号月费分摊估算"
         />
         <StatCard
           icon={BarChart3}
-          iconColor="text-emerald-400"
-          iconBg="bg-emerald-500/10"
+          iconColor="text-success"
+          iconBg="bg-success/10"
           label="毛利"
           value={formatMeterCost(summary.gross_margin_usd || 0)}
           sub={`毛利率 ${formatPercent(summary.gross_margin_rate)}`}
         />
         <StatCard
           icon={AlertTriangle}
-          iconColor="text-red-400"
-          iconBg="bg-red-500/10"
+          iconColor="text-error"
+          iconBg="bg-error/10"
           label="未配置请求"
           value={(summary.unconfigured_request_count || 0).toLocaleString()}
           sub="需补 auth_index 成本"
@@ -348,7 +348,7 @@ const UpstreamMarginPage = () => {
             <select
               value={selectedPreset}
               onChange={(e) => applyPreset(e.target.value)}
-              className="w-full bg-surface-container-high border border-outline-variant text-on-surface text-sm rounded px-2 py-1.5 outline-none"
+              className="w-full bg-surface-container-high border border-outline-variant text-on-surface text-sm rounded-control px-2 py-1.5 outline-none"
             >
               <option value="">不套用</option>
               {presets.map(p => (
@@ -364,7 +364,7 @@ const UpstreamMarginPage = () => {
                   value={form.provider}
                   onChange={(e) => setForm(p => ({ ...p, provider: e.target.value }))}
                   placeholder="codex / anthropic / gemini"
-                  className="w-full bg-surface-container-high border border-outline-variant text-on-surface text-sm rounded px-3 py-1.5 outline-none focus:border-primary"
+                  className="w-full bg-surface-container-high border border-outline-variant text-on-surface text-sm rounded-control px-3 py-1.5 outline-none focus:border-primary"
                 />
               </FormRow>
               <FormRow label="auth_index" required>
@@ -372,7 +372,7 @@ const UpstreamMarginPage = () => {
                   value={form.auth_index}
                   onChange={(e) => setForm(p => ({ ...p, auth_index: e.target.value }))}
                   placeholder="账号索引（不可逆 hash）"
-                  className="w-full bg-surface-container-high border border-outline-variant text-on-surface text-sm rounded px-3 py-1.5 font-mono outline-none focus:border-primary"
+                  className="w-full bg-surface-container-high border border-outline-variant text-on-surface text-sm rounded-control px-3 py-1.5 font-mono outline-none focus:border-primary"
                 />
               </FormRow>
               <FormRow label="auth_type">
@@ -380,7 +380,7 @@ const UpstreamMarginPage = () => {
                   value={form.auth_type}
                   onChange={(e) => setForm(p => ({ ...p, auth_type: e.target.value }))}
                   placeholder="oauth / api_key"
-                  className="w-full bg-surface-container-high border border-outline-variant text-on-surface text-sm rounded px-3 py-1.5 outline-none focus:border-primary"
+                  className="w-full bg-surface-container-high border border-outline-variant text-on-surface text-sm rounded-control px-3 py-1.5 outline-none focus:border-primary"
                 />
               </FormRow>
               <FormRow label="账号备注">
@@ -388,7 +388,7 @@ const UpstreamMarginPage = () => {
                   value={form.label}
                   onChange={(e) => setForm(p => ({ ...p, label: e.target.value }))}
                   placeholder="例如 Codex Pro #1"
-                  className="w-full bg-surface-container-high border border-outline-variant text-on-surface text-sm rounded px-3 py-1.5 outline-none focus:border-primary"
+                  className="w-full bg-surface-container-high border border-outline-variant text-on-surface text-sm rounded-control px-3 py-1.5 outline-none focus:border-primary"
                 />
               </FormRow>
             </>
@@ -399,7 +399,7 @@ const UpstreamMarginPage = () => {
               value={form.plan_name}
               onChange={(e) => setForm(p => ({ ...p, plan_name: e.target.value }))}
               placeholder="例如 Pro"
-              className="w-full bg-surface-container-high border border-outline-variant text-on-surface text-sm rounded px-3 py-1.5 outline-none focus:border-primary"
+              className="w-full bg-surface-container-high border border-outline-variant text-on-surface text-sm rounded-control px-3 py-1.5 outline-none focus:border-primary"
             />
           </FormRow>
           <FormRow label="月成本 USD" hint="该账号每月的官方订阅费用">
@@ -408,7 +408,7 @@ const UpstreamMarginPage = () => {
               value={form.monthly_cost_usd}
               onChange={(e) => setForm(p => ({ ...p, monthly_cost_usd: e.target.value }))}
               placeholder="20"
-              className="w-full bg-surface-container-high border border-outline-variant text-on-surface text-sm rounded px-3 py-1.5 outline-none focus:border-primary"
+              className="w-full bg-surface-container-high border border-outline-variant text-on-surface text-sm rounded-control px-3 py-1.5 outline-none focus:border-primary"
             />
           </FormRow>
           <FormRow label="估算月容量" hint="API 等值美元（按平台实测填，非官方限额）">
@@ -417,7 +417,7 @@ const UpstreamMarginPage = () => {
               value={form.estimated_monthly_capacity_usd}
               onChange={(e) => setForm(p => ({ ...p, estimated_monthly_capacity_usd: e.target.value }))}
               placeholder="5000"
-              className="w-full bg-surface-container-high border border-outline-variant text-on-surface text-sm rounded px-3 py-1.5 outline-none focus:border-primary"
+              className="w-full bg-surface-container-high border border-outline-variant text-on-surface text-sm rounded-control px-3 py-1.5 outline-none focus:border-primary"
             />
           </FormRow>
           <FormRow label="启用成本分摊">
@@ -431,7 +431,7 @@ const UpstreamMarginPage = () => {
               value={form.notes}
               onChange={(e) => setForm(p => ({ ...p, notes: e.target.value }))}
               placeholder="可留空"
-              className="w-full bg-surface-container-high border border-outline-variant text-on-surface text-sm rounded px-3 py-1.5 outline-none focus:border-primary"
+              className="w-full bg-surface-container-high border border-outline-variant text-on-surface text-sm rounded-control px-3 py-1.5 outline-none focus:border-primary"
             />
           </FormRow>
         </FormRow.Group>

@@ -45,7 +45,6 @@ var SubscriptionSysConfigDefaults = map[string]string{
 	"balance_consume_default_enabled":     "false",   // 余额消费默认关闭（最严策略）
 	"balance_consume_default_limit_usd":   "0",       // 默认无限额
 	"balance_consume_default_window_secs": "2592000", // 默认 30 天重置窗口
-	"addon_default_period_seconds":        "604800",  // 增量包默认有效期 7 天
 	"subscription_default_period_seconds": "2592000", // 订阅默认周期 30 天
 
 	// ── 公开透明计费规则（三账：raw_cost / charged_cost / platform_cost_estimate）──

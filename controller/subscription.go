@@ -344,7 +344,7 @@ func purchaseAsInstant(c *fiber.Ctx, user *database.User, pkg *database.Package,
 		if err := tx.Select("id, quota").First(&freshUser, user.ID).Error; err != nil {
 			return fmt.Errorf("fetch fresh quota: %w", err)
 		}
-		// Phase 8：addon 已移除，所有套餐购买都走 purchase_sub
+		// Phase 8：所有套餐购买都走 purchase_sub
 		entryType := database.BillingTypePurchaseSub
 		// 计算购买扣款前的基线余额：freshUser.Quota 是事务内最终值。
 		balRollingMicro := freshUser.Quota + totalPriceMicro
@@ -688,9 +688,10 @@ func CancelSubscription(c *fiber.Ctx) error {
 			pkgName = pkg.Name
 		}
 	}
-	title := readSysConfigCached("notif_subscription_canceled_title", "订阅已取消")
-	bodyTpl := readSysConfigCached("notif_subscription_canceled_body", "「{package_name}」已取消，将不再消费您的额度。如需退款请联系客服。")
-	body := strings.ReplaceAll(bodyTpl, "{package_name}", pkgName)
+	title := readSysConfigCached("notif_subscription_canceled_title", "您的订阅已取消")
+	bodyTpl := readSysConfigCached("notif_subscription_canceled_body", "您的【{{plan_name}}】订阅已于 {{cancel_time}} 取消。如需恢复服务，请前往套餐中心重新订阅。")
+	body := strings.ReplaceAll(bodyTpl, "{{plan_name}}", pkgName)
+	body = strings.ReplaceAll(body, "{{cancel_time}}", now.Format("2006-01-02 15:04:05"))
 	dedupKey := fmt.Sprintf("cancel:sub_%d", sub.ID)
 	proxy.Dispatch(user.ID, "subscription", "info", title, body,
 		proxy.LinkTickets(), "联系客服", "subscription", sub.ID, &dedupKey)
@@ -714,7 +715,7 @@ type adminRefundSubscriptionRequest struct {
 	// 不要在退款流程里捆绑——这样审计两边各自清晰，账单 / 券系统解耦。
 }
 
-// adminRevokeGrantedSubscriptionRequest admin 收回赠送订阅 / 增量包的请求体。
+// adminRevokeGrantedSubscriptionRequest admin 收回赠送订阅的请求体。
 //
 // 收回赠送只撤销权益，不做退款、不改变 user.quota。reason 必填，进入账单描述和审计日志。
 type adminRevokeGrantedSubscriptionRequest struct {
@@ -996,7 +997,7 @@ func AdminRevokeGrantedSubscription(c *fiber.Ctx) error {
 	if !sub.IsGranted {
 		return c.Status(400).JSON(fiber.Map{
 			"success":      false,
-			"message":      "只能收回管理员赠送的订阅 / 增量包",
+			"message":      "只能收回管理员赠送的订阅",
 			"message_code": "ERR_REVOKE_NOT_GRANTED",
 		})
 	}
@@ -1125,7 +1126,7 @@ type adminSubItem struct {
 	UserGithubID      string     `json:"user_github_id"`
 	PackageID         uint       `json:"package_id"`
 	PackageName       string     `json:"package_name"`        // 从 snapshot 提取（套餐改名/删除后仍准确）
-	ProductType       string     `json:"product_type"`        // 始终是 subscription（addon 已移除）
+	ProductType       string     `json:"product_type"`        // 始终是 subscription
 	PurchasedPriceUSD float64    `json:"purchased_price_usd"` // 从 snapshot 提取购买时价格
 	Status            string     `json:"status"`              // active | canceled | expired | refunded | paused | revoked
 	StartAt           time.Time  `json:"start_at"`
@@ -1372,7 +1373,7 @@ func AdminListSubscriptions(c *fiber.Ctx) error {
 			item.UsageDetailsJSON = string(b)
 		}
 
-		// Phase 8：addon 已移除，所有套餐都是 subscription，按时间比例退款
+		// Phase 8：所有套餐都是 subscription，按时间比例退款
 		if sub.Status != "refunded" {
 			if item.PurchasedPriceUSD > 0 {
 				ratio := item.TimeRemainingPct / 100.0
@@ -1421,7 +1422,7 @@ func buildPackageSnapshotTx(db *gorm.DB, pkg *database.Package) (string, error) 
 		SchemaVersion        int        `json:"schema_version"`
 		PackageID            uint       `json:"package_id"`
 		PackageName          string     `json:"package_name"`
-		ProductType          string     `json:"product_type"` // 始终是 subscription（addon 已移除）
+		ProductType          string     `json:"product_type"` // 始终是 subscription
 		PriceAmount          int64      `json:"price_amount"`
 		PriceCurrency        string     `json:"price_currency"`
 		BillingPeriodSeconds int        `json:"billing_period_seconds"`

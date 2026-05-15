@@ -26,7 +26,7 @@ import (
 type BillingEntryInput struct {
 	UserID          uint
 	EntryType       string // 见 billing_schema.go 的 BillingType* 常量
-	AmountUSD       int64  // 入账正、出账负；api_usage_sub/addon 传 0（单位 micro_usd）
+	AmountUSD       int64  // 入账正、出账负；api_usage_sub 传 0（单位 micro_usd）
 	BalanceAfterUSD int64  // 调用方算好（quota+= 后的值，单位 micro_usd）
 	Description     string
 
@@ -99,7 +99,7 @@ func WriteBillingEntry(tx *gorm.DB, in BillingEntryInput) error {
 //     `[BILLING-LOST-DEBT]` 警报日志，让 admin 能从 ApiLog 手工补账
 //
 // 当前正确用法见 proxy/stream.go：
-//   - api_usage_sub / api_usage_addon: 直接 NonFatal（仅审计）
+//   - api_usage_sub: 直接 NonFatal（仅审计）
 //   - api_usage_pending_reconcile (DB-RETRY / UNAUTHORIZED-FALLBACK): 重试 3 次 + 失败 LOST-DEBT 警报
 func WriteBillingEntryNonFatal(in BillingEntryInput) error {
 	return WriteBillingEntry(DB, in)

@@ -28,7 +28,7 @@ const AdminSidebar = () => {
           小字 caption 标识即可 */}
       <div className="border-b border-outline-variant/40">
         <div className="px-4 py-3 flex items-center gap-2.5">
-          <img src="/daof_logo.png" alt="" className="w-8 h-8 rounded" />
+          <img src="/daof_logo.png" alt="" className="w-8 h-8 rounded-control" />
           <div className="min-w-0 flex-1">
             <div className="text-sm font-semibold text-on-surface truncate leading-tight">
               DAOF-CPA
@@ -63,7 +63,7 @@ const AdminSidebar = () => {
                     <NavLink
                       to={item.path}
                       className={({ isActive }) =>
-                        `relative w-full h-8 flex items-center gap-2 px-2.5 rounded text-sm transition
+                        `relative w-full h-8 flex items-center gap-2 px-2.5 rounded-control text-sm transition
                          ${isActive
                            ? 'bg-primary-container text-on-primary-container font-medium'
                            : 'text-on-surface-variant hover:bg-on-surface/[0.04] hover:text-on-surface'}`
@@ -74,7 +74,7 @@ const AdminSidebar = () => {
                           {isActive && (
                             <span
                               aria-hidden
-                              className="absolute left-0 top-1/2 -translate-y-1/2 w-[3px] h-4 bg-primary rounded-full"
+                              className="absolute left-0 top-1/2 -translate-y-1/2 w-[3px] h-4 bg-primary rounded-control-full"
                             />
                           )}
                           <Icon size={16} className={`shrink-0 ${isActive ? 'opacity-100' : 'opacity-70'}`} />
@@ -94,7 +94,7 @@ const AdminSidebar = () => {
       <div className="border-t border-outline-variant/40 p-2">
         <NavLink
           to="/"
-          className="w-full h-8 flex items-center gap-2 px-2.5 rounded text-sm text-on-surface-variant hover:bg-on-surface/[0.04] hover:text-on-surface transition"
+          className="w-full h-8 flex items-center gap-2 px-2.5 rounded-control text-sm text-on-surface-variant hover:bg-on-surface/[0.04] hover:text-on-surface transition"
         >
           <Home size={14} className="opacity-70" />
           <span>{t('ADMIN.GOTO_USER', '用户仪表盘')}</span>

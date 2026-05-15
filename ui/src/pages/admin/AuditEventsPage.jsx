@@ -38,14 +38,14 @@ const STATUS_OPTIONS = [
 ];
 
 const PeriodSwitch = ({ value, onChange }) => (
-  <div className="flex items-center gap-1 bg-surface-container p-0.5 rounded border border-outline-variant">
+  <div className="flex items-center gap-1 bg-surface-container p-0.5 rounded-control border border-outline-variant">
     {PERIODS.map(p => (
       <button
         key={p.value}
         type="button"
         onClick={() => onChange(p.value)}
-        className={`px-3 py-1 text-xs font-medium rounded ${
-          value === p.value ? 'bg-surface-variant text-on-surface shadow-sm' : 'text-on-surface-variant hover:text-on-surface'
+        className={`px-3 py-1 text-xs font-medium rounded-control ${
+          value === p.value ? 'bg-surface-variant text-on-surface ' : 'text-on-surface-variant hover:text-on-surface'
         }`}
       >{p.label}</button>
     ))}
@@ -150,7 +150,7 @@ const AuditEventsPage = () => {
           {e.requested_model || e.model_name}
         </div>
         {e.served_model && e.requested_model && e.served_model !== e.requested_model && (
-          <div className="text-[10px] text-amber-300 font-mono truncate" title={`served as ${e.served_model}`}>
+          <div className="text-[10px] text-warning font-mono truncate" title={`served as ${e.served_model}`}>
             → {e.served_model}
           </div>
         )}
@@ -162,10 +162,10 @@ const AuditEventsPage = () => {
         const isPrecheck = isPrecheckLimitEvent(e);
         return (
           <span
-            className={`inline-flex items-center gap-1 px-2 h-6 rounded-full text-[11px] font-medium border ${
+            className={`inline-flex items-center gap-1 px-2 h-6 rounded-control-full text-[11px] font-medium border ${
               isPrecheck
-                ? 'bg-amber-500/10 text-amber-300 border-amber-500/30'
-                : 'bg-red-500/10 text-red-300 border-red-500/30'
+                ? 'bg-warning/10 text-warning border-warning/30'
+                : 'bg-error/10 text-error border-error/30'
             }`}
             title={failure?.detail || e.error_message || e.error_type}
           >
@@ -175,9 +175,9 @@ const AuditEventsPage = () => {
       }
       const ok = e.status >= 200 && e.status < 300;
       return (
-        <span className={`inline-flex items-center px-2 h-6 rounded-full text-[11px] font-medium border ${
-          ok ? 'bg-emerald-500/10 text-emerald-300 border-emerald-500/30'
-             : 'bg-red-500/10 text-red-300 border-red-500/30'
+        <span className={`inline-flex items-center px-2 h-6 rounded-control-full text-[11px] font-medium border ${
+          ok ? 'bg-success/10 text-success border-success/30'
+             : 'bg-error/10 text-error border-error/30'
         }`}>
           {e.status}
         </span>
@@ -194,7 +194,7 @@ const AuditEventsPage = () => {
       <button
         type="button"
         onClick={() => setFiltersOpen(o => !o)}
-        className={`inline-flex items-center gap-1.5 px-3 py-1.5 rounded text-xs font-medium border ${
+        className={`inline-flex items-center gap-1.5 px-3 py-1.5 rounded-control text-xs font-medium border ${
           filtersOpen || userIdFilter || modelFilter || statusFilter || errorTypeFilter
             ? 'bg-primary-container text-on-primary-container border-primary/40'
             : 'border-outline-variant text-on-surface-variant hover:text-on-surface'
@@ -203,13 +203,13 @@ const AuditEventsPage = () => {
         <Filter size={12} />
         筛选
         {(userIdFilter || modelFilter || statusFilter || errorTypeFilter) && (
-          <span className="inline-block w-1.5 h-1.5 rounded-full bg-primary" />
+          <span className="inline-block w-1.5 h-1.5 rounded-control-full bg-primary" />
         )}
       </button>
       <button
         type="button"
         onClick={handleExportCsv}
-        className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded text-xs font-medium border border-outline-variant text-on-surface-variant hover:text-on-surface"
+        className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-control text-xs font-medium border border-outline-variant text-on-surface-variant hover:text-on-surface"
       >
         <Download size={12} />
         CSV
@@ -218,7 +218,7 @@ const AuditEventsPage = () => {
       <button
         type="button"
         onClick={fetchData}
-        className="p-2 rounded border border-outline-variant text-on-surface-variant hover:text-on-surface transition"
+        className="p-2 rounded-control border border-outline-variant text-on-surface-variant hover:text-on-surface transition"
         aria-label="刷新"
       >
         <RefreshCw size={14} className={loading ? 'animate-spin' : ''} />
@@ -241,18 +241,18 @@ const AuditEventsPage = () => {
               value={userIdFilter}
               onChange={(e) => setUserIdFilter(e.target.value)}
               placeholder="user_id"
-              className="bg-surface-container-high border border-outline-variant text-on-surface text-sm rounded px-3 py-1.5 outline-none focus:border-primary"
+              className="bg-surface-container-high border border-outline-variant text-on-surface text-sm rounded-control px-3 py-1.5 outline-none focus:border-primary"
             />
             <input
               value={modelFilter}
               onChange={(e) => setModelFilter(e.target.value)}
               placeholder="模型 (substring)"
-              className="bg-surface-container-high border border-outline-variant text-on-surface text-sm rounded px-3 py-1.5 outline-none focus:border-primary"
+              className="bg-surface-container-high border border-outline-variant text-on-surface text-sm rounded-control px-3 py-1.5 outline-none focus:border-primary"
             />
             <select
               value={statusFilter}
               onChange={(e) => setStatusFilter(e.target.value)}
-              className="bg-surface-container-high border border-outline-variant text-on-surface text-sm rounded px-3 py-1.5 outline-none focus:border-primary"
+              className="bg-surface-container-high border border-outline-variant text-on-surface text-sm rounded-control px-3 py-1.5 outline-none focus:border-primary"
             >
               {STATUS_OPTIONS.map(o => <option key={o.v} value={o.v}>{o.l}</option>)}
             </select>
@@ -260,7 +260,7 @@ const AuditEventsPage = () => {
               value={errorTypeFilter}
               onChange={(e) => setErrorTypeFilter(e.target.value)}
               placeholder="error_type (e.g. upstream_unmetered)"
-              className="bg-surface-container-high border border-outline-variant text-on-surface text-sm rounded px-3 py-1.5 outline-none focus:border-primary"
+              className="bg-surface-container-high border border-outline-variant text-on-surface text-sm rounded-control px-3 py-1.5 outline-none focus:border-primary"
             />
           </div>
           <div className="flex items-center justify-end mt-3">
@@ -313,10 +313,10 @@ const EventDetail = ({ event, formatMeterCost, formatEventFailure }) => {
       {/* 状态条 */}
       <div className={`rounded-overlay border px-4 py-3 ${
         failure
-          ? (isPrecheck ? 'bg-amber-500/10 border-amber-500/30' : 'bg-red-500/10 border-red-500/30')
-          : 'bg-emerald-500/10 border-emerald-500/30'
+          ? (isPrecheck ? 'bg-warning/10 border-warning/30' : 'bg-error/10 border-error/30')
+          : 'bg-success/10 border-success/30'
       }`}>
-        <div className={`text-sm font-semibold ${failure ? (isPrecheck ? 'text-amber-300' : 'text-red-300') : 'text-emerald-300'}`}>
+        <div className={`text-sm font-semibold ${failure ? (isPrecheck ? 'text-warning' : 'text-error') : 'text-success'}`}>
           {failure ? failure.label : `成功 (${event.status})`}
         </div>
         {failure?.detail && (
@@ -395,7 +395,7 @@ const EventDetail = ({ event, formatMeterCost, formatEventFailure }) => {
       {(event.error_type || event.error_message) && (
         <Section title="错误详情" flat>
           <Field label="error_type" mono value={event.error_type || '-'} />
-          <div className="mt-2 text-[11px] text-red-300 font-mono whitespace-pre-wrap break-all bg-red-500/5 border border-red-500/20 rounded p-2">
+          <div className="mt-2 text-[11px] text-error font-mono whitespace-pre-wrap break-all bg-error/5 border border-error/20 rounded-control p-2">
             {event.error_message || '(无 message)'}
           </div>
         </Section>

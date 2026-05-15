@@ -47,7 +47,7 @@ export const CurrencyProvider = ({ children }) => {
 
     const formatCurrency = (usdAmount, maxDecimals = 3) => {
         if (typeof usdAmount !== 'number' || !Number.isFinite(usdAmount)) return usdAmount;
-        
+
         if (displayCurrency === 'CNY') {
             const cnyAmount = usdAmount * exchangeRate;
             return `￥${Number(cnyAmount.toFixed(maxDecimals))}`;

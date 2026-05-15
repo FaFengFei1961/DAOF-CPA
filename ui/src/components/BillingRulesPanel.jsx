@@ -63,10 +63,10 @@ const BillingRulesPanel = ({ compact = false }) => {
     .every((r) => Number(r.weight || 1) === 1);
 
   return (
-    <section className="rounded-xl border border-outline-variant/50 bg-surface-container/40 p-4 space-y-4">
+    <section className="rounded-overlay border border-outline-variant/50 bg-surface-container/40 p-4 space-y-4">
       <header className="flex flex-col sm:flex-row sm:items-start sm:justify-between gap-3">
         <div className="flex items-start gap-3">
-          <div className="w-10 h-10 rounded-lg bg-primary/10 flex items-center justify-center shrink-0">
+          <div className="w-10 h-10 rounded-control bg-primary/10 flex items-center justify-center shrink-0">
             <Scale className="w-5 h-5 text-primary" />
           </div>
           <div>
@@ -74,7 +74,7 @@ const BillingRulesPanel = ({ compact = false }) => {
               <h2 className="text-base font-semibold text-on-surface">
                 {t('BILLING_RULES.TITLE', '额度怎么扣？')}
               </h2>
-              <span className="text-[11px] px-2 py-0.5 rounded-full bg-on-surface/[0.06] text-on-surface-variant font-mono">
+              <span className="text-[11px] px-2 py-0.5 rounded-control-full bg-on-surface/[0.06] text-on-surface-variant font-mono">
                 {t('BILLING_RULES.VERSION', '规则版本')} {version}
               </span>
             </div>
@@ -86,7 +86,7 @@ const BillingRulesPanel = ({ compact = false }) => {
         <button
           type="button"
           onClick={load}
-          className="inline-flex items-center justify-center gap-1.5 h-9 px-3 rounded-lg border border-outline-variant text-sm text-on-surface-variant hover:text-on-surface hover:bg-on-surface/[0.04]"
+          className="inline-flex items-center justify-center gap-1.5 h-9 px-3 rounded-control border border-outline-variant text-sm text-on-surface-variant hover:text-on-surface hover:bg-on-surface/[0.04]"
         >
           <RefreshCw className={`w-4 h-4 ${loading ? 'animate-spin' : ''}`} />
           {t('COMMON.REFRESH', '刷新')}
@@ -94,7 +94,7 @@ const BillingRulesPanel = ({ compact = false }) => {
       </header>
 
       {error && (
-        <div className="rounded-lg border border-rose-500/30 bg-rose-500/10 px-3 py-2 text-sm text-rose-300">
+        <div className="rounded-control border border-error/30 bg-error/10 px-3 py-2 text-sm text-error">
           {t('BILLING_RULES.LOAD_FAIL', '规则加载失败')}：{error}
         </div>
       )}
@@ -109,7 +109,7 @@ const BillingRulesPanel = ({ compact = false }) => {
           </div>
 
           <div className="grid grid-cols-1 xl:grid-cols-[minmax(0,1fr)_320px] gap-4">
-            <div className="overflow-hidden rounded-lg border border-outline-variant/40 bg-surface">
+            <div className="overflow-hidden rounded-control border border-outline-variant/40 bg-surface">
               <div className="px-3 py-2 border-b border-outline-variant/40 text-sm font-semibold text-on-surface flex items-center gap-2">
                 <Activity className="w-4 h-4 text-primary" />
                 {t('BILLING_RULES.MODEL_TABLE', '模型消耗系数')}
@@ -139,7 +139,7 @@ const BillingRulesPanel = ({ compact = false }) => {
                           <div className="text-[11px] text-on-surface-variant font-mono mt-0.5">{r.pattern}</div>
                         </td>
                         <td className="px-3 py-2 text-right font-mono text-primary">×{formatWeight(r.weight)}</td>
-                        <td className="px-3 py-2 text-right font-mono text-amber-400">
+                        <td className="px-3 py-2 text-right font-mono text-warning">
                           {r.thinking_weight ? `×${formatWeight(r.thinking_weight)}` : '-'}
                         </td>
                         <td className="px-3 py-2 text-xs text-on-surface-variant">{r.reason || r.label || '-'}</td>
@@ -184,7 +184,7 @@ const BillingRulesPanel = ({ compact = false }) => {
             </div>
           </div>
 
-          <details className="rounded-lg border border-outline-variant/40 bg-surface px-3 py-2">
+          <details className="rounded-control border border-outline-variant/40 bg-surface px-3 py-2">
             <summary className="cursor-pointer text-sm font-medium text-on-surface">
               {t('BILLING_RULES.TECH_DETAILS', '技术字段对照')}
             </summary>
@@ -203,14 +203,14 @@ const BillingRulesPanel = ({ compact = false }) => {
 };
 
 const RuleStep = ({ label, value, strong = false }) => (
-  <div className={`rounded-lg border border-outline-variant/40 p-3 ${strong ? 'bg-primary/10' : 'bg-surface'}`}>
+  <div className={`rounded-control border border-outline-variant/40 p-3 ${strong ? 'bg-primary/10' : 'bg-surface'}`}>
     <div className="text-xs text-on-surface-variant">{label}</div>
     <div className={`mt-1 font-mono text-sm ${strong ? 'text-primary font-semibold' : 'text-on-surface'}`}>{value}</div>
   </div>
 );
 
 const InfoBox = ({ icon: Icon, title, lines }) => (
-  <div className="rounded-lg border border-outline-variant/40 bg-surface p-3">
+  <div className="rounded-control border border-outline-variant/40 bg-surface p-3">
     <div className="flex items-center gap-2 text-sm font-semibold text-on-surface mb-2">
       {Icon && <Icon className="w-4 h-4 text-primary" />}
       {title}
@@ -226,7 +226,7 @@ const InfoBox = ({ icon: Icon, title, lines }) => (
 );
 
 const TechLine = ({ name, text }) => (
-  <div className="rounded-md bg-on-surface/[0.03] px-2 py-1.5">
+  <div className="rounded-control bg-on-surface/[0.03] px-2 py-1.5">
     <span className="font-mono text-primary">{name}</span>
     <span className="ml-2">{text}</span>
   </div>

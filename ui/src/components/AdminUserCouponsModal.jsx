@@ -174,17 +174,17 @@ const AdminUserCouponsModal = ({ userId, username, onClose }) => {
     }[s] || s);
 
     const statusColor = (s) => ({
-        available: 'bg-emerald-500/20 text-emerald-400',
-        used: 'bg-zinc-500/20 text-zinc-400',
-        expired: 'bg-amber-500/20 text-amber-400',
-        revoked: 'bg-rose-500/20 text-rose-400',
-    }[s] || 'bg-zinc-500/20 text-zinc-400');
+        available: 'bg-success/20 text-success',
+        used: 'bg-surface-variant/20 text-on-surface-variant',
+        expired: 'bg-warning/20 text-warning',
+        revoked: 'bg-error/20 text-error',
+    }[s] || 'bg-surface-variant/20 text-on-surface-variant');
 
     return (
         <div ref={modalRef} role="dialog" aria-modal="true" aria-labelledby="admin-user-coupons-title"
             onClick={onBackdropClick}
             className="fixed inset-0 bg-black/80 backdrop-blur-sm z-[100] flex items-start sm:items-center justify-center p-2 sm:p-4 overflow-y-auto">
-            <div className="bg-surface-container border border-outline-variant rounded-2xl w-full max-w-3xl flex flex-col max-h-[90vh]">
+            <div className="bg-surface-container border border-outline-variant rounded-overlay w-full max-w-3xl flex flex-col max-h-[90vh]">
                 <div className="p-6 border-b border-outline-variant flex justify-between items-center">
                     <h3 id="admin-user-coupons-title" className="text-lg font-bold text-on-surface flex items-center gap-2">
                         <Ticket size={18} className="text-fuchsia-400" aria-hidden="true" />
@@ -219,7 +219,7 @@ const AdminUserCouponsModal = ({ userId, username, onClose }) => {
                                         id="grant-tpl"
                                         value={grantTemplateID}
                                         onChange={(e) => setGrantTemplateID(e.target.value)}
-                                        className="w-full bg-surface-container border border-outline rounded-lg px-3 py-2 text-on-surface"
+                                        className="w-full bg-surface-container border border-outline rounded-control px-3 py-2 text-on-surface"
                                     >
                                         <option value="">{t('COMMON.PLEASE_SELECT', '请选择...')}</option>
                                         {/* fix MINOR R23+3（gemini）：可读性更好的下拉文案 */}
@@ -246,7 +246,7 @@ const AdminUserCouponsModal = ({ userId, username, onClose }) => {
                                         value={grantReason}
                                         onChange={(e) => setGrantReason(e.target.value)}
                                         placeholder={t('COUPON.ADMIN_GRANT_REASON_PLACEHOLDER', '如：客诉补偿 / 节日活动')}
-                                        className="w-full bg-surface-container border border-outline rounded-lg px-3 py-2 text-on-surface"
+                                        className="w-full bg-surface-container border border-outline rounded-control px-3 py-2 text-on-surface"
                                     />
                                 </div>
                                 <div>
@@ -261,7 +261,7 @@ const AdminUserCouponsModal = ({ userId, username, onClose }) => {
                                         step="1"
                                         value={grantQuantity}
                                         onChange={(e) => setGrantQuantity(e.target.value)}
-                                        className="w-full bg-surface-container border border-outline rounded-lg px-3 py-2 text-on-surface"
+                                        className="w-full bg-surface-container border border-outline rounded-control px-3 py-2 text-on-surface"
                                     />
                                     <p className="text-[11px] text-on-surface-variant mt-1">
                                         {t('COUPON.ADMIN_GRANT_QTY_HINT', '一次发放多张同款券（节日补偿场景）')}
@@ -272,7 +272,7 @@ const AdminUserCouponsModal = ({ userId, username, onClose }) => {
                                 <button
                                     type="button"
                                     onClick={() => { setShowGrantForm(false); setGrantTemplateID(''); setGrantReason(''); setGrantQuantity('1'); }}
-                                    className="px-4 py-2 text-on-surface-variant hover:text-on-surface rounded-lg"
+                                    className="px-4 py-2 text-on-surface-variant hover:text-on-surface rounded-control"
                                 >
                                     {t('COMMON.CANCEL', '取消')}
                                 </button>
@@ -280,7 +280,7 @@ const AdminUserCouponsModal = ({ userId, username, onClose }) => {
                                     type="button"
                                     onClick={onGrant}
                                     disabled={granting}
-                                    className="px-4 py-2 bg-primary text-on-primary rounded-lg font-medium flex items-center gap-2 disabled:opacity-50"
+                                    className="px-4 py-2 bg-primary text-on-primary rounded-control font-medium flex items-center gap-2 disabled:opacity-50"
                                 >
                                     {granting && <RefreshCw size={14} className="animate-spin" aria-hidden="true" />}
                                     {t('COUPON.ADMIN_GRANT_SUBMIT', '确认发放')}
@@ -321,11 +321,11 @@ const AdminUserCouponsModal = ({ userId, username, onClose }) => {
                                 {list.map((c) => (
                                     <tr key={c.id} className="hover:bg-surface-container-high">
                                         <td className="px-2 py-2 font-medium">{c.snapshot_name}</td>
-                                        <td className="px-2 py-2 text-emerald-400 font-mono text-xs">
+                                        <td className="px-2 py-2 text-success font-mono text-xs">
                                             {c.snapshot_type === 'fixed_price' ? `$${c.snapshot_value}` : c.snapshot_type}
                                         </td>
                                         <td className="px-2 py-2">
-                                            <span className={`px-2 py-0.5 rounded text-xs ${statusColor(c.status)}`}>
+                                            <span className={`px-2 py-0.5 rounded-control text-xs ${statusColor(c.status)}`}>
                                                 {statusLabel(c.status)}
                                             </span>
                                         </td>
@@ -339,7 +339,7 @@ const AdminUserCouponsModal = ({ userId, username, onClose }) => {
                                             {c.status === 'available' && (
                                                 <button
                                                     onClick={() => onRevoke(c)}
-                                                    className="p-1 text-rose-500 hover:bg-rose-500/20 rounded"
+                                                    className="p-1 text-error hover:bg-error/20 rounded-control"
                                                     aria-label={t('COUPON.ADMIN_REVOKE', '撤销')}
                                                     title={t('COUPON.ADMIN_REVOKE', '撤销')}
                                                 >

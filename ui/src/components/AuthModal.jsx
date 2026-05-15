@@ -230,7 +230,7 @@ const AuthModal = ({ isOpen, onClose, onLoginSuccess, initialStep = 'github', tm
       onClick={onBackdropClick}
       className="fixed inset-0 z-50 flex items-start sm:items-center justify-center p-2 sm:p-4 bg-black/60 backdrop-blur-sm overflow-y-auto animate-in fade-in"
     >
-      <div className="relative w-full max-w-[400px] bg-surface-container border border-outline-variant rounded-2xl shadow-2xl overflow-hidden shadow-black/50 my-4 sm:my-0">
+      <div className="relative w-full max-w-[400px] bg-surface-container border border-outline-variant rounded-overlay shadow-2xl shadow-black/40 overflow-hidden shadow-black/50 my-4 sm:my-0">
 
         {/* Close Button */}
         <button
@@ -260,11 +260,11 @@ const AuthModal = ({ isOpen, onClose, onLoginSuccess, initialStep = 'github', tm
                   type="button"
                   onClick={handleGithubLogin}
                   disabled={loading}
-                  className="w-full h-12 bg-white text-black font-semibold rounded-xl flex items-center justify-center gap-3 hover:bg-gray-200  active:scale-[0.98] disabled:opacity-70 disabled:active:scale-100"
+                  className="w-full h-12 bg-white text-black font-semibold rounded-overlay flex items-center justify-center gap-3 hover:bg-surface-container active:scale-[0.98] disabled:opacity-70 disabled:active:scale-100"
                >
                  {loading ? (
                    <span className="flex items-center gap-2">
-                     <div className="w-4 h-4 border-2 border-black/30 border-t-black rounded-full "></div>
+                     <div className="w-4 h-4 border-2 border-black/30 border-t-black rounded-control-full "></div>
                      {t('AUTH.BTN_GITHUB_LOADING')}
                    </span>
                  ) : (
@@ -282,15 +282,15 @@ const AuthModal = ({ isOpen, onClose, onLoginSuccess, initialStep = 'github', tm
           {/* Bind Phone Step */}
           {step === 'bind' && (
             <form onSubmit={handleBind} className="w-full flex gap-4 flex-col">
-              
+
               <div className="relative group">
-                <input 
-                  type="text" 
+                <input
+                  type="text"
                   required
                   value={username}
                   onChange={(e) => setUsername(e.target.value)}
-                  placeholder={t('AUTH.USERNAME_PLACEHOLDER')} 
-                  className="w-full h-11 bg-[#1e1e1e] border border-white/10 rounded-lg px-4 text-sm text-on-surface outline-none focus:border-blue-500/50  placeholder-gray-500"
+                  placeholder={t('AUTH.USERNAME_PLACEHOLDER')}
+                  className="w-full h-11 bg-surface-container border border-white/10 rounded-control px-4 text-sm text-on-surface outline-none focus:border-primary/50 placeholder-on-surface-variant/50"
                 />
               </div>
 
@@ -298,39 +298,39 @@ const AuthModal = ({ isOpen, onClose, onLoginSuccess, initialStep = 'github', tm
                 <div className="absolute inset-y-0 left-0 pl-4 flex items-center pointer-events-none">
                   <span className="text-on-surface-variant text-sm border-r border-outline-variant pr-3 mr-1">+86</span>
                 </div>
-                <input 
-                  type="tel" 
+                <input
+                  type="tel"
                   required
                   value={phone}
                   onChange={(e) => setPhone(e.target.value)}
-                  placeholder={t('AUTH.PHONE_PLACEHOLDER')} 
-                  className="w-full h-11 bg-[#1e1e1e] border border-white/10 rounded-lg pl-[68px] pr-4 text-sm text-on-surface outline-none focus:border-blue-500/50  placeholder-gray-500"
+                  placeholder={t('AUTH.PHONE_PLACEHOLDER')}
+                  className="w-full h-11 bg-surface-container border border-white/10 rounded-control pl-[68px] pr-4 text-sm text-on-surface outline-none focus:border-primary/50 placeholder-on-surface-variant/50"
                 />
               </div>
 
                <div className="flex gap-2">
-                  <input 
-                    type="text" 
+                  <input
+                    type="text"
                     required
                     value={code}
                     onChange={(e) => setCode(e.target.value)}
-                    placeholder={t('AUTH.CODE_PLACEHOLDER')} 
-                    className="flex-1 h-11 bg-[#1e1e1e] border border-white/10 rounded-lg px-4 text-sm text-on-surface outline-none focus:border-blue-500/50  placeholder-gray-500"
+                    placeholder={t('AUTH.CODE_PLACEHOLDER')}
+                    className="flex-1 h-11 bg-surface-container border border-white/10 rounded-control px-4 text-sm text-on-surface outline-none focus:border-primary/50 placeholder-on-surface-variant/50"
                   />
                   <button
                     type="button"
                     onClick={handleSendCode}
                     disabled={countdown > 0 || !phone}
-                    className="h-11 px-4 bg-surface-variant text-on-surface text-xs font-semibold rounded-lg hover:bg-[#333]  disabled:opacity-50 whitespace-nowrap"
+                    className="h-11 px-4 bg-surface-variant text-on-surface text-xs font-semibold rounded-control hover:bg-surface-container-high disabled:opacity-50 whitespace-nowrap"
                   >
                     {countdown > 0 ? t('AUTH.BTN_RE_SEND', { countdown }) : t('AUTH.BTN_SEND_CODE')}
                   </button>
                </div>
 
-               <button 
-                  type="submit" 
+               <button
+                  type="submit"
                   disabled={loading || !username || !phone || !code}
-                  className="w-full h-11 mt-2 bg-gradient-to-r from-blue-600 to-cyan-500 text-on-surface font-semibold rounded-lg flex items-center justify-center hover:opacity-90 -opacity disabled:opacity-50"
+                  className="w-full h-11 mt-2 bg-gradient-to-r from-blue-600 to-cyan-500 text-on-surface font-semibold rounded-control flex items-center justify-center hover:opacity-90 -opacity disabled:opacity-50"
                >
                  {loading ? t('AUTH.BTN_BIND_LOADING') : t('AUTH.BTN_BIND')}
                </button>
@@ -352,19 +352,19 @@ const AuthModal = ({ isOpen, onClose, onLoginSuccess, initialStep = 'github', tm
                   placeholder={t('AUTH.USERNAME_PLACEHOLDER')}
                   aria-invalid={!!profileError}
                   aria-describedby={profileError ? 'auth-profile-error' : undefined}
-                  className={`w-full h-11 bg-[#1e1e1e] border ${profileError ? 'border-red-500/50 focus:border-red-500' : 'border-white/10 focus:border-blue-500/50'} rounded-lg px-4 text-sm text-on-surface outline-none  placeholder-gray-500`}
+                  className={`w-full h-11 bg-surface-container border ${profileError ? 'border-error/50 focus:border-error' : 'border-white/10 focus:border-primary/50'} rounded-control px-4 text-sm text-on-surface outline-none  placeholder-on-surface-variant/50`}
                 />
                 {profileError && (
-                  <span id="auth-profile-error" role="alert" className="absolute -bottom-5 left-1 text-xs text-red-400">
+                  <span id="auth-profile-error" role="alert" className="absolute -bottom-5 left-1 text-xs text-error">
                     {profileError}
                   </span>
                 )}
               </div>
 
-               <button 
-                  type="submit" 
+               <button
+                  type="submit"
                   disabled={loading || !!profileError || !profileName}
-                  className="w-full h-11 mt-4 bg-gradient-to-r from-blue-600 to-cyan-500 text-on-surface font-semibold rounded-lg flex items-center justify-center hover:opacity-90 -opacity disabled:opacity-50"
+                  className="w-full h-11 mt-4 bg-gradient-to-r from-blue-600 to-cyan-500 text-on-surface font-semibold rounded-control flex items-center justify-center hover:opacity-90 -opacity disabled:opacity-50"
                >
                  {loading ? t('AUTH.BTN_PROFILE_LOADING') : t('AUTH.BTN_PROFILE')}
                </button>
@@ -372,7 +372,7 @@ const AuthModal = ({ isOpen, onClose, onLoginSuccess, initialStep = 'github', tm
           )}
 
         </div>
-        
+
         {/* Footer info mock */}
         <div className="w-full p-4 border-t border-outline-variant text-center">
             <span className="text-xs text-on-surface-variant">{t('AUTH.FOOTER_TOS')}</span>

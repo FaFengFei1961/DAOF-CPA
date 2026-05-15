@@ -277,11 +277,11 @@ const UpgradePage = ({ onPurchaseSuccess }) => {
               return (
                 <div key={pkg.id}
                   className={`relative fl-card p-6 ${isRecommended ? 'border-primary' : ''}`}>
-                  {/* Phase 8：去 ring-2 + ring-offset + shadow-md（"超市价签"营销
+                  {/* Phase 8：去 ring-2 + ring-offset + （"超市价签"营销
                       视觉），改成 border-primary 高亮（推荐套餐边框由灰变主色）+
                       标题旁中性 chip 标识，避免 admin 自定义 pkg.gradient 覆盖背景 */}
                   {isRecommended && (
-                    <span className="absolute top-3 right-3 inline-flex items-center px-2 py-0.5 rounded-full text-[10px] font-medium bg-primary/15 text-primary border border-primary/30">
+                    <span className="absolute top-3 right-3 inline-flex items-center px-2 py-0.5 rounded-control-full text-[10px] font-medium bg-primary/15 text-primary border border-primary/30">
                       {pkg.highlight_tag}
                     </span>
                   )}
@@ -295,7 +295,7 @@ const UpgradePage = ({ onPurchaseSuccess }) => {
                     {hasDiscount && (
                       <>
                         <span className="sr-only">{t('UPGRADE.SR_DISCOUNT_PRICE', '折扣价')} {finalPriceText}</span>
-                        <span aria-hidden="true" className="text-2xl font-bold text-emerald-400">{finalPriceText}</span>
+                        <span aria-hidden="true" className="text-2xl font-bold text-success">{finalPriceText}</span>
                         <span className="sr-only">，{t('UPGRADE.SR_ORIGINAL_PRICE', '原价')} {originalPriceText}</span>
                         <span aria-hidden="true" className="text-xs text-outline line-through">{originalPriceText}</span>
                       </>
@@ -307,10 +307,10 @@ const UpgradePage = ({ onPurchaseSuccess }) => {
                   </div>
 
                   <div className="flex flex-wrap gap-1 mb-3 text-[10px]">
-                    <span className="px-2 py-0.5 rounded bg-emerald-500/20 text-emerald-400">{t('UPGRADE.INSTANT', '⚡ 即时开通')}</span>
-                    {Boolean(pkg.stackable) && <span className="px-2 py-0.5 rounded bg-purple-500/20 text-purple-400">{t('UPGRADE.STACKABLE', '可叠加')}</span>}
+                    <span className="px-2 py-0.5 rounded-control bg-success/20 text-success">{t('UPGRADE.INSTANT', '⚡ 即时开通')}</span>
+                    {Boolean(pkg.stackable) && <span className="px-2 py-0.5 rounded-control bg-primary/20 text-primary">{t('UPGRADE.STACKABLE', '可叠加')}</span>}
                     {hasDiscount && (
-                      <span className="px-2 py-0.5 rounded bg-fuchsia-500/20 text-fuchsia-400 font-bold">
+                      <span className="px-2 py-0.5 rounded-control bg-fuchsia-500/20 text-fuchsia-400 font-bold">
                         <span aria-hidden="true">🎟️ </span>{t('UPGRADE.COUPON_APPLIED', '使用券')}
                       </span>
                     )}
@@ -324,7 +324,7 @@ const UpgradePage = ({ onPurchaseSuccess }) => {
                     <ul className="space-y-1 mb-3">
                       {pkg.plans.map(p => (
                         <li key={p.id} className="text-xs text-on-surface-variant flex items-start gap-1.5">
-                          <Check size={12} className="text-emerald-400 shrink-0 mt-0.5" aria-hidden="true" />
+                          <Check size={12} className="text-success shrink-0 mt-0.5" aria-hidden="true" />
                           <span className="min-w-0 break-words leading-relaxed">
                             {String(p.plan?.display_name || p.plan?.name || '')
                               .replaceAll('GPT', 'Codex')
@@ -348,7 +348,7 @@ const UpgradePage = ({ onPurchaseSuccess }) => {
                         id={`coupon-${pkg.id}`}
                         value={selectedCouponId}
                         onChange={(e) => setSelectedCouponByPkg((prev) => ({ ...prev, [pkg.id]: parseInt(e.target.value, 10) || 0 }))}
-                        className="w-full bg-surface-container-high border border-outline rounded-lg px-2 py-1 text-xs text-on-surface focus:border-primary focus:ring-1 focus:ring-primary"
+                        className="w-full bg-surface-container-high border border-outline rounded-control px-2 py-1 text-xs text-on-surface focus:border-primary focus:ring-1 focus:ring-primary"
                       >
                         <option value={0}>{t('UPGRADE.COUPON_NONE', '不使用券')}</option>
                         {usableCoupons.map((c) => (

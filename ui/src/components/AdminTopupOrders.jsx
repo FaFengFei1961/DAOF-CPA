@@ -128,7 +128,7 @@ const AdminTopupOrders = () => {
           <select
             value={statusFilter}
             onChange={e => setStatusFilter(e.target.value)}
-            className="h-9 bg-surface-container border border-outline-variant rounded-lg px-3 text-sm text-on-surface"
+            className="h-9 bg-surface-container border border-outline-variant rounded-control px-3 text-sm text-on-surface"
           >
             {STATUS_OPTIONS.map(s => (
               <option key={s} value={s}>
@@ -139,14 +139,14 @@ const AdminTopupOrders = () => {
           <button
             type="button"
             onClick={load}
-            className="h-9 w-9 flex items-center justify-center rounded-lg bg-surface-container hover:bg-on-surface/[0.04]"
+            className="h-9 w-9 flex items-center justify-center rounded-control bg-surface-container hover:bg-on-surface/[0.04]"
           >
             <RefreshCw size={14} className={loading ? 'animate-spin' : ''} />
           </button>
         </div>
       </header>
 
-      <section className="bg-surface-container-high border border-outline-variant rounded-2xl overflow-hidden">
+      <section className="bg-surface-container-high border border-outline-variant rounded-overlay overflow-hidden">
         {rows.length === 0 ? (
           <div className="text-center py-12 text-sm text-on-surface-variant">
             {t('TOPUP.EMPTY', '暂无充值记录')}
@@ -176,7 +176,7 @@ const AdminTopupOrders = () => {
                       ¥{o.money_rmb.toFixed(2)}
                       <span className="text-xs text-on-surface-variant ml-1">/ ${o.amount_usd.toFixed(2)}</span>
                       {o.refunded_amount_rmb > 0 && (
-                        <div className="text-[10px] text-amber-400">
+                        <div className="text-[10px] text-warning">
                           已退 ¥{o.refunded_amount_rmb.toFixed(2)}
                         </div>
                       )}
@@ -196,7 +196,7 @@ const AdminTopupOrders = () => {
                           type="button"
                           disabled={refundingId === o.id}
                           onClick={() => openRefundModal(o)}
-                          className="text-xs text-amber-400 hover:text-amber-300 inline-flex items-center gap-1 disabled:opacity-50"
+                          className="text-xs text-warning hover:text-warning inline-flex items-center gap-1 disabled:opacity-50"
                         >
                           <RotateCcw size={12} />
                           {refundingId === o.id ? '...' : t('PAY_ADMIN.REFUND_BTN', '退款')}
@@ -221,7 +221,7 @@ const AdminTopupOrders = () => {
                 value={pageSize}
                 onChange={(e) => { setPageSize(Number(e.target.value)); setPage(1); }}
                 aria-label={t('PAGINATION.SIZE_LABEL', '每页条数')}
-                className="bg-surface-container-high border border-outline-variant rounded px-2 py-1 text-xs text-on-surface"
+                className="bg-surface-container-high border border-outline-variant rounded-control px-2 py-1 text-xs text-on-surface"
               >
                 {[10, 20, 50, 100].map(n => <option key={n} value={n}>{n} / {t('PAGINATION.PAGE', '页')}</option>)}
               </select>
@@ -229,7 +229,7 @@ const AdminTopupOrders = () => {
                 type="button"
                 onClick={() => setPage(p => Math.max(1, p - 1))}
                 disabled={page <= 1}
-                className="px-3 py-1 text-xs bg-surface-container-high border border-outline-variant rounded disabled:opacity-30 hover:border-primary"
+                className="px-3 py-1 text-xs bg-surface-container-high border border-outline-variant rounded-control disabled:opacity-30 hover:border-primary"
               >
                 {t('PAGINATION.PREV', '上一页')}
               </button>
@@ -237,7 +237,7 @@ const AdminTopupOrders = () => {
                 type="button"
                 onClick={() => setPage(p => Math.min(totalPages, p + 1))}
                 disabled={page >= totalPages}
-                className="px-3 py-1 text-xs bg-surface-container-high border border-outline-variant rounded disabled:opacity-30 hover:border-primary"
+                className="px-3 py-1 text-xs bg-surface-container-high border border-outline-variant rounded-control disabled:opacity-30 hover:border-primary"
               >
                 {t('PAGINATION.NEXT', '下一页')}
               </button>
@@ -256,12 +256,12 @@ const AdminTopupOrders = () => {
           onClick={onRefundBackdropClick}
           className="fixed inset-0 z-[60] flex items-center justify-center p-4 bg-black/70 backdrop-blur-md"
         >
-          <div className="bg-surface w-full max-w-md rounded-xl shadow-2xl overflow-hidden">
+          <div className="bg-surface w-full max-w-md rounded-overlay shadow-2xl shadow-black/40 overflow-hidden">
             <div className="flex items-center justify-between px-5 py-4 border-b border-outline-variant/40">
               <h2 id="refund-modal-title" className="text-base font-semibold text-on-surface">
                 {t('PAY_ADMIN.REFUND_MANUAL_TITLE', '手动退款登记')} · #{refundModal.order.id}
               </h2>
-              <button onClick={closeRefundModal} className="p-1.5 rounded hover:bg-on-surface/[0.04]" aria-label={t('COMMON.CLOSE', '关闭')}>
+              <button onClick={closeRefundModal} className="p-1.5 rounded-control hover:bg-on-surface/[0.04]" aria-label={t('COMMON.CLOSE', '关闭')}>
                 <X className="w-4 h-4" />
               </button>
             </div>
@@ -269,16 +269,16 @@ const AdminTopupOrders = () => {
             <div className="p-5 space-y-4">
               {refundModal.step === 1 && (
                 <>
-                  <div className="rounded-lg bg-amber-500/10 border border-amber-500/40 p-3 text-sm">
+                  <div className="rounded-control bg-warning/10 border border-warning/40 p-3 text-sm">
                     <div className="flex items-start gap-2">
-                      <AlertCircle className="w-4 h-4 text-amber-500 mt-0.5 shrink-0" />
-                      <div className="text-amber-700 dark:text-amber-300 leading-relaxed">
+                      <AlertCircle className="w-4 h-4 text-warning mt-0.5 shrink-0" />
+                      <div className="text-warning dark:text-warning leading-relaxed">
                         {t('PAY_ADMIN.REFUND_MANUAL_STEP1_HINT', '本平台已关闭自动退款 API。请先登录易付通商户后台手动完成退款（钱将原路退回用户支付宝/微信），完成后再返回此处登记。')}
                       </div>
                     </div>
                   </div>
                   <div className="text-sm space-y-1.5 text-on-surface/80">
-                    <div>{t('PAY_ADMIN.REFUND_ORDER_NO', '订单号')}: <code className="px-1 bg-on-surface/[0.06] rounded">{refundModal.order.out_trade_no}</code></div>
+                    <div>{t('PAY_ADMIN.REFUND_ORDER_NO', '订单号')}: <code className="px-1 bg-on-surface/[0.06] rounded-control">{refundModal.order.out_trade_no}</code></div>
                     <div>{t('PAY_ADMIN.REFUND_ORDER_AMOUNT', '订单金额')}: ¥{refundModal.order.money_rmb.toFixed(2)}</div>
                     <div>{t('PAY_ADMIN.REFUND_REMAINING', '剩余可退')}: ¥{(refundModal.order.money_rmb - (refundModal.order.refunded_amount_rmb || 0)).toFixed(2)}</div>
                   </div>
@@ -302,13 +302,13 @@ const AdminTopupOrders = () => {
                     <span>{t('PAY_ADMIN.REFUND_CONFIRM_EXTERNAL', '我已在易付通后台完成此订单的退款操作')}</span>
                   </label>
                   <div className="flex gap-2 justify-end pt-2">
-                    <button onClick={closeRefundModal} className="px-4 py-2 rounded-lg border border-outline-variant text-sm hover:bg-on-surface/[0.04]">
+                    <button onClick={closeRefundModal} className="px-4 py-2 rounded-control border border-outline-variant text-sm hover:bg-on-surface/[0.04]">
                       {t('CONFIRM.CANCEL', '取消')}
                     </button>
                     <button
                       disabled={!refundModal.confirmedExternal}
                       onClick={() => setRefundModal(prev => ({ ...prev, step: 2 }))}
-                      className="px-4 py-2 rounded-lg bg-primary text-white text-sm hover:opacity-90 disabled:opacity-40"
+                      className="px-4 py-2 rounded-control bg-primary text-white text-sm hover:opacity-90 disabled:opacity-40"
                     >
                       {t('CONFIRM.NEXT', '下一步')} →
                     </button>
@@ -332,7 +332,7 @@ const AdminTopupOrders = () => {
                       placeholder={String((refundModal.order.money_rmb - (refundModal.order.refunded_amount_rmb || 0)).toFixed(2))}
                       value={refundModal.moneyRmb}
                       onChange={(e) => setRefundModal(prev => ({ ...prev, moneyRmb: e.target.value }))}
-                      className="mt-1 w-full px-3 py-2 rounded border border-outline-variant bg-surface text-sm"
+                      className="mt-1 w-full px-3 py-2 rounded-control border border-outline-variant bg-surface text-sm"
                     />
                   </label>
                   <label className="block">
@@ -343,7 +343,7 @@ const AdminTopupOrders = () => {
                       placeholder="rxxxxxxxxxxxxxxxxxxxx"
                       value={refundModal.externalRef}
                       onChange={(e) => setRefundModal(prev => ({ ...prev, externalRef: e.target.value }))}
-                      className="mt-1 w-full px-3 py-2 rounded border border-outline-variant bg-surface text-sm font-mono"
+                      className="mt-1 w-full px-3 py-2 rounded-control border border-outline-variant bg-surface text-sm font-mono"
                     />
                   </label>
                   <label className="flex items-start gap-2 text-sm cursor-pointer">
@@ -363,14 +363,14 @@ const AdminTopupOrders = () => {
                   <div className="flex gap-2 justify-end pt-2">
                     <button
                       onClick={() => setRefundModal(prev => ({ ...prev, step: 1 }))}
-                      className="px-4 py-2 rounded-lg border border-outline-variant text-sm hover:bg-on-surface/[0.04]"
+                      className="px-4 py-2 rounded-control border border-outline-variant text-sm hover:bg-on-surface/[0.04]"
                     >
                       ← {t('CONFIRM.PREV', '上一步')}
                     </button>
                     <button
                       disabled={refundingId === refundModal.order.id}
                       onClick={submitRefund}
-                      className="px-4 py-2 rounded-lg bg-primary text-white text-sm hover:opacity-90 disabled:opacity-40"
+                      className="px-4 py-2 rounded-control bg-primary text-white text-sm hover:opacity-90 disabled:opacity-40"
                     >
                       {refundingId === refundModal.order.id ? '...' : t('PAY_ADMIN.REFUND_SUBMIT', '登记退款')}
                     </button>
@@ -387,9 +387,9 @@ const AdminTopupOrders = () => {
 
 const statusClass = (s) => {
   switch (s) {
-    case 'paid': return 'text-emerald-400 text-xs';
-    case 'created': return 'text-amber-400 text-xs';
-    case 'failed': return 'text-red-400 text-xs';
+    case 'paid': return 'text-success text-xs';
+    case 'created': return 'text-warning text-xs';
+    case 'failed': return 'text-error text-xs';
     case 'refunded': return 'text-on-surface-variant text-xs line-through';
     default: return 'text-on-surface-variant text-xs';
   }

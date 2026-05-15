@@ -23,7 +23,7 @@ import (
 	"gorm.io/gorm"
 )
 
-// 允许的 EntryType 白名单（防 admin 注入任意字符串污染日志）
+// 允许的 EntryType 白名单（防 admin 注入任意字符串污染日志）。Phase 8 后只保留订阅与余额路径。
 //
 // fix MAJOR（codex 第十七轮）：补齐 admin_grant_* 与 api_usage_pending_reconcile，
 // 否则 admin 账单页过滤会把"赠送账单"和"待对账记录"排除，财务对账出现 hole。
@@ -180,7 +180,7 @@ func listBillingEntries(c *fiber.Ctx, userID uint, includeInternal bool) error {
 
 	return c.JSON(fiber.Map{
 		"success": true,
-		"data":    rows,
+		"data":    billingEntryViewsFrom(rows),
 		"meta":    fiber.Map{"page": page, "page_size": size, "total": total},
 	})
 }

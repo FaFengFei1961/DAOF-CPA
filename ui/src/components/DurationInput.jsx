@@ -60,7 +60,7 @@ const DurationInput = ({ value, onChange, className = '', selectClass = '', allo
     totalSec === 0 ? 0 : Number((totalSec / meta.sec).toFixed(6));
 
   const baseInputCls =
-    'w-full rounded-lg bg-surface border border-outline-variant text-on-surface text-sm px-3 py-2 focus:outline-none focus:border-primary';
+    'w-full rounded-control bg-surface border border-outline-variant text-on-surface text-sm px-3 py-2 focus:outline-none focus:border-primary';
 
   const handleNumberChange = (raw) => {
     if (raw === '' || raw === '-') {

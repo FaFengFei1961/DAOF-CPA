@@ -14,7 +14,7 @@ import NotificationCenter from './NotificationCenter';
  *  - 高度 48px（Win11 Mica 顶栏标准）
  *  - 中央居中搜索框（占 max-w-2xl），仅桌面端显示
  *  - 右侧紧凑控件簇：通知 / 语言 / 货币 / 余额 / 头像 / 退出
- *  - 控件统一 32px 高，rounded (8px)，hover 时 subtle bg
+ *  - 控件统一 32px 高，rounded-control (8px)，hover 时 subtle bg
  *  - 移动端：左侧露 logo + 应用名，右侧只保留头像 / 登录
  */
 const TopBar = ({ isAuthenticated, onOpenAuth, isAdmin, profile }) => {
@@ -106,7 +106,7 @@ const TopBar = ({ isAuthenticated, onOpenAuth, isAdmin, profile }) => {
     <header className="h-12 flex items-center gap-2 px-3 sm:px-4 bg-surface/85 backdrop-blur-md w-full shrink-0 sticky top-0 z-40 border-b border-outline-variant/40">
       {/* 左：移动端 Logo */}
       <div className="flex items-center gap-2 lg:hidden shrink-0">
-        <img src="/daof_logo.png" alt="" className="w-7 h-7 rounded" />
+        <img src="/daof_logo.png" alt="" className="w-7 h-7 rounded-control" />
         <span className="text-sm font-semibold text-on-surface">DAOF-CPA</span>
       </div>
 
@@ -127,7 +127,7 @@ const TopBar = ({ isAuthenticated, onOpenAuth, isAdmin, profile }) => {
           placeholder={t('TOPBAR.SEARCH_PLACEHOLDER', '搜索模型、套餐')}
           className="w-full h-9 bg-surface-container/60 border border-outline-variant/60 rounded-overlay pl-9 pr-14 text-sm text-on-surface placeholder:text-on-surface-variant outline-none focus:border-primary focus:bg-surface-container transition-colors"
         />
-        <kbd className="hidden lg:flex absolute right-3 top-1/2 -translate-y-1/2 items-center gap-0.5 h-5 px-1.5 rounded text-[10px] font-mono text-on-surface-variant bg-on-surface/5 border border-outline-variant/60 pointer-events-none">
+        <kbd className="hidden lg:flex absolute right-3 top-1/2 -translate-y-1/2 items-center gap-0.5 h-5 px-1.5 rounded-control text-[10px] font-mono text-on-surface-variant bg-on-surface/5 border border-outline-variant/60 pointer-events-none">
           <span>⌘</span><span>K</span>
         </kbd>
       </form>
@@ -145,7 +145,7 @@ const TopBar = ({ isAuthenticated, onOpenAuth, isAdmin, profile }) => {
         {isAdmin && (
           <Link
             to="/admin"
-            className="flex items-center gap-1.5 h-8 px-2.5 rounded border border-outline-variant text-on-surface-variant hover:bg-on-surface/[0.04] hover:text-on-surface transition"
+            className="flex items-center gap-1.5 h-8 px-2.5 rounded-control border border-outline-variant text-on-surface-variant hover:bg-on-surface/[0.04] hover:text-on-surface transition"
             title={t('TOPBAR.ENTER_ADMIN', '进入管理后台')}
           >
             <ShieldAlert size={14} />
@@ -159,12 +159,12 @@ const TopBar = ({ isAuthenticated, onOpenAuth, isAdmin, profile }) => {
               ref={menuTriggerRef}
               type="button"
               onClick={() => setMenuOpen(v => !v)}
-              className="flex items-center gap-1.5 h-8 pl-1 pr-2 rounded hover:bg-on-surface/[0.04] transition"
+              className="flex items-center gap-1.5 h-8 pl-1 pr-2 rounded-control hover:bg-on-surface/[0.04] transition"
               aria-haspopup="menu"
               aria-expanded={menuOpen}
               aria-label={t('TOPBAR.ACCOUNT_MENU', '账户菜单')}
             >
-              <div className="w-7 h-7 rounded-full bg-primary text-on-primary flex items-center justify-center shrink-0">
+              <div className="w-7 h-7 rounded-control-full bg-primary text-on-primary flex items-center justify-center shrink-0">
                 <User size={13} />
               </div>
               <ChevronDown size={12} className={`text-on-surface-variant transition-transform ${menuOpen ? 'rotate-180' : ''}`} />
@@ -173,12 +173,12 @@ const TopBar = ({ isAuthenticated, onOpenAuth, isAdmin, profile }) => {
             {menuOpen && (
               <div
                 role="menu"
-                className="absolute right-0 top-full mt-2 w-72 bg-surface-container-high border border-outline-variant rounded-overlay shadow-xl shadow-black/40 z-[100] overflow-hidden"
+                className="absolute right-0 top-full mt-2 w-72 bg-surface-container-high border border-outline-variant rounded-overlay shadow-black/40 z-[100] overflow-hidden"
               >
                 {/* Header: 用户名 + role + 余额 */}
                 <div className="px-4 py-3 border-b border-outline-variant/40">
                   <div className="flex items-center gap-3">
-                    <div className="w-10 h-10 rounded-full bg-primary text-on-primary flex items-center justify-center">
+                    <div className="w-10 h-10 rounded-control-full bg-primary text-on-primary flex items-center justify-center">
                       <User size={18} />
                     </div>
                     <div className="min-w-0 flex-1">
@@ -223,7 +223,7 @@ const TopBar = ({ isAuthenticated, onOpenAuth, isAdmin, profile }) => {
                               onClick={() => i18n.changeLanguage(loc.id)}
                               role="menuitemradio"
                               aria-checked={active}
-                              className={`flex items-center gap-1.5 px-2 py-1.5 rounded text-xs transition ${
+                              className={`flex items-center gap-1.5 px-2 py-1.5 rounded-control text-xs transition ${
                                 active
                                   ? 'bg-primary/15 text-primary font-semibold border border-primary/30'
                                   : 'text-on-surface-variant hover:bg-on-surface/[0.06] border border-transparent'

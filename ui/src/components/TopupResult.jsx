@@ -20,35 +20,35 @@ const TopupResult = () => {
     switch (status) {
       case 'success':
         return {
-          icon: <CheckCircle2 size={56} className="text-emerald-400" />,
+          icon: <CheckCircle2 size={56} className="text-success" />,
           title: t('TOPUP.RESULT_SUCCESS', '支付完成，正在确认到账'),
           subtitle: t('TOPUP.RESULT_SUCCESS_SUB', '余额会在收到支付平台异步通知后自动入账，通常几秒到几分钟'),
-          tone: 'border-emerald-500/30',
+          tone: 'border-success/30',
         };
       case 'pending':
         return {
-          icon: <Clock size={56} className="text-amber-400" />,
+          icon: <Clock size={56} className="text-warning" />,
           title: t('TOPUP.RESULT_PENDING', '我们正在确认您的支付，稍后将自动到账'),
-          tone: 'border-amber-500/30',
+          tone: 'border-warning/30',
         };
       case 'sign_invalid':
         return {
-          icon: <AlertTriangle size={56} className="text-red-400" />,
+          icon: <AlertTriangle size={56} className="text-error" />,
           title: t('TOPUP.RESULT_SIGN_INVALID', '回调签名异常，请联系客服'),
-          tone: 'border-red-500/30',
+          tone: 'border-error/30',
         };
       default:
         return {
-          icon: <XCircle size={56} className="text-red-400" />,
+          icon: <XCircle size={56} className="text-error" />,
           title: t('TOPUP.RESULT_FAILED', '支付失败或已取消'),
-          tone: 'border-red-500/30',
+          tone: 'border-error/30',
         };
     }
   })();
 
   return (
     <div className="max-w-xl mx-auto py-12">
-      <div className={`bg-surface-container-high border ${config.tone} rounded-2xl p-10 text-center`}>
+      <div className={`bg-surface-container-high border ${config.tone} rounded-overlay p-10 text-center`}>
         <div className="flex justify-center mb-4">{config.icon}</div>
         <h1 className="text-lg font-bold text-on-surface mb-2">{config.title}</h1>
         {config.subtitle && (
@@ -60,7 +60,7 @@ const TopupResult = () => {
         <button
           type="button"
           onClick={() => navigate('/topup')}
-          className="h-10 px-6 bg-primary text-on-primary rounded-lg text-sm font-semibold hover:opacity-90"
+          className="h-10 px-6 bg-primary text-on-primary rounded-control text-sm font-semibold hover:opacity-90"
         >
           {t('TOPUP.BACK_TO_TOPUP', '返回充值')}
         </button>

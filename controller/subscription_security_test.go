@@ -4,7 +4,7 @@
 // 每个测试都有具体攻击/利用场景标注，确保未来重构不会回退。
 //
 // 不变量清单（按修复轮次倒序，便于追溯）：
-//  1. R11: addon 退款公式 — min(time_remain_ratio, quota_remain_ratio)
+//  1. R11: 订阅退款建议按时间比例，不读取 quota 消耗率
 //  2. R11: TopupOrder reclaim_quota 防绕过 — 用户有非 refunded 订阅则拒绝
 //  3. R10: AdminRefundSubscription 状态机 — refunded 终态，重复退款 409
 //  4. R10: canceled_at 不被退款时间覆写 — 已 canceled 子保留原始取消时间
@@ -315,11 +315,9 @@ func TestSecurity_Purchase_RequiresFullPrice(t *testing.T) {
 	}
 }
 
-// ─── R11 Major: addon 退款公式 = min(time_remain, quota_remain) ────
+// ─── R11 Major: subscription refund suggestion guard ────────────────
 
-// Phase 8：addon（增量包）已移除，TestSecurity_AdminList_AddonRefund_UsesQuotaRatio
-// 测试整段删除 — 该测试针对的"addon 取 min(time, quota) 比例退款防套利"逻辑随
-// 业务下线一并移除（subscription.go 退款建议改为统一按时间比例）。
+// Phase 8：旧的 quota-ratio 退款建议逻辑随业务下线一并移除。
 
 // TestSecurity_AdminList_SubscriptionRefund_UsesTimeRatio 验证：
 // 普通 subscription 仍按时间比例退款，不读 quota——

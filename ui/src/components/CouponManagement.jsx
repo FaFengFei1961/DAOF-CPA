@@ -158,7 +158,7 @@ const CouponManagement = () => {
         </button>
       </div>
 
-      <div className="bg-surface-container border border-outline-variant rounded-2xl overflow-hidden">
+      <div className="bg-surface-container border border-outline-variant rounded-overlay overflow-hidden">
         <table className="w-full text-sm">
           <thead className="bg-surface-container-high text-on-surface-variant text-xs">
             <tr>
@@ -183,7 +183,7 @@ const CouponManagement = () => {
                   <td className="px-4 py-3 font-medium">{tpl.name}</td>
                   <td className="px-4 py-3">
                     {tpl.discount_type === 'fixed_price' && (
-                      <span className="text-emerald-400">{t('COUPON.FIXED_PRICE', '固定价 $')}{tpl.discount_value}</span>
+                      <span className="text-success">{t('COUPON.FIXED_PRICE', '固定价 $')}{tpl.discount_value}</span>
                     )}
                   </td>
                   <td className="px-4 py-3 text-xs text-on-surface-variant">{renderPackageScope(tpl)}</td>
@@ -192,16 +192,16 @@ const CouponManagement = () => {
                   </td>
                   <td className="px-4 py-3">
                     {tpl.enabled !== false
-                      ? <span className="text-xs px-2 py-0.5 rounded bg-emerald-500/20 text-emerald-400">{t('COUPON.YES', '启用')}</span>
-                      : <span className="text-xs px-2 py-0.5 rounded bg-zinc-500/20 text-zinc-400">{t('COUPON.NO', '禁用')}</span>}
+                      ? <span className="text-xs px-2 py-0.5 rounded-control bg-success/20 text-success">{t('COUPON.YES', '启用')}</span>
+                      : <span className="text-xs px-2 py-0.5 rounded-control bg-surface-variant/20 text-on-surface-variant">{t('COUPON.NO', '禁用')}</span>}
                   </td>
                   <td className="px-4 py-3 text-right">
                     <button onClick={() => setEditing({ ...tpl, package_ids: tpl.package_ids || '' })}
-                      className="p-1.5 hover:bg-blue-500/20 text-primary rounded mr-1" aria-label={t('COUPON.EDIT', '编辑')}>
+                      className="p-1.5 hover:bg-primary/20 text-primary rounded-control mr-1" aria-label={t('COUPON.EDIT', '编辑')}>
                       <Edit size={14} />
                     </button>
                     <button onClick={() => onDelete(tpl)}
-                      className="p-1.5 hover:bg-rose-500/20 text-rose-500 rounded" aria-label={t('COUPON.DELETE', '删除')}>
+                      className="p-1.5 hover:bg-error/20 text-error rounded-control" aria-label={t('COUPON.DELETE', '删除')}>
                       <Trash2 size={14} />
                     </button>
                   </td>
@@ -216,7 +216,7 @@ const CouponManagement = () => {
         <div ref={modalRef} role="dialog" aria-modal="true" aria-labelledby="coupon-modal-title"
           onClick={onBackdropClick}
           className="fixed inset-0 bg-black/80 backdrop-blur-sm z-[100] flex items-center justify-center p-4 overflow-y-auto">
-          <div className="bg-surface-container border border-outline-variant rounded-2xl w-full max-w-xl max-h-[90vh] flex flex-col">
+          <div className="bg-surface-container border border-outline-variant rounded-overlay w-full max-w-xl max-h-[90vh] flex flex-col">
             <div className="p-6 border-b border-outline-variant flex justify-between items-center">
               <h3 id="coupon-modal-title" className="text-lg font-bold flex items-center gap-2">
                 <Ticket size={18} className="text-primary" />
@@ -234,7 +234,7 @@ const CouponManagement = () => {
                 <input id="ct-name" type="text" value={editing.name}
                   onChange={(e) => updateField('name', e.target.value)}
                   placeholder={t('COUPON.NAME_PLACEHOLDER', '如：新人 5 折券')}
-                  className="w-full bg-surface-container-high border border-outline rounded-lg px-3 py-2 text-on-surface" />
+                  className="w-full bg-surface-container-high border border-outline rounded-control px-3 py-2 text-on-surface" />
               </div>
               <div>
                 <label htmlFor="ct-desc" className="block text-xs font-medium text-on-surface-variant mb-1">
@@ -243,7 +243,7 @@ const CouponManagement = () => {
                 <input id="ct-desc" type="text" value={editing.description}
                   onChange={(e) => updateField('description', e.target.value)}
                   placeholder={t('COUPON.DESC_PLACEHOLDER', '如：限时新人首单专享')}
-                  className="w-full bg-surface-container-high border border-outline rounded-lg px-3 py-2 text-on-surface" />
+                  className="w-full bg-surface-container-high border border-outline rounded-control px-3 py-2 text-on-surface" />
               </div>
               <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
                 <div>
@@ -252,7 +252,7 @@ const CouponManagement = () => {
                   </label>
                   <select id="ct-type" value={editing.discount_type}
                     onChange={(e) => updateField('discount_type', e.target.value)}
-                    className="w-full bg-surface-container-high border border-outline rounded-lg px-3 py-2 text-on-surface">
+                    className="w-full bg-surface-container-high border border-outline rounded-control px-3 py-2 text-on-surface">
                     <option value="fixed_price">{t('COUPON.TYPE_FIXED', '固定价（直接定价）')}</option>
                   </select>
                 </div>
@@ -262,7 +262,7 @@ const CouponManagement = () => {
                   </label>
                   <input id="ct-value" type="number" min="0" step="0.01" value={editing.discount_value}
                     onChange={(e) => updateField('discount_value', parseFloat(e.target.value) || 0)}
-                    className="w-full bg-surface-container-high border border-outline rounded-lg px-3 py-2 text-on-surface" />
+                    className="w-full bg-surface-container-high border border-outline rounded-control px-3 py-2 text-on-surface" />
                 </div>
               </div>
               <div>
@@ -272,7 +272,7 @@ const CouponManagement = () => {
                 <div className="flex flex-wrap gap-2">
                   {packages.map((p) => (
                     <button key={p.id} type="button" onClick={() => togglePackage(p.id)}
-                      className={`px-3 py-1.5 rounded-lg text-xs border transition ${
+                      className={`px-3 py-1.5 rounded-control text-xs border transition ${
                         isPackageSelected(p.id)
                           ? 'bg-primary text-on-primary border-primary'
                           : 'bg-surface-container-high border-outline-variant text-on-surface-variant hover:border-primary'
@@ -289,7 +289,7 @@ const CouponManagement = () => {
                   </label>
                   <input id="ct-valid" type="number" min="0" value={editing.valid_days}
                     onChange={(e) => updateField('valid_days', parseInt(e.target.value, 10) || 0)}
-                    className="w-full bg-surface-container-high border border-outline rounded-lg px-3 py-2 text-on-surface" />
+                    className="w-full bg-surface-container-high border border-outline rounded-control px-3 py-2 text-on-surface" />
                 </div>
                 <div className="flex items-end">
                   <label className="flex items-center gap-2 cursor-pointer text-sm">
@@ -303,11 +303,11 @@ const CouponManagement = () => {
             </div>
             <div className="p-6 border-t border-outline-variant flex justify-end gap-3">
               <button onClick={() => !saving && setEditing(null)}
-                className="px-5 py-2 text-on-surface-variant hover:text-on-surface rounded-lg">
+                className="px-5 py-2 text-on-surface-variant hover:text-on-surface rounded-control">
                 {t('COMMON.CANCEL', '取消')}
               </button>
               <button onClick={onSave} disabled={saving}
-                className="px-5 py-2 bg-primary text-on-primary rounded-lg font-medium flex items-center gap-2 disabled:opacity-50">
+                className="px-5 py-2 bg-primary text-on-primary rounded-control font-medium flex items-center gap-2 disabled:opacity-50">
                 <Save size={16} /> {saving ? t('COMMON.SAVING', '保存中...') : t('COMMON.SAVE', '保存')}
               </button>
             </div>

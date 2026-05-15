@@ -6,10 +6,10 @@ import toast from 'react-hot-toast';
 import { authFetch, isLoggedIn } from '../utils/authFetch';
 
 const SEVERITY_COLOR = {
-  info: 'text-blue-400',
-  success: 'text-emerald-400',
-  warning: 'text-amber-400',
-  error: 'text-red-400',
+  info: 'text-primary',
+  success: 'text-success',
+  warning: 'text-warning',
+  error: 'text-error',
 };
 
 // 通知中心。挂在 TopBar 作为下拉面板。
@@ -156,7 +156,7 @@ const NotificationCenter = ({ isAuthenticated, onSignIn }) => {
             return !v;
           });
         }}
-        className="relative w-8 h-8 flex items-center justify-center rounded text-on-surface-variant hover:text-on-surface hover:bg-on-surface/[0.04] transition"
+        className="relative w-8 h-8 flex items-center justify-center rounded-control text-on-surface-variant hover:text-on-surface hover:bg-on-surface/[0.04] transition"
         aria-label={t('NOTIF.CENTER', '通知中心')}
         aria-haspopup="dialog"
         aria-expanded={open}
@@ -164,7 +164,7 @@ const NotificationCenter = ({ isAuthenticated, onSignIn }) => {
       >
         <Bell size={16} />
         {unread > 0 && (
-          <span className="absolute -top-0.5 -right-0.5 min-w-[16px] h-[16px] px-1 rounded-full bg-red-500 text-white text-[9px] font-bold flex items-center justify-center">
+          <span className="absolute -top-0.5 -right-0.5 min-w-[16px] h-[16px] px-1 rounded-control-full bg-error text-white text-[9px] font-bold flex items-center justify-center">
             {unread > 99 ? '99+' : unread}
           </span>
         )}
@@ -175,14 +175,14 @@ const NotificationCenter = ({ isAuthenticated, onSignIn }) => {
           id="notification-center-popover"
           role="dialog"
           aria-label={t('NOTIF.CENTER', '通知中心')}
-          className="absolute right-0 top-full mt-2 w-96 max-w-[calc(100vw-2rem)] max-h-[560px] bg-surface-container border border-outline-variant rounded-xl shadow-xl shadow-black/40 z-50 flex flex-col overflow-hidden">
+          className="absolute right-0 top-full mt-2 w-96 max-w-[calc(100vw-2rem)] max-h-[560px] bg-surface-container border border-outline-variant rounded-overlay shadow-black/40 z-50 flex flex-col overflow-hidden">
           <div className="p-3 border-b border-outline-variant/40 flex items-center justify-between">
             <div className="min-w-0 flex items-center gap-2">
               {selectedNotif && (
                 <button
                   type="button"
                   onClick={() => setSelectedNotif(null)}
-                  className="w-7 h-7 flex items-center justify-center rounded-md text-on-surface-variant hover:text-on-surface hover:bg-on-surface/[0.06]"
+                  className="w-7 h-7 flex items-center justify-center rounded-control text-on-surface-variant hover:text-on-surface hover:bg-on-surface/[0.06]"
                   aria-label={t('COMMON.PREV', '上一页')}
                 >
                   <ArrowLeft size={15} />
@@ -199,7 +199,7 @@ const NotificationCenter = ({ isAuthenticated, onSignIn }) => {
               <button
                 type="button"
                 onClick={() => { setOpen(false); setSelectedNotif(null); }}
-                className="w-7 h-7 flex items-center justify-center rounded-md text-on-surface-variant hover:text-on-surface hover:bg-on-surface/[0.06]"
+                className="w-7 h-7 flex items-center justify-center rounded-control text-on-surface-variant hover:text-on-surface hover:bg-on-surface/[0.06]"
                 aria-label={t('COMMON.CLOSE', '关闭')}
               >
                 <X size={15} />
@@ -222,7 +222,7 @@ const NotificationCenter = ({ isAuthenticated, onSignIn }) => {
                   <button
                     type="button"
                     onClick={() => handleNavigate(selectedNotif)}
-                    className="mt-1 inline-flex w-fit items-center gap-1.5 px-3 py-1.5 text-xs bg-primary text-on-primary rounded-md font-medium hover:opacity-90"
+                    className="mt-1 inline-flex w-fit items-center gap-1.5 px-3 py-1.5 text-xs bg-primary text-on-primary rounded-control font-medium hover:opacity-90"
                   >
                     {selectedNotif.action_text || t('NOTIF.OPEN_ACTION', '打开链接')}
                     <ExternalLink size={12} />
@@ -252,7 +252,7 @@ const NotificationCenter = ({ isAuthenticated, onSignIn }) => {
                 <article key={n.id}
                   className={`px-3 py-3 border-b border-outline-variant/20 hover:bg-surface-container-high ${!n.read_at ? 'bg-primary/5' : ''}`}>
                   <div className="flex items-start gap-2">
-                    <div className={`w-1.5 h-1.5 rounded-full mt-1.5 ${!n.read_at ? 'bg-primary' : 'bg-transparent'}`} />
+                    <div className={`w-1.5 h-1.5 rounded-control-full mt-1.5 ${!n.read_at ? 'bg-primary' : 'bg-transparent'}`} />
                     <div className="flex-1 min-w-0">
                       <button
                         type="button"
@@ -273,7 +273,7 @@ const NotificationCenter = ({ isAuthenticated, onSignIn }) => {
                         <button
                           type="button"
                           onClick={() => handleNavigate(n)}
-                          className="mt-2 inline-flex items-center gap-1 px-2 py-1 text-[11px] bg-primary text-on-primary rounded-md font-medium hover:opacity-90"
+                          className="mt-2 inline-flex items-center gap-1 px-2 py-1 text-[11px] bg-primary text-on-primary rounded-control font-medium hover:opacity-90"
                         >
                           {n.action_text || t('NOTIF.OPEN_ACTION', '打开链接')}
                           <ExternalLink size={11} />

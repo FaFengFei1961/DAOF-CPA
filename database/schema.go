@@ -33,7 +33,7 @@ type User struct {
 	RegRiskScore int    `gorm:"default:0" json:"reg_risk_score"` // 风控热度判定打分
 
 	// 余额消费控制（参照 Claude Extra usage 三段消费模型）：
-	// 订阅 → 增量包 → 余额（user.Quota）。前两段用尽且 BalanceConsumeEnabled=true 才走余额扣费。
+	// 订阅 → 余额（user.Quota）。订阅用尽且 BalanceConsumeEnabled=true 才走余额扣费。
 	BalanceConsumeEnabled       bool       `gorm:"default:false" json:"balance_consume_enabled"`
 	BalanceConsumeLimitUSD      int64      `gorm:"default:0" json:"balance_consume_limit_usd"`            // micro_usd, 0=不限
 	BalanceConsumeWindowSeconds int        `gorm:"default:2592000" json:"balance_consume_window_seconds"` // 默认 30 天

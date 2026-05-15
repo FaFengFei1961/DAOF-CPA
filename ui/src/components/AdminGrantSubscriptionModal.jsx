@@ -183,18 +183,18 @@ const AdminGrantSubscriptionModal = ({ open, onClose, onSuccess, prefillUser = n
       aria-modal="true"
       aria-labelledby="grant-modal-title"
     >
-      <div className="bg-surface-container rounded-xl border border-outline-variant w-full max-w-lg m-4 max-h-[90vh] overflow-y-auto">
+      <div className="bg-surface-container rounded-overlay border border-outline-variant w-full max-w-lg m-4 max-h-[90vh] overflow-y-auto">
         {/* Header */}
         <div className="flex items-center justify-between px-5 py-4 border-b border-outline-variant">
           <h3 id="grant-modal-title" className="text-lg font-semibold text-on-surface flex items-center gap-2">
-            <Gift size={18} className="text-emerald-400" />
+            <Gift size={18} className="text-success" />
             {t('ADMIN_GRANT.TITLE', '赠送订阅')}
           </h3>
           <button
             type="button"
             onClick={onClose}
             disabled={submitting}
-            className="text-on-surface-variant hover:text-on-surface p-1 rounded disabled:opacity-50"
+            className="text-on-surface-variant hover:text-on-surface p-1 rounded-control disabled:opacity-50"
             aria-label={t('COMMON.CLOSE', '关闭')}
           >
             <X size={18} />
@@ -206,7 +206,7 @@ const AdminGrantSubscriptionModal = ({ open, onClose, onSuccess, prefillUser = n
           {/* 用户选择 */}
           <div>
             <label htmlFor="grant-target-user" className="block text-sm text-on-surface mb-1">
-              {t('ADMIN_GRANT.TARGET_USER', '目标用户')} <span className="text-rose-400">*</span>
+              {t('ADMIN_GRANT.TARGET_USER', '目标用户')} <span className="text-error">*</span>
             </label>
             {/* fix MAJOR M9（gemini 第二十轮）：去掉 role="listbox"/option（需要复杂方向键管理才完整），
                 改为 plain button list + Tab 导航；input 仍用 aria-autocomplete + aria-expanded
@@ -223,7 +223,7 @@ const AdminGrantSubscriptionModal = ({ open, onClose, onSuccess, prefillUser = n
                   setSelectedUser(null);
                 }}
                 placeholder={t('ADMIN_GRANT.USER_SEARCH_PH', '输入用户名 / 手机号 / GitHub ID（≥2 字符）')}
-                className="w-full bg-surface-container-high border border-outline-variant rounded-lg pl-9 pr-3 py-2 text-sm focus:outline-none focus:border-primary"
+                className="w-full bg-surface-container-high border border-outline-variant rounded-control pl-9 pr-3 py-2 text-sm focus:outline-none focus:border-primary"
                 disabled={submitting}
                 aria-autocomplete="list"
                 aria-expanded={userSuggestions.length > 0 && !selectedUser}
@@ -235,7 +235,7 @@ const AdminGrantSubscriptionModal = ({ open, onClose, onSuccess, prefillUser = n
               <ul
                 id="grant-user-suggestions"
                 aria-label={t('ADMIN_GRANT.SUGGESTIONS_ARIA', '用户建议列表')}
-                className="mt-1 bg-surface-container-high border border-outline-variant rounded-lg max-h-44 overflow-y-auto"
+                className="mt-1 bg-surface-container-high border border-outline-variant rounded-control max-h-44 overflow-y-auto"
               >
                 {userSuggestions.map((u) => (
                   <li key={u.id}>
@@ -261,7 +261,7 @@ const AdminGrantSubscriptionModal = ({ open, onClose, onSuccess, prefillUser = n
               <div className="text-xs text-on-surface-variant mt-1">{t('ADMIN_GRANT.SEARCHING', '搜索中...')}</div>
             )}
             {selectedUser && (
-              <div className="mt-1 text-xs text-emerald-400">
+              <div className="mt-1 text-xs text-success">
                 {t('ADMIN_GRANT.SELECTED_USER', '已选择')}: {selectedUser.username} #{selectedUser.id}
               </div>
             )}
@@ -270,14 +270,14 @@ const AdminGrantSubscriptionModal = ({ open, onClose, onSuccess, prefillUser = n
           {/* 套餐选择 */}
           <div>
             <label htmlFor="grant-package" className="block text-sm text-on-surface mb-1">
-              {t('ADMIN_GRANT.PACKAGE', '套餐')} <span className="text-rose-400">*</span>
+              {t('ADMIN_GRANT.PACKAGE', '套餐')} <span className="text-error">*</span>
             </label>
             <select
               id="grant-package"
               value={selectedPackageId}
               onChange={(e) => setSelectedPackageId(e.target.value)}
               disabled={submitting || loadingPackages}
-              className="w-full bg-surface-container-high border border-outline-variant rounded-lg px-3 py-2 text-sm focus:outline-none focus:border-primary"
+              className="w-full bg-surface-container-high border border-outline-variant rounded-control px-3 py-2 text-sm focus:outline-none focus:border-primary"
             >
               <option value="">{loadingPackages ? t('ADMIN_GRANT.LOADING_PKG', '加载中...') : t('ADMIN_GRANT.SELECT_PKG', '请选择')}</option>
               {packages.map((p) => (
@@ -302,7 +302,7 @@ const AdminGrantSubscriptionModal = ({ open, onClose, onSuccess, prefillUser = n
               value={quantity}
               onChange={(e) => setQuantity(e.target.value)}
               disabled={submitting}
-              className="w-32 bg-surface-container-high border border-outline-variant rounded-lg px-3 py-2 text-sm font-mono focus:outline-none focus:border-primary"
+              className="w-32 bg-surface-container-high border border-outline-variant rounded-control px-3 py-2 text-sm font-mono focus:outline-none focus:border-primary"
             />
             <span className="ml-3 text-xs text-on-surface-variant">{t('ADMIN_GRANT.QTY_HINT', '受套餐持有上限约束')}</span>
           </div>
@@ -310,7 +310,7 @@ const AdminGrantSubscriptionModal = ({ open, onClose, onSuccess, prefillUser = n
           {/* Reason */}
           <div>
             <label htmlFor="grant-reason" className="block text-sm text-on-surface mb-1">
-              {t('ADMIN_GRANT.REASON', '赠送理由')} <span className="text-rose-400">*</span>
+              {t('ADMIN_GRANT.REASON', '赠送理由')} <span className="text-error">*</span>
             </label>
             <textarea
               id="grant-reason"
@@ -320,7 +320,7 @@ const AdminGrantSubscriptionModal = ({ open, onClose, onSuccess, prefillUser = n
               rows={3}
               maxLength={500}
               placeholder={t('ADMIN_GRANT.REASON_PH', '客服补偿订单 #xxx / 活动赠送 / 撤销错误退款 ...')}
-              className="w-full bg-surface-container-high border border-outline-variant rounded-lg px-3 py-2 text-sm focus:outline-none focus:border-primary"
+              className="w-full bg-surface-container-high border border-outline-variant rounded-control px-3 py-2 text-sm focus:outline-none focus:border-primary"
             />
             <div className="text-xs text-on-surface-variant text-right mt-0.5">
               {reason.length} / 500
@@ -328,7 +328,7 @@ const AdminGrantSubscriptionModal = ({ open, onClose, onSuccess, prefillUser = n
           </div>
 
           {/* 信息提示 */}
-          <div className="text-xs text-on-surface-variant bg-surface-container-high rounded-lg px-3 py-2">
+          <div className="text-xs text-on-surface-variant bg-surface-container-high rounded-control px-3 py-2">
             <div>{t('ADMIN_GRANT.INFO_LINE_1', '• 赠送的订阅会被标记 IsGranted=true，不可退款（防止白送钱）')}</div>
             <div>{t('ADMIN_GRANT.INFO_LINE_2', '• 用户会收到一条系统通知（强制送达，不被偏好屏蔽）')}</div>
             <div>{t('ADMIN_GRANT.INFO_LINE_3', '• 操作会记入审计日志（admin id + 理由）')}</div>
@@ -341,7 +341,7 @@ const AdminGrantSubscriptionModal = ({ open, onClose, onSuccess, prefillUser = n
             type="button"
             onClick={onClose}
             disabled={submitting}
-            className="px-4 py-1.5 text-sm rounded-lg text-on-surface-variant hover:bg-surface-container disabled:opacity-50"
+            className="px-4 py-1.5 text-sm rounded-control text-on-surface-variant hover:bg-surface-container disabled:opacity-50"
           >
             {t('COMMON.CANCEL', '取消')}
           </button>
@@ -349,7 +349,7 @@ const AdminGrantSubscriptionModal = ({ open, onClose, onSuccess, prefillUser = n
             type="button"
             onClick={submit}
             disabled={submitting || !isFormValid}
-            className="px-4 py-1.5 text-sm rounded-lg bg-emerald-500 text-white hover:bg-emerald-600 disabled:opacity-50 disabled:cursor-not-allowed flex items-center gap-1.5"
+            className="px-4 py-1.5 text-sm rounded-control bg-success text-white hover:bg-success disabled:opacity-50 disabled:cursor-not-allowed flex items-center gap-1.5"
             title={!isFormValid && !submitting ? t('ADMIN_GRANT.SUBMIT_DISABLED_HINT', '请先选择目标用户、套餐并填写理由') : undefined}
           >
             <Gift size={14} />

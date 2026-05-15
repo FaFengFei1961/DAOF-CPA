@@ -52,7 +52,7 @@ const FinanceShell = () => {
               end={end}
               role="tab"
               className={({ isActive }) =>
-                `h-10 px-4 rounded-lg border text-sm font-medium transition-colors flex items-center gap-2 ${
+                `h-10 px-4 rounded-control border text-sm font-medium transition-colors flex items-center gap-2 ${
                   isActive
                     ? 'bg-primary text-on-primary border-primary'
                     : 'bg-surface-container border-outline-variant text-on-surface-variant hover:text-on-surface hover:border-primary/50'

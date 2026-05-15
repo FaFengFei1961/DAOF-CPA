@@ -51,7 +51,7 @@ const Settings = ({ initialTab }) => {
         <select
           value={activeTab}
           onChange={(e) => setActiveTab(e.target.value)}
-          className="w-full rounded-lg bg-surface-container border border-outline-variant text-on-surface text-sm px-3 py-2"
+          className="w-full rounded-control bg-surface-container border border-outline-variant text-on-surface text-sm px-3 py-2"
         >
           {userTabs.map(it => (
             <option key={it.id} value={it.id}>{it.label}</option>
@@ -74,7 +74,7 @@ const Settings = ({ initialTab }) => {
                 type="button"
                 aria-current={isActive ? 'page' : undefined}
                 onClick={() => setActiveTab(it.id)}
-                className={`w-full h-8 flex items-center gap-2 px-2.5 rounded-lg text-sm transition ${
+                className={`w-full h-8 flex items-center gap-2 px-2.5 rounded-control text-sm transition ${
                   isActive
                     ? 'bg-primary-container text-on-primary-container font-medium'
                     : 'text-on-surface-variant hover:bg-surface-container'
@@ -102,7 +102,7 @@ const Settings = ({ initialTab }) => {
               </p>
             </header>
 
-            <div className="bg-surface-container border border-outline-variant rounded-2xl p-4 md:p-6 w-full">
+            <div className="bg-surface-container border border-outline-variant rounded-overlay p-4 md:p-6 w-full">
               {/* 主题模式 */}
               <div className="flex flex-col md:flex-row md:items-center justify-between py-4 border-b border-outline-variant/30 gap-4">
                 <div className="flex flex-col gap-1">
@@ -112,7 +112,7 @@ const Settings = ({ initialTab }) => {
                 <div
                   role="radiogroup"
                   aria-label={t('SETTINGS.THEME_LABEL', '外观')}
-                  className="inline-flex rounded-lg border border-outline-variant bg-surface p-0.5 self-start md:self-auto"
+                  className="inline-flex rounded-control border border-outline-variant bg-surface p-0.5 self-start md:self-auto"
                 >
                   {[
                     { v: 'light',  label: t('SETTINGS.THEME_LIGHT', '浅色') },
@@ -122,7 +122,7 @@ const Settings = ({ initialTab }) => {
                     <button
                       key={v} type="button" role="radio" aria-checked={themePref === v}
                       onClick={() => changeTheme(v)}
-                      className={`px-3 py-1.5 text-sm rounded-md transition ${
+                      className={`px-3 py-1.5 text-sm rounded-control transition ${
                         themePref === v
                           ? 'bg-primary text-on-primary font-medium'
                           : 'text-on-surface-variant hover:text-on-surface'
@@ -143,7 +143,7 @@ const Settings = ({ initialTab }) => {
                     <button
                       key={hex} type="button" onClick={() => changeSeedColor(hex)}
                       title={name} aria-label={`主题色: ${name}`}
-                      className={`w-7 h-7 rounded-full border-2 transition ${
+                      className={`w-7 h-7 rounded-control-full border-2 transition ${
                         seedColor.toLowerCase() === hex.toLowerCase()
                           ? 'border-on-surface scale-110'
                           : 'border-outline-variant hover:scale-110'
@@ -152,7 +152,7 @@ const Settings = ({ initialTab }) => {
                     />
                   ))}
                   <label
-                    className="w-7 h-7 rounded-full border-2 border-dashed border-outline-variant flex items-center justify-center cursor-pointer hover:border-primary text-[10px] text-on-surface-variant"
+                    className="w-7 h-7 rounded-control-full border-2 border-dashed border-outline-variant flex items-center justify-center cursor-pointer hover:border-primary text-[10px] text-on-surface-variant"
                     title="自定义"
                   >
                     <input
@@ -199,7 +199,7 @@ const Settings = ({ initialTab }) => {
                 {t('SETTINGS.NOTIFICATION_PREFS_DESC', '配置站内铃铛、邮件、短信等通知渠道的接收偏好')}
               </p>
             </header>
-            <div className="bg-surface-container border border-outline-variant rounded-2xl p-6">
+            <div className="bg-surface-container border border-outline-variant rounded-overlay p-6">
               <NotificationPreferences />
             </div>
           </div>

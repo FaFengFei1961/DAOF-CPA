@@ -31,7 +31,7 @@ const FinanceSettingsPage = () => {
               value={configs.exchange_rate || ''}
               onChange={(e) => handleChange('exchange_rate', e.target.value)}
               placeholder="7.25"
-              className="w-full md:w-32 bg-surface-container-high border border-outline rounded-lg pl-8 pr-4 py-2 text-on-surface outline-none text-right focus:border-primary"
+              className="w-full md:w-32 bg-surface-container-high border border-outline rounded-control pl-8 pr-4 py-2 text-on-surface outline-none text-right focus:border-primary"
             />
           </div>
         </div>
@@ -45,14 +45,14 @@ const FinanceSettingsPage = () => {
             value={configs.server_address || ''}
             onChange={(e) => handleChange('server_address', e.target.value)}
             placeholder="https://your-domain/"
-            className="bg-surface-container-high border border-outline text-on-surface-variant rounded-lg px-4 py-2 outline-none text-sm w-full md:w-64 hover:border-primary/50 focus:border-primary"
+            className="bg-surface-container-high border border-outline text-on-surface-variant rounded-control px-4 py-2 outline-none text-sm w-full md:w-64 hover:border-primary/50 focus:border-primary"
           />
         </div>
       </Section>
 
       <Section
         title={t('SETTINGS.BALANCE_DEFAULT_TITLE', '新用户余额消费默认值')}
-        sub={t('SETTINGS.BALANCE_DEFAULT_DESC', '只影响之后注册的新用户。余额消费仍排在订阅和增量包之后；默认关闭可保持最小攻击面。')}
+        sub={t('SETTINGS.BALANCE_DEFAULT_DESC', '只影响之后注册的新用户。余额消费仍排在订阅之后；默认关闭可保持最小攻击面。')}
         icon={Wallet}
       >
         <div className="flex flex-col md:flex-row md:items-center justify-between py-3 border-b border-outline-variant/20 gap-3">
@@ -61,7 +61,7 @@ const FinanceSettingsPage = () => {
               {t('SETTINGS.BALANCE_DEFAULT_ENABLED', '默认允许余额消费')}
             </span>
             <span className="text-xs text-outline">
-              {t('SETTINGS.BALANCE_DEFAULT_ENABLED_HINT', '开启后，新用户在订阅和增量包都耗尽时会自动扣余额。')}
+              {t('SETTINGS.BALANCE_DEFAULT_ENABLED_HINT', '开启后，新用户在订阅耗尽时会自动扣余额。')}
             </span>
           </div>
           <button
@@ -70,9 +70,9 @@ const FinanceSettingsPage = () => {
             aria-checked={balanceEnabled}
             aria-labelledby="balance-default-enabled-label"
             onClick={() => handleChange('balance_consume_default_enabled', balanceEnabled ? 'false' : 'true')}
-            className={`relative shrink-0 w-12 h-6 rounded-full transition ${balanceEnabled ? 'bg-primary' : 'bg-on-surface/20'}`}
+            className={`relative shrink-0 w-12 h-6 rounded-control-full transition ${balanceEnabled ? 'bg-primary' : 'bg-on-surface/20'}`}
           >
-            <span className={`absolute top-0.5 w-5 h-5 rounded-full bg-white transition-all ${balanceEnabled ? 'left-6' : 'left-0.5'}`} />
+            <span className={`absolute top-0.5 w-5 h-5 rounded-control-full bg-white transition-all ${balanceEnabled ? 'left-6' : 'left-0.5'}`} />
           </button>
         </div>
 
@@ -88,7 +88,7 @@ const FinanceSettingsPage = () => {
                 value={configs.balance_consume_default_limit_usd ?? '0'}
                 onChange={(e) => handleChange('balance_consume_default_limit_usd', e.target.value)}
                 placeholder="0"
-                className="w-full bg-surface-container-high border border-outline rounded-lg pl-7 pr-3 py-2 text-on-surface outline-none text-right focus:border-primary"
+                className="w-full bg-surface-container-high border border-outline rounded-control pl-7 pr-3 py-2 text-on-surface outline-none text-right focus:border-primary"
               />
             </div>
             <span className="text-[11px] text-on-surface-variant">
@@ -105,7 +105,7 @@ const FinanceSettingsPage = () => {
               value={configs.balance_consume_default_window_secs ?? '2592000'}
               onChange={(e) => handleChange('balance_consume_default_window_secs', e.target.value)}
               placeholder="2592000"
-              className="w-full bg-surface-container-high border border-outline rounded-lg px-3 py-2 text-on-surface outline-none text-right focus:border-primary"
+              className="w-full bg-surface-container-high border border-outline rounded-control px-3 py-2 text-on-surface outline-none text-right focus:border-primary"
             />
             <span className="text-[11px] text-on-surface-variant">
               {t('SETTINGS.BALANCE_DEFAULT_WINDOW_HINT', '60 秒到 365 天；2592000 = 30 天。')}

@@ -14,7 +14,7 @@ import { PAGE_SIZE_DEFAULT } from './common/constants';
 // fix MAJOR（codex 第十七轮）：补齐 admin_grant_* + api_usage_pending_reconcile，
 // 与后端 allowedBillingTypes 同步——否则 admin 默认隐藏 API 用量时
 // 这两类账单也会被排除掉。
-// Phase 8：addon 已移除，purchase_addon / admin_grant_addon / api_usage_addon 三类删除
+// Phase 8：旧账单类型已移除。
 const TYPE_I18N = {
   topup:                       { i18n: 'BILL.T_TOPUP',          fallback: '充值' },
   purchase_sub:                { i18n: 'BILL.T_PURCHASE_SUB',   fallback: '购买套餐' },
@@ -128,10 +128,10 @@ const AdminUserBills = ({ userId, username, onClose }) => {
       onClick={onBackdropClick}
       className="fixed inset-0 z-[60] flex items-center justify-center p-4 bg-black/70 backdrop-blur-md"
     >
-      <div className="bg-surface w-full max-w-5xl max-h-[90vh] rounded-xl shadow-2xl overflow-hidden flex flex-col">
+      <div className="bg-surface w-full max-w-5xl max-h-[90vh] rounded-overlay shadow-2xl shadow-black/40 overflow-hidden flex flex-col">
         <div className="flex items-center justify-between px-6 py-4 border-b border-outline-variant/40">
           <div className="flex items-center gap-3">
-            <div className="w-9 h-9 rounded-lg bg-primary/10 flex items-center justify-center">
+            <div className="w-9 h-9 rounded-control bg-primary/10 flex items-center justify-center">
               <Receipt className="w-4 h-4 text-primary" />
             </div>
             <div>
@@ -145,7 +145,7 @@ const AdminUserBills = ({ userId, username, onClose }) => {
             <button
               type="button"
               onClick={load}
-              className="p-2 rounded-lg hover:bg-on-surface/[0.04]"
+              className="p-2 rounded-control hover:bg-on-surface/[0.04]"
               title={t('BILL.REFRESH', '刷新')}
               aria-label={t('BILL.REFRESH', '刷新')}
             >
@@ -154,7 +154,7 @@ const AdminUserBills = ({ userId, username, onClose }) => {
             <button
               type="button"
               onClick={handleExport}
-              className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-primary text-white text-sm hover:opacity-90"
+              className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-control bg-primary text-white text-sm hover:opacity-90"
             >
               <Download className="w-4 h-4" />{t('BILL.EXPORT_CSV', '导出 CSV')}
             </button>
@@ -162,7 +162,7 @@ const AdminUserBills = ({ userId, username, onClose }) => {
               ref={closeBtnRef}
               type="button"
               onClick={onClose}
-              className="p-2 rounded-lg hover:bg-on-surface/[0.04]"
+              className="p-2 rounded-control hover:bg-on-surface/[0.04]"
               aria-label={t('COMMON.CLOSE', '关闭')}
             >
               <X className="w-4 h-4" />
@@ -173,12 +173,12 @@ const AdminUserBills = ({ userId, username, onClose }) => {
         {/* 汇总卡片 */}
         {summary && (
           <div className="grid grid-cols-2 md:grid-cols-4 gap-3 p-4 border-b border-outline-variant/30 bg-surface-container/40">
-            <SumCard label={t('BILL.SUM_IN', '入账')} value={`$${(summary.total_in_usd || 0).toFixed(2)}`} color="text-green-600" />
-            <SumCard label={t('BILL.SUM_OUT', '消费')} value={`$${(summary.total_out_usd || 0).toFixed(2)}`} color="text-rose-600" />
+            <SumCard label={t('BILL.SUM_IN', '入账')} value={`$${(summary.total_in_usd || 0).toFixed(2)}`} color="text-success" />
+            <SumCard label={t('BILL.SUM_OUT', '消费')} value={`$${(summary.total_out_usd || 0).toFixed(2)}`} color="text-error" />
             <SumCard
               label={t('BILL.SUM_NET', '净变动')}
               value={`${summary.net_change_usd >= 0 ? '+' : ''}$${(summary.net_change_usd || 0).toFixed(2)}`}
-              color={summary.net_change_usd >= 0 ? 'text-green-600' : 'text-rose-600'}
+              color={summary.net_change_usd >= 0 ? 'text-success' : 'text-error'}
             />
             <SumCard label={t('BILL.SUM_BALANCE', '当前余额')} value={`$${(summary.current_balance || 0).toFixed(2)}`} color="text-on-surface" />
           </div>
@@ -225,7 +225,7 @@ const AdminUserBills = ({ userId, username, onClose }) => {
 };
 
 const SumCard = ({ label, value, color }) => (
-  <div className="rounded-lg bg-surface border border-outline-variant/40 p-3">
+  <div className="rounded-control bg-surface border border-outline-variant/40 p-3">
     <div className="text-xs text-on-surface/60 mb-1">{label}</div>
     <div className={`text-lg font-semibold ${color}`}>{value}</div>
   </div>
@@ -236,8 +236,8 @@ const AdminBillRow = ({ entry, t }) => {
   const isUsage = entry.entry_type === 'api_usage_sub';
   const Icon = isUsage ? Activity : (isCredit ? ArrowDownCircle : ArrowUpCircle);
   const iconColor = isUsage
-    ? 'text-slate-500'
-    : isCredit ? 'text-green-600' : 'text-rose-600';
+    ? 'text-on-surface-variant'
+    : isCredit ? 'text-success' : 'text-error';
   const meta = TYPE_I18N[entry.entry_type] || { i18n: '', fallback: entry.entry_type };
 
   return (
@@ -249,7 +249,7 @@ const AdminBillRow = ({ entry, t }) => {
             {meta.i18n ? t(meta.i18n, meta.fallback) : meta.fallback}
           </span>
           {entry.model_name && (
-            <span className="text-xs px-1.5 py-0.5 rounded bg-on-surface/[0.06] text-on-surface/70">
+            <span className="text-xs px-1.5 py-0.5 rounded-control bg-on-surface/[0.06] text-on-surface/70">
               {entry.model_name}
             </span>
           )}
@@ -265,7 +265,7 @@ const AdminBillRow = ({ entry, t }) => {
       <div className="text-right shrink-0">
         <div className={`text-sm font-semibold ${
           isUsage ? 'text-on-surface/60' :
-          isCredit ? 'text-green-600' : 'text-rose-600'
+          isCredit ? 'text-success' : 'text-error'
         }`}>
           {isUsage
             ? (entry.tokens_total > 0 ? `${entry.tokens_total.toLocaleString()} tok` : '—')

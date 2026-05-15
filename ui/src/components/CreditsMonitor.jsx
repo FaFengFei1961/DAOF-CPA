@@ -11,36 +11,36 @@ const PROVIDER_META = {
   claude: {
     label: 'Claude (Anthropic OAuth)',
     color: '#d97757',
-    bgClass: 'bg-orange-500/10 border-orange-500/30',
-    iconColor: 'text-orange-400',
+    bgClass: 'bg-warning/10 border-warning/30',
+    iconColor: 'text-warning',
     Icon: Sparkles,
   },
   antigravity: {
     label: 'Antigravity (Multi-model)',
-    color: '#a855f7',
-    bgClass: 'bg-purple-500/10 border-purple-500/30',
-    iconColor: 'text-purple-400',
+    color: '#6366f1',
+    bgClass: 'bg-primary/10 border-primary/30',
+    iconColor: 'text-primary',
     Icon: Layers,
   },
   codex: {
     label: 'Codex / OpenAI ChatGPT',
     color: '#10b981',
-    bgClass: 'bg-emerald-500/10 border-emerald-500/30',
-    iconColor: 'text-emerald-400',
+    bgClass: 'bg-success/10 border-success/30',
+    iconColor: 'text-success',
     Icon: Cpu,
   },
   'gemini-cli': {
     label: 'Gemini CLI',
     color: '#3b82f6',
-    bgClass: 'bg-blue-500/10 border-blue-500/30',
-    iconColor: 'text-blue-400',
+    bgClass: 'bg-primary/10 border-primary/30',
+    iconColor: 'text-primary',
     Icon: Zap,
   },
   kimi: {
     label: 'Kimi (Moonshot)',
     color: '#f59e0b',
-    bgClass: 'bg-amber-500/10 border-amber-500/30',
-    iconColor: 'text-amber-400',
+    bgClass: 'bg-warning/10 border-warning/30',
+    iconColor: 'text-warning',
     Icon: Activity,
   },
 };
@@ -49,8 +49,8 @@ const getProviderMeta = (provider) => {
   return PROVIDER_META[provider] || {
     label: provider || 'Unknown',
     color: '#6b7280',
-    bgClass: 'bg-gray-500/10 border-gray-500/30',
-    iconColor: 'text-gray-400',
+    bgClass: 'bg-surface-variant/10 border-outline-variant/30',
+    iconColor: 'text-on-surface-variant',
     Icon: ServerCrash,
   };
 };
@@ -68,7 +68,7 @@ const QuotaBar = ({ remaining, label, resetsAt }) => {
           {safeRem.toFixed(1)}%
         </span>
       </div>
-      <div className="h-2 rounded-full bg-black/40 overflow-hidden border border-outline-variant/40">
+      <div className="h-2 rounded-control-full bg-black/40 overflow-hidden border border-outline-variant/40">
         <div
           className="h-full transition-all duration-500 ease-out"
           style={{ width: `${safeRem}%`, background: color, boxShadow: `0 0 12px ${color}80` }}
@@ -89,17 +89,17 @@ const EntryCard = React.memo(function EntryCard({ entry }) {
   const Icon = meta.Icon;
   return (
     <div
-      className={`rounded-xl p-4 border ${
+      className={`rounded-overlay p-4 border ${
         entry.healthy
           ? 'bg-surface-container border-outline-variant'
           : entry.last_error
-          ? 'bg-red-950/20 border-red-900/40'
+          ? 'bg-error/20 border-error/40'
           : 'bg-surface-container border-outline-variant opacity-70'
       }`}
     >
       <div className="flex items-start justify-between gap-3 mb-3 pb-3 border-b border-outline-variant/30">
         <div className="flex items-start gap-2.5 min-w-0 flex-1">
-          <div className={`p-1.5 rounded-md ${meta.iconColor} bg-black/30 shrink-0`}>
+          <div className={`p-1.5 rounded-control ${meta.iconColor} bg-black/30 shrink-0`}>
             <Icon size={14} />
           </div>
           <div className="min-w-0 flex-1">
@@ -109,7 +109,7 @@ const EntryCard = React.memo(function EntryCard({ entry }) {
             <div className="flex items-center gap-2 mt-0.5">
               <span className="text-[10px] text-outline font-mono">#{entry.auth_index}</span>
               {entry.plan_type && (
-                <span className="text-[10px] px-1.5 py-0.5 rounded bg-primary/10 text-primary border border-primary/30 font-mono">
+                <span className="text-[10px] px-1.5 py-0.5 rounded-control bg-primary/10 text-primary border border-primary/30 font-mono">
                   {entry.plan_type}
                 </span>
               )}
@@ -118,15 +118,15 @@ const EntryCard = React.memo(function EntryCard({ entry }) {
         </div>
         <div className="shrink-0 flex flex-col items-end gap-1">
           {entry.healthy ? (
-            <span className="inline-flex items-center gap-1 text-[10px] text-emerald-400">
+            <span className="inline-flex items-center gap-1 text-[10px] text-success">
               <CheckCircle2 size={11} /> 健康
             </span>
           ) : entry.last_error ? (
-            <span className="inline-flex items-center gap-1 text-[10px] text-red-400">
+            <span className="inline-flex items-center gap-1 text-[10px] text-error">
               <XCircle size={11} /> 失败
             </span>
           ) : (
-            <span className="inline-flex items-center gap-1 text-[10px] text-amber-400">
+            <span className="inline-flex items-center gap-1 text-[10px] text-warning">
               <AlertTriangle size={11} /> 用尽
             </span>
           )}
@@ -137,7 +137,7 @@ const EntryCard = React.memo(function EntryCard({ entry }) {
       </div>
 
       {entry.last_error && (
-        <div className="mb-3 px-2 py-1.5 rounded-md bg-red-950/30 border border-red-900/40 text-[10px] text-red-300 font-mono break-all">
+        <div className="mb-3 px-2 py-1.5 rounded-control bg-error/30 border border-error/40 text-[10px] text-error font-mono break-all">
           重试 #{entry.retry_count}：{entry.last_error}
         </div>
       )}
@@ -176,21 +176,21 @@ const ProviderSection = ({ provider, entries }) => {
   }, [entries]);
 
   return (
-    <div className={`rounded-2xl border ${meta.bgClass} p-4 md:p-6 mb-6`}>
+    <div className={`rounded-overlay border ${meta.bgClass} p-4 md:p-6 mb-6`}>
       <div className="flex flex-col md:flex-row md:items-center md:justify-between gap-3 mb-5 pb-4 border-b border-outline-variant/30">
         <div className="flex items-center gap-3">
-          <div className={`p-2 rounded-lg ${meta.iconColor} bg-black/30`}>
+          <div className={`p-2 rounded-control ${meta.iconColor} bg-black/30`}>
             <Icon size={20} />
           </div>
           <div>
             <h3 className="text-base font-bold text-on-surface">{meta.label}</h3>
             <div className="flex items-center gap-3 text-xs mt-0.5">
-              <span className="text-emerald-400">
+              <span className="text-success">
                 <CheckCircle2 size={11} className="inline mr-1" />
                 {healthyCount} 健康
               </span>
               {failedCount > 0 && (
-                <span className="text-red-400">
+                <span className="text-error">
                   <XCircle size={11} className="inline mr-1" />
                   {failedCount} 失败
                 </span>
@@ -384,7 +384,7 @@ const CreditsMonitor = () => {
           onClick={triggerRefresh}
           disabled={refreshing || data.refreshing}
           aria-label="立即刷新全部号池"
-          className="shrink-0 h-11 px-5 bg-primary text-on-primary font-medium rounded-xl flex items-center justify-center gap-2 hover:bg-primary-container hover:text-on-primary-container shadow-[0_0_15px_rgba(37,99,235,0.2)] disabled:opacity-50 disabled:cursor-not-allowed"
+          className="shrink-0 h-11 px-5 bg-primary text-on-primary font-medium rounded-overlay flex items-center justify-center gap-2 hover:bg-primary-container hover:text-on-primary-container disabled:opacity-50 disabled:cursor-not-allowed"
         >
           <RefreshCw size={16} className={refreshing || data.refreshing ? 'animate-spin' : ''} />
           {refreshing || data.refreshing ? '刷新中...' : '立即刷新全部'}
@@ -392,21 +392,21 @@ const CreditsMonitor = () => {
       </div>
 
       <div className="grid grid-cols-2 md:grid-cols-4 gap-3 mb-8">
-        <div className="rounded-xl bg-surface-container border border-outline-variant p-4">
+        <div className="rounded-overlay bg-surface-container border border-outline-variant p-4">
           <div className="text-xs text-on-surface-variant mb-1">上游账号总数</div>
           <div className="text-2xl font-bold text-on-surface">{data.total_count || 0}</div>
         </div>
-        <div className="rounded-xl bg-emerald-950/20 border border-emerald-900/40 p-4">
-          <div className="text-xs text-emerald-400 mb-1">健康节点</div>
-          <div className="text-2xl font-bold text-emerald-400">{data.healthy_count || 0}</div>
+        <div className="rounded-overlay bg-success/20 border border-success/40 p-4">
+          <div className="text-xs text-success mb-1">健康节点</div>
+          <div className="text-2xl font-bold text-success">{data.healthy_count || 0}</div>
         </div>
-        <div className="rounded-xl bg-red-950/20 border border-red-900/40 p-4">
-          <div className="text-xs text-red-400 mb-1">异常节点</div>
-          <div className="text-2xl font-bold text-red-400">
+        <div className="rounded-overlay bg-error/20 border border-error/40 p-4">
+          <div className="text-xs text-error mb-1">异常节点</div>
+          <div className="text-2xl font-bold text-error">
             {(data.total_count || 0) - (data.healthy_count || 0)}
           </div>
         </div>
-        <div className="rounded-xl bg-surface-container border border-outline-variant p-4">
+        <div className="rounded-overlay bg-surface-container border border-outline-variant p-4">
           <div className="text-xs text-on-surface-variant mb-1">最近全量刷新</div>
           <div className="text-sm font-mono text-on-surface mt-1.5 truncate" title={lastFullStr}>
             {lastFullStr}
@@ -420,12 +420,12 @@ const CreditsMonitor = () => {
           <div>正在加载号池数据...</div>
         </div>
       ) : sessionExpiredRef.current ? (
-        <div className="text-center py-16 bg-red-950/20 border border-red-900/40 rounded-2xl">
-          <XCircle size={32} className="inline text-red-400 mb-3" />
-          <div className="text-red-300 text-sm">管理员会话已过期，请刷新页面重新登录</div>
+        <div className="text-center py-16 bg-error/20 border border-error/40 rounded-overlay">
+          <XCircle size={32} className="inline text-error mb-3" />
+          <div className="text-error text-sm">管理员会话已过期，请刷新页面重新登录</div>
         </div>
       ) : data.total_count === 0 ? (
-        <div className="text-center py-16 bg-surface-container border border-outline-variant rounded-2xl">
+        <div className="text-center py-16 bg-surface-container border border-outline-variant rounded-overlay">
           <ServerCrash size={32} className="inline text-on-surface-variant mb-3" />
           <div className="text-on-surface-variant text-sm">
             尚未采集到任何上游账号。

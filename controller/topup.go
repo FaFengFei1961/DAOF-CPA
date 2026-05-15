@@ -21,6 +21,7 @@ import (
 	"context"
 	"crypto/rand"
 	"encoding/hex"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"log"
@@ -528,7 +529,7 @@ func MyTopupOrders(c *fiber.Ctx) error {
 	}
 	return c.JSON(fiber.Map{
 		"success": true,
-		"data":    rows,
+		"data":    topupOrderViewsFrom(rows),
 		"meta":    fiber.Map{"page": page, "page_size": size, "total": total},
 	})
 }
@@ -615,7 +616,7 @@ func AdminListTopupOrders(c *fiber.Ctx) error {
 	}
 	return c.JSON(fiber.Map{
 		"success": true,
-		"data":    rows,
+		"data":    topupOrderViewsFrom(rows),
 		"meta":    fiber.Map{"page": page, "page_size": size, "total": total},
 	})
 }
@@ -725,6 +726,7 @@ func AdminRefundTopup(c *fiber.Ctx) error {
 	var (
 		refundFen         int64 // tx 内确定的本次退款 fen（写日志用）
 		usdToReclaimMicro int64 // tx 内确定的等值 micro_usd（写账单 + reclaim quota 用）
+		responseOrder     database.TopupOrder
 	)
 	txErr := database.DB.Transaction(func(tx *gorm.DB) error {
 		// 串行化所有该 user 的购买/扣款/退款链路（与 purchaseAsInstant 用同一锁路径）
@@ -807,6 +809,11 @@ func AdminRefundTopup(c *fiber.Ctx) error {
 		if res.RowsAffected == 0 {
 			return errAdminMarkRaced
 		}
+		responseOrder = freshOrder
+		responseOrder.Status = newStatus
+		responseOrder.RefundedAmountRMB = newRefundedFen
+		responseOrder.RefundNo = req.ExternalRefundRef
+		responseOrder.OutRefundNo = req.ExternalRefundRef
 
 		if req.ReclaimQuota {
 			if err := tx.Model(&database.User{}).
@@ -845,7 +852,18 @@ func AdminRefundTopup(c *fiber.Ctx) error {
 		}); err != nil {
 			return fmt.Errorf("write billing refund_topup: %w", err)
 		}
-		return nil
+		auditDetails, _ := json.Marshal(map[string]any{
+			"type":                "REFUND_TOPUP",
+			"admin_id":            op.ID,
+			"order_id":            order.ID,
+			"out_trade_no":        freshOrder.OutTradeNo,
+			"amount_rmb":          fenToRMBFloat(refundFen),
+			"amount_fen":          refundFen,
+			"amount_micro_usd":    amountMicroUSD,
+			"external_refund_ref": req.ExternalRefundRef,
+			"reclaim_quota":       req.ReclaimQuota,
+		})
+		return LogOperationByTx(tx, op.ID, order.UserID, "admin", "REFUND_TOPUP", c.IP(), string(auditDetails))
 	})
 	if errors.Is(txErr, errAdminMarkRaced) {
 		return c.Status(409).JSON(fiber.Map{
@@ -895,7 +913,11 @@ func AdminRefundTopup(c *fiber.Ctx) error {
 
 	log.Printf("[TOPUP-REFUND-MANUAL] OK order=%s admin=%d rmb_fen=%d reclaim_quota=%v ref=%q",
 		order.OutTradeNo, op.ID, refundFen, req.ReclaimQuota, req.ExternalRefundRef)
-	return c.JSON(fiber.Map{"success": true, "message_code": "SUCCESS_REFUNDED"})
+	return c.JSON(fiber.Map{
+		"success":      true,
+		"data":         topupOrderViewFrom(responseOrder),
+		"message_code": "SUCCESS_REFUNDED",
+	})
 }
 
 // ─── helpers ───────────────────────────────────────────────────

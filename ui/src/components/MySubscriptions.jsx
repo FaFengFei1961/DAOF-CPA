@@ -88,8 +88,7 @@ const MySubscriptions = ({ isAuthenticated = true, embedded = false }) => {
     .filter((s) => s.status === 'active')
     .map((sub) => normalizeSubscription(sub)), [subs]);
 
-  const subscriptionGroup = activeItems.filter((item) => item.productType === 'subscription');
-  const addonGroup = activeItems.filter((item) => item.productType === 'addon');
+  const activeSubscriptions = activeItems;
 
   const body = loading ? (
     <div className="text-center py-20 text-on-surface-variant">{t('SUB.LOADING', '加载中...')}</div>
@@ -104,39 +103,17 @@ const MySubscriptions = ({ isAuthenticated = true, embedded = false }) => {
 
       <StoreSection
         title={t('MY_PRODUCTS.GROUP_SUBSCRIPTION', '订阅')}
-        right={<span className="text-xs text-on-surface-variant">{subscriptionGroup.length} 个活跃订阅</span>}
+        right={<span className="text-xs text-on-surface-variant">{activeSubscriptions.length} 个活跃订阅</span>}
       >
-        {subscriptionGroup.length === 0 ? (
+        {activeSubscriptions.length === 0 ? (
           <EmptyUsageCard>{t('MY_PRODUCTS.GROUP_SUB_EMPTY', '暂无活跃订阅')}</EmptyUsageCard>
         ) : (
           <div className="grid grid-cols-1 xl:grid-cols-2 gap-4">
-            {subscriptionGroup.map((item, idx) => (
+            {activeSubscriptions.map((item, idx) => (
               <SubscriptionUsageCard
                 key={item.sub.id}
                 item={item}
                 priority={idx === 0}
-                onCancel={() => cancel(item.sub)}
-                t={t}
-                formatMeterCurrency={formatCurrencyFixed}
-              />
-            ))}
-          </div>
-        )}
-      </StoreSection>
-
-      <StoreSection
-        title={t('MY_PRODUCTS.GROUP_ADDON', '增量包')}
-        right={<span className="text-xs text-on-surface-variant">{addonGroup.length} 个活跃增量包</span>}
-      >
-        {addonGroup.length === 0 ? (
-          <EmptyUsageCard>{t('MY_PRODUCTS.GROUP_ADDON_EMPTY', '暂无活跃增量包')}</EmptyUsageCard>
-        ) : (
-          <div className="grid grid-cols-1 xl:grid-cols-2 gap-4">
-            {addonGroup.map((item) => (
-              <SubscriptionUsageCard
-                key={item.sub.id}
-                item={item}
-                priority={false}
                 onCancel={() => cancel(item.sub)}
                 t={t}
                 formatMeterCurrency={formatCurrencyFixed}
@@ -157,7 +134,7 @@ const MySubscriptions = ({ isAuthenticated = true, embedded = false }) => {
       <StorePage
         icon={PackageIcon}
         title={t('MY_PRODUCTS.TITLE', '我的产品')}
-        subtitle={t('MY_PRODUCTS.SUBTITLE', '订阅最先消耗；订阅用尽后扣增量包；都用完才走余额扣费（在账号设置中开启）。')}
+        subtitle={t('MY_PRODUCTS.SUBTITLE', '订阅最先消耗；用尽后才走余额扣费（在账号设置中开启）。')}
       >
         {body}
       </StorePage>
@@ -187,7 +164,7 @@ const UsageOverview = ({ items, refreshing, onRefresh, formatMeterCurrency }) =>
         </button>
       </div>
       <div className="grid grid-cols-1 sm:grid-cols-2 xl:grid-cols-4 gap-3">
-        <MetricCard icon={Layers} label="当前优先消费" value={priorityName} sub={`${items.length} 个活跃产品`} />
+        <MetricCard icon={Layers} label="当前优先消费" value={priorityName} sub={`${items.length} 个活跃订阅`} />
         <MetricCard icon={TimerReset} label="5 小时剩余" value={formatRemainingMetric(fiveHour, formatMeterCurrency)} sub={formatUsedMetric(fiveHour, formatMeterCurrency)} tone={fiveHour.remainingPct} />
         <MetricCard icon={Gauge} label="7 天剩余" value={formatRemainingMetric(sevenDay, formatMeterCurrency)} sub={formatUsedMetric(sevenDay, formatMeterCurrency)} tone={sevenDay.remainingPct} />
         <MetricCard icon={Activity} label="已采集用量" value={formatUsageValue(observed.consumed, 'api_cost_usd', formatMeterCurrency)} sub={`${observed.requestCount} 次调用`} />
@@ -233,14 +210,14 @@ const SubscriptionUsageCard = ({ item, priority, onCancel, t, formatMeterCurrenc
           <div className="min-w-0">
             <div className="flex items-center gap-2 flex-wrap">
               <span className="font-bold text-lg text-on-surface min-w-0 break-words leading-snug">{packageName}</span>
-              <span className="text-xs px-2 py-0.5 rounded bg-primary/10 text-primary font-mono">#{sub.stack_index}</span>
+              <span className="text-xs px-2 py-0.5 rounded-control bg-primary/10 text-primary font-mono">#{sub.stack_index}</span>
               {priority ? (
-                <span className="text-xs px-2 py-0.5 rounded bg-emerald-500/20 text-emerald-400">{t('SUB.ACTIVE_TAG', '优先消费中')}</span>
+                <span className="text-xs px-2 py-0.5 rounded-control bg-success/20 text-success">{t('SUB.ACTIVE_TAG', '优先消费中')}</span>
               ) : (
-                <span className="text-xs px-2 py-0.5 rounded bg-surface-container-high text-outline">{t('SUB.QUEUED_TAG', '排队中')}</span>
+                <span className="text-xs px-2 py-0.5 rounded-control bg-surface-container-high text-outline">{t('SUB.QUEUED_TAG', '排队中')}</span>
               )}
               {sub.is_granted && (
-                <span className="text-xs px-2 py-0.5 rounded bg-surface-container-high text-on-surface-variant">内测赠送</span>
+                <span className="text-xs px-2 py-0.5 rounded-control bg-surface-container-high text-on-surface-variant">内测赠送</span>
               )}
             </div>
             <div className="mt-2 text-xs text-on-surface-variant flex flex-wrap items-center gap-x-3 gap-y-1">
@@ -290,7 +267,7 @@ const UsageMeter = ({ usage, formatMeterCurrency }) => {
         </div>
       </div>
 
-      <div className="mt-3 h-2 rounded-full bg-black/35 overflow-hidden">
+      <div className="mt-3 h-2 rounded-control-full bg-black/35 overflow-hidden">
         <div className="h-full transition-all" style={{ width: `${consumedPct}%`, background: color }} />
       </div>
 

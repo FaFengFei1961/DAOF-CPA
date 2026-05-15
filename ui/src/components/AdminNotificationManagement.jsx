@@ -166,7 +166,7 @@ const AdminNotificationManagement = () => {
       </div>
 
       {/* 创建表单 */}
-      <section className="bg-surface-container-high border border-outline-variant rounded-2xl p-6 space-y-4">
+      <section className="bg-surface-container-high border border-outline-variant rounded-overlay p-6 space-y-4">
         <h3 className="text-base font-semibold text-on-surface flex items-center gap-2">
           <Send size={16} /> {t('NOTIF.ADMIN.CREATE_TITLE', '创建系统通知')}
         </h3>
@@ -181,7 +181,7 @@ const AdminNotificationManagement = () => {
               type="text"
               value={form.title}
               onChange={e => setForm({ ...form, title: e.target.value })}
-              className="w-full h-10 bg-surface-container border border-outline rounded-lg px-3 text-sm text-on-surface focus:border-primary outline-none"
+              className="w-full h-10 bg-surface-container border border-outline rounded-control px-3 text-sm text-on-surface focus:border-primary outline-none"
               maxLength={200}
             />
           </div>
@@ -194,7 +194,7 @@ const AdminNotificationManagement = () => {
               rows={3}
               value={form.body}
               onChange={e => setForm({ ...form, body: e.target.value })}
-              className="w-full bg-surface-container border border-outline rounded-lg px-3 py-2 text-sm text-on-surface focus:border-primary outline-none resize-none"
+              className="w-full bg-surface-container border border-outline rounded-control px-3 py-2 text-sm text-on-surface focus:border-primary outline-none resize-none"
             />
           </div>
           <div className="space-y-1.5">
@@ -205,7 +205,7 @@ const AdminNotificationManagement = () => {
               id="notif-admin-severity"
               value={form.severity}
               onChange={e => setForm({ ...form, severity: e.target.value })}
-              className="w-full h-10 bg-surface-container border border-outline rounded-lg px-3 text-sm text-on-surface focus:border-primary outline-none"
+              className="w-full h-10 bg-surface-container border border-outline rounded-control px-3 text-sm text-on-surface focus:border-primary outline-none"
             >
               {SEVERITY_OPTIONS.map(s => (
                 <option key={s} value={s}>
@@ -222,7 +222,7 @@ const AdminNotificationManagement = () => {
               id="notif-admin-target-mode"
               value={form.target_mode}
               onChange={e => { setForm({ ...form, target_mode: e.target.value }); setPreviewCount(null); }}
-              className="w-full h-10 bg-surface-container border border-outline rounded-lg px-3 text-sm text-on-surface focus:border-primary outline-none"
+              className="w-full h-10 bg-surface-container border border-outline rounded-control px-3 text-sm text-on-surface focus:border-primary outline-none"
             >
               {TARGET_MODES.map(m => (
                 <option key={m} value={m}>
@@ -241,7 +241,7 @@ const AdminNotificationManagement = () => {
                 type="number"
                 value={form.target_package_id}
                 onChange={e => setForm({ ...form, target_package_id: e.target.value })}
-                className="w-full h-10 bg-surface-container border border-outline rounded-lg px-3 text-sm text-on-surface focus:border-primary outline-none"
+                className="w-full h-10 bg-surface-container border border-outline rounded-control px-3 text-sm text-on-surface focus:border-primary outline-none"
               />
             </div>
           )}
@@ -255,7 +255,7 @@ const AdminNotificationManagement = () => {
                 type="text"
                 value={form.target_user_ids}
                 onChange={e => setForm({ ...form, target_user_ids: e.target.value })}
-                className="w-full h-10 bg-surface-container border border-outline rounded-lg px-3 text-sm text-on-surface focus:border-primary outline-none font-mono"
+                className="w-full h-10 bg-surface-container border border-outline rounded-control px-3 text-sm text-on-surface focus:border-primary outline-none font-mono"
                 placeholder="1, 2, 3"
               />
             </div>
@@ -269,7 +269,7 @@ const AdminNotificationManagement = () => {
               type="text"
               value={form.action_url}
               onChange={e => setForm({ ...form, action_url: e.target.value })}
-              className="w-full h-10 bg-surface-container border border-outline rounded-lg px-3 text-sm text-on-surface focus:border-primary outline-none"
+              className="w-full h-10 bg-surface-container border border-outline rounded-control px-3 text-sm text-on-surface focus:border-primary outline-none"
               placeholder="/subscriptions"
             />
           </div>
@@ -282,7 +282,7 @@ const AdminNotificationManagement = () => {
               type="text"
               value={form.action_text}
               onChange={e => setForm({ ...form, action_text: e.target.value })}
-              className="w-full h-10 bg-surface-container border border-outline rounded-lg px-3 text-sm text-on-surface focus:border-primary outline-none"
+              className="w-full h-10 bg-surface-container border border-outline rounded-control px-3 text-sm text-on-surface focus:border-primary outline-none"
             />
           </div>
         </div>
@@ -292,7 +292,7 @@ const AdminNotificationManagement = () => {
             type="button"
             onClick={handlePreview}
             disabled={previewing}
-            className="h-10 px-4 bg-surface-container border border-outline-variant text-on-surface rounded-lg text-sm font-medium hover:bg-on-surface/[0.04] transition flex items-center gap-2"
+            className="h-10 px-4 bg-surface-container border border-outline-variant text-on-surface rounded-control text-sm font-medium hover:bg-on-surface/[0.04] transition flex items-center gap-2"
           >
             <Eye size={14} />
             {previewing ? '...' : t('NOTIF.ADMIN.PREVIEW', '预览触达')}
@@ -307,7 +307,7 @@ const AdminNotificationManagement = () => {
             type="button"
             onClick={handleSend}
             disabled={sending || !form.title.trim()}
-            className="h-10 px-6 bg-primary text-on-primary rounded-lg text-sm font-medium hover:opacity-90 disabled:opacity-50 transition flex items-center gap-2"
+            className="h-10 px-6 bg-primary text-on-primary rounded-control text-sm font-medium hover:opacity-90 disabled:opacity-50 transition flex items-center gap-2"
           >
             <Send size={14} />
             {sending ? '...' : t('NOTIF.ADMIN.SEND', '发送')}
@@ -316,7 +316,7 @@ const AdminNotificationManagement = () => {
       </section>
 
       {/* 历史列表 */}
-      <section className="bg-surface-container-high border border-outline-variant rounded-2xl p-6">
+      <section className="bg-surface-container-high border border-outline-variant rounded-overlay p-6">
         <div className="flex items-center justify-between mb-4">
           <h3 className="text-base font-semibold text-on-surface">
             {t('NOTIF.ADMIN.HISTORY_TITLE', '历史群发')}
@@ -356,7 +356,7 @@ const AdminNotificationManagement = () => {
                   <tr key={b.id} className="hover:bg-surface-container">
                     <td className="px-3 py-2 max-w-xs truncate" title={b.title}>{b.title}</td>
                     <td className="px-3 py-2">
-                      <span className={`text-xs px-2 py-0.5 rounded ${severityClass(b.severity)}`}>
+                      <span className={`text-xs px-2 py-0.5 rounded-control ${severityClass(b.severity)}`}>
                         {severityLabel(b.severity)}
                       </span>
                     </td>
@@ -378,7 +378,7 @@ const AdminNotificationManagement = () => {
                         <button
                           type="button"
                           onClick={() => handleRevoke(b)}
-                          className="text-xs text-red-400 hover:text-red-300 inline-flex items-center gap-1"
+                          className="text-xs text-error hover:text-error inline-flex items-center gap-1"
                           title={t('NOTIF.ADMIN.REVOKE', '撤回')}
                         >
                           <Trash2 size={12} />
@@ -406,18 +406,18 @@ const AdminNotificationManagement = () => {
 
 const severityClass = (s) => {
   switch (s) {
-    case 'success': return 'bg-emerald-500/10 text-emerald-400';
-    case 'warning': return 'bg-amber-500/10 text-amber-400';
-    case 'error': return 'bg-red-500/10 text-red-400';
-    default: return 'bg-blue-500/10 text-blue-400';
+    case 'success': return 'bg-success/10 text-success';
+    case 'warning': return 'bg-warning/10 text-warning';
+    case 'error': return 'bg-error/10 text-error';
+    default: return 'bg-primary/10 text-primary';
   }
 };
 
 const statusClass = (s) => {
   switch (s) {
-    case 'sent': return 'text-emerald-400';
+    case 'sent': return 'text-success';
     case 'revoked': return 'text-on-surface-variant line-through';
-    case 'draft': return 'text-amber-400';
+    case 'draft': return 'text-warning';
     default: return 'text-on-surface-variant';
   }
 };

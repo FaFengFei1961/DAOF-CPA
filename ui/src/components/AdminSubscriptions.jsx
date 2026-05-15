@@ -13,12 +13,12 @@ const STATUS_OPTIONS = ['', 'active', 'canceled', 'expired', 'refunded', 'paused
 // 状态显示样式（颜色 + 文案）
 const statusStyle = (s) => {
   switch (s) {
-    case 'active': return { bg: 'bg-emerald-500/10', text: 'text-emerald-400' };
-    case 'canceled': return { bg: 'bg-amber-500/10', text: 'text-amber-400' };
-    case 'expired': return { bg: 'bg-gray-500/10', text: 'text-gray-400' };
-    case 'refunded': return { bg: 'bg-rose-500/10', text: 'text-rose-400' };
-    case 'paused': return { bg: 'bg-blue-500/10', text: 'text-blue-400' };
-    case 'revoked': return { bg: 'bg-zinc-500/10', text: 'text-zinc-400' };
+    case 'active': return { bg: 'bg-success/10', text: 'text-success' };
+    case 'canceled': return { bg: 'bg-warning/10', text: 'text-warning' };
+    case 'expired': return { bg: 'bg-surface-variant/10', text: 'text-on-surface-variant' };
+    case 'refunded': return { bg: 'bg-error/10', text: 'text-error' };
+    case 'paused': return { bg: 'bg-primary/10', text: 'text-primary' };
+    case 'revoked': return { bg: 'bg-surface-variant/10', text: 'text-on-surface-variant' };
     default: return { bg: 'bg-surface-container-high', text: 'text-on-surface-variant' };
   }
 };
@@ -246,14 +246,14 @@ const AdminSubscriptions = () => {
           <button
             type="button"
             onClick={() => setGrantModalOpen(true)}
-            className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-sm bg-emerald-500/10 text-emerald-400 hover:bg-emerald-500/20 border border-emerald-500/30"
+            className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-control text-sm bg-success/10 text-success hover:bg-success/20 border border-success/30"
             title={t('ADMIN_SUBS.GRANT_BTN_TITLE', '管理员赠送订阅给指定用户')}
           >
             <Gift size={14} />
             {t('ADMIN_SUBS.GRANT_BTN', '赠送')}
           </button>
           <button onClick={() => load(meta.page)}
-            className="text-on-surface-variant hover:text-on-surface p-2 rounded-lg hover:bg-surface-container-high"
+            className="text-on-surface-variant hover:text-on-surface p-2 rounded-control hover:bg-surface-container-high"
             aria-label={t('ADMIN_SUBS.RELOAD', '重新加载')}>
             <RefreshCw size={16} className={loading ? 'animate-spin' : ''} />
           </button>
@@ -291,7 +291,7 @@ const AdminSubscriptions = () => {
             select 添加 aria-label，防屏幕阅读器只听到"弹出式按钮"不知道用途 */}
         <select value={statusFilter} onChange={e => setStatusFilter(e.target.value)}
           aria-label={t('ADMIN_SUBS.STATUS_FILTER_LABEL', '按状态筛选订阅')}
-          className="bg-surface-container-high border border-outline-variant rounded-lg px-3 py-1.5 text-sm">
+          className="bg-surface-container-high border border-outline-variant rounded-control px-3 py-1.5 text-sm">
           {/* fix Minor 第二十轮（gemini）：状态值 i18n */}
           {STATUS_OPTIONS.map(s => (
             <option key={s} value={s}>
@@ -303,7 +303,7 @@ const AdminSubscriptions = () => {
           <Search size={14} className="absolute left-3 top-1/2 -translate-y-1/2 text-on-surface-variant" />
           <input type="text" value={searchQ} onChange={e => setSearchQ(e.target.value)}
             placeholder={t('ADMIN_SUBS.SEARCH_PLACEHOLDER', '搜索用户名 / 手机号 / GitHub ID')}
-            className="w-full bg-surface-container-high border border-outline-variant rounded-lg pl-9 pr-9 py-1.5 text-sm" />
+            className="w-full bg-surface-container-high border border-outline-variant rounded-control pl-9 pr-9 py-1.5 text-sm" />
           {searchQ && (
             <button type="button" onClick={() => { setSearchQ(''); setSearchSubmitted(''); }}
               className="absolute right-2 top-1/2 -translate-y-1/2 text-on-surface-variant hover:text-on-surface">
@@ -311,7 +311,7 @@ const AdminSubscriptions = () => {
             </button>
           )}
         </div>
-        <button type="submit" className="bg-primary text-on-primary px-4 py-1.5 rounded-lg text-sm font-medium">
+        <button type="submit" className="bg-primary text-on-primary px-4 py-1.5 rounded-control text-sm font-medium">
           {t('ADMIN_SUBS.SEARCH', '搜索')}
         </button>
       </form>
@@ -346,8 +346,8 @@ const AdminSubscriptions = () => {
                 const revocableGrant = sub.is_granted && ['active', 'paused'].includes(sub.status);
                 // 剩余天数颜色：> 50% 绿（建议高比例退）/ 20-50% 黄 / < 20% 红（剩余少建议低额度退）
                 const daysPctColor =
-                  sub.time_remaining_pct >= 50 ? 'text-emerald-400' :
-                  sub.time_remaining_pct >= 20 ? 'text-amber-400' : 'text-rose-400';
+                  sub.time_remaining_pct >= 50 ? 'text-success' :
+                  sub.time_remaining_pct >= 20 ? 'text-warning' : 'text-error';
                 const expanded = expandedRow === sub.id;
                 const toggleExpand = () => setExpandedRow(expanded ? null : sub.id);
                 return (
@@ -366,7 +366,7 @@ const AdminSubscriptions = () => {
                             aria-label={expanded
                               ? t('ADMIN_SUBS.COLLAPSE_DETAILS', '收起详情')
                               : t('ADMIN_SUBS.EXPAND_DETAILS', '展开详情')}
-                            className="p-0.5 -ml-0.5 rounded hover:bg-on-surface/10 focus-visible:outline focus-visible:outline-2 focus-visible:outline-primary">
+                            className="p-0.5 -ml-0.5 rounded-control hover:bg-on-surface/10 focus-visible:outline focus-visible:outline-2 focus-visible:outline-primary">
                             <ChevronDown
                               size={14}
                               className={`transition-transform ${expanded ? 'rotate-180' : ''}`}
@@ -384,7 +384,7 @@ const AdminSubscriptions = () => {
                           <span>{sub.package_name || `套餐#${sub.package_id}`}</span>
                           {sub.is_granted && (
                             <span
-                              className="inline-flex items-center gap-0.5 px-1.5 py-0.5 rounded text-[10px] bg-emerald-500/10 text-emerald-400 border border-emerald-500/20"
+                              className="inline-flex items-center gap-0.5 px-1.5 py-0.5 rounded-control text-[10px] bg-success/10 text-success border border-success/20"
                               title={sub.grant_reason || ''}
                             >
                               <Gift size={10} />{t('ADMIN_SUBS.GRANTED_TAG', '赠送')}
@@ -404,11 +404,11 @@ const AdminSubscriptions = () => {
                           / {sub.total_days?.toFixed(0) || '0'} 天
                         </div>
                       </td>
-                      <td className="px-3 py-2 text-right font-mono text-emerald-400">
+                      <td className="px-3 py-2 text-right font-mono text-success">
                         ${sub.suggested_refund_usd?.toFixed(2) || '0.00'}
                       </td>
                       <td className="px-3 py-2">
-                        <span className={`px-2 py-0.5 rounded-full text-xs ${sty.bg} ${sty.text}`}>
+                        <span className={`px-2 py-0.5 rounded-control-full text-xs ${sty.bg} ${sty.text}`}>
                           {/* fix Minor 第二十轮（gemini）：状态枚举 i18n，避免中文环境下显示英文 */}
                           {t(`ADMIN_SUBS.STATUS_${sub.status.toUpperCase()}`, sub.status)}
                         </span>
@@ -418,9 +418,9 @@ const AdminSubscriptions = () => {
                           <button
                             disabled={!revocableGrant || revokingId === sub.id}
                             onClick={(e) => { e.stopPropagation(); revokeGrant(sub); }}
-                            className={`inline-flex items-center gap-1 px-3 py-1 rounded-lg text-xs ${
+                            className={`inline-flex items-center gap-1 px-3 py-1 rounded-control text-xs ${
                               revocableGrant
-                                ? 'bg-amber-500/10 text-amber-400 hover:bg-amber-500/20'
+                                ? 'bg-warning/10 text-warning hover:bg-warning/20'
                                 : 'bg-surface-container-high text-on-surface-variant cursor-not-allowed'
                             }`}
                             title={revocableGrant ? t('ADMIN_SUBS.REVOKE_BTN', '收回') : t('ADMIN_SUBS.REVOKE_DISABLED', '该赠送状态不可收回')}>
@@ -431,9 +431,9 @@ const AdminSubscriptions = () => {
                           <button
                             disabled={!refundable || refundingId === sub.id}
                             onClick={(e) => { e.stopPropagation(); refund(sub); }}
-                            className={`inline-flex items-center gap-1 px-3 py-1 rounded-lg text-xs ${
+                            className={`inline-flex items-center gap-1 px-3 py-1 rounded-control text-xs ${
                               refundable
-                                ? 'bg-rose-500/10 text-rose-400 hover:bg-rose-500/20'
+                                ? 'bg-error/10 text-error hover:bg-error/20'
                                 : 'bg-surface-container-high text-on-surface-variant cursor-not-allowed'
                             }`}
                             title={refundable ? t('ADMIN_SUBS.REFUND_BTN', '退款') : t('ADMIN_SUBS.REFUND_DISABLED', '该状态不可退款')}>
@@ -453,7 +453,7 @@ const AdminSubscriptions = () => {
                               <div>开始：<span className="font-mono text-on-surface">{fmtTime(sub.start_at)}</span></div>
                               <div>结束：<span className="font-mono text-on-surface">{fmtTime(sub.end_at)}</span></div>
                               {sub.canceled_at && (
-                                <div className="text-amber-400">
+                                <div className="text-warning">
                                   {sub.status === 'revoked' ? '收回' : '取消'}：<span className="font-mono">{fmtTime(sub.canceled_at)}</span>
                                 </div>
                               )}
@@ -498,10 +498,10 @@ const AdminSubscriptions = () => {
         <span>{t('ADMIN_SUBS.TOTAL', { count: meta.total, defaultValue: '共 {{count}} 条' })}</span>
         <div className="flex gap-2">
           <button disabled={meta.page <= 1} onClick={() => load(meta.page - 1)}
-            className="px-3 py-1 rounded bg-surface-container-high disabled:opacity-50">←</button>
+            className="px-3 py-1 rounded-control bg-surface-container-high disabled:opacity-50">←</button>
           <span>{meta.page} / {Math.max(1, Math.ceil(meta.total / meta.page_size))}</span>
           <button disabled={meta.page * meta.page_size >= meta.total} onClick={() => load(meta.page + 1)}
-            className="px-3 py-1 rounded bg-surface-container-high disabled:opacity-50">→</button>
+            className="px-3 py-1 rounded-control bg-surface-container-high disabled:opacity-50">→</button>
         </div>
       </div>
     </div>
@@ -525,7 +525,7 @@ const AdminUsageMetric = ({ icon: Icon, label, value, sub, pct }) => {
         </div>
       </div>
       {usedPct != null && (
-        <div className="mt-3 h-1.5 rounded-full bg-black/35 overflow-hidden">
+        <div className="mt-3 h-1.5 rounded-control-full bg-black/35 overflow-hidden">
           <div className="h-full" style={{ width: `${usedPct}%`, background: color }} />
         </div>
       )}
@@ -549,7 +549,7 @@ const AdminUsageDetailMeter = ({ detail }) => {
           <div className="text-lg font-bold" style={{ color }}>{usedPct.toFixed(1)}%</div>
         </div>
       </div>
-      <div className="mt-3 h-2 rounded-full bg-black/35 overflow-hidden">
+      <div className="mt-3 h-2 rounded-control-full bg-black/35 overflow-hidden">
         <div className="h-full" style={{ width: `${usedPct}%`, background: color }} />
       </div>
       <div className="mt-3 grid grid-cols-3 gap-2 text-xs">

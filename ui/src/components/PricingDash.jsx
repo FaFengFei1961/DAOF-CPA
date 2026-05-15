@@ -42,7 +42,7 @@ const PricingDash = () => {
                         placeholder={t('PRICING.SEARCH_PLACEHOLDER', '搜索模型名称 (如 gpt-4, claude)...')}
                         value={searchTerm}
                         onChange={(e) => setSearchTerm(e.target.value)}
-                        className="w-full bg-surface-container-high border border-outline-variant text-on-surface text-sm rounded-lg focus:ring-1 focus:ring-primary focus:border-primary block p-2.5 pl-10 "
+                        className="w-full bg-surface-container-high border border-outline-variant text-on-surface text-sm rounded-control focus:ring-1 focus:ring-primary focus:border-primary block p-2.5 pl-10 "
                     />
                 </div>
             </div>
@@ -121,7 +121,7 @@ const PricingDash = () => {
                     </table>
                 </div>
             </div>
-            
+
             {/* Phase 8：删 footer hint 长文 —— 计费规则已在上方 BillingRulesPanel
                 内完整说明，footer 重复就是冗余信息 */}
         </StorePage>
@@ -132,7 +132,7 @@ const ProviderIcon = ({ provider }) => {
     const Icon = provider.icon;
     return (
         <span
-            className="w-7 h-7 rounded-lg flex items-center justify-center border"
+            className="w-7 h-7 rounded-control flex items-center justify-center border"
             style={{
                 background: hexA(provider.hue, 0.14),
                 borderColor: hexA(provider.hue, 0.24),
@@ -143,7 +143,7 @@ const ProviderIcon = ({ provider }) => {
     );
 };
 
-// Phase 7：清理魔法 hex（bg-[#25262c] / text-gray-200 / divide-[#2b2b2b]）→ design system token
+// Phase 7：清理魔法 hex（bg-[#25262c] / text-on-surface-variant / divide-[#2b2b2b]）→ design system token
 // input/output/cache 三列保留语义化色（蓝/紫/绿），但用 token 而非裸 tailwind 色
 // 阶梯价继续用 amber，与"长上下文 = 暖色提示"语义一致
 const PricingRow = ({ model: m, provider, formatCurrency, formatTokens, t }) => (
@@ -172,8 +172,8 @@ const PricingRow = ({ model: m, provider, formatCurrency, formatTokens, t }) => 
                 </div>
                 {m.context_threshold > 0 && (
                     <div className="flex items-center gap-1.5 cursor-help" title={t('PRICING.LONG_CONTEXT_HINT', { threshold: m.context_threshold })}>
-                        <span className="text-[10px] font-medium bg-amber-500/15 text-amber-300 rounded px-1.5 py-0.5 border border-amber-500/30">{`>${formatTokens(m.context_threshold)} `}{t('PRICING.TIER_TAG', '阶梯')}</span>
-                        <span className="font-mono text-xs tabular-nums text-amber-300/90">{formatCurrency(m.min_high_in_price, 4)}</span>
+                        <span className="text-[10px] font-medium bg-warning/15 text-warning rounded-control px-1.5 py-0.5 border border-warning/30">{`>${formatTokens(m.context_threshold)} `}{t('PRICING.TIER_TAG', '阶梯')}</span>
+                        <span className="font-mono text-xs tabular-nums text-warning/90">{formatCurrency(m.min_high_in_price, 4)}</span>
                     </div>
                 )}
             </div>
@@ -185,8 +185,8 @@ const PricingRow = ({ model: m, provider, formatCurrency, formatTokens, t }) => 
                 </div>
                 {m.context_threshold > 0 && (
                     <div className="flex items-center gap-1.5 cursor-help" title={t('PRICING.LONG_CONTEXT_HINT', { threshold: m.context_threshold })}>
-                        <span className="text-[10px] font-medium bg-amber-500/15 text-amber-300 rounded px-1.5 py-0.5 border border-amber-500/30">{`>${formatTokens(m.context_threshold)} `}{t('PRICING.TIER_TAG', '阶梯')}</span>
-                        <span className="font-mono text-xs tabular-nums text-amber-300/90">{formatCurrency(m.min_high_out_price, 4)}</span>
+                        <span className="text-[10px] font-medium bg-warning/15 text-warning rounded-control px-1.5 py-0.5 border border-warning/30">{`>${formatTokens(m.context_threshold)} `}{t('PRICING.TIER_TAG', '阶梯')}</span>
+                        <span className="font-mono text-xs tabular-nums text-warning/90">{formatCurrency(m.min_high_out_price, 4)}</span>
                     </div>
                 )}
             </div>
@@ -196,8 +196,8 @@ const PricingRow = ({ model: m, provider, formatCurrency, formatTokens, t }) => 
                 <div className="font-mono text-sm tabular-nums text-on-surface">{m.min_cache_price > 0 ? formatCurrency(m.min_cache_price, 4) : '-'}</div>
                 {m.context_threshold > 0 && m.min_high_cache_price > 0 && (
                     <div className="flex items-center gap-1.5 cursor-help" title={t('PRICING.LONG_CONTEXT_HINT', { threshold: m.context_threshold })}>
-                        <span className="text-[10px] font-medium bg-amber-500/15 text-amber-300 rounded px-1.5 py-0.5 border border-amber-500/30">{`>${formatTokens(m.context_threshold)} `}{t('PRICING.TIER_TAG', '阶梯')}</span>
-                        <span className="font-mono text-xs tabular-nums text-amber-300/90">{formatCurrency(m.min_high_cache_price, 4)}</span>
+                        <span className="text-[10px] font-medium bg-warning/15 text-warning rounded-control px-1.5 py-0.5 border border-warning/30">{`>${formatTokens(m.context_threshold)} `}{t('PRICING.TIER_TAG', '阶梯')}</span>
+                        <span className="font-mono text-xs tabular-nums text-warning/90">{formatCurrency(m.min_high_cache_price, 4)}</span>
                     </div>
                 )}
                 {m.min_cache_write_price > 0 && (

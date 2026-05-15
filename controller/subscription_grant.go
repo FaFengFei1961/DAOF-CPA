@@ -1,6 +1,6 @@
 // Package controller / subscription_grant.go
 //
-// 管理员赠送订阅 / 增量包入口。
+// 管理员赠送订阅入口。
 //
 // 业务模型：
 //   - admin 通过 POST /api/admin/subscriptions/grant 给目标用户免费开通某个产品
@@ -339,7 +339,7 @@ func AdminGrantSubscription(c *fiber.Ctx) error {
 			return fmt.Errorf("fetch fresh quota: %w", err)
 		}
 		baseEntryMicro := now.UnixMicro()
-		// Phase 8：addon 已移除，所有 admin grant 都走 admin_grant_sub
+		// Phase 8：所有 admin grant 都走 admin_grant_sub
 		entryType := database.BillingTypeAdminGrantSub
 		for i, sub := range created {
 			subID := sub.ID

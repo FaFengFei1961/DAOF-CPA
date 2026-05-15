@@ -28,6 +28,7 @@ import (
 const MaxQuantityMultiplier = 100.0
 
 var errDeprecatedRequestField = errors.New("deprecated request field")
+var errInvalidProductType = errors.New("product_type only supports subscription")
 
 // validatePlanMultipliers 校验 plan_multipliers 与 plan_ids 一一对应的合法性。
 // 缺失（len 不足）视为 1.0 默认；显式传值必须 finite + 0 < v ≤ 100。
@@ -82,6 +83,13 @@ func validatePackagePayload(p *database.Package) error {
 	}
 	if p.SortOrder < 0 {
 		return fmt.Errorf("sort_order 不能为负数")
+	}
+	return nil
+}
+
+func validatePackageProductType(productType string) error {
+	if productType != "subscription" {
+		return errInvalidProductType
 	}
 	return nil
 }
@@ -355,6 +363,10 @@ func parsePackagePayload(c *fiber.Ctx) (createPackagePayload, error) {
 	if raw.DeprecatedBonus != nil {
 		return createPackagePayload{}, fmt.Errorf("%w: bonus_balance_usd", errDeprecatedRequestField)
 	}
+	productType := strings.TrimSpace(raw.ProductType)
+	if productType == "" {
+		productType = "subscription"
+	}
 	if err := validateAdminQuotaInput(raw.PriceAmount); err != nil {
 		return createPackagePayload{}, fmt.Errorf("price_amount: %w", err)
 	}
@@ -366,7 +378,7 @@ func parsePackagePayload(c *fiber.Ctx) (createPackagePayload, error) {
 		Package: database.Package{
 			Name:                 raw.Name,
 			Description:          raw.Description,
-			ProductType:          raw.ProductType,
+			ProductType:          productType,
 			IconKey:              raw.IconKey,
 			BadgeColor:           raw.BadgeColor,
 			Gradient:             raw.Gradient,
@@ -403,6 +415,9 @@ func CreatePackage(c *fiber.Ctx) error {
 	}
 	if payload.Name == "" {
 		return c.Status(400).JSON(fiber.Map{"success": false, "message": "name 必填", "message_code": "ERR_REQUIRED"})
+	}
+	if err := validatePackageProductType(payload.ProductType); err != nil {
+		return c.Status(400).JSON(fiber.Map{"success": false, "message": "产品类型仅支持订阅", "message_code": MessageCodeInvalidProductType})
 	}
 	if err := validatePackagePayload(&payload.Package); err != nil {
 		return c.Status(400).JSON(fiber.Map{"success": false, "message": err.Error(), "message_code": "ERR_INVALID_PACKAGE"})
@@ -473,6 +488,9 @@ func UpdatePackage(c *fiber.Ctx) error {
 		return c.Status(400).JSON(fiber.Map{"success": false, "message_code": "ERR_PARSE_PAYLOAD"})
 	}
 	// fix Minor（codex 第五轮）：UpdatePackage 同样校验 price/period/active 上限的边界
+	if err := validatePackageProductType(payload.ProductType); err != nil {
+		return c.Status(400).JSON(fiber.Map{"success": false, "message": "产品类型仅支持订阅", "message_code": MessageCodeInvalidProductType})
+	}
 	if err := validatePackagePayload(&payload.Package); err != nil {
 		return c.Status(400).JSON(fiber.Map{"success": false, "message": err.Error(), "message_code": "ERR_INVALID_PACKAGE"})
 	}
@@ -487,7 +505,8 @@ func UpdatePackage(c *fiber.Ctx) error {
 		// nil → admin 没传该字段 → 跳过更新（保持原值）；非 nil → 解引用写入。
 		updates := map[string]any{
 			"name": payload.Name, "description": payload.Description,
-			"icon_key": payload.IconKey, "badge_color": payload.BadgeColor,
+			"product_type": payload.ProductType,
+			"icon_key":     payload.IconKey, "badge_color": payload.BadgeColor,
 			"gradient": payload.Gradient, "highlight_tag": payload.HighlightTag,
 			"price_amount":           payload.PriceAmount,
 			"price_currency":         payload.PriceCurrency,

@@ -21,7 +21,7 @@ const ChannelManagement = () => {
     const [channels, setChannels] = useState([]);
     const [loading, setLoading] = useState(true);
     const [searchTerm, setSearchTerm] = useState('');
-    
+
     // View state: 'channels' | 'models'
     const [view, setView] = useState('channels');
     const [selectedChannel, setSelectedChannel] = useState(null);
@@ -35,7 +35,7 @@ const ChannelManagement = () => {
     const [channelModels, setChannelModels] = useState([]);
     const [loadingModels, setLoadingModels] = useState(false);
     const [modelSearchTerm, setModelSearchTerm] = useState('');
-    
+
     // Models Modal State
     const [isModelModalOpen, setIsModelModalOpen] = useState(false);
     const [currentModel, setCurrentModel] = useState(null);
@@ -163,14 +163,14 @@ const ChannelManagement = () => {
         const lvl = (level || 'off').toLowerCase();
         const fm = (failMode || 'open').toLowerCase();
         const map = {
-            off:        { txt: t('CHANNEL_MGMT.MOD.BADGE_OFF', 'OFF'),       cls: 'bg-zinc-500/10 border-zinc-500/30 text-zinc-400' },
-            keyword:    { txt: t('CHANNEL_MGMT.MOD.BADGE_KW', 'KW'),         cls: 'bg-amber-500/10 border-amber-500/30 text-amber-400' },
-            moderation: { txt: t('CHANNEL_MGMT.MOD.BADGE_MOD', 'MOD'),       cls: 'bg-blue-500/10 border-blue-500/30 text-blue-400' },
-            strict:     { txt: t('CHANNEL_MGMT.MOD.BADGE_STRICT', 'STRICT'), cls: 'bg-emerald-500/10 border-emerald-500/30 text-emerald-400' },
+            off:        { txt: t('CHANNEL_MGMT.MOD.BADGE_OFF', 'OFF'),       cls: 'bg-surface-variant/10 border-outline-variant/30 text-on-surface-variant' },
+            keyword:    { txt: t('CHANNEL_MGMT.MOD.BADGE_KW', 'KW'),         cls: 'bg-warning/10 border-warning/30 text-warning' },
+            moderation: { txt: t('CHANNEL_MGMT.MOD.BADGE_MOD', 'MOD'),       cls: 'bg-primary/10 border-primary/30 text-primary' },
+            strict:     { txt: t('CHANNEL_MGMT.MOD.BADGE_STRICT', 'STRICT'), cls: 'bg-success/10 border-success/30 text-success' },
         };
         const meta = map[lvl] || map.off;
         return (
-            <span className={`inline-flex items-center gap-1 px-1.5 py-0.5 rounded border text-[10px] font-medium ${meta.cls}`}
+            <span className={`inline-flex items-center gap-1 px-1.5 py-0.5 rounded-control border text-[10px] font-medium ${meta.cls}`}
                 title={`${t('CHANNEL_MGMT.MOD.LEVEL', '审核等级')}: ${lvl} / ${t('CHANNEL_MGMT.MOD.FAIL_MODE', '失败模式')}: ${fm}`}
             >
                 {meta.txt}{lvl !== 'off' && fm === 'closed' ? '·🔒' : ''}
@@ -181,13 +181,13 @@ const ChannelManagement = () => {
     const EndpointPolicyBadge = ({ policy }) => {
         const p = (policy || 'all').toLowerCase();
         const map = {
-            all: { txt: t('CHANNEL_MGMT.ENDPOINT.BADGE_ALL', '端点: ALL'), cls: 'bg-zinc-500/10 border-zinc-500/30 text-zinc-400' },
-            no_chat_non_stream: { txt: t('CHANNEL_MGMT.ENDPOINT.BADGE_NO_CHAT_NS', '端点: 禁非流式 Chat'), cls: 'bg-amber-500/10 border-amber-500/30 text-amber-400' },
-            responses_only: { txt: t('CHANNEL_MGMT.ENDPOINT.BADGE_RESPONSES', '端点: Responses'), cls: 'bg-blue-500/10 border-blue-500/30 text-blue-400' },
+            all: { txt: t('CHANNEL_MGMT.ENDPOINT.BADGE_ALL', '端点: ALL'), cls: 'bg-surface-variant/10 border-outline-variant/30 text-on-surface-variant' },
+            no_chat_non_stream: { txt: t('CHANNEL_MGMT.ENDPOINT.BADGE_NO_CHAT_NS', '端点: 禁非流式 Chat'), cls: 'bg-warning/10 border-warning/30 text-warning' },
+            responses_only: { txt: t('CHANNEL_MGMT.ENDPOINT.BADGE_RESPONSES', '端点: Responses'), cls: 'bg-primary/10 border-primary/30 text-primary' },
         };
         const meta = map[p] || map.all;
         return (
-            <span className={`inline-flex items-center gap-1 px-1.5 py-0.5 rounded border text-[10px] font-medium ${meta.cls}`}
+            <span className={`inline-flex items-center gap-1 px-1.5 py-0.5 rounded-control border text-[10px] font-medium ${meta.cls}`}
                 title={`${t('CHANNEL_MGMT.ENDPOINT.POLICY', '允许的客户端端点')}: ${p}`}
             >
                 {meta.txt}
@@ -337,11 +337,11 @@ const ChannelManagement = () => {
         e.preventDefault();
         setIsSubmitting(true);
         try {
-            const url = currentModel 
-                ? `/api/admin/channel-models/${currentModel.id}` 
+            const url = currentModel
+                ? `/api/admin/channel-models/${currentModel.id}`
                 : `/api/admin/channels/${selectedChannel.id}/models`;
             const method = currentModel ? 'PUT' : 'POST';
-            
+
             const payload = {
                 ...modelForm,
                 input_price: inputCurrency === 'CNY' ? (parseFloat(modelForm.input_price) || 0) / exchangeRate : (parseFloat(modelForm.input_price) || 0),
@@ -440,14 +440,14 @@ const ChannelManagement = () => {
     const filteredModels = channelModels.filter(m => m.model_id.toLowerCase().includes(modelSearchTerm.toLowerCase()));
 
     // --- Sub-Renders ---
-    
+
     if (view === 'models') {
         return (
             <div className="w-full animation-fade-in relative z-10">
-                <button onClick={() => setView('channels')} className="flex items-center gap-2 text-on-surface-variant hover:text-emerald-400  mb-6 text-sm font-medium">
+                <button onClick={() => setView('channels')} className="flex items-center gap-2 text-on-surface-variant hover:text-success mb-6 text-sm font-medium">
                     <ArrowLeft size={16} /> {t('CHANNEL_MGMT.MODEL.BTN_BACK')}
                 </button>
-                
+
                 <div className="mb-8">
                     <h1 className="text-3xl font-black text-on-surface flex items-center gap-3">
                         <Box size={32} className="text-primary" />
@@ -457,26 +457,26 @@ const ChannelManagement = () => {
 
                 <div className="flex flex-col md:flex-row justify-between items-start md:items-center gap-4 mb-6 relative z-20">
                     <div className="relative w-full md:w-96">
-                        <input 
-                            type="text" 
+                        <input
+                            type="text"
                             placeholder={t('CHANNEL_MGMT.MODEL.SEARCH_PLACEHOLDER')}
                             value={modelSearchTerm}
                             onChange={(e) => setModelSearchTerm(e.target.value)}
-                            className="w-full bg-surface-container border border-outline-variant rounded-xl pl-11 pr-4 py-3 text-sm text-on-surface-variant focus:outline-none focus:border-primary focus:ring-1 focus:ring-blue-500/50"
+                            className="w-full bg-surface-container border border-outline-variant rounded-overlay pl-11 pr-4 py-3 text-sm text-on-surface-variant focus:outline-none focus:border-primary focus:ring-1 focus:ring-blue-500/50"
                         />
                         <Search size={18} className="absolute left-4 top-1/2 -translate-y-1/2 text-on-surface-variant" />
                     </div>
                     <div className="flex gap-2">
-                        <button 
-                            onClick={handleOpenUpstreamSync} 
-                            className="flex items-center gap-2 bg-[#1a1b1e] hover:bg-[#25262b] text-on-surface-variant border border-outline-variant px-4 py-3 rounded-xl font-medium "
+                        <button
+                            onClick={handleOpenUpstreamSync}
+                            className="flex items-center gap-2 bg-surface hover:bg-surface-container-high text-on-surface-variant border border-outline-variant px-4 py-3 rounded-overlay font-medium "
                         >
-                            <Network size={18} className="text-emerald-500" />
+                            <Network size={18} className="text-success" />
                             {t('CHANNEL_MGMT.MODEL.BTN_FETCH_UPSTREAM')}
                         </button>
-                        <button 
-                            onClick={() => handleOpenModelModal()} 
-                            className="flex items-center gap-2 bg-primary text-on-primary hover:bg-primary-container hover:text-on-primary-container px-5 py-3 rounded-xl font-medium  shadow-lg shadow-blue-600/20 active:scale-95 border border-blue-500/50"
+                        <button
+                            onClick={() => handleOpenModelModal()}
+                            className="flex items-center gap-2 bg-primary text-on-primary hover:bg-primary-container hover:text-on-primary-container px-5 py-3 rounded-overlay font-medium /20 active:scale-95 border border-primary/50"
                         >
                             <Plus size={18} />
                             {t('CHANNEL_MGMT.MODEL.BTN_ADD')}
@@ -485,7 +485,7 @@ const ChannelManagement = () => {
                 </div>
 
                 {/* Model Table */}
-                <div className="bg-surface-container border border-outline-variant rounded-2xl overflow-hidden shadow-sm">
+                <div className="bg-surface-container border border-outline-variant rounded-overlay overflow-hidden ">
                     <div className="overflow-x-auto">
                         <table className="w-full min-w-[900px] text-left text-sm text-on-surface-variant table-fixed">
                             <thead className="bg-surface-container-high text-xs uppercase font-mono tracking-wider text-on-surface-variant border-b border-outline-variant">
@@ -500,13 +500,13 @@ const ChannelManagement = () => {
                         </thead>
                         <tbody className="divide-y divide-[#2b2b2b]/50">
                             {loadingModels ? (
-                                <tr><td colSpan="6" className="px-6 py-12 text-center text-on-surface-variant"><RefreshCw size={24} className="mx-auto  mb-2" /></td></tr>
+                                <tr><td colSpan="6" className="px-6 py-12 text-center text-on-surface-variant"><RefreshCw size={24} className="mx-auto mb-2" /></td></tr>
                             ) : filteredModels.length === 0 ? (
                                 <tr><td colSpan="6" className="px-6 py-12 text-center text-on-surface-variant">No models found for this channel.</td></tr>
                             ) : (
                                 filteredModels.map(m => (
-                                    <tr key={m.id} className="hover:bg-[#1a1b1e]  group">
-                                        <td className="px-6 py-4 font-mono text-blue-400">
+                                    <tr key={m.id} className="hover:bg-surface group">
+                                        <td className="px-6 py-4 font-mono text-primary">
                                             <div className="flex items-center gap-2 flex-wrap">
                                                 <span>{m.model_id}</span>
                                                 <ModerationBadge level={m.moderation_level} failMode={m.moderation_fail_mode} />
@@ -518,7 +518,7 @@ const ChannelManagement = () => {
                                         </td>
                                         <td className="px-6 py-4">
                                             {m.max_context_length > 0 ? (
-                                                <span className="text-xs bg-[#2b2b2b]/50 text-on-surface-variant px-2 py-1 rounded border border-[#3f4148]/50">
+                                                <span className="text-xs bg-surface-container-high/50 text-on-surface-variant px-2 py-1 rounded-control border border-outline-variant/50">
                                                     {formatTokens(m.max_context_length)}
                                                 </span>
                                             ) : (
@@ -529,20 +529,20 @@ const ChannelManagement = () => {
                                             <div className="flex flex-col text-xs space-y-1">
                                                 <span className="text-on-surface-variant">{t('CHANNEL_MGMT.MODEL.IN')}: {formatCurrency(m.input_price, 6)}</span>
                                                 <span className="text-on-surface-variant">{t('CHANNEL_MGMT.MODEL.OUT')}: {formatCurrency(m.output_price, 6)}</span>
-                                                {m.cached_input_price > 0 && <span className="text-emerald-400">{t('CHANNEL_MGMT.MODEL.CACHE')}: {formatCurrency(m.cached_input_price, 6)}</span>}
-                                                {m.cache_write_input_price > 0 && <span className="text-orange-400">{t('CHANNEL_MGMT.MODEL.CACHE_WRITE_5M', '缓存写5m')}: {formatCurrency(m.cache_write_input_price, 6)}</span>}
-                                                {m.cache_write_1h_input_price > 0 && <span className="text-orange-300">{t('CHANNEL_MGMT.MODEL.CACHE_WRITE_1H', '缓存写1h')}: {formatCurrency(m.cache_write_1h_input_price, 6)}</span>}
+                                                {m.cached_input_price > 0 && <span className="text-success">{t('CHANNEL_MGMT.MODEL.CACHE')}: {formatCurrency(m.cached_input_price, 6)}</span>}
+                                                {m.cache_write_input_price > 0 && <span className="text-warning">{t('CHANNEL_MGMT.MODEL.CACHE_WRITE_5M', '缓存写5m')}: {formatCurrency(m.cache_write_input_price, 6)}</span>}
+                                                {m.cache_write_1h_input_price > 0 && <span className="text-warning">{t('CHANNEL_MGMT.MODEL.CACHE_WRITE_1H', '缓存写1h')}: {formatCurrency(m.cache_write_1h_input_price, 6)}</span>}
                                             </div>
                                         </td>
                                         <td className="px-6 py-4">
                                             {m.context_price_threshold > 0 ? (
-                                                <div className="flex flex-col text-xs space-y-1 bg-amber-500/10 border border-amber-500/30 p-2 rounded w-fit">
-                                                    <span className="text-amber-500 font-medium pb-1 mb-1 border-b border-amber-500/20">
+                                                <div className="flex flex-col text-xs space-y-1 bg-warning/10 border border-warning/30 p-2 rounded-control w-fit">
+                                                    <span className="text-warning font-medium pb-1 mb-1 border-b border-warning/20">
                                                         <AlertTriangle size={12} className="inline mr-1 -mt-0.5" />
                                                         {t('CHANNEL_MGMT.MODEL.TIER_ACTIVE', { threshold: formatTokens(m.context_price_threshold) })}
                                                     </span>
                                                     <span className="text-on-surface-variant">{t('CHANNEL_MGMT.MODEL.IN')}: {formatCurrency(m.high_input_price, 6)}</span>
-                                                    {m.high_cached_input_price > 0 && <span className="text-emerald-400">{t('CHANNEL_MGMT.MODEL.CACHE')}: {formatCurrency(m.high_cached_input_price, 6)}</span>}
+                                                    {m.high_cached_input_price > 0 && <span className="text-success">{t('CHANNEL_MGMT.MODEL.CACHE')}: {formatCurrency(m.high_cached_input_price, 6)}</span>}
                                                     <span className="text-on-surface-variant">{t('CHANNEL_MGMT.MODEL.OUT')}: {formatCurrency(m.high_output_price, 6)}</span>
                                                 </div>
                                             ) : (
@@ -551,8 +551,8 @@ const ChannelManagement = () => {
                                         </td>
                                         <td className="px-6 py-4">{m.weight}</td>
                                         <td className="px-6 py-4 text-right">
-                                            <button onClick={() => handleOpenModelModal(m)} className="p-2 hover:bg-blue-500/20 text-primary rounded-lg mr-2"><Edit2 size={16} /></button>
-                                            <button onClick={() => handleDeleteModel(m.id)} className="p-2 hover:bg-rose-500/20 text-rose-500 rounded-lg"><Trash2 size={16} /></button>
+                                            <button onClick={() => handleOpenModelModal(m)} className="p-2 hover:bg-primary/20 text-primary rounded-control mr-2"><Edit2 size={16} /></button>
+                                            <button onClick={() => handleDeleteModel(m.id)} className="p-2 hover:bg-error/20 text-error rounded-control"><Trash2 size={16} /></button>
                                         </td>
                                     </tr>
                                 ))
@@ -572,7 +572,7 @@ const ChannelManagement = () => {
                         onClick={onModelBackdropClick}
                         className="fixed inset-0 bg-black/80 backdrop-blur-sm z-[100] flex items-start sm:items-center justify-center p-2 sm:p-4 overflow-y-auto"
                     >
-                        <div className="bg-[#1a1b1e] border border-outline-variant rounded-2xl w-full max-w-xl flex flex-col max-h-[90vh]">
+                        <div className="bg-surface border border-outline-variant rounded-overlay w-full max-w-xl flex flex-col max-h-[90vh]">
                             <div className="p-6 border-b border-outline-variant flex justify-between">
                                 <h3 id="channel-model-modal-title" className="text-xl font-bold text-on-surface flex items-center gap-2">
                                     {currentModel ? t('CHANNEL_MGMT.MODEL.MODAL.EDIT_TITLE') : t('CHANNEL_MGMT.MODEL.MODAL.ADD_TITLE')}
@@ -581,16 +581,16 @@ const ChannelManagement = () => {
                             </div>
                             <div className="bg-surface-container-high px-6 py-3 border-b border-outline-variant flex items-center justify-between">
                                 <span className="text-xs text-on-surface-variant font-medium tracking-wide">{t('CHANNEL_MGMT.SETTLEMENT_CURRENCY')}</span>
-                                <div className="flex bg-surface-variant rounded-lg p-1">
-                                    <button 
-                                        type="button" 
+                                <div className="flex bg-surface-variant rounded-control p-1">
+                                    <button
+                                        type="button"
                                         onClick={() => toggleInputCurrency('USD')}
-                                        className={`px-4 py-1 text-xs font-bold rounded-md  ${inputCurrency === 'USD' ? 'bg-primary text-on-primary text-on-surface shadow-sm' : 'text-on-surface-variant hover:text-white'}`}
+                                        className={`px-4 py-1 text-xs font-bold rounded-control  ${inputCurrency === 'USD' ? 'bg-primary text-on-primary text-on-surface ' : 'text-on-surface-variant hover:text-white'}`}
                                     >USD ($)</button>
-                                    <button 
-                                        type="button" 
+                                    <button
+                                        type="button"
                                         onClick={() => toggleInputCurrency('CNY')}
-                                        className={`px-4 py-1 text-xs font-bold rounded-md  ${inputCurrency === 'CNY' ? 'bg-orange-600 text-on-surface shadow-sm' : 'text-on-surface-variant hover:text-white'}`}
+                                        className={`px-4 py-1 text-xs font-bold rounded-control  ${inputCurrency === 'CNY' ? 'bg-warning text-on-surface ' : 'text-on-surface-variant hover:text-white'}`}
                                     >CNY (￥)</button>
                                 </div>
                             </div>
@@ -603,72 +603,72 @@ const ChannelManagement = () => {
                                         required
                                         value={modelForm.model_id}
                                         onChange={e=>setModelForm(withEndpointPolicyDefaults(withOpenAIModelModeration({...modelForm, model_id: e.target.value})))}
-                                        className="w-full bg-surface-container-high border border-outline-variant rounded-xl px-4 py-2.5 text-on-surface"
+                                        className="w-full bg-surface-container-high border border-outline-variant rounded-overlay px-4 py-2.5 text-on-surface"
                                     />
                                 </div>
                                 <div>
                                     <label htmlFor="channel-model-display-name" className="block text-xs font-medium text-on-surface-variant mb-1">{t('CHANNEL_MGMT.MODEL.MODAL.DISPLAY_NAME')}</label>
-                                    <input id="channel-model-display-name" type="text" value={modelForm.display_name || ''} onChange={e=>setModelForm({...modelForm, display_name: e.target.value})} className="w-full bg-surface-container-high border border-outline-variant rounded-xl px-4 py-2.5 text-on-surface" />
+                                    <input id="channel-model-display-name" type="text" value={modelForm.display_name || ''} onChange={e=>setModelForm({...modelForm, display_name: e.target.value})} className="w-full bg-surface-container-high border border-outline-variant rounded-overlay px-4 py-2.5 text-on-surface" />
                                 </div>
                                 <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
                                     <div>
-                                        <label htmlFor="channel-model-max-context" className="block text-xs font-medium text-on-surface-variant mb-1">{t('CHANNEL_MGMT.MODEL.MODAL.MAX_CONTEXT_LENGTH')} <span className="ml-1 text-gray-400/70">(Tokens)</span></label>
-                                        <input id="channel-model-max-context" type="number" min="0" value={modelForm.max_context_length || ''} onChange={e=>setModelForm({...modelForm, max_context_length: parseInt(e.target.value) || 0})} className="w-full bg-surface-container-high border border-outline-variant rounded-xl px-4 py-2.5 text-on-surface" placeholder="0 = 不限制" />
+                                        <label htmlFor="channel-model-max-context" className="block text-xs font-medium text-on-surface-variant mb-1">{t('CHANNEL_MGMT.MODEL.MODAL.MAX_CONTEXT_LENGTH')} <span className="ml-1 text-on-surface-variant/70">(Tokens)</span></label>
+                                        <input id="channel-model-max-context" type="number" min="0" value={modelForm.max_context_length || ''} onChange={e=>setModelForm({...modelForm, max_context_length: parseInt(e.target.value) || 0})} className="w-full bg-surface-container-high border border-outline-variant rounded-overlay px-4 py-2.5 text-on-surface" placeholder="0 = 不限制" />
                                         <div className="flex flex-wrap gap-1 mt-2">
                                             {[8000, 32000, 128000, 200000, 1000000].map(v => (
-                                                <button type="button" key={v} onClick={()=>setModelForm({...modelForm, max_context_length: v})} className="px-2 py-0.5 rounded text-[10px] border border-outline-variant bg-[#1a1b1e] hover:bg-[#25262b] text-on-surface-variant">{formatTokens(v)}</button>
+                                                <button type="button" key={v} onClick={()=>setModelForm({...modelForm, max_context_length: v})} className="px-2 py-0.5 rounded-control text-[10px] border border-outline-variant bg-surface hover:bg-surface-container-high text-on-surface-variant">{formatTokens(v)}</button>
                                             ))}
                                         </div>
                                     </div>
                                     <div>
                                         <label htmlFor="channel-model-weight" className="block text-xs font-medium text-on-surface-variant mb-1">{t('CHANNEL_MGMT.MODEL.MODAL.WEIGHT')}</label>
-                                        <input id="channel-model-weight" type="number" min="0" value={modelForm.weight} onChange={e=>setModelForm({...modelForm, weight: e.target.value})} className="w-full bg-surface-container-high border border-outline-variant rounded-xl px-4 py-2.5 text-on-surface" />
+                                        <input id="channel-model-weight" type="number" min="0" value={modelForm.weight} onChange={e=>setModelForm({...modelForm, weight: e.target.value})} className="w-full bg-surface-container-high border border-outline-variant rounded-overlay px-4 py-2.5 text-on-surface" />
                                     </div>
                                 </div>
                                 <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
                                     <div>
                                         <label htmlFor="channel-model-input-price" className="block text-xs font-medium text-on-surface-variant mb-1">
                                             {t('CHANNEL_MGMT.MODEL.MODAL.INPUT_PRICE')}
-                                            <span className="ml-1 text-blue-400">({inputCurrency === 'CNY' ? '￥/1M' : '$/1M'})</span>
+                                            <span className="ml-1 text-primary">({inputCurrency === 'CNY' ? '￥/1M' : '$/1M'})</span>
                                         </label>
-                                        <input id="channel-model-input-price" type="number" step="0.000001" min="0" required value={modelForm.input_price} onChange={e=>setModelForm({...modelForm, input_price: e.target.value})} className="w-full bg-[#1a1b1e] border border-outline-variant rounded-lg px-3 py-2 text-on-surface" />
+                                        <input id="channel-model-input-price" type="number" step="0.000001" min="0" required value={modelForm.input_price} onChange={e=>setModelForm({...modelForm, input_price: e.target.value})} className="w-full bg-surface border border-outline-variant rounded-control px-3 py-2 text-on-surface" />
                                     </div>
                                     <div>
                                         <label htmlFor="channel-model-output-price" className="block text-xs font-medium text-on-surface-variant mb-1">
                                             {t('CHANNEL_MGMT.MODEL.MODAL.OUTPUT_PRICE')}
-                                            <span className="ml-1 text-blue-400">({inputCurrency === 'CNY' ? '￥/1M' : '$/1M'})</span>
+                                            <span className="ml-1 text-primary">({inputCurrency === 'CNY' ? '￥/1M' : '$/1M'})</span>
                                         </label>
-                                        <input id="channel-model-output-price" type="number" step="0.000001" min="0" required value={modelForm.output_price} onChange={e=>setModelForm({...modelForm, output_price: e.target.value})} className="w-full bg-[#1a1b1e] border border-outline-variant rounded-lg px-3 py-2 text-on-surface" />
+                                        <input id="channel-model-output-price" type="number" step="0.000001" min="0" required value={modelForm.output_price} onChange={e=>setModelForm({...modelForm, output_price: e.target.value})} className="w-full bg-surface border border-outline-variant rounded-control px-3 py-2 text-on-surface" />
                                     </div>
                                     <div>
-                                        <label htmlFor="channel-model-cache-price" className="block text-xs font-medium text-emerald-500 mb-1">
+                                        <label htmlFor="channel-model-cache-price" className="block text-xs font-medium text-success mb-1">
                                             {t('CHANNEL_MGMT.MODEL.MODAL.CACHE_PRICE')}
-                                            <span className="ml-1 text-emerald-400/70">({inputCurrency === 'CNY' ? '￥/1M' : '$/1M'})</span>
+                                            <span className="ml-1 text-success/70">({inputCurrency === 'CNY' ? '￥/1M' : '$/1M'})</span>
                                         </label>
-                                        <input id="channel-model-cache-price" type="number" step="0.000001" min="0" value={modelForm.cached_input_price} onChange={e=>setModelForm({...modelForm, cached_input_price: e.target.value})} className="w-full bg-[#1a1b1e] border border-emerald-500/30 rounded-lg px-3 py-2 text-on-surface" />
+                                        <input id="channel-model-cache-price" type="number" step="0.000001" min="0" value={modelForm.cached_input_price} onChange={e=>setModelForm({...modelForm, cached_input_price: e.target.value})} className="w-full bg-surface border border-success/30 rounded-control px-3 py-2 text-on-surface" />
                                     </div>
                                     <div>
-                                        <label htmlFor="channel-model-cache-write-price" className="block text-xs font-medium text-orange-400 mb-1">
+                                        <label htmlFor="channel-model-cache-write-price" className="block text-xs font-medium text-warning mb-1">
                                             {t('CHANNEL_MGMT.MODEL.MODAL.CACHE_WRITE_PRICE', '缓存写入单价 ($/1M Token)')}
-                                            <span className="ml-1 text-orange-400/70">({inputCurrency === 'CNY' ? '￥/1M' : '$/1M'})</span>
+                                            <span className="ml-1 text-warning/70">({inputCurrency === 'CNY' ? '￥/1M' : '$/1M'})</span>
                                         </label>
-                                        <input id="channel-model-cache-write-price" type="number" step="0.000001" min="0" value={modelForm.cache_write_input_price} onChange={e=>setModelForm({...modelForm, cache_write_input_price: e.target.value})} className="w-full bg-[#1a1b1e] border border-orange-500/30 rounded-lg px-3 py-2 text-on-surface" />
+                                        <input id="channel-model-cache-write-price" type="number" step="0.000001" min="0" value={modelForm.cache_write_input_price} onChange={e=>setModelForm({...modelForm, cache_write_input_price: e.target.value})} className="w-full bg-surface border border-warning/30 rounded-control px-3 py-2 text-on-surface" />
                                     </div>
                                     <div className="col-span-1 sm:col-span-2">
-                                        <label htmlFor="channel-model-cache-write-1h-price" className="block text-xs font-medium text-orange-300 mb-1">
+                                        <label htmlFor="channel-model-cache-write-1h-price" className="block text-xs font-medium text-warning mb-1">
                                             {t('CHANNEL_MGMT.MODEL.MODAL.CACHE_WRITE_1H_PRICE', '1小时缓存写入单价 ($/1M Token)')}
-                                            <span className="ml-1 text-orange-300/70">({inputCurrency === 'CNY' ? '￥/1M' : '$/1M'})</span>
+                                            <span className="ml-1 text-warning/70">({inputCurrency === 'CNY' ? '￥/1M' : '$/1M'})</span>
                                         </label>
-                                        <input id="channel-model-cache-write-1h-price" type="number" step="0.000001" min="0" value={modelForm.cache_write_1h_input_price} onChange={e=>setModelForm({...modelForm, cache_write_1h_input_price: e.target.value})} className="w-full bg-[#1a1b1e] border border-orange-400/30 rounded-lg px-3 py-2 text-on-surface" />
+                                        <input id="channel-model-cache-write-1h-price" type="number" step="0.000001" min="0" value={modelForm.cache_write_1h_input_price} onChange={e=>setModelForm({...modelForm, cache_write_1h_input_price: e.target.value})} className="w-full bg-surface border border-warning/30 rounded-control px-3 py-2 text-on-surface" />
                                     </div>
                                 </div>
-                                <div className="p-4 bg-amber-500/5 border border-amber-500/20 rounded-xl space-y-4">
+                                <div className="p-4 bg-warning/5 border border-warning/20 rounded-overlay space-y-4">
                                     <div>
                                         <label htmlFor="channel-model-threshold" className="block text-xs font-medium text-on-surface-variant mb-1">{t('CHANNEL_MGMT.MODEL.MODAL.THRESHOLD')}</label>
-                                        <input id="channel-model-threshold" type="number" min="0" value={modelForm.context_price_threshold} onChange={e=>setModelForm({...modelForm, context_price_threshold: e.target.value})} className="w-full bg-[#1a1b1e] border border-amber-500/30 rounded-lg px-3 py-2 text-amber-100" />
+                                        <input id="channel-model-threshold" type="number" min="0" value={modelForm.context_price_threshold} onChange={e=>setModelForm({...modelForm, context_price_threshold: e.target.value})} className="w-full bg-surface border border-warning/30 rounded-control px-3 py-2 text-warning" />
                                         <div className="flex flex-wrap gap-1 mt-2">
                                             {[8000, 32000, 128000, 200000, 1000000].map(v => (
-                                                <button type="button" key={v} onClick={()=>setModelForm({...modelForm, context_price_threshold: v})} className="px-2 py-0.5 rounded text-[10px] border border-amber-500/20 bg-amber-500/10 hover:bg-amber-500/20 text-amber-500/80">{formatTokens(v)}</button>
+                                                <button type="button" key={v} onClick={()=>setModelForm({...modelForm, context_price_threshold: v})} className="px-2 py-0.5 rounded-control text-[10px] border border-warning/20 bg-warning/10 hover:bg-warning/20 text-warning/80">{formatTokens(v)}</button>
                                             ))}
                                         </div>
                                     </div>
@@ -677,29 +677,29 @@ const ChannelManagement = () => {
                                             <div>
                                                 <label htmlFor="channel-model-high-input" className="block text-xs font-medium text-on-surface-variant mb-1">
                                                     {t('CHANNEL_MGMT.MODEL.MODAL.HIGH_IN_PRICE')}
-                                                    <span className="ml-1 text-blue-400">({inputCurrency === 'CNY' ? '￥/1M' : '$/1M'})</span>
+                                                    <span className="ml-1 text-primary">({inputCurrency === 'CNY' ? '￥/1M' : '$/1M'})</span>
                                                 </label>
-                                                <input id="channel-model-high-input" type="number" step="0.000001" min="0" required value={modelForm.high_input_price} onChange={e=>setModelForm({...modelForm, high_input_price: e.target.value})} className="w-full bg-[#1a1b1e] border border-outline-variant rounded-lg px-3 py-2 text-on-surface" />
+                                                <input id="channel-model-high-input" type="number" step="0.000001" min="0" required value={modelForm.high_input_price} onChange={e=>setModelForm({...modelForm, high_input_price: e.target.value})} className="w-full bg-surface border border-outline-variant rounded-control px-3 py-2 text-on-surface" />
                                             </div>
                                             <div>
                                                 <label htmlFor="channel-model-high-cache" className="block text-xs font-medium text-on-surface-variant mb-1">
                                                     {t('CHANNEL_MGMT.MODEL.MODAL.HIGH_CACHE_PRICE', '阶梯缓存读取单价 ($/1M)')}
-                                                    <span className="ml-1 text-blue-400">({inputCurrency === 'CNY' ? '￥/1M' : '$/1M'})</span>
+                                                    <span className="ml-1 text-primary">({inputCurrency === 'CNY' ? '￥/1M' : '$/1M'})</span>
                                                 </label>
-                                                <input id="channel-model-high-cache" type="number" step="0.000001" min="0" value={modelForm.high_cached_input_price} onChange={e=>setModelForm({...modelForm, high_cached_input_price: e.target.value})} className="w-full bg-[#1a1b1e] border border-outline-variant rounded-lg px-3 py-2 text-on-surface" />
+                                                <input id="channel-model-high-cache" type="number" step="0.000001" min="0" value={modelForm.high_cached_input_price} onChange={e=>setModelForm({...modelForm, high_cached_input_price: e.target.value})} className="w-full bg-surface border border-outline-variant rounded-control px-3 py-2 text-on-surface" />
                                             </div>
                                             <div>
                                                 <label htmlFor="channel-model-high-output" className="block text-xs font-medium text-on-surface-variant mb-1">
                                                     {t('CHANNEL_MGMT.MODEL.MODAL.HIGH_OUT_PRICE')}
-                                                    <span className="ml-1 text-blue-400">({inputCurrency === 'CNY' ? '￥/1M' : '$/1M'})</span>
+                                                    <span className="ml-1 text-primary">({inputCurrency === 'CNY' ? '￥/1M' : '$/1M'})</span>
                                                 </label>
-                                                <input id="channel-model-high-output" type="number" step="0.000001" min="0" required value={modelForm.high_output_price} onChange={e=>setModelForm({...modelForm, high_output_price: e.target.value})} className="w-full bg-[#1a1b1e] border border-outline-variant rounded-lg px-3 py-2 text-on-surface" />
+                                                <input id="channel-model-high-output" type="number" step="0.000001" min="0" required value={modelForm.high_output_price} onChange={e=>setModelForm({...modelForm, high_output_price: e.target.value})} className="w-full bg-surface border border-outline-variant rounded-control px-3 py-2 text-on-surface" />
                                             </div>
                                         </div>
                                     )}
                                 </div>
 
-                                <fieldset className="border border-outline-variant rounded-xl p-4 mt-2">
+                                <fieldset className="border border-outline-variant rounded-overlay p-4 mt-2">
                                     <legend className="px-2 text-xs font-semibold text-on-surface flex items-center gap-2">
                                         <Network size={13} className="text-on-surface-variant" />
                                         {t('CHANNEL_MGMT.ENDPOINT.LEGEND', '端点兼容策略')}
@@ -711,7 +711,7 @@ const ChannelManagement = () => {
                                         id="endpoint-policy"
                                         value={modelForm.endpoint_policy || 'all'}
                                         onChange={e=>setModelForm({...modelForm, endpoint_policy: e.target.value})}
-                                        className="w-full bg-surface-container-high border border-outline-variant rounded-xl px-4 py-2.5 text-on-surface"
+                                        className="w-full bg-surface-container-high border border-outline-variant rounded-overlay px-4 py-2.5 text-on-surface"
                                     >
                                         <option value="all">{t('CHANNEL_MGMT.ENDPOINT.ALL', '全部允许')}</option>
                                         <option value="no_chat_non_stream">{t('CHANNEL_MGMT.ENDPOINT.NO_CHAT_NON_STREAM', '禁止 Chat Completions 非流式')}</option>
@@ -723,9 +723,9 @@ const ChannelManagement = () => {
                                 </fieldset>
 
                                 {/* fix CRITICAL R23: per-ChannelModel 内容审核策略 (codex 第二十三轮反馈) */}
-                                <fieldset className="border border-outline-variant rounded-xl p-4 mt-2">
+                                <fieldset className="border border-outline-variant rounded-overlay p-4 mt-2">
                                     <legend className="px-2 text-xs font-semibold text-on-surface flex items-center gap-2">
-                                        <AlertTriangle size={13} className={isOfficialChannel ? 'text-amber-400' : 'text-on-surface-variant'} />
+                                        <AlertTriangle size={13} className={isOfficialChannel ? 'text-warning' : 'text-on-surface-variant'} />
                                         {t('CHANNEL_MGMT.MOD.LEGEND', '内容审核（防账号被封禁）')}
                                     </legend>
                                     <div className="grid grid-cols-1 sm:grid-cols-2 gap-4 mt-2">
@@ -738,7 +738,7 @@ const ChannelManagement = () => {
                                                 value={modelForm.moderation_level || 'off'}
                                                 onChange={e=>setModelForm(withOpenAIModelModeration({...modelForm, moderation_level: e.target.value, confirm_official_no_moderation: false}))}
                                                 disabled={isOpenAIModel}
-                                                className="w-full bg-surface-container-high border border-outline-variant rounded-xl px-4 py-2.5 text-on-surface"
+                                                className="w-full bg-surface-container-high border border-outline-variant rounded-overlay px-4 py-2.5 text-on-surface"
                                             >
                                                 <option value="off">{t('CHANNEL_MGMT.MOD.LEVEL_OFF', 'OFF — 不审核')}</option>
                                                 <option value="keyword">{t('CHANNEL_MGMT.MOD.LEVEL_KEYWORD', 'KW — 仅关键字快扫')}</option>
@@ -755,7 +755,7 @@ const ChannelManagement = () => {
                                                 value={modelForm.moderation_fail_mode || 'open'}
                                                 onChange={e=>setModelForm(withOpenAIModelModeration({...modelForm, moderation_fail_mode: e.target.value}))}
                                                 disabled={isOpenAIModel}
-                                                className="w-full bg-surface-container-high border border-outline-variant rounded-xl px-4 py-2.5 text-on-surface"
+                                                className="w-full bg-surface-container-high border border-outline-variant rounded-overlay px-4 py-2.5 text-on-surface"
                                             >
                                                 <option value="open">{t('CHANNEL_MGMT.MOD.FAIL_OPEN', 'OPEN — 放行（cloaked 路径推荐）')}</option>
                                                 <option value="closed">{t('CHANNEL_MGMT.MOD.FAIL_CLOSED', 'CLOSED — 拒绝（直连官方推荐）')}</option>
@@ -763,13 +763,13 @@ const ChannelManagement = () => {
                                         </div>
                                     </div>
                                     {isOfficialChannel && (
-                                        <div className="mt-3 p-3 bg-amber-500/10 border border-amber-500/30 rounded-lg text-xs text-amber-300 leading-relaxed">
+                                        <div className="mt-3 p-3 bg-warning/10 border border-warning/30 rounded-control text-xs text-warning leading-relaxed">
                                             <AlertTriangle size={12} className="inline mr-1 -mt-0.5" />
                                             {t('CHANNEL_MGMT.MOD.OFFICIAL_HINT', '当前渠道指向官方 API（OpenAI / Anthropic / Gemini）。建议设为 STRICT + CLOSED 防账号被封禁。点击右下角"应用推荐预设"。')}
                                         </div>
                                     )}
                                     {isOpenAIModel && (
-                                        <div className="mt-3 p-3 bg-emerald-500/10 border border-emerald-500/30 rounded-lg text-xs text-emerald-200 leading-relaxed">
+                                        <div className="mt-3 p-3 bg-success/10 border border-success/30 rounded-control text-xs text-success leading-relaxed">
                                             <AlertTriangle size={12} className="inline mr-1 -mt-0.5" />
                                             {t('CHANNEL_MGMT.MOD.OPENAI_LOCK_HINT', 'OpenAI / Codex-family 模型已全局强制启用 STRICT + CLOSED 内容审查。')}
                                         </div>
@@ -787,7 +787,7 @@ const ChannelManagement = () => {
                                         </button>
                                     </div>
                                     {isOfficialChannel && modelForm.moderation_level === 'off' && (
-                                        <label className="flex items-start gap-2 mt-3 text-xs text-amber-200 bg-amber-500/10 border border-amber-500/30 rounded-lg p-2 cursor-pointer">
+                                        <label className="flex items-start gap-2 mt-3 text-xs text-warning bg-warning/10 border border-warning/30 rounded-control p-2 cursor-pointer">
                                             <input
                                                 type="checkbox"
                                                 className="mt-0.5"
@@ -799,13 +799,13 @@ const ChannelManagement = () => {
                                     )}
                                 </fieldset>
                             </div>
-                            <div className="p-6 border-t border-outline-variant bg-surface-container-high flex justify-end gap-3 rounded-b-2xl">
-                                <button onClick={() => setIsModelModalOpen(false)} className="px-5 py-2.5 text-on-surface-variant hover:text-white hover:bg-[#2b2b2b] rounded-xl">{t('CHANNEL_MGMT.MODEL.MODAL.BTN_CANCEL')}</button>
+                            <div className="p-6 border-t border-outline-variant bg-surface-container-high flex justify-end gap-3 rounded-control-b-2xl">
+                                <button onClick={() => setIsModelModalOpen(false)} className="px-5 py-2.5 text-on-surface-variant hover:text-white hover:bg-surface-container-high rounded-overlay">{t('CHANNEL_MGMT.MODEL.MODAL.BTN_CANCEL')}</button>
                                 {/* fix MINOR R23-m4：官方渠道关审核没勾 confirm 时禁用 Save，省一次后端往返 */}
                                 <button
                                     onClick={handleModelSubmit}
                                     disabled={isSubmitting || (!isOpenAIModel && isOfficialChannel && modelForm.moderation_level === 'off' && !modelForm.confirm_official_no_moderation)}
-                                    className="px-6 py-2.5 bg-primary text-on-primary hover:bg-primary-container hover:text-on-primary-container rounded-xl font-medium flex items-center gap-2 disabled:opacity-50 disabled:cursor-not-allowed"
+                                    className="px-6 py-2.5 bg-primary text-on-primary hover:bg-primary-container hover:text-on-primary-container rounded-overlay font-medium flex items-center gap-2 disabled:opacity-50 disabled:cursor-not-allowed"
                                 >
                                     {isSubmitting ? <RefreshCw className="animate-spin" size={18}/> : <Save size={18}/>} {t('CHANNEL_MGMT.MODEL.MODAL.BTN_SAVE')}
                                 </button>
@@ -824,22 +824,22 @@ const ChannelManagement = () => {
                         onClick={onUpstreamBackdropClick}
                         className="fixed inset-0 bg-black/80 backdrop-blur-sm z-[100] flex items-start sm:items-center justify-center p-2 sm:p-4 overflow-y-auto"
                     >
-                        <div className="bg-[#1a1b1e] border border-outline-variant rounded-2xl w-full max-w-2xl flex flex-col max-h-[90vh]">
-                            <div className="p-6 border-b border-outline-variant flex justify-between items-center bg-surface-container-high rounded-t-2xl">
+                        <div className="bg-surface border border-outline-variant rounded-overlay w-full max-w-2xl flex flex-col max-h-[90vh]">
+                            <div className="p-6 border-b border-outline-variant flex justify-between items-center bg-surface-container-high rounded-control-t-2xl">
                                 <div>
                                     <h3 id="channel-upstream-modal-title" className="text-xl font-bold text-on-surface flex items-center gap-2">
-                                        <Network size={22} className="text-emerald-500" />
+                                        <Network size={22} className="text-success" />
                                         {t('CHANNEL_MGMT.UPSTREAM_MODAL.TITLE')}
                                     </h3>
                                     <p className="text-xs text-on-surface-variant mt-1">{t('CHANNEL_MGMT.UPSTREAM_MODAL.DESC', { type: selectedChannel.type })}</p>
                                 </div>
                                 <button ref={upstreamModalCloseRef} onClick={() => setIsUpstreamModalOpen(false)} aria-label={t('COMMON.CLOSE', '关闭')}><X size={20} className="text-on-surface-variant hover:text-white" /></button>
                             </div>
-                            
+
                             <div className="p-6 overflow-y-auto flex-1">
                                 {loadingUpstream ? (
                                     <div className="flex flex-col items-center justify-center py-12">
-                                        <RefreshCw size={32} className="text-emerald-500  mb-4" />
+                                        <RefreshCw size={32} className="text-success mb-4" />
                                         <p className="text-on-surface-variant">{t('CHANNEL_MGMT.UPSTREAM_MODAL.LOADING')}</p>
                                     </div>
                                 ) : upstreamModels.length === 0 ? (
@@ -850,12 +850,12 @@ const ChannelManagement = () => {
                                     <div className="space-y-4">
                                         <div className="flex items-center justify-between pb-2 border-b border-outline-variant">
                                             <span className="text-sm text-on-surface-variant">{t('CHANNEL_MGMT.UPSTREAM_MODAL.FOUND_COUNT', { count: upstreamModels.length })}</span>
-                                            <button 
+                                            <button
                                                 onClick={() => {
                                                     if(selectedUpstreamModels.length === upstreamModels.length) setSelectedUpstreamModels([]);
                                                     else setSelectedUpstreamModels([...upstreamModels]);
                                                 }}
-                                                className="text-xs text-emerald-500 hover:text-emerald-400 font-medium"
+                                                className="text-xs text-success hover:text-success font-medium"
                                             >
                                                 {selectedUpstreamModels.length === upstreamModels.length ? t('CHANNEL_MGMT.UPSTREAM_MODAL.BTN_DESELECT_ALL') : t('CHANNEL_MGMT.UPSTREAM_MODAL.BTN_SELECT_ALL')}
                                             </button>
@@ -865,8 +865,8 @@ const ChannelManagement = () => {
                                             {upstreamModelsByLetter.map(([letter, models]) => (
                                                 <div key={letter} className="space-y-3">
                                                     <h4 className="flex items-center gap-2">
-                                                        <span className="bg-surface-variant text-on-surface-variant font-bold w-6 h-6 flex items-center justify-center rounded-md text-xs">{letter}</span>
-                                                        <span className="flex-1 border-t border-[#2b2b2b]/80"></span>
+                                                        <span className="bg-surface-variant text-on-surface-variant font-bold w-6 h-6 flex items-center justify-center rounded-control text-xs">{letter}</span>
+                                                        <span className="flex-1 border-t border-outline-variant/80"></span>
                                                     </h4>
                                                     <div className="grid grid-cols-2 md:grid-cols-3 gap-3">
                                                         {models.map(modelId => {
@@ -888,14 +888,14 @@ const ChannelManagement = () => {
                                                                             toggleSelect();
                                                                         }
                                                                     }}
-                                                                    className={`cursor-pointer p-3 rounded-lg border text-sm  flex items-center gap-2 focus:outline-none focus:ring-2 focus:ring-emerald-500/60
+                                                                    className={`cursor-pointer p-3 rounded-control border text-sm  flex items-center gap-2 focus:outline-none focus:ring-2 focus:ring-emerald-500/60
                                                                         ${isSelected
-                                                                            ? 'bg-emerald-500/10 border-emerald-500/50 text-emerald-400'
-                                                                            : 'bg-surface-container-high border-outline-variant text-on-surface-variant hover:border-gray-600'}`}
+                                                                            ? 'bg-success/10 border-success/50 text-success'
+                                                                            : 'bg-surface-container-high border-outline-variant text-on-surface-variant hover:border-outline-variant'}`}
                                                                 >
-                                                                    <div className={`w-4 h-4 rounded border flex items-center justify-center shrink-0
-                                                                        ${isSelected ? 'bg-emerald-500 border-emerald-500' : 'border-gray-600'}`}>
-                                                                        {isSelected && <div className="w-2 h-2 bg-surface-container-high rounded-sm" />}
+                                                                    <div className={`w-4 h-4 rounded-control border flex items-center justify-center shrink-0
+                                                                        ${isSelected ? 'bg-success border-success' : 'border-outline-variant'}`}>
+                                                                        {isSelected && <div className="w-2 h-2 bg-surface-container-high rounded-control-sm" />}
                                                                     </div>
                                                                     <span className="truncate">{modelId}</span>
                                                                 </div>
@@ -909,19 +909,19 @@ const ChannelManagement = () => {
                                 )}
                             </div>
 
-                            <div className="p-6 border-t border-outline-variant bg-surface-container-high flex justify-between items-center rounded-b-2xl">
+                            <div className="p-6 border-t border-outline-variant bg-surface-container-high flex justify-between items-center rounded-control-b-2xl">
                                 {/* C-2 修复：用 i18n 插值占位 + JSX 子组件渲染数字，避免 dangerouslySetInnerHTML 注入面 */}
                                 <span className="text-sm text-on-surface-variant">
                                     <Trans i18nKey="CHANNEL_MGMT.UPSTREAM_MODAL.SELECTED_COUNT"
-                                        components={{ strong: <strong className="text-emerald-400 mx-1" /> }}
+                                        components={{ strong: <strong className="text-success mx-1" /> }}
                                         values={{ count: selectedUpstreamModels.length }} />
                                 </span>
                                 <div className="flex gap-3">
-                                    <button onClick={() => setIsUpstreamModalOpen(false)} className="px-5 py-2.5 text-on-surface-variant hover:text-white hover:bg-[#2b2b2b] rounded-xl">{t('CHANNEL_MGMT.MODEL.MODAL.BTN_CANCEL')}</button>
-                                    <button 
-                                        onClick={handleBatchImport} 
-                                        disabled={isSubmitting || selectedUpstreamModels.length === 0} 
-                                        className="px-6 py-2.5 bg-emerald-600 hover:bg-emerald-500 disabled:opacity-50 disabled:cursor-not-allowed text-on-surface rounded-xl font-medium flex items-center gap-2 "
+                                    <button onClick={() => setIsUpstreamModalOpen(false)} className="px-5 py-2.5 text-on-surface-variant hover:text-white hover:bg-surface-container-high rounded-overlay">{t('CHANNEL_MGMT.MODEL.MODAL.BTN_CANCEL')}</button>
+                                    <button
+                                        onClick={handleBatchImport}
+                                        disabled={isSubmitting || selectedUpstreamModels.length === 0}
+                                        className="px-6 py-2.5 bg-success hover:bg-success disabled:opacity-50 disabled:cursor-not-allowed text-on-surface rounded-overlay font-medium flex items-center gap-2 "
                                     >
                                         {isSubmitting ? <RefreshCw className="animate-spin" size={18}/> : <Save size={18}/>}
                                         {t('CHANNEL_MGMT.UPSTREAM_MODAL.BTN_IMPORT')}
@@ -939,8 +939,8 @@ const ChannelManagement = () => {
     return (
         <div className="w-full animation-fade-in relative z-10">
             <div className="mb-10">
-                <h1 className="text-4xl font-black text-transparent bg-clip-text bg-gradient-to-r from-emerald-400 to-teal-600 mb-3 tracking-tight drop-shadow-sm flex items-center gap-3">
-                    <Network size={36} className="text-emerald-500" />
+                <h1 className="text-4xl font-black text-transparent bg-clip-text bg-gradient-to-r from-emerald-400 to-teal-600 mb-3 tracking-tight drop- flex items-center gap-3">
+                    <Network size={36} className="text-success" />
                     {t('CHANNEL_MGMT.TITLE')}
                 </h1>
                 <p className="text-on-surface-variant text-sm font-medium tracking-wide">
@@ -950,25 +950,25 @@ const ChannelManagement = () => {
 
             <div className="flex flex-col md:flex-row justify-between items-start md:items-center gap-4 mb-6 relative z-20">
                 <div className="relative w-full md:w-96">
-                    <input 
-                        type="text" 
+                    <input
+                        type="text"
                         placeholder={t('CHANNEL_MGMT.SEARCH_CHANNEL')}
                         value={searchTerm}
                         onChange={(e) => setSearchTerm(e.target.value)}
-                        className="w-full bg-surface-container border border-outline-variant rounded-xl pl-11 pr-4 py-3 text-sm text-on-surface-variant focus:outline-none focus:border-emerald-500 focus:ring-1 focus:ring-emerald-500/50"
+                        className="w-full bg-surface-container border border-outline-variant rounded-overlay pl-11 pr-4 py-3 text-sm text-on-surface-variant focus:outline-none focus:border-success focus:ring-1 focus:ring-emerald-500/50"
                     />
                     <Search size={18} className="absolute left-4 top-1/2 -translate-y-1/2 text-on-surface-variant" />
                 </div>
-                <button 
-                    onClick={() => handleOpenChanModal()} 
-                    className="flex items-center gap-2 bg-emerald-600 hover:bg-emerald-500 text-on-surface px-5 py-3 rounded-xl font-medium  shadow-lg shadow-emerald-600/20 active:scale-95 border border-emerald-500/50"
+                <button
+                    onClick={() => handleOpenChanModal()}
+                    className="flex items-center gap-2 bg-success hover:bg-success text-on-surface px-5 py-3 rounded-overlay font-medium /20 active:scale-95 border border-success/50"
                 >
                     <Plus size={18} />
                     {t('CHANNEL_MGMT.BTN_ADD_CHANNEL')}
                 </button>
             </div>
 
-            <div className="bg-surface-container border border-outline-variant rounded-2xl overflow-hidden shadow-sm">
+            <div className="bg-surface-container border border-outline-variant rounded-overlay overflow-hidden ">
                 <div className="overflow-x-auto">
                     <table className="w-full min-w-[1000px] text-left text-sm text-on-surface-variant table-fixed">
                         <thead className="bg-surface-container-high text-xs uppercase font-mono tracking-wider text-on-surface-variant border-b border-outline-variant">
@@ -982,29 +982,29 @@ const ChannelManagement = () => {
                     </thead>
                     <tbody className="divide-y divide-[#2b2b2b]/50">
                         {loading ? (
-                            <tr><td colSpan="5" className="px-6 py-12 text-center text-on-surface-variant"><RefreshCw size={24} className="mx-auto  mb-2" /></td></tr>
+                            <tr><td colSpan="5" className="px-6 py-12 text-center text-on-surface-variant"><RefreshCw size={24} className="mx-auto mb-2" /></td></tr>
                         ) : filteredChannels.length === 0 ? (
                             <tr><td colSpan="5" className="px-6 py-12 text-center text-on-surface-variant">No channels connected yet.</td></tr>
                         ) : (
                             filteredChannels.map(c => (
-                                <tr key={c.id} className="hover:bg-[#1a1b1e]  group">
+                                <tr key={c.id} className="hover:bg-surface group">
                                     <td className="px-6 py-4 font-bold text-on-surface-variant">
                                         #{c.id}
-                                        {c.name && <div className="text-xs text-emerald-500/80 font-normal mt-1">{c.name}</div>}
+                                        {c.name && <div className="text-xs text-success/80 font-normal mt-1">{c.name}</div>}
                                     </td>
                                     <td className="px-6 py-4">
-                                        <span className="bg-emerald-500/10 text-emerald-400 px-2.5 py-1 rounded-full text-xs box-border border border-emerald-500/20">{c.type}</span>
+                                        <span className="bg-success/10 text-success px-2.5 py-1 rounded-control-full text-xs box-border border border-success/20">{c.type}</span>
                                     </td>
                                     <td className="px-6 py-4 font-mono text-xs opacity-80">
                                         <div className="break-all max-w-xs">{c.key}</div>
                                         <span className="text-on-surface-variant mt-1 block">{c.base_url || 'default'}</span>
                                     </td>
-                                    <td className="px-6 py-4 text-emerald-400">{c.weight}</td>
+                                    <td className="px-6 py-4 text-success">{c.weight}</td>
                                     <td className="px-6 py-4 text-right">
                                         <div className="flex justify-end gap-2 shrink-0 flex-nowrap">
-                                            <button onClick={() => handleSelectChannel(c)} className="p-2 flex shrink-0 items-center gap-1 hover:bg-blue-500/20 text-blue-400 rounded-lg bg-surface-variant  whitespace-nowrap"><Box size={14} /> {t('CHANNEL_MGMT.BTN_MODELS')}</button>
-                                            <button onClick={() => handleOpenChanModal(c)} className="p-2 shrink-0 hover:bg-emerald-500/20 text-emerald-500 rounded-lg bg-surface-variant "><Edit2 size={16} /></button>
-                                            <button onClick={() => handleDeleteChan(c.id)} className="p-2 shrink-0 hover:bg-rose-500/20 text-rose-500 rounded-lg bg-surface-variant "><Trash2 size={16} /></button>
+                                            <button onClick={() => handleSelectChannel(c)} className="p-2 flex shrink-0 items-center gap-1 hover:bg-primary/20 text-primary rounded-control bg-surface-variant whitespace-nowrap"><Box size={14} /> {t('CHANNEL_MGMT.BTN_MODELS')}</button>
+                                            <button onClick={() => handleOpenChanModal(c)} className="p-2 shrink-0 hover:bg-success/20 text-success rounded-control bg-surface-variant "><Edit2 size={16} /></button>
+                                            <button onClick={() => handleDeleteChan(c.id)} className="p-2 shrink-0 hover:bg-error/20 text-error rounded-control bg-surface-variant "><Trash2 size={16} /></button>
                                         </div>
                                     </td>
                                 </tr>
@@ -1025,7 +1025,7 @@ const ChannelManagement = () => {
                     onClick={onChanBackdropClick}
                     className="fixed inset-0 bg-black/80 backdrop-blur-sm z-[100] flex items-start sm:items-center justify-center p-2 sm:p-4 overflow-y-auto"
                 >
-                    <div className="bg-[#1a1b1e] border border-outline-variant rounded-2xl w-full max-w-xl flex flex-col">
+                    <div className="bg-surface border border-outline-variant rounded-overlay w-full max-w-xl flex flex-col">
                         <div className="p-6 border-b border-outline-variant flex justify-between">
                             <h3 id="channel-form-modal-title" className="text-xl font-bold text-on-surface">{currentChannel ? t('CHANNEL_MGMT.MODAL_CHANNEL.EDIT_TITLE') : t('CHANNEL_MGMT.MODAL_CHANNEL.ADD_TITLE')}</h3>
                             <button ref={chanModalCloseRef} onClick={() => setIsChanModalOpen(false)} aria-label={t('COMMON.CLOSE', '关闭')}><X size={20} className="text-on-surface-variant hover:text-white" /></button>
@@ -1033,11 +1033,11 @@ const ChannelManagement = () => {
                         <div className="p-6 space-y-4">
                             <div>
                                 <label htmlFor="channel-form-name" className="block text-xs font-medium text-on-surface-variant mb-1">{t('CHANNEL_MGMT.MODAL_CHANNEL.NAME_LABEL')}</label>
-                                <input id="channel-form-name" type="text" required value={chanForm.name} onChange={e=>setChanForm({...chanForm, name: e.target.value})} placeholder={t('CHANNEL_MGMT.MODAL_CHANNEL.NAME_PLACEHOLDER')} className="w-full bg-surface-container-high border border-outline-variant rounded-xl px-4 py-2.5 text-on-surface" />
+                                <input id="channel-form-name" type="text" required value={chanForm.name} onChange={e=>setChanForm({...chanForm, name: e.target.value})} placeholder={t('CHANNEL_MGMT.MODAL_CHANNEL.NAME_PLACEHOLDER')} className="w-full bg-surface-container-high border border-outline-variant rounded-overlay px-4 py-2.5 text-on-surface" />
                             </div>
                             <div>
                                 <label htmlFor="channel-form-type" className="block text-xs font-medium text-on-surface-variant mb-1">{t('CHANNEL_MGMT.MODAL_CHANNEL.TYPE')}</label>
-                                <select id="channel-form-type" required value={chanForm.type} onChange={e=>setChanForm({...chanForm, type: e.target.value})} className="w-full bg-surface-container-high border border-outline-variant rounded-xl px-4 py-2.5 text-on-surface cursor-pointer hover:border-emerald-500/50 outline-none">
+                                <select id="channel-form-type" required value={chanForm.type} onChange={e=>setChanForm({...chanForm, type: e.target.value})} className="w-full bg-surface-container-high border border-outline-variant rounded-overlay px-4 py-2.5 text-on-surface cursor-pointer hover:border-success/50 outline-none">
                                     {channelTypes.map(ct => (
                                         <option key={ct.id} value={ct.id}>{ct.label} ({ct.id})</option>
                                     ))}
@@ -1045,28 +1045,28 @@ const ChannelManagement = () => {
                             </div>
                             <div>
                                 <label htmlFor="channel-form-key" className="block text-xs font-medium text-on-surface-variant mb-1">{t('CHANNEL_MGMT.MODAL_CHANNEL.KEY')}</label>
-                                <input id="channel-form-key" type="text" required value={chanForm.key} onChange={e=>setChanForm({...chanForm, key: e.target.value})} className="w-full bg-surface-container-high border border-outline-variant rounded-xl px-4 py-2.5 text-on-surface font-mono text-sm tracking-widest" />
+                                <input id="channel-form-key" type="text" required value={chanForm.key} onChange={e=>setChanForm({...chanForm, key: e.target.value})} className="w-full bg-surface-container-high border border-outline-variant rounded-overlay px-4 py-2.5 text-on-surface font-mono text-sm tracking-widest" />
                             </div>
                             <div>
                                 <label htmlFor="channel-form-base-url" className="block text-xs font-medium text-on-surface-variant mb-1">{t('CHANNEL_MGMT.MODAL_CHANNEL.BASE_URL')} (Base URL)</label>
-                                <input id="channel-form-base-url" type="text" value={chanForm.base_url} onChange={e=>setChanForm({...chanForm, base_url: e.target.value})} placeholder="https://api.openai.com" className="w-full bg-surface-container-high border border-outline-variant rounded-xl px-4 py-2.5 text-on-surface" />
+                                <input id="channel-form-base-url" type="text" value={chanForm.base_url} onChange={e=>setChanForm({...chanForm, base_url: e.target.value})} placeholder="https://api.openai.com" className="w-full bg-surface-container-high border border-outline-variant rounded-overlay px-4 py-2.5 text-on-surface" />
                             </div>
                             <div>
                                 <label htmlFor="channel-form-proxy" className="block text-xs font-medium text-on-surface-variant mb-1">代理跳板 (Proxy URL)</label>
-                                <input id="channel-form-proxy" type="text" value={chanForm.proxy_url} onChange={e=>setChanForm({...chanForm, proxy_url: e.target.value})} placeholder="http://127.0.0.1:8080 或 https://proxy.example.com:443" className="w-full bg-surface-container-high border border-outline-variant rounded-xl px-4 py-2.5 text-on-surface font-mono text-sm" />
+                                <input id="channel-form-proxy" type="text" value={chanForm.proxy_url} onChange={e=>setChanForm({...chanForm, proxy_url: e.target.value})} placeholder="http://127.0.0.1:8080 或 https://proxy.example.com:443" className="w-full bg-surface-container-high border border-outline-variant rounded-overlay px-4 py-2.5 text-on-surface font-mono text-sm" />
                             </div>
                             <div>
                                 <label htmlFor="channel-form-headers" className="block text-xs font-medium text-on-surface-variant mb-1">自定义网关请求头 (Custom Headers JSON)</label>
-                                <textarea id="channel-form-headers" value={chanForm.headers} onChange={e=>setChanForm({...chanForm, headers: e.target.value})} placeholder='{"x-custom-tenant": "vip-01"}' rows={3} className="w-full bg-surface-container-high border border-outline-variant rounded-xl px-4 py-2.5 text-on-surface font-mono text-xs"></textarea>
+                                <textarea id="channel-form-headers" value={chanForm.headers} onChange={e=>setChanForm({...chanForm, headers: e.target.value})} placeholder='{"x-custom-tenant": "vip-01"}' rows={3} className="w-full bg-surface-container-high border border-outline-variant rounded-overlay px-4 py-2.5 text-on-surface font-mono text-xs"></textarea>
                             </div>
                             <div>
                                 <label htmlFor="channel-form-weight" className="block text-xs font-medium text-on-surface-variant mb-1">{t('CHANNEL_MGMT.MODAL_CHANNEL.WEIGHT')}</label>
-                                <input id="channel-form-weight" type="number" min="1" value={chanForm.weight} onChange={e=>setChanForm({...chanForm, weight: e.target.value})} className="w-full bg-surface-container-high border border-outline-variant rounded-xl px-4 py-2.5 text-on-surface" />
+                                <input id="channel-form-weight" type="number" min="1" value={chanForm.weight} onChange={e=>setChanForm({...chanForm, weight: e.target.value})} className="w-full bg-surface-container-high border border-outline-variant rounded-overlay px-4 py-2.5 text-on-surface" />
                             </div>
                         </div>
-                        <div className="p-6 border-t border-outline-variant bg-surface-container-high flex justify-end gap-3 rounded-b-2xl">
-                            <button onClick={() => setIsChanModalOpen(false)} className="px-5 py-2.5 text-on-surface-variant hover:text-white hover:bg-[#2b2b2b] rounded-xl">{t('CHANNEL_MGMT.MODAL_CHANNEL.BTN_CANCEL')}</button>
-                            <button onClick={handleChanSubmit} disabled={isSubmitting} className="px-6 py-2.5 bg-emerald-600 hover:bg-emerald-500 text-on-surface rounded-xl font-medium flex items-center gap-2">
+                        <div className="p-6 border-t border-outline-variant bg-surface-container-high flex justify-end gap-3 rounded-control-b-2xl">
+                            <button onClick={() => setIsChanModalOpen(false)} className="px-5 py-2.5 text-on-surface-variant hover:text-white hover:bg-surface-container-high rounded-overlay">{t('CHANNEL_MGMT.MODAL_CHANNEL.BTN_CANCEL')}</button>
+                            <button onClick={handleChanSubmit} disabled={isSubmitting} className="px-6 py-2.5 bg-success hover:bg-success text-on-surface rounded-overlay font-medium flex items-center gap-2">
                                 {isSubmitting ? <RefreshCw className="animate-spin" size={18}/> : <Save size={18}/>} {t('CHANNEL_MGMT.MODAL_CHANNEL.BTN_SAVE')}
                             </button>
                         </div>

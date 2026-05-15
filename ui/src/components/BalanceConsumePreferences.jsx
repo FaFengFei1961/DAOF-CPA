@@ -35,7 +35,7 @@ const getBalancePrefCacheKey = () => {
 };
 
 // 用户余额消费控制（参照 Claude Extra usage 面板）
-// Phase 8：addon 移除后两段消费 — 订阅 → 余额（默认关闭，需在此开启 + 限额）
+// Phase 8：两段消费 — 订阅 → 余额（默认关闭，需在此开启 + 限额）
 const BalanceConsumePreferences = () => {
   const { t } = useTranslation();
   const confirm = useConfirm();
@@ -146,7 +146,7 @@ const BalanceConsumePreferences = () => {
           <div className="text-[11px] text-on-surface-variant mt-0.5">
             {data.enabled
               ? t('BALANCE_CONSUME.ENABLED_ON', '订阅用尽后自动从余额扣费')
-              : t('BALANCE_CONSUME.ENABLED_OFF', '订阅和增量包用尽后请求将被拒绝（402）')}
+              : t('BALANCE_CONSUME.ENABLED_OFF', '订阅用尽后请求将被拒绝（402）')}
           </div>
         </div>
         <button
@@ -156,9 +156,9 @@ const BalanceConsumePreferences = () => {
           aria-labelledby="balance-consume-enable-label"
           disabled={saving}
           onClick={() => update({ enabled: !data.enabled })}
-          className={`relative shrink-0 w-12 h-6 rounded-full transition disabled:opacity-50 ${data.enabled ? 'bg-primary' : 'bg-on-surface/20'}`}
+          className={`relative shrink-0 w-12 h-6 rounded-control-full transition disabled:opacity-50 ${data.enabled ? 'bg-primary' : 'bg-on-surface/20'}`}
         >
-          <span className={`absolute top-0.5 w-5 h-5 rounded-full bg-white transition-all ${data.enabled ? 'left-6' : 'left-0.5'}`} />
+          <span className={`absolute top-0.5 w-5 h-5 rounded-control-full bg-white transition-all ${data.enabled ? 'left-6' : 'left-0.5'}`} />
         </button>
       </div>
 
@@ -178,7 +178,7 @@ const BalanceConsumePreferences = () => {
             type="button"
             onClick={handleAdjustLimit}
             disabled={saving}
-            className="h-8 px-3 bg-surface-container-high border border-outline-variant rounded-lg text-xs hover:bg-on-surface/[0.04] flex items-center gap-1 disabled:opacity-50"
+            className="h-8 px-3 bg-surface-container-high border border-outline-variant rounded-control text-xs hover:bg-on-surface/[0.04] flex items-center gap-1 disabled:opacity-50"
           >
             <Edit3 size={12} />
             {t('BALANCE_CONSUME.ADJUST_LIMIT', '调整限额')}
@@ -186,8 +186,8 @@ const BalanceConsumePreferences = () => {
         </div>
 
         {limitUSD > 0 ? (
-          <div className="h-2 rounded-full bg-on-surface/10 overflow-hidden">
-            <div className={`h-full transition-all ${percent >= 90 ? 'bg-red-400' : percent >= 70 ? 'bg-amber-400' : 'bg-primary'}`}
+          <div className="h-2 rounded-control-full bg-on-surface/10 overflow-hidden">
+            <div className={`h-full transition-all ${percent >= 90 ? 'bg-error' : percent >= 70 ? 'bg-warning' : 'bg-primary'}`}
               style={{ width: `${percent}%` }} />
           </div>
         ) : (
@@ -238,7 +238,7 @@ const WindowEditor = ({ currentSeconds, saving, onSave, t }) => {
   };
 
   return (
-    <div className="rounded-xl border border-outline-variant bg-surface-container p-4 space-y-3">
+    <div className="rounded-overlay border border-outline-variant bg-surface-container p-4 space-y-3">
       <div>
         <div className="text-xs font-semibold text-on-surface-variant">
           {t('BALANCE_CONSUME.WINDOW_LABEL', '重置周期')}
@@ -255,12 +255,12 @@ const WindowEditor = ({ currentSeconds, saving, onSave, t }) => {
           step={1}
           value={value}
           onChange={e => setValue(e.target.value)}
-          className="w-32 h-10 bg-surface-container-high border border-outline rounded-lg px-3 text-sm font-mono focus:border-primary outline-none"
+          className="w-32 h-10 bg-surface-container-high border border-outline rounded-control px-3 text-sm font-mono focus:border-primary outline-none"
         />
         <select
           value={unit}
           onChange={e => setUnit(e.target.value)}
-          className="h-10 bg-surface-container-high border border-outline rounded-lg px-3 text-sm focus:border-primary outline-none"
+          className="h-10 bg-surface-container-high border border-outline rounded-control px-3 text-sm focus:border-primary outline-none"
         >
           {UNITS.map(u => (
             <option key={u.id} value={u.id}>{t(`BALANCE_CONSUME.UNIT_${u.id.toUpperCase()}`, u.label)}</option>
@@ -270,14 +270,14 @@ const WindowEditor = ({ currentSeconds, saving, onSave, t }) => {
           type="button"
           onClick={handleApply}
           disabled={saving || !valid || !dirty}
-          className="h-10 px-4 bg-primary text-on-primary rounded-lg text-sm font-semibold hover:opacity-90 disabled:opacity-40"
+          className="h-10 px-4 bg-primary text-on-primary rounded-control text-sm font-semibold hover:opacity-90 disabled:opacity-40"
         >
           {saving ? t('BALANCE_CONSUME.SAVING', '保存中...') : t('BALANCE_CONSUME.APPLY', '应用')}
         </button>
       </div>
 
       {!valid && (
-        <div className="text-[11px] text-red-400">
+        <div className="text-[11px] text-error">
           {t('BALANCE_CONSUME.WINDOW_OUT_OF_RANGE', '范围必须在 60 秒到 365 天之间')}
         </div>
       )}

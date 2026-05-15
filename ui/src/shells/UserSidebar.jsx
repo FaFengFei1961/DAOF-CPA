@@ -20,7 +20,7 @@ const NavItem = ({ to, label, Icon }) => {
       end={end}
       title={label}
       className={({ isActive }) =>
-        `relative w-full flex items-center gap-3 h-9 pl-3 pr-2 rounded-md text-[13px] font-medium transition
+        `relative w-full flex items-center gap-3 h-9 pl-3 pr-2 rounded-control text-[13px] font-medium transition
          ${isActive
            ? 'bg-primary/10 text-primary'
            : 'text-on-surface-variant hover:bg-on-surface/[0.05] hover:text-on-surface'}`
@@ -31,7 +31,7 @@ const NavItem = ({ to, label, Icon }) => {
           {isActive && (
             <span
               aria-hidden
-              className="absolute left-0 top-1/2 -translate-y-1/2 w-[3px] h-5 bg-primary rounded-r-full"
+              className="absolute left-0 top-1/2 -translate-y-1/2 w-[3px] h-5 bg-primary rounded-control-r-full"
             />
           )}
           <Icon size={16} strokeWidth={isActive ? 2.25 : 1.75} className="shrink-0" />
@@ -56,7 +56,7 @@ const UserSidebar = () => {
         className="flex items-center gap-2.5 px-4 h-14 border-b border-outline-variant/30 hover:bg-on-surface/[0.03] transition shrink-0"
         aria-label="DAOF-CPA"
       >
-        <img src="/daof_logo.png" alt="" className="w-8 h-8 rounded-md shrink-0" />
+        <img src="/daof_logo.png" alt="" className="w-8 h-8 rounded-control shrink-0" />
         <div className="min-w-0">
           <div className="text-sm font-bold tracking-tight text-on-surface leading-tight">
             DAOF-CPA

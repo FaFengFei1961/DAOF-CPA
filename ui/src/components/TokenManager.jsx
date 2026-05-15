@@ -123,7 +123,7 @@ const TokenManager = ({ isAuthenticated }) => {
     const handleSaveName = async (id) => {
         // Prevent multiple triggers or empty saves
         if (editingTokenId !== id) return;
-        
+
         const trimmed = editingName.trim();
         setEditingTokenId(null); // Instantly collapse input box
 
@@ -176,8 +176,8 @@ const TokenManager = ({ isAuthenticated }) => {
 
     const renderTokens = () => (
         <div className="space-y-6">
-            <div className="bg-surface border border-outline-variant rounded-2xl p-6 relative overflow-hidden">
-                <div className="absolute top-0 right-0 w-32 h-32 bg-primary/5 rounded-full blur-3xl -mr-10 -mt-10 pointer-events-none"></div>
+            <div className="bg-surface border border-outline-variant rounded-overlay p-6 relative overflow-hidden">
+                <div className="absolute top-0 right-0 w-32 h-32 bg-primary/5 rounded-control-full blur-3xl -mr-10 -mt-10 pointer-events-none"></div>
                 <div className="relative z-10 flex flex-col md:flex-row md:items-center justify-between gap-4">
                     <div>
                         <h2 className="text-xl font-bold flex items-center gap-2">
@@ -187,32 +187,32 @@ const TokenManager = ({ isAuthenticated }) => {
                         <p className="text-sm text-on-surface-variant mt-1">{t('TOKEN_MGMT.CREATE_CARD_DESC')}</p>
                     </div>
                     <div className="flex w-full md:w-auto items-center gap-3 flex-wrap md:flex-nowrap mt-4 md:mt-0">
-                        <input 
-                            type="text" 
-                            placeholder={t('TOKEN_MGMT.INPUT_PLACEHOLDER')} 
-                            className="w-full md:w-[150px] bg-surface-container-high border border-outline rounded-xl px-4 py-2 text-sm outline-none focus:border-primary "
+                        <input
+                            type="text"
+                            placeholder={t('TOKEN_MGMT.INPUT_PLACEHOLDER')}
+                            className="w-full md:w-[150px] bg-surface-container-high border border-outline rounded-overlay px-4 py-2 text-sm outline-none focus:border-primary "
                             value={newTokenName}
                             onChange={e => setNewTokenName(e.target.value)}
                         />
                         <input
                             type="number"
                             placeholder={t('TOKEN_MGMT.LIMIT', 'Quota($)')}
-                            className="w-[110px] bg-surface-container-high border border-outline rounded-xl px-3 py-2 text-sm outline-none focus:border-primary"
+                            className="w-[110px] bg-surface-container-high border border-outline rounded-overlay px-3 py-2 text-sm outline-none focus:border-primary"
                             value={newQuotaLimit}
                             onChange={e => setNewQuotaLimit(e.target.value)}
                             min="0"
                             step="0.01"
                         />
-                        <input 
-                            type="datetime-local" 
-                            className="w-[160px] bg-surface-container-high border border-outline rounded-xl px-2 py-2 text-sm outline-none focus:border-primary text-on-surface-variant font-mono"
+                        <input
+                            type="datetime-local"
+                            className="w-[160px] bg-surface-container-high border border-outline rounded-overlay px-2 py-2 text-sm outline-none focus:border-primary text-on-surface-variant font-mono"
                             value={newExpiredAt}
                             onChange={e => setNewExpiredAt(e.target.value)}
                         />
-                        <button 
+                        <button
                             onClick={handleCreateToken}
                             disabled={isCreating}
-                            className="bg-primary text-on-primary hover:bg-primary-container hover:text-on-primary-container px-4 py-2 rounded-xl font-medium text-sm flex items-center gap-2 disabled:opacity-50 whitespace-nowrap shadow-sm"
+                            className="bg-primary text-on-primary hover:bg-primary-container hover:text-on-primary-container px-4 py-2 rounded-overlay font-medium text-sm flex items-center gap-2 disabled:opacity-50 whitespace-nowrap "
                         >
                             <Plus size={16} />
                             {isCreating ? t('TOKEN_MGMT.BTN_CREATING') : t('TOKEN_MGMT.BTN_CREATE')}
@@ -221,9 +221,9 @@ const TokenManager = ({ isAuthenticated }) => {
                 </div>
             </div>
 
-            <div className="bg-surface border border-outline-variant rounded-2xl p-6 flex flex-col md:flex-row md:items-center justify-between gap-4 shadow-lg relative overflow-hidden">
+            <div className="bg-surface border border-outline-variant rounded-overlay p-6 flex flex-col md:flex-row md:items-center justify-between gap-4 relative overflow-hidden">
                 <div className="flex items-center gap-4 relative z-10">
-                    <div className="p-3 bg-primary/10 rounded-xl text-primary">
+                    <div className="p-3 bg-primary/10 rounded-overlay text-primary">
                         <Link size={24} />
                     </div>
                     <div>
@@ -231,11 +231,11 @@ const TokenManager = ({ isAuthenticated }) => {
                         <p className="text-xs text-on-surface-variant mt-1">{t('TOKEN_MGMT.BASE_URL_DESC')}</p>
                     </div>
                 </div>
-                <div className="flex bg-surface-container-high border border-outline rounded-xl overflow-hidden font-mono text-sm group relative z-10 w-full md:w-auto">
+                <div className="flex bg-surface-container-high border border-outline rounded-overlay overflow-hidden font-mono text-sm group relative z-10 w-full md:w-auto">
                     <div className="px-4 py-3 text-on-surface-variant border-r border-outline tracking-tight truncate max-w-full md:max-w-md w-full">
                         {window.location.origin}/v1
                     </div>
-                    <button 
+                    <button
                         onClick={() => handleCopy(`${window.location.origin}/v1`)}
                         className="px-4 py-3 text-primary hover:bg-white/5 flex items-center justify-center shrink-0"
                         title={t('TOKEN_MGMT.COPY_URL')}
@@ -245,7 +245,7 @@ const TokenManager = ({ isAuthenticated }) => {
                 </div>
             </div>
 
-            <div className="bg-surface border border-outline-variant rounded-2xl overflow-hidden shadow-lg">
+            <div className="bg-surface border border-outline-variant rounded-overlay overflow-hidden ">
                 <div className="overflow-x-auto">
                     <table className="w-full min-w-[900px] text-left border-collapse table-fixed">
                         <thead>
@@ -273,10 +273,10 @@ const TokenManager = ({ isAuthenticated }) => {
                                 <tr key={token.id} className="hover:bg-surface-variant group">
                                     <td className="p-4 text-sm font-medium text-on-surface-variant group/name">
                                         {editingTokenId === token.id ? (
-                                            <input 
+                                            <input
                                                 autoFocus
                                                 type="text"
-                                                className="bg-surface-container-high border border-primary rounded px-2 py-1 text-sm w-full md:w-32 outline-none text-on-surface focus:ring-2 ring-primary/20"
+                                                className="bg-surface-container-high border border-primary rounded-control px-2 py-1 text-sm w-full md:w-32 outline-none text-on-surface focus:ring-2 ring-primary/20"
                                                 value={editingName}
                                                 onChange={e => setEditingName(e.target.value)}
                                                 onKeyDown={e => {
@@ -288,9 +288,9 @@ const TokenManager = ({ isAuthenticated }) => {
                                         ) : (
                                             <div className="flex items-center gap-2">
                                                 <span className="truncate max-w-[150px]" title={token.name}>{token.name}</span>
-                                                <button 
+                                                <button
                                                     onClick={() => handleEditName(token)}
-                                                    className="text-on-surface-variant hover:text-white opacity-0 group-hover/name:opacity-100 p-1 rounded hover:bg-surface-container-high"
+                                                    className="text-on-surface-variant hover:text-white opacity-0 group-hover/name:opacity-100 p-1 rounded-control hover:bg-surface-container-high"
                                                 >
                                                     <Edit2 size={12} />
                                                 </button>
@@ -299,17 +299,17 @@ const TokenManager = ({ isAuthenticated }) => {
                                     </td>
                                     <td className="p-4">
                                         <div className="flex items-center gap-2">
-                                            <code className="text-xs text-primary bg-primary/20 px-2.5 py-1 rounded-md max-w-[180px] truncate">{token.key}</code>
-                                            <button onClick={() => handleCopy(token.key)} className="text-on-surface-variant hover:text-white p-1 rounded-md hover:bg-surface-container-high">
+                                            <code className="text-xs text-primary bg-primary/20 px-2.5 py-1 rounded-control max-w-[180px] truncate">{token.key}</code>
+                                            <button onClick={() => handleCopy(token.key)} className="text-on-surface-variant hover:text-white p-1 rounded-control hover:bg-surface-container-high">
                                                 <Copy size={14} />
                                             </button>
                                         </div>
                                     </td>
                                     <td className="p-4 text-sm tracking-tight text-on-surface-variant">
                                         {editingTokenId === token.id ? (
-                                            <input 
+                                            <input
                                                 type="number"
-                                                className="bg-surface-container-high border border-primary rounded px-2 py-1 text-xs w-20 outline-none text-on-surface focus:ring-2 ring-primary/20"
+                                                className="bg-surface-container-high border border-primary rounded-control px-2 py-1 text-xs w-20 outline-none text-on-surface focus:ring-2 ring-primary/20"
                                                 value={editingQuota}
                                                 placeholder="Limit"
                                                 onChange={e => setEditingQuota(e.target.value)}
@@ -323,9 +323,9 @@ const TokenManager = ({ isAuthenticated }) => {
                                     </td>
                                     <td className="p-4 text-xs text-on-surface-variant">
                                         {editingTokenId === token.id ? (
-                                            <input 
+                                            <input
                                                 type="datetime-local"
-                                                className="bg-surface-container-high border border-primary rounded px-2 py-1 flex-1 outline-none text-on-surface focus:ring-2 ring-primary/20 text-xs w-full font-mono"
+                                                className="bg-surface-container-high border border-primary rounded-control px-2 py-1 flex-1 outline-none text-on-surface focus:ring-2 ring-primary/20 text-xs w-full font-mono"
                                                 value={editingExpiry}
                                                 onChange={e => setEditingExpiry(e.target.value)}
                                             />
@@ -334,16 +334,16 @@ const TokenManager = ({ isAuthenticated }) => {
                                         )}
                                     </td>
                                     <td className="p-4">
-                                        <button 
+                                        <button
                                             onClick={() => handleToggleStatus(token.id, token.status)}
-                                            className={`inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full text-xs font-medium cursor-pointer  ${token.status === 1 ? 'bg-green-500/10 text-green-400 hover:bg-green-500/20' : 'bg-red-500/10 text-red-400 hover:bg-red-500/20'}`}
+                                            className={`inline-flex items-center gap-1.5 px-2.5 py-1 rounded-control-full text-xs font-medium cursor-pointer  ${token.status === 1 ? 'bg-success/10 text-success hover:bg-success/20' : 'bg-error/10 text-error hover:bg-error/20'}`}
                                         >
                                             <Power size={12} />
                                             {token.status === 1 ? t('TOKEN_MGMT.STATUS_ACTIVE') : t('TOKEN_MGMT.STATUS_FROZEN')}
                                         </button>
                                     </td>
                                     <td className="p-4 text-right">
-                                        <button onClick={() => handleDeleteToken(token.id)} className="text-on-surface-variant hover:text-red-400 p-2 rounded-lg hover:bg-red-500/10 ">
+                                        <button onClick={() => handleDeleteToken(token.id)} className="text-on-surface-variant hover:text-error p-2 rounded-control hover:bg-error/10 ">
                                             <Trash2 size={16} />
                                         </button>
                                     </td>

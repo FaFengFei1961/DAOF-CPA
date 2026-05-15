@@ -179,7 +179,7 @@ export function StoreHero({
       }}
     >
       {Icon && (
-        <div className="w-16 h-16 sm:w-20 sm:h-20 rounded-2xl flex items-center justify-center bg-white/15 backdrop-blur-md shrink-0">
+        <div className="w-16 h-16 sm:w-20 sm:h-20 rounded-overlay flex items-center justify-center bg-white/15 backdrop-blur-md shrink-0">
           <Icon size={36} className="text-white" />
         </div>
       )}
@@ -199,7 +199,7 @@ export function StoreHero({
         <button
           type="button"
           onClick={onCta}
-          className="shrink-0 inline-flex items-center justify-center gap-1.5 h-10 px-5 rounded-control text-sm font-semibold bg-white text-zinc-900 hover:bg-white/90 active:scale-[0.98] transition"
+          className="shrink-0 inline-flex items-center justify-center gap-1.5 h-10 px-5 rounded-control text-sm font-semibold bg-white text-on-surface-variant hover:bg-white/90 active:scale-[0.98] transition"
         >
           {ctaLabel}
           <ArrowUpRight size={14} />

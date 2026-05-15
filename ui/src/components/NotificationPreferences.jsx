@@ -126,7 +126,7 @@ const NotificationPreferences = () => {
       </header>
 
       {/* 类别开关 */}
-      <div className="rounded-xl border border-outline-variant bg-surface-container p-4 space-y-3">
+      <div className="rounded-overlay border border-outline-variant bg-surface-container p-4 space-y-3">
         <div className="text-xs font-semibold text-on-surface-variant uppercase tracking-wide">
           {t('NOTIF.PREF.CATEGORIES_LABEL', '通知类别')}
         </div>
@@ -150,7 +150,7 @@ const NotificationPreferences = () => {
         ))}
         {FORCED_CATEGORIES.map(cat => (
           <div key={cat.i18n} className="flex items-start gap-3 opacity-70">
-            <div className="mt-1 w-4 h-4 rounded border border-outline-variant bg-on-surface/[0.06] flex items-center justify-center">
+            <div className="mt-1 w-4 h-4 rounded-control border border-outline-variant bg-on-surface/[0.06] flex items-center justify-center">
               <span className="text-[10px] text-on-surface-variant">✓</span>
             </div>
             <div className="text-sm text-on-surface-variant">
@@ -161,7 +161,7 @@ const NotificationPreferences = () => {
       </div>
 
       {/* 阈值 */}
-      <div className="rounded-xl border border-outline-variant bg-surface-container p-4 space-y-3">
+      <div className="rounded-overlay border border-outline-variant bg-surface-container p-4 space-y-3">
         <div>
           <div className="text-xs font-semibold text-on-surface-variant uppercase tracking-wide">
             {t('NOTIF.PREF.THRESHOLDS_LABEL', '用量预警阈值')}
@@ -178,7 +178,7 @@ const NotificationPreferences = () => {
                 key={val}
                 type="button"
                 onClick={() => toggleThreshold(val)}
-                className={`px-3 py-1.5 rounded-full text-xs font-semibold border transition ${
+                className={`px-3 py-1.5 rounded-control-full text-xs font-semibold border transition ${
                   active
                     ? 'bg-primary text-on-primary border-primary'
                     : 'bg-transparent text-on-surface-variant border-outline-variant hover:border-primary hover:text-primary'

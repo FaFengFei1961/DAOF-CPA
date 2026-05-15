@@ -215,15 +215,15 @@ const QuotaPlanManagement = () => {
         </div>
         <div className="flex flex-wrap items-center gap-2">
           <button type="button" onClick={exportCSV}
-            className="h-10 px-4 bg-surface-container-high border border-outline-variant rounded-lg text-sm flex items-center gap-1.5 hover:bg-surface-variant">
+            className="h-10 px-4 bg-surface-container-high border border-outline-variant rounded-control text-sm flex items-center gap-1.5 hover:bg-surface-variant">
             <Download size={14} /> 导出 CSV
           </button>
           <button type="button" onClick={importCSV}
-            className="h-10 px-4 bg-surface-container-high border border-outline-variant rounded-lg text-sm flex items-center gap-1.5 hover:bg-surface-variant">
+            className="h-10 px-4 bg-surface-container-high border border-outline-variant rounded-control text-sm flex items-center gap-1.5 hover:bg-surface-variant">
             <Upload size={14} /> 导入 CSV
           </button>
           <button type="button" onClick={startCreate}
-            className="h-10 px-4 bg-primary text-on-primary rounded-lg flex items-center gap-1.5 hover:opacity-90 text-sm font-medium">
+            className="h-10 px-4 bg-primary text-on-primary rounded-control flex items-center gap-1.5 hover:opacity-90 text-sm font-medium">
             <Plus size={14} /> 新建配额计划
           </button>
         </div>
@@ -232,13 +232,13 @@ const QuotaPlanManagement = () => {
       {loading ? (
         <div className="text-center py-20 text-on-surface-variant">加载中...</div>
       ) : plans.length === 0 ? (
-        <div className="text-center py-16 bg-surface-container border border-outline-variant rounded-2xl">
+        <div className="text-center py-16 bg-surface-container border border-outline-variant rounded-overlay">
           <p className="text-on-surface-variant text-sm">还没有配额计划，点右上角创建</p>
         </div>
       ) : (
         <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-4">
           {plans.map(p => (
-            <div key={p.id} className="bg-surface-container border border-outline-variant rounded-xl p-5">
+            <div key={p.id} className="bg-surface-container border border-outline-variant rounded-overlay p-5">
               <div className="flex items-start justify-between mb-3">
                 <div className="flex-1 min-w-0">
                   <div className="font-bold text-on-surface truncate">{p.display_name || p.name}</div>
@@ -248,7 +248,7 @@ const QuotaPlanManagement = () => {
                   <button onClick={() => startEdit(p)} className="p-1.5 text-on-surface-variant hover:text-primary">
                     <Edit size={14} />
                   </button>
-                  <button onClick={() => remove(p)} className="p-1.5 text-on-surface-variant hover:text-red-400">
+                  <button onClick={() => remove(p)} className="p-1.5 text-on-surface-variant hover:text-error">
                     <Trash2 size={14} />
                   </button>
                 </div>
@@ -260,7 +260,7 @@ const QuotaPlanManagement = () => {
                 <div>优先级: {p.priority} · 溢出: <span className="text-on-surface font-mono">{p.overflow_strategy}</span></div>
               </div>
               <div className="mt-3 pt-3 border-t border-outline-variant/30 flex items-center justify-between text-xs">
-                <span className={p.enabled ? 'text-emerald-400' : 'text-outline'}>
+                <span className={p.enabled ? 'text-success' : 'text-outline'}>
                   {p.enabled ? '● 启用' : '○ 禁用'}
                 </span>
                 <span className="text-outline">ID: {p.id}</span>
@@ -279,10 +279,10 @@ const QuotaPlanManagement = () => {
           onClick={onEditBackdropClick}
           className="fixed inset-0 z-[100] flex items-start sm:items-center justify-center p-2 sm:p-4 bg-black/80 backdrop-blur-sm"
         >
-          <div className="relative w-full max-w-3xl bg-surface-container border border-outline-variant rounded-2xl flex flex-col max-h-[92vh] shadow-2xl">
+          <div className="relative w-full max-w-3xl bg-surface-container border border-outline-variant rounded-overlay flex flex-col max-h-[92vh] shadow-2xl shadow-black/40">
             <div className="flex items-center justify-between px-4 sm:px-6 py-4 border-b border-outline-variant/60 shrink-0">
               <h2 id="quota-plan-modal-title" className="text-lg font-bold text-on-surface">{editing.id ? '编辑' : '新建'}配额计划</h2>
-              <button type="button" ref={editCloseBtnRef} onClick={cancel} className="text-on-surface-variant hover:text-on-surface p-1 rounded">
+              <button type="button" ref={editCloseBtnRef} onClick={cancel} className="text-on-surface-variant hover:text-on-surface p-1 rounded-control">
                 <X size={18} />
               </button>
             </div>
@@ -368,10 +368,10 @@ const QuotaPlanManagement = () => {
 
             </div>{/* 表单滚动区结束 */}
 
-            <div className="flex justify-end gap-2 px-4 sm:px-6 py-4 border-t border-outline-variant/60 bg-surface-container-low rounded-b-2xl shrink-0">
-              <button type="button" onClick={cancel} className="px-4 py-2 bg-surface-container-high border border-outline-variant rounded-lg text-sm hover:bg-surface-variant">取消</button>
+            <div className="flex justify-end gap-2 px-4 sm:px-6 py-4 border-t border-outline-variant/60 bg-surface-container-low rounded-control-b-2xl shrink-0">
+              <button type="button" onClick={cancel} className="px-4 py-2 bg-surface-container-high border border-outline-variant rounded-control text-sm hover:bg-surface-variant">取消</button>
               <button type="button" onClick={save} disabled={saving}
-                className="px-5 py-2 bg-primary text-on-primary rounded-lg text-sm font-medium flex items-center gap-1.5 disabled:opacity-50 hover:opacity-90">
+                className="px-5 py-2 bg-primary text-on-primary rounded-control text-sm font-medium flex items-center gap-1.5 disabled:opacity-50 hover:opacity-90">
                 <Save size={14} /> {saving ? '保存中...' : '保存'}
               </button>
             </div>
@@ -382,7 +382,7 @@ const QuotaPlanManagement = () => {
   );
 };
 
-const inputCls = 'w-full h-10 bg-surface-container-high border border-outline rounded-lg px-3 text-sm text-on-surface outline-none focus:border-primary';
+const inputCls = 'w-full h-10 bg-surface-container-high border border-outline rounded-control px-3 text-sm text-on-surface outline-none focus:border-primary';
 
 // Field 自动给子 input/textarea/select 注入 id，并把 label htmlFor 关联，提升 a11y。
 const Field = ({ label, hint, children }) => {

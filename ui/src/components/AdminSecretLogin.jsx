@@ -7,7 +7,7 @@ const AdminSecretLogin = ({ sysParam, setupMode, onSuccess }) => {
   const [password, setPassword] = useState('');
   const [newUsername, setNewUsername] = useState('');
   const [newPassword, setNewPassword] = useState('');
-  
+
   const [show, setShow] = useState(false);
   const [loading, setLoading] = useState(false);
   const [errorMsg, setErrorMsg] = useState('');
@@ -69,10 +69,10 @@ const AdminSecretLogin = ({ sysParam, setupMode, onSuccess }) => {
 
   if (setupMode) {
     return (
-      <div className="min-h-screen bg-surface flex items-center justify-center p-4 font-sans text-gray-200">
-        <div className="w-full max-w-md bg-[#1e1e24] border border-outline-variant rounded-2xl shadow-2xl p-8">
+      <div className="min-h-screen bg-surface flex items-center justify-center p-4 font-sans text-on-surface-variant">
+        <div className="w-full max-w-md bg-surface-container border border-outline-variant rounded-overlay shadow-2xl shadow-black/40 p-8">
           <div className="flex flex-col items-center justify-center mb-8 gap-3">
-             <div className="w-16 h-16 rounded-full bg-blue-900/30 flex items-center justify-center">
+             <div className="w-16 h-16 rounded-control-full bg-primary/30 flex items-center justify-center">
                  <Lock size={32} className="text-primary" />
              </div>
              <h1 className="text-2xl font-bold tracking-tight mt-2">{t('ADMIN_LOGIN.SETUP_TITLE')}</h1>
@@ -80,7 +80,7 @@ const AdminSecretLogin = ({ sysParam, setupMode, onSuccess }) => {
                {t('ADMIN_LOGIN.SETUP_DESC')}
              </p>
           </div>
-          
+
           <form onSubmit={handleSetup} className="flex flex-col gap-5">
             <div className="flex flex-col gap-2">
                <label htmlFor="admin-setup-username" className="text-sm font-semibold text-on-surface-variant">{t('ADMIN_LOGIN.SETUP_USERNAME_LABEL')}</label>
@@ -90,7 +90,7 @@ const AdminSecretLogin = ({ sysParam, setupMode, onSuccess }) => {
                  required
                  value={newUsername}
                  onChange={(e) => setNewUsername(e.target.value)}
-                 className="w-full bg-surface-container-high border border-outline rounded-xl px-4 py-3 outline-none focus:border-primary "
+                 className="w-full bg-surface-container-high border border-outline rounded-overlay px-4 py-3 outline-none focus:border-primary "
                  placeholder={t('ADMIN_LOGIN.SETUP_USERNAME_PLACEHOLDER')}
                />
             </div>
@@ -102,21 +102,21 @@ const AdminSecretLogin = ({ sysParam, setupMode, onSuccess }) => {
                  required
                  value={newPassword}
                  onChange={(e) => setNewPassword(e.target.value)}
-                 className="w-full bg-surface-container-high border border-outline rounded-xl px-4 py-3 outline-none focus:border-primary "
+                 className="w-full bg-surface-container-high border border-outline rounded-overlay px-4 py-3 outline-none focus:border-primary "
                  placeholder={t('ADMIN_LOGIN.SETUP_PASSWORD_PLACEHOLDER')}
                />
             </div>
-  
+
             {errorMsg && (
-               <div className="text-xs text-red-400 bg-red-900/10 border border-red-900/30 rounded-lg p-3 text-center">
+               <div className="text-xs text-error bg-error/10 border border-error/30 rounded-control p-3 text-center">
                  {errorMsg}
                </div>
             )}
-  
-            <button 
-              type="submit" 
+
+            <button
+              type="submit"
               disabled={loading || !newUsername || !newPassword}
-              className="w-full mt-4 bg-primary text-on-primary hover:bg-primary-container hover:text-on-primary-container font-semibold rounded-xl py-3.5  shadow-[0_0_20px_rgba(37,99,235,0.2)] disabled:opacity-50 flex items-center justify-center gap-2"
+              className="w-full mt-4 bg-primary text-on-primary hover:bg-primary-container hover:text-on-primary-container font-semibold rounded-overlay py-3.5 disabled:opacity-50 flex items-center justify-center gap-2"
             >
                <Save size={18} />
                {loading ? t('ADMIN_LOGIN.BTN_SETUP_LOADING') : t('ADMIN_LOGIN.BTN_SETUP')}
@@ -128,15 +128,15 @@ const AdminSecretLogin = ({ sysParam, setupMode, onSuccess }) => {
   }
 
   return (
-    <div className="min-h-screen bg-surface flex items-center justify-center p-4 font-sans text-gray-200">
-      <div className="w-full max-w-sm bg-[#1e1e24] border border-outline-variant rounded-2xl shadow-2xl p-8">
+    <div className="min-h-screen bg-surface flex items-center justify-center p-4 font-sans text-on-surface-variant">
+      <div className="w-full max-w-sm bg-surface-container border border-outline-variant rounded-overlay shadow-2xl shadow-black/40 p-8">
         <div className="flex flex-col items-center justify-center mb-8 gap-3">
-           <div className="w-16 h-16 rounded-full bg-blue-900/20 flex items-center justify-center border border-blue-900/30">
+           <div className="w-16 h-16 rounded-control-full bg-primary/20 flex items-center justify-center border border-primary/30">
                <Shield size={32} className="text-primary" />
            </div>
            <h1 className="text-2xl font-bold tracking-tight mt-2">{t('ADMIN_LOGIN.LOGIN_TITLE')}</h1>
         </div>
-        
+
         <form onSubmit={handleLogin} className="flex flex-col gap-5">
           <div className="flex flex-col gap-2 relative">
              <label htmlFor="admin-login-password" className="text-sm font-semibold text-on-surface-variant">{t('ADMIN_LOGIN.PASSWORD_LABEL')}</label>
@@ -146,24 +146,24 @@ const AdminSecretLogin = ({ sysParam, setupMode, onSuccess }) => {
                required
                value={password}
                onChange={(e) => setPassword(e.target.value)}
-               className="w-full bg-surface-container-high border border-outline rounded-xl px-4 py-3 pr-10 outline-none focus:border-primary "
+               className="w-full bg-surface-container-high border border-outline rounded-overlay px-4 py-3 pr-10 outline-none focus:border-primary "
                placeholder="••••••••"
              />
-             <button type="button" onClick={() => setShow(!show)} aria-label={show ? '隐藏密码' : '显示密码'} className="absolute right-3 top-[34px] text-on-surface-variant hover:text-gray-300">
+             <button type="button" onClick={() => setShow(!show)} aria-label={show ? '隐藏密码' : '显示密码'} className="absolute right-3 top-[34px] text-on-surface-variant hover:text-on-surface-variant">
                {show ? <EyeOff size={18}/> : <Eye size={18}/>}
              </button>
           </div>
 
           {errorMsg && (
-             <div className="text-xs text-red-400 bg-red-900/10 border border-red-900/30 rounded-lg p-3 text-center">
+             <div className="text-xs text-error bg-error/10 border border-error/30 rounded-control p-3 text-center">
                {errorMsg}
              </div>
           )}
 
-          <button 
-            type="submit" 
+          <button
+            type="submit"
             disabled={loading || !password}
-            className="w-full mt-2 bg-white hover:bg-gray-200 text-black font-semibold rounded-xl py-3  disabled:opacity-50"
+            className="w-full mt-2 bg-white hover:bg-surface-container text-black font-semibold rounded-overlay py-3 disabled:opacity-50"
           >
              {loading ? t('ADMIN_LOGIN.BTN_LOGIN_LOADING') : t('ADMIN_LOGIN.BTN_LOGIN')}
           </button>

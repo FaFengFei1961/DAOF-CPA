@@ -16,20 +16,17 @@ import { useCurrency } from '../context/CurrencyContext';
 // fix MAJOR（codex 第十七轮）：补齐 admin_grant_* + api_usage_pending_reconcile，
 // 与后端 allowedBillingTypes 同步。
 const TYPE_META = {
-  topup:                       { icon: ArrowDownCircle, color: 'text-green-600',   bg: 'bg-green-50',   i18n: 'BILL.T_TOPUP',              fallback: '充值',            direction: 'in' },
-  purchase_sub:                { icon: ArrowUpCircle,   color: 'text-blue-600',    bg: 'bg-blue-50',    i18n: 'BILL.T_PURCHASE_SUB',       fallback: '购买套餐',         direction: 'out' },
-  purchase_addon:              { icon: ArrowUpCircle,   color: 'text-cyan-600',    bg: 'bg-cyan-50',    i18n: 'BILL.T_PURCHASE_ADDON',     fallback: '购买增量包',       direction: 'out' },
-  bonus_credit:                { icon: ArrowDownCircle, color: 'text-emerald-600', bg: 'bg-emerald-50', i18n: 'BILL.T_BONUS',              fallback: '奖励入账',         direction: 'in' },
-  refund_sub:                  { icon: ArrowDownCircle, color: 'text-amber-600',   bg: 'bg-amber-50',   i18n: 'BILL.T_REFUND_SUB',         fallback: '订阅退款',         direction: 'in' },
-  refund_topup:                { icon: ArrowUpCircle,   color: 'text-orange-600',  bg: 'bg-orange-50',  i18n: 'BILL.T_REFUND_TOPUP',       fallback: '充值退款',         direction: 'out' },
-  admin_adjust:                { icon: RefreshCw,       color: 'text-purple-600',  bg: 'bg-purple-50',  i18n: 'BILL.T_ADMIN_ADJUST',       fallback: '管理员调整',       direction: 'neutral' },
-  admin_grant_sub:             { icon: ArrowDownCircle, color: 'text-indigo-600',  bg: 'bg-indigo-50',  i18n: 'BILL.T_ADMIN_GRANT_SUB',    fallback: '管理员赠送订阅',   direction: 'neutral' },
-  admin_grant_addon:           { icon: ArrowDownCircle, color: 'text-indigo-600',  bg: 'bg-indigo-50',  i18n: 'BILL.T_ADMIN_GRANT_ADDON',  fallback: '管理员赠送增量包', direction: 'neutral' },
-  admin_revoke_grant:          { icon: RefreshCw,       color: 'text-amber-600',   bg: 'bg-amber-50',   i18n: 'BILL.T_ADMIN_REVOKE_GRANT', fallback: '管理员收回赠送',   direction: 'neutral' },
-  api_consume_balance:         { icon: Activity,        color: 'text-rose-600',    bg: 'bg-rose-50',    i18n: 'BILL.T_API_BALANCE',        fallback: '余额扣费',         direction: 'out' },
-  api_usage_sub:               { icon: Activity,        color: 'text-slate-500',   bg: 'bg-slate-50',   i18n: 'BILL.T_API_SUB',            fallback: '套餐扣额度',       direction: 'usage' },
-  api_usage_addon:             { icon: Activity,        color: 'text-slate-500',   bg: 'bg-slate-50',   i18n: 'BILL.T_API_ADDON',          fallback: '增量包扣额度',     direction: 'usage' },
-  api_usage_pending_reconcile: { icon: Activity,        color: 'text-yellow-600',  bg: 'bg-yellow-50',  i18n: 'BILL.T_API_PENDING',        fallback: '待对账',           direction: 'neutral' },
+  topup:                       { icon: ArrowDownCircle, color: 'text-success',   bg: 'bg-success',   i18n: 'BILL.T_TOPUP',              fallback: '充值',            direction: 'in' },
+  purchase_sub:                { icon: ArrowUpCircle,   color: 'text-primary',    bg: 'bg-primary',    i18n: 'BILL.T_PURCHASE_SUB',       fallback: '购买套餐',         direction: 'out' },
+  bonus_credit:                { icon: ArrowDownCircle, color: 'text-success', bg: 'bg-success', i18n: 'BILL.T_BONUS',              fallback: '奖励入账',         direction: 'in' },
+  refund_sub:                  { icon: ArrowDownCircle, color: 'text-warning',   bg: 'bg-warning',   i18n: 'BILL.T_REFUND_SUB',         fallback: '订阅退款',         direction: 'in' },
+  refund_topup:                { icon: ArrowUpCircle,   color: 'text-warning',  bg: 'bg-warning',  i18n: 'BILL.T_REFUND_TOPUP',       fallback: '充值退款',         direction: 'out' },
+  admin_adjust:                { icon: RefreshCw,       color: 'text-primary',  bg: 'bg-primary/10',  i18n: 'BILL.T_ADMIN_ADJUST',       fallback: '管理员调整',       direction: 'neutral' },
+  admin_grant_sub:             { icon: ArrowDownCircle, color: 'text-primary',  bg: 'bg-primary',  i18n: 'BILL.T_ADMIN_GRANT_SUB',    fallback: '管理员赠送订阅',   direction: 'neutral' },
+  admin_revoke_grant:          { icon: RefreshCw,       color: 'text-warning',   bg: 'bg-warning',   i18n: 'BILL.T_ADMIN_REVOKE_GRANT', fallback: '管理员收回赠送',   direction: 'neutral' },
+  api_consume_balance:         { icon: Activity,        color: 'text-error',    bg: 'bg-error',    i18n: 'BILL.T_API_BALANCE',        fallback: '余额扣费',         direction: 'out' },
+  api_usage_sub:               { icon: Activity,        color: 'text-on-surface-variant',   bg: 'bg-surface-container',   i18n: 'BILL.T_API_SUB',            fallback: '套餐扣额度',       direction: 'usage' },
+  api_usage_pending_reconcile: { icon: Activity,        color: 'text-warning',  bg: 'bg-warning',  i18n: 'BILL.T_API_PENDING',        fallback: '待对账',           direction: 'neutral' },
 };
 
 const formatSignedCurrency = (n, formatCurrency, decimals = 2) => {
@@ -47,7 +44,7 @@ const fmtTime = (s) => {
 
 const BILLING_CACHE_TTL_MS = 30000;
 const DEFAULT_NON_USAGE_TYPES = Object.keys(TYPE_META).filter(
-  (k) => k !== 'api_usage_sub' && k !== 'api_usage_addon'
+  (k) => k !== 'api_usage_sub'
 );
 
 const getBillingAuthKey = () => {
@@ -87,7 +84,7 @@ const BillsPage = () => {
 
   // 筛选状态
   const [selectedTypes, setSelectedTypes] = useState([]); // 空 = 全部
-  const [hideUsage, setHideUsage] = useState(true); // 默认折叠 api_usage_sub/addon（量大）
+  const [hideUsage, setHideUsage] = useState(true); // 默认折叠 api_usage_sub（量大）
   const [fromDate, setFromDate] = useState('');
   const [toDate, setToDate] = useState('');
 
@@ -102,7 +99,7 @@ const BillsPage = () => {
     if (hideUsage && types.length === 0) {
       // 默认排除 usage，等价于"显示所有非 usage 类型"
       types = Object.keys(TYPE_META).filter(
-        (k) => k !== 'api_usage_sub' && k !== 'api_usage_addon'
+        (k) => k !== 'api_usage_sub'
       );
     }
     if (types.length > 0) params.set('types', types.join(','));
@@ -211,7 +208,7 @@ const BillsPage = () => {
     <div className="max-w-6xl mx-auto px-4 py-6 space-y-6">
       <header className="flex items-center justify-between flex-wrap gap-4">
         <div className="flex items-center gap-3">
-          <div className="w-10 h-10 rounded-xl bg-primary/10 flex items-center justify-center">
+          <div className="w-10 h-10 rounded-overlay bg-primary/10 flex items-center justify-center">
             <Receipt className="w-5 h-5 text-primary" />
           </div>
           <div>
@@ -227,14 +224,14 @@ const BillsPage = () => {
           <button
             type="button"
             onClick={() => { loadEntries({ force: true }); loadSummary({ force: true }); }}
-            className="inline-flex items-center gap-1.5 px-3 py-2 rounded-lg border border-outline-variant text-sm hover:bg-on-surface/[0.04]"
+            className="inline-flex items-center gap-1.5 px-3 py-2 rounded-control border border-outline-variant text-sm hover:bg-on-surface/[0.04]"
           >
             <RefreshCw className="w-4 h-4" />{t('BILL.REFRESH', '刷新')}
           </button>
           <button
             type="button"
             onClick={handleExport}
-            className="inline-flex items-center gap-1.5 px-3 py-2 rounded-lg bg-primary text-white text-sm hover:opacity-90"
+            className="inline-flex items-center gap-1.5 px-3 py-2 rounded-control bg-primary text-white text-sm hover:opacity-90"
           >
             <Download className="w-4 h-4" />{t('BILL.EXPORT_CSV', '导出 CSV')}
           </button>
@@ -247,19 +244,19 @@ const BillsPage = () => {
           <SummaryCard
             label={t('BILL.SUM_IN', '入账')}
             value={formatCurrency(summary.total_in_usd || 0, 2)}
-            color="text-green-600"
+            color="text-success"
             icon={ArrowDownCircle}
           />
           <SummaryCard
             label={t('BILL.SUM_OUT', '消费')}
             value={formatCurrency(summary.total_out_usd || 0, 2)}
-            color="text-rose-600"
+            color="text-error"
             icon={ArrowUpCircle}
           />
           <SummaryCard
             label={t('BILL.SUM_NET', '净变动')}
             value={formatSignedCurrency(summary.net_change_usd || 0, formatCurrency, 2)}
-            color={summary.net_change_usd >= 0 ? 'text-green-600' : 'text-rose-600'}
+            color={summary.net_change_usd >= 0 ? 'text-success' : 'text-error'}
             icon={Activity}
           />
           <SummaryCard
@@ -275,7 +272,7 @@ const BillsPage = () => {
           /bills 只看历史交易，不重复展示规则 */}
 
       {/* 筛选 */}
-      <section className="rounded-xl bg-surface-container/40 border border-outline-variant/40 p-4 space-y-3">
+      <section className="rounded-overlay bg-surface-container/40 border border-outline-variant/40 p-4 space-y-3">
         <div className="flex items-center gap-2 text-sm font-medium text-on-surface">
           <Filter className="w-4 h-4" />{t('BILL.FILTER', '筛选')}
         </div>
@@ -287,7 +284,7 @@ const BillsPage = () => {
                 type="button"
                 key={key}
                 onClick={() => toggleType(key)}
-                className={`text-xs px-3 py-1.5 rounded-full border transition ${
+                className={`text-xs px-3 py-1.5 rounded-control-full border transition ${
                   active
                     ? 'bg-primary text-white border-primary'
                     : 'bg-surface text-on-surface border-outline-variant hover:bg-on-surface/[0.04]'
@@ -304,7 +301,7 @@ const BillsPage = () => {
               type="checkbox"
               checked={hideUsage}
               onChange={(e) => { setPage(1); setHideUsage(e.target.checked); }}
-              className="rounded"
+              className="rounded-control"
             />
             <span>{t('BILL.HIDE_USAGE', '隐藏 API 用量行（按订阅扣额度）')}</span>
           </label>
@@ -314,14 +311,14 @@ const BillsPage = () => {
               type="date"
               value={fromDate}
               onChange={(e) => { setPage(1); setFromDate(e.target.value); }}
-              className="px-2 py-1 rounded border border-outline-variant bg-surface text-sm"
+              className="px-2 py-1 rounded-control border border-outline-variant bg-surface text-sm"
             />
             <span>→</span>
             <input
               type="date"
               value={toDate}
               onChange={(e) => { setPage(1); setToDate(e.target.value); }}
-              className="px-2 py-1 rounded border border-outline-variant bg-surface text-sm"
+              className="px-2 py-1 rounded-control border border-outline-variant bg-surface text-sm"
             />
           </div>
         </div>
@@ -337,7 +334,7 @@ const BillsPage = () => {
             <p>{t('BILL.EMPTY', '暂无账单记录')}</p>
           </div>
         ) : (
-          <ul className="divide-y divide-outline-variant/30 rounded-xl border border-outline-variant/40 overflow-hidden bg-surface">
+          <ul className="divide-y divide-outline-variant/30 rounded-overlay border border-outline-variant/40 overflow-hidden bg-surface">
             {entries.map((e) => <BillRow key={e.id} entry={e} t={t} formatCurrency={formatCurrency} />)}
           </ul>
         )}
@@ -356,7 +353,7 @@ const BillsPage = () => {
 };
 
 const SummaryCard = ({ label, value, color, icon: Icon }) => (
-  <div className="rounded-xl bg-surface-container/40 border border-outline-variant/40 p-4">
+  <div className="rounded-overlay bg-surface-container/40 border border-outline-variant/40 p-4">
     <div className="flex items-center justify-between mb-2">
       <span className="text-xs text-on-surface/60">{label}</span>
       {Icon && <Icon className="w-4 h-4 text-on-surface/40" />}
@@ -380,14 +377,14 @@ const BillRow = ({ entry, t, formatCurrency }) => {
 
   return (
     <li className="flex items-center gap-3 px-4 py-3 hover:bg-on-surface/[0.02]">
-      <div className={`w-9 h-9 rounded-lg flex items-center justify-center ${meta.bg}`}>
+      <div className={`w-9 h-9 rounded-control flex items-center justify-center ${meta.bg}`}>
         <Icon className={`w-4 h-4 ${meta.color}`} />
       </div>
       <div className="flex-1 min-w-0">
         <div className="flex items-center gap-2">
           <span className="text-sm font-medium text-on-surface">{label}</span>
           {entry.model_name && (
-            <span className="text-xs px-1.5 py-0.5 rounded bg-on-surface/[0.06] text-on-surface/70">
+            <span className="text-xs px-1.5 py-0.5 rounded-control bg-on-surface/[0.06] text-on-surface/70">
               {entry.model_name}
             </span>
           )}
@@ -407,9 +404,9 @@ const BillRow = ({ entry, t, formatCurrency }) => {
           isUsage
             ? 'text-on-surface/60'
             : entry.amount_usd > 0
-              ? 'text-green-600'
+              ? 'text-success'
               : entry.amount_usd < 0
-                ? 'text-rose-600'
+                ? 'text-error'
                 : 'text-on-surface/60'
         }`}>
           {amountText}
@@ -432,7 +429,7 @@ const formatBillingDescription = (entry, formatCurrency) => {
     if (amount < 0) return `管理员调整额度 · 余额减少 ${formatCurrency(Math.abs(amount), 2)}`;
     return '管理员调整额度 · 余额未变化';
   }
-  if (entry.entry_type === 'purchase_sub' || entry.entry_type === 'purchase_addon') {
+  if (entry.entry_type === 'purchase_sub') {
     return raw.replace(/ · USD\s+-?\d+(\.\d+)?$/i, ` · ${formatCurrency(Math.abs(Number(entry.amount_usd || 0)), 2)}`);
   }
   if (entry.entry_type === 'api_consume_balance') {

@@ -185,9 +185,9 @@ const StatStripSkeleton = () => (
   >
     {[0, 1, 2, 3].map(i => (
       <div key={i} className="px-5 py-4">
-        <div className="h-2.5 w-16 rounded bg-on-surface/[0.08] animate-pulse" />
-        <div className={`mt-2 h-7 ${i === 0 ? 'w-28' : 'w-20'} rounded bg-on-surface/[0.10] animate-pulse`} />
-        <div className="mt-2 h-2 w-20 rounded bg-on-surface/[0.06] animate-pulse" />
+        <div className="h-2.5 w-16 rounded-control bg-on-surface/[0.08] animate-pulse" />
+        <div className={`mt-2 h-7 ${i === 0 ? 'w-28' : 'w-20'} rounded-control bg-on-surface/[0.10] animate-pulse`} />
+        <div className="mt-2 h-2 w-20 rounded-control bg-on-surface/[0.06] animate-pulse" />
       </div>
     ))}
   </section>

@@ -22,8 +22,10 @@ var NotificationSysConfigDefaults = map[string]string{
 	"notif_default_thresholds_csv": "80,100",
 
 	// ── 触发器文案（admin 可改）──
-	"notif_usage_warn_title": "套餐用量提醒",
-	"notif_usage_warn_body":  "您的「{package_name}」当前用量已达 {percent}%（{plan_name} / {bucket}）。",
+	"notif_usage_warn_title":            "套餐用量提醒",
+	"notif_usage_warn_body":             "您的「{package_name}」当前用量已达 {percent}%（{plan_name} / {bucket}）。",
+	"notif_subscription_canceled_title": "您的订阅已取消",
+	"notif_subscription_canceled_body":  "您的【{{plan_name}}】订阅已于 {{cancel_time}} 取消。如需恢复服务，请前往套餐中心重新订阅。",
 	// 订阅取消的退款（钱进 USD 余额，可立即继续消费）—— 沿用旧文案
 	"notif_refund_title": "退款已到账",
 	"notif_refund_body":  "「{package_name}」已退款 {amount} {currency}，到账您的余额。",

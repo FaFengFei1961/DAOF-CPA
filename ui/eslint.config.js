@@ -3,11 +3,15 @@ import globals from 'globals'
 import reactHooks from 'eslint-plugin-react-hooks'
 import reactRefresh from 'eslint-plugin-react-refresh'
 import { defineConfig, globalIgnores } from 'eslint/config'
+import designSystem from './eslint-plugins/no-design-violation.js'
 
 export default defineConfig([
   globalIgnores(['dist']),
   {
     files: ['**/*.{js,jsx}'],
+    plugins: {
+      'design-system': designSystem
+    },
     extends: [
       js.configs.recommended,
       reactHooks.configs.flat.recommended,
@@ -24,6 +28,9 @@ export default defineConfig([
       },
     },
     rules: {
+      // Enforce design system tokens
+      'design-system/strict-tokens': 'error',
+
       // Phase 6：放宽 catch 未用 err（业内 React 大量 catch (err) {} 模式）+
       // PascalCase 参数（如 destructure prop `({ icon: Icon })`）通常是组件/HOC 引用，
       // ESLint 对 JSX `<Icon />` 用法识别有时不准确，allow PascalCase 跳过避免误报。
@@ -56,6 +63,16 @@ export default defineConfig([
     ],
     rules: {
       'react-refresh/only-export-components': 'off',
+    },
+  },
+  {
+    // Block B exclude these from strict-tokens check
+    files: [
+      'src/components/ui/**/*.{js,jsx}',
+      'src/context/ConfirmContext.jsx'
+    ],
+    rules: {
+      'design-system/strict-tokens': 'off',
     },
   },
 ])

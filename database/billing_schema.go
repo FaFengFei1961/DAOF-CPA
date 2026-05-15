@@ -10,18 +10,18 @@
 //  3. BalanceAfterUSD 是事件后的 user.quota 快照，便于离线对账（重算不依赖时序遍历）。
 //  4. RelatedType + RelatedID 反向关联到来源记录（topup_orders / user_subscriptions / api_logs），
 //     admin 点击账单行可以跳转到原始事件详情。
-//  5. SourceSubscriptionID 仅 api_usage_sub / api_usage_addon 类型有意义，标识"扣自哪个 sub 实例"。
+//  5. SourceSubscriptionID 仅 api_usage_sub 类型有意义，标识"扣自哪个 sub 实例"。
 //
 // 写入时机（共 7 处插桩，均在事务内）：
 //
 //	YifutNotify (paid)              → topup
-//	purchaseAsInstant (success)     → purchase_sub | purchase_addon
-//	AdminGrantSubscription          → admin_grant_sub | admin_grant_addon (AmountUSD=0)
+//	purchaseAsInstant (success)     → purchase_sub
+//	AdminGrantSubscription          → admin_grant_sub (AmountUSD=0)
 //	AdminRevokeGrantedSubscription  → admin_revoke_grant (AmountUSD=0)
 //	AdminRefundSubscription         → refund_sub
 //	AdminRefundTopup                → refund_topup (+ admin_adjust if reclaim_quota=false 仍写一行 0 USD 解释)
 //	stream.go deductQuotaAtomic     → api_consume_balance
-//	stream.go Decide 命中 sub/addon → api_usage_sub | api_usage_addon (AmountUSD=0)
+//	stream.go Decide 命中 sub → api_usage_sub (AmountUSD=0)
 package database
 
 import "time"
@@ -39,7 +39,7 @@ type BillingEntry struct {
 	// EntryType 见上方文件头注释。索引用于按类型筛选。
 	EntryType string `gorm:"index;not null;size:32;<-:create" json:"entry_type"`
 
-	// AmountUSD 影响 user.quota 的净变动；仅 api_usage_sub/addon 类型为 0。
+	// AmountUSD 影响 user.quota 的净变动；仅 api_usage_sub 类型为 0。
 	// 单位：micro_usd（USD * 1e6），int64 全程整数算术杜绝累加误差。
 	AmountUSD int64 `gorm:"not null;<-:create" json:"amount_usd"`
 	// BalanceAfterUSD 事件后用户余额快照（micro_usd）。回填脚本可能填 0 标记"未知"。
@@ -54,8 +54,8 @@ type BillingEntry struct {
 	TokensTotal int    `gorm:"<-:create" json:"tokens_total,omitempty"` // prompt + completion（cached/reasoning 是这两者的子集，不重复加）
 
 	// SourceSubscriptionID 语义因 EntryType 不同（fix m4，codex 第十四轮印证）：
-	//   api_usage_sub / api_usage_addon → 此次 API 调用的额度来自哪个订阅实例（"quota source"）
-	//   refund_sub                       → 被退款的订阅实例（"refunded subject"）
+	//   api_usage_sub → 此次 API 调用的额度来自哪个订阅实例（"quota source"）
+	//   refund_sub    → 被退款的订阅实例（"refunded subject"）
 	// 查询时若不区分 EntryType 而仅按 SourceSubscriptionID 过滤会混淆这两种语义。
 	SourceSubscriptionID *uint `gorm:"<-:create" json:"source_subscription_id,omitempty"`
 
@@ -72,11 +72,7 @@ type BillingEntry struct {
 
 // EntryType 常量集。新增类型时在此处加常量并更新 IsConsumeEntry / IsCreditEntry 的判定。
 //
-// Phase 8：彻底删除增量包（addon）相关 entry type — 平台只保留周期订阅模式：
-//   - BillingTypePurchaseAddon       (purchase_addon)
-//   - BillingTypeAdminGrantAddon     (admin_grant_addon)
-//   - BillingTypeApiUsageAddon       (api_usage_addon)
-// 三段消费引擎（订阅 → 增量包 → 余额）简化为两段（订阅 → 余额）。
+// Phase 8：平台只保留周期订阅模式。
 const (
 	BillingTypeTopup             = "topup"               // 充值入账
 	BillingTypePurchaseSub       = "purchase_sub"        // 购买周期套餐
