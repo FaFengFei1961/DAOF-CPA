@@ -79,7 +79,8 @@ func parsePackageIDsStrict(s string) ([]uint, bool) {
 // 业务侧若需更严格成本下限，可通过 SysConfig `coupon_min_fixed_price_micro_usd` 调高。
 const couponMinFixedPriceMicroUSD = int64(10_000)
 
-const MessageCodeCouponFixedPriceBelowPackageCostFloor = "ERR" + "_COUPON_FIXED_PRICE_BELOW_PACKAGE_COST_FLOOR"
+// 直接使用常量字面量，i18n 覆盖测试可通过 AST 扫描捕获，避免遗漏翻译。
+const MessageCodeCouponFixedPriceBelowPackageCostFloor = "ERR_COUPON_FIXED_PRICE_BELOW_PACKAGE_COST_FLOOR"
 
 func couponTemplateValidationMessageCode(err error) string {
 	if errors.Is(err, errCouponFixedPriceBelowPackageCostFloor) {

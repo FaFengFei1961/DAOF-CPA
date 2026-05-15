@@ -13,9 +13,10 @@ import (
 )
 
 const (
-	actionCircuitForceReset          = "CIRCUIT_FORCE_RESET"
-	messageCodeCircuitResetSuccess   = "SUCCESS_" + "CIRCUIT_RESET"
-	messageCodeCircuitResetAuditFail = "ERR_" + "CIRCUIT_RESET_AUDIT_FAILED"
+	actionCircuitForceReset = "CIRCUIT_FORCE_RESET"
+	// 直接使用常量字面量，i18n 覆盖测试可通过 AST 扫描捕获，避免遗漏翻译。
+	messageCodeCircuitResetSuccess   = "SUCCESS_CIRCUIT_RESET"
+	messageCodeCircuitResetAuditFail = "ERR_CIRCUIT_RESET_AUDIT_FAILED"
 )
 
 type channelCircuitAdminRow struct {

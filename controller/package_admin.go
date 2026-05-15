@@ -31,7 +31,8 @@ var errDeprecatedRequestField = errors.New("deprecated request field")
 var errInvalidProductType = errors.New("product_type only supports subscription")
 var errPackageCostFloorInvalid = errors.New("package cost_floor invalid")
 
-const MessageCodePackageCostFloorInvalid = "ERR" + "_PACKAGE_COST_FLOOR_INVALID"
+// 直接使用常量字面量，i18n 覆盖测试可通过 AST 扫描捕获，避免遗漏翻译。
+const MessageCodePackageCostFloorInvalid = "ERR_PACKAGE_COST_FLOOR_INVALID"
 
 // validatePlanMultipliers 校验 plan_multipliers 与 plan_ids 一一对应的合法性。
 // 缺失（len 不足）视为 1.0 默认；显式传值必须 finite + 0 < v ≤ 100。

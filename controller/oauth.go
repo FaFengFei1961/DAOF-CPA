@@ -171,8 +171,10 @@ func cleanupExpiredOAuthStates(now time.Time) {
 	})
 }
 
+// oauthStateInvalidMessageCode 暴露给前端的统一 message_code。
+// 直接返回常量字面量，i18n 覆盖测试可通过 AST 扫描捕获，避免漏译。
 func oauthStateInvalidMessageCode() string {
-	return strings.Join([]string{"ERR", "OAUTH", "STATE", "INVALID"}, "_")
+	return "ERR_OAUTH_STATE_INVALID"
 }
 
 // maskPhone 把手机号脱敏成 138****8888

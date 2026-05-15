@@ -86,6 +86,8 @@ func InitDB() {
 		&BillingEntry{}, &BillingReconciliation{},
 		// 优惠券系统（admin 创建模板 → 发给用户 → 购买时使用）
 		&CouponTemplate{}, &UserCoupon{},
+		// Sprint5-M6 分布式锁（cliproxy_usage_sync 单实例化）+ Sprint5-M1 浏览器 session（OAuth + Logout 真吊销）
+		&DistributedLock{}, &UserSession{},
 	)
 	if err != nil {
 		log.Fatalf("数据库结构自动迁移失败: %v", err)

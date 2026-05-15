@@ -181,6 +181,8 @@ func main() {
 	api.Post("/auth/send-sms", middleware.SetupGuard, authLimiter, controller.SendSMS)
 	api.Post("/auth/complete-risk", middleware.SetupGuard, authLimiter, controller.CompleteRisk)
 	api.Post("/auth/complete-profile", middleware.SetupGuard, authLimiter, controller.CompleteProfile)
+	// Sprint5-M1 浏览器登出：在 Session 表标记 revoked，下次 UserGuard 命中即 401
+	api.Post("/auth/logout", middleware.UserGuard, controller.AuthLogout)
 	api.Get("/models", middleware.SetupGuard, controller.GetPublicModels)
 	api.Get("/pricing", middleware.SetupGuard, controller.GetPublicPricing)
 	api.Get("/billing/rules", middleware.SetupGuard, controller.GetPublicBillingRules)
@@ -264,6 +266,10 @@ func main() {
 	adminApi.Put("/channels/:id", controller.UpdateChannel)
 	adminApi.Put("/channels/:id/reset-key", controller.ResetChannelKey)
 	adminApi.Delete("/channels/:id", controller.DeleteChannel)
+
+	// Sprint5-M2 渠道熔断监控（admin 实时查看 closed/open/half-open + 强制重置）
+	adminApi.Get("/channels/circuits", controller.AdminListChannelCircuits)
+	adminApi.Post("/channels/:id/circuit-reset", controller.AdminForceResetChannelCircuit)
 
 	adminApi.Get("/channels/:channelId/models", controller.GetModelsByChannel)
 	adminApi.Get("/channels/:channelId/upstream-models", controller.FetchUpstreamModels)
