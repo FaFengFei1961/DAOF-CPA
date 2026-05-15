@@ -6,7 +6,6 @@ package controller
 
 import (
 	"log"
-	"math"
 
 	"daof-ai-hub/database"
 	"daof-ai-hub/proxy"
@@ -14,12 +13,11 @@ import (
 	"github.com/gofiber/fiber/v2"
 )
 
-// LimitUSD 来自前端：单位 USD（float64），后端转 micro_usd 落库。
-// 这是 API 边界的格式转换，不是 backward compat —— 前端展示天然用 USD，存储用 micro_usd。
+// LimitMicroUSD 来自前端：单位 micro_usd，直接落库。
 type balanceConsumeUpdateRequest struct {
-	Enabled       *bool    `json:"enabled"`
-	LimitUSD      *float64 `json:"limit_usd"`
-	WindowSeconds *int     `json:"window_seconds"`
+	Enabled       *bool  `json:"enabled"`
+	LimitMicroUSD *int64 `json:"limit_micro_usd"`
+	WindowSeconds *int   `json:"window_seconds"`
 }
 
 // GetMyBalanceConsumePreference GET /api/balance-consume/preference
@@ -62,13 +60,9 @@ func UpdateMyBalanceConsumePreference(c *fiber.Ctx) error {
 	if req.Enabled != nil {
 		updates["balance_consume_enabled"] = *req.Enabled
 	}
-	if req.LimitUSD != nil {
-		v := *req.LimitUSD
-		if math.IsNaN(v) || math.IsInf(v, 0) || v < 0 {
-			return c.Status(400).JSON(fiber.Map{"success": false, "message_code": "ERR_LIMIT_INVALID"})
-		}
-		micro, ok := database.USDToMicro(v)
-		if !ok {
+	if req.LimitMicroUSD != nil {
+		micro := *req.LimitMicroUSD
+		if micro < 0 {
 			return c.Status(400).JSON(fiber.Map{"success": false, "message_code": "ERR_LIMIT_INVALID"})
 		}
 		updates["balance_consume_limit_usd"] = micro

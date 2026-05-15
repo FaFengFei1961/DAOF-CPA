@@ -15,26 +15,23 @@ import (
 	"gorm.io/gorm"
 )
 
-// MaxAdminQuotaUSD admin 直改用户额度的上限：1e9 USD（实际业务远不会到这个量级，
-// 但有限上限可防 admin 误填 1e308 导致整个 quota 字段被科学记数污染财务汇总）。
+// MaxAdminQuotaMicroUSD admin 直改用户额度的上限：1e9 USD 对应的 micro_usd
+// （实际业务远不会到这个量级，但有限上限可防 admin 误填极大整数污染财务汇总）。
 //
 // fix MAJOR M23-A6（codex 第二十三轮）：标准 JSON 不接 NaN/Inf，但接 1e308 这种超大有限数。
 // 业务上 admin 改额度通常 ≤ $10000，10亿美元已远超合理范围，作为保护性上限。
-const MaxAdminQuotaUSD = 1e9
+const MaxAdminQuotaUSD = 1_000_000_000
+const MaxAdminQuotaMicroUSD int64 = MaxAdminQuotaUSD * database.MicroPerUSD
 const bulkQuotaPreviewUserLimit = 500
 
-// validateAdminQuotaInput 校验 admin 输入的 quota / amount 值。
+// validateAdminQuotaMicroInput 校验 admin 输入的 quota / amount micro_usd 值。
 //
-//   - NaN / Inf → 拒绝
-//   - |v| > MaxAdminQuotaUSD → 拒绝（防误填超大数污染汇总）
+//   - |v| > MaxAdminQuotaMicroUSD → 拒绝（防误填超大数污染汇总）
 //
 // 不在此校验是否 ≥ 0 —— 部分场景允许负数（如 set quota=-10 用于客服补偿），由调用方决定语义。
-func validateAdminQuotaInput(v float64) error {
-	if math.IsNaN(v) || math.IsInf(v, 0) {
-		return fmt.Errorf("额度必须为有限数（NaN/Inf 非法）")
-	}
-	if math.Abs(v) > MaxAdminQuotaUSD {
-		return fmt.Errorf("额度绝对值超过上限 %v USD，请检查输入", MaxAdminQuotaUSD)
+func validateAdminQuotaMicroInput(v int64) error {
+	if v > MaxAdminQuotaMicroUSD || v < -MaxAdminQuotaMicroUSD {
+		return fmt.Errorf("额度绝对值超过上限 %d micro_usd，请检查输入", MaxAdminQuotaMicroUSD)
 	}
 	return nil
 }
@@ -117,14 +114,12 @@ func GetUsers(c *fiber.Ctx) error {
 	})
 }
 
-// 用户增量操作 Payload
-//
-// 前端传 Quota 是 USD float，后端入业务前转 micro_usd。
+// 用户增量操作 Payload。QuotaMicroUSD 单位为 micro_usd。
 type UserPayload struct {
-	Username  string  `json:"username"`
-	Quota     float64 `json:"quota"` // USD float（人友好）
-	Status    int     `json:"status"`
-	BanReason string  `json:"ban_reason"`
+	Username      string `json:"username"`
+	QuotaMicroUSD int64  `json:"quota_micro_usd"`
+	Status        int    `json:"status"`
+	BanReason     string `json:"ban_reason"`
 }
 
 func UpdateUser(c *fiber.Ctx) error {
@@ -135,19 +130,16 @@ func UpdateUser(c *fiber.Ctx) error {
 	}
 	// fix MAJOR M23-A6（codex 第二十三轮）：admin 改额度必须 finite + 上限校验。
 	// 即使标准 JSON 不接受 NaN，超大有限数（1e308）仍可进入 quota 污染财务汇总。
-	if err := validateAdminQuotaInput(req.Quota); err != nil {
+	if err := validateAdminQuotaMicroInput(req.QuotaMicroUSD); err != nil {
 		return c.Status(400).JSON(fiber.Map{"success": false, "message": err.Error(), "message_code": "ERR_INVALID_QUOTA"})
 	}
-	// 校验通过后转 micro_usd 入业务
-	reqQuotaMicro, ok := database.USDToMicro(req.Quota)
-	if !ok {
-		return c.Status(400).JSON(fiber.Map{"success": false, "message": "quota 非法", "message_code": "ERR_INVALID_QUOTA"})
-	}
+	reqQuotaMicro := req.QuotaMicroUSD
 
 	var user database.User
 	if err := database.DB.First(&user, id).Error; err != nil {
 		return c.Status(404).JSON(fiber.Map{"success": false, "message": "未找到相关记录", "message_code": "ERR_NODE_GONE"})
 	}
+	oldStatus := user.Status
 
 	// status: 封禁
 	if req.Status != 1 && user.Role == "admin" {
@@ -244,6 +236,11 @@ func UpdateUser(c *fiber.Ctx) error {
 		log.Printf("[USER-UPDATE] tx failed user=%d: %v", user.ID, txErr)
 		return c.Status(500).JSON(fiber.Map{"success": false, "message": "数据更新失败，存在冲突", "message_code": "ERR_UPDATE_CONFLICT"})
 	}
+	if oldStatus == 1 && req.Status != 1 {
+		if err := database.RevokeSessionsForUser(user.ID); err != nil {
+			log.Printf("[USER-STATUS] revoke session failed for user=%d: %v", user.ID, err)
+		}
+	}
 
 	// ZERO-TRUST 防御：无论状态改成什么，都强力同步到高速内存里，瞬间实现封号！
 	proxy.SyncCacheConfig()
@@ -299,19 +296,17 @@ func GetSelfData(c *fiber.Ctx) error {
 	})
 }
 
-// BulkQuotaPayload 是批量调整额度的请求体
-//
-// API 边界单位：Amount 是 USD float（前端友好），handler 内转 micro_usd 入业务。
+// BulkQuotaPayload 是批量调整额度的请求体，AmountMicroUSD 单位为 micro_usd。
 type BulkQuotaPayload struct {
-	UserIDs []uint  `json:"user_ids"`
-	Mode    string  `json:"mode"`   // "add" / "sub" / "set"
-	Amount  float64 `json:"amount"` // 美金（USD float）
+	UserIDs        []uint `json:"user_ids"`
+	Mode           string `json:"mode"` // "add" / "sub" / "set"
+	AmountMicroUSD int64  `json:"amount_micro_usd"`
 }
 
 type BulkQuotaPreviewPayload struct {
-	UserIDs   []int64 `json:"user_ids"`
-	Action    string  `json:"action"`     // "add" / "subtract" / "set"
-	AmountUSD float64 `json:"amount_usd"` // 美金（USD float）
+	UserIDs        []int64 `json:"user_ids"`
+	Action         string  `json:"action"` // "add" / "subtract" / "set"
+	AmountMicroUSD int64   `json:"amount_micro_usd"`
 }
 
 type bulkQuotaPreviewUser struct {
@@ -375,16 +370,13 @@ func BulkAdjustQuotaPreview(c *fiber.Ctx) error {
 	if req.Action != "add" && req.Action != "subtract" && req.Action != "set" {
 		return c.Status(400).JSON(fiber.Map{"success": false, "message": "无效的调整模式", "message_code": "ERR_INVALID_MODE"})
 	}
-	if err := validateAdminQuotaInput(req.AmountUSD); err != nil {
+	if err := validateAdminQuotaMicroInput(req.AmountMicroUSD); err != nil {
 		return c.Status(400).JSON(fiber.Map{"success": false, "message": err.Error(), "message_code": "ERR_INVALID_QUOTA"})
 	}
-	if req.AmountUSD < 0 {
+	if req.AmountMicroUSD < 0 {
 		return c.Status(400).JSON(fiber.Map{"success": false, "message": "金额不能为负", "message_code": "ERR_NEGATIVE_AMOUNT"})
 	}
-	amountMicro, ok := database.USDToMicro(req.AmountUSD)
-	if !ok {
-		return c.Status(400).JSON(fiber.Map{"success": false, "message": "金额非法", "message_code": "ERR_INVALID_QUOTA"})
-	}
+	amountMicro := req.AmountMicroUSD
 	uniqIDs, err := dedupePositiveUserIDs(req.UserIDs)
 	if err != nil {
 		return c.Status(400).JSON(fiber.Map{"success": false, "message": "用户 ID 不合法", "message_code": "ERR_BAD_USER_ID"})
@@ -435,17 +427,13 @@ func BulkAdjustQuota(c *fiber.Ctx) error {
 		return c.Status(400).JSON(fiber.Map{"success": false, "message": "无效的调整模式", "message_code": "ERR_INVALID_MODE"})
 	}
 	// fix MAJOR M23-A6（codex 第二十三轮）：批量调整金额必须 finite + 上限校验
-	if err := validateAdminQuotaInput(req.Amount); err != nil {
+	if err := validateAdminQuotaMicroInput(req.AmountMicroUSD); err != nil {
 		return c.Status(400).JSON(fiber.Map{"success": false, "message": err.Error(), "message_code": "ERR_INVALID_QUOTA"})
 	}
-	if req.Amount < 0 {
+	if req.AmountMicroUSD < 0 {
 		return c.Status(400).JSON(fiber.Map{"success": false, "message": "金额不能为负", "message_code": "ERR_NEGATIVE_AMOUNT"})
 	}
-	// 转 micro_usd 入业务（DB 列单位）
-	amountMicro, ok := database.USDToMicro(req.Amount)
-	if !ok {
-		return c.Status(400).JSON(fiber.Map{"success": false, "message": "金额非法", "message_code": "ERR_INVALID_QUOTA"})
-	}
+	amountMicro := req.AmountMicroUSD
 
 	// 去重 user_ids（防止 admin 误传重复 ID 让计数虚高）
 	idSet := make(map[uint]struct{}, len(req.UserIDs))
@@ -526,17 +514,16 @@ func BulkAdjustQuota(c *fiber.Ctx) error {
 			// 同时附加 *_micro 用于精确审计回溯
 			change, _ := json.Marshal([]map[string]interface{}{
 				{
-					"type":         "BULK_QUOTA",
-					"target":       u.Username,
-					"mode":         req.Mode,
-					"old":          database.MicroToUSD(before.Quota),
-					"new":          database.MicroToUSD(after.Quota),
-					"amount":       req.Amount,
-					"delta":        database.MicroToUSD(delta),
-					"old_micro":    before.Quota,
-					"new_micro":    after.Quota,
-					"amount_micro": amountMicro,
-					"delta_micro":  delta,
+					"type":             "BULK_QUOTA",
+					"target":           u.Username,
+					"mode":             req.Mode,
+					"old":              database.MicroToUSD(before.Quota),
+					"new":              database.MicroToUSD(after.Quota),
+					"delta":            database.MicroToUSD(delta),
+					"old_micro":        before.Quota,
+					"new_micro":        after.Quota,
+					"amount_micro_usd": amountMicro,
+					"delta_micro":      delta,
 				},
 			})
 			opLogID, err := LogOperationByTxReturning(tx, adminID, u.ID, "admin", "BULK_QUOTA", c.IP(), string(change))

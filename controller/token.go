@@ -4,7 +4,6 @@ import (
 	"errors"
 	"fmt"
 	"log"
-	"math"
 	"time"
 
 	"daof-ai-hub/database"
@@ -18,16 +17,11 @@ import (
 // errTokenLimitReached 事务内业务级 sentinel
 var errTokenLimitReached = errors.New("user token quota reached")
 
-// isValidQuotaLimit 业务约定：QuotaLimit 必须 ≥ 0 且为有限数（不能 NaN/+Inf/-Inf）。
+// isValidQuotaLimit 业务约定：QuotaLimitMicroUSD 必须 ≥ 0。
 //   - 0 = 无限制（最常见）
 //   - 正数 = 具体上限
-//   - 负数 / Inf / NaN = 非法（拒绝写入）
-//
-// 校验前端输入（USD float），通过后转 micro_usd 入业务。
-func isValidQuotaLimit(v float64) bool {
-	if math.IsNaN(v) || math.IsInf(v, 0) {
-		return false
-	}
+//   - 负数 = 非法（拒绝写入）
+func isValidQuotaLimit(v int64) bool {
 	return v >= 0
 }
 
@@ -67,9 +61,9 @@ func GetTokens(c *fiber.Ctx) error {
 }
 
 type CreateTokenPayload struct {
-	Name       string     `json:"name"`
-	QuotaLimit float64    `json:"quota_limit"` // 0 for unlimited
-	ExpiredAt  *time.Time `json:"expired_at"`  // null for unlimited
+	Name               string     `json:"name"`
+	QuotaLimitMicroUSD int64      `json:"quota_limit_micro_usd"` // 0 for unlimited
+	ExpiredAt          *time.Time `json:"expired_at"`            // null for unlimited
 }
 
 func CreateToken(c *fiber.Ctx) error {
@@ -87,14 +81,9 @@ func CreateToken(c *fiber.Ctx) error {
 		req.Name = "Unnamed Token"
 	}
 
-	// fix Major（codex 第五轮）：拒绝负数/Inf/NaN 限额。
-	// 业务约定：0 表示无限制；正数表示具体上限；其他形态都视为非法（防伪装"伪限额"绕过）。
-	if !isValidQuotaLimit(req.QuotaLimit) {
-		return c.Status(400).JSON(fiber.Map{"success": false, "message": "quota_limit 不合法（必须 ≥ 0 且为有限数）", "message_code": "ERR_INVALID_QUOTA_LIMIT"})
-	}
-	quotaLimitMicro, ok := database.USDToMicro(req.QuotaLimit)
-	if !ok {
-		return c.Status(400).JSON(fiber.Map{"success": false, "message": "quota_limit 数值非法", "message_code": "ERR_INVALID_QUOTA_LIMIT"})
+	// 业务约定：0 表示无限制；正数表示具体上限；负数视为非法（防伪装"伪限额"绕过）。
+	if !isValidQuotaLimit(req.QuotaLimitMicroUSD) {
+		return c.Status(400).JSON(fiber.Map{"success": false, "message": "quota_limit_micro_usd 不合法（必须 ≥ 0）", "message_code": "ERR_INVALID_QUOTA_LIMIT"})
 	}
 	// fix MEDIUM M19-1（codex 第十九轮）：拒绝过期时间设在过去 → 否则创建即"立即失效"，前端列表里显示
 	// 但实际任何请求都被 Auth 路径拒绝；用户体感是"刚建就坏掉"。预留 60s 容差对抗时钟漂移。
@@ -109,7 +98,7 @@ func CreateToken(c *fiber.Ctx) error {
 		UserID:     user.ID,
 		Name:       req.Name,
 		Key:        newKey,
-		QuotaLimit: quotaLimitMicro,
+		QuotaLimit: req.QuotaLimitMicroUSD,
 		ExpiredAt:  req.ExpiredAt,
 		Status:     1,
 	}
@@ -139,17 +128,17 @@ func CreateToken(c *fiber.Ctx) error {
 	proxy.SyncCacheConfig()
 
 	LogOperationBy(user.ID, user.ID, "user", "CREATE_TOKEN", c.IP(),
-		fmt.Sprintf(`[{"type":"CREATE_TOKEN","token_id":%d,"name":%q,"quota_limit":%g}]`, newToken.ID, req.Name, req.QuotaLimit))
+		fmt.Sprintf(`[{"type":"CREATE_TOKEN","token_id":%d,"name":%q,"quota_limit_micro_usd":%d}]`, newToken.ID, req.Name, req.QuotaLimitMicroUSD))
 
 	return c.JSON(fiber.Map{"success": true, "message": "API 凭证创建成功", "message_code": "SUCCESS_TOKEN_CREATED", "data": newToken})
 }
 
 type UpdateTokenPayload struct {
-	Name        *string    `json:"name"`
-	Status      *int       `json:"status"` // 1 启用, 2 禁用
-	QuotaLimit  *float64   `json:"quota_limit"`
-	ExpiredAt   *time.Time `json:"expired_at"`   // null can technically mean infinite here if passed null in JSON (requires careful pointer handling)
-	ClearExpiry bool       `json:"clear_expiry"` // Explicit flag to clear expiration
+	Name               *string    `json:"name"`
+	Status             *int       `json:"status"` // 1 启用, 2 禁用
+	QuotaLimitMicroUSD *int64     `json:"quota_limit_micro_usd"`
+	ExpiredAt          *time.Time `json:"expired_at"`   // null can technically mean infinite here if passed null in JSON (requires careful pointer handling)
+	ClearExpiry        bool       `json:"clear_expiry"` // Explicit flag to clear expiration
 }
 
 func UpdateTokenSettings(c *fiber.Ctx) error {
@@ -176,16 +165,11 @@ func UpdateTokenSettings(c *fiber.Ctx) error {
 	if req.Status != nil && (*req.Status == 1 || *req.Status == 2) {
 		updates["status"] = *req.Status
 	}
-	if req.QuotaLimit != nil {
-		// fix Major（codex 第五轮）：UPDATE 路径同样拒绝负数/Inf/NaN
-		if !isValidQuotaLimit(*req.QuotaLimit) {
-			return c.Status(400).JSON(fiber.Map{"success": false, "message": "quota_limit 不合法（必须 ≥ 0 且为有限数）", "message_code": "ERR_INVALID_QUOTA_LIMIT"})
+	if req.QuotaLimitMicroUSD != nil {
+		if !isValidQuotaLimit(*req.QuotaLimitMicroUSD) {
+			return c.Status(400).JSON(fiber.Map{"success": false, "message": "quota_limit_micro_usd 不合法（必须 ≥ 0）", "message_code": "ERR_INVALID_QUOTA_LIMIT"})
 		}
-		quotaLimitMicro, ok := database.USDToMicro(*req.QuotaLimit)
-		if !ok {
-			return c.Status(400).JSON(fiber.Map{"success": false, "message": "quota_limit 数值非法", "message_code": "ERR_INVALID_QUOTA_LIMIT"})
-		}
-		updates["quota_limit"] = quotaLimitMicro
+		updates["quota_limit"] = *req.QuotaLimitMicroUSD
 	}
 	if req.ClearExpiry {
 		updates["expired_at"] = nil

@@ -391,11 +391,7 @@ type createPackagePayload struct {
 	PlanMultipliers []float64 `json:"plan_multipliers"` // 与 PlanIDs 同序，缺省按 1.0
 }
 
-// packagePayloadJSON 是 admin 端 JSON 表示（USD float），handler 内转 micro_usd 入业务。
-//
-// fix MAJOR M22-A1 Phase 1：DB schema PriceAmount 是 int64 micro_usd，
-// 但前端 admin 输入的是人友好的 USD float（如 9.9）。直接 BodyParser 进 createPackagePayload
-// 会因 float→int64 失败。这里在 API 边界做一次转换。
+// packagePayloadJSON 是 admin 端 JSON 表示，金额字段直接使用 micro_usd。
 type packagePayloadJSON struct {
 	Name                 string           `json:"name"`
 	Description          string           `json:"description"`
@@ -404,7 +400,7 @@ type packagePayloadJSON struct {
 	BadgeColor           string           `json:"badge_color"`
 	Gradient             string           `json:"gradient"`
 	HighlightTag         string           `json:"highlight_tag"`
-	PriceAmount          float64          `json:"price_amount"`
+	PriceMicroUSD        int64            `json:"price_micro_usd"`
 	CostFloorMicroUSD    int64            `json:"cost_floor_micro_usd"`
 	PriceCurrency        string           `json:"price_currency"`
 	BillingPeriodSeconds int              `json:"billing_period_seconds"`
@@ -420,10 +416,7 @@ type packagePayloadJSON struct {
 	DeprecatedBonus      *json.RawMessage `json:"bonus_balance_usd"`
 }
 
-// parsePackagePayload 解析 admin POST/PUT 套餐 body，把 USD float 转 micro_usd。
-//
-// fix MAJOR Phase 4-codex（第二十四轮）：admin 金额必须过 validateAdminQuotaInput（含
-// MaxAdminQuotaUSD 上限），防 admin 误填 / 攻击注入极大值污染财务汇总或下游溢出。
+// parsePackagePayload 解析 admin POST/PUT 套餐 body。
 func parsePackagePayload(c *fiber.Ctx) (createPackagePayload, error) {
 	var raw packagePayloadJSON
 	if err := c.BodyParser(&raw); err != nil {
@@ -436,12 +429,8 @@ func parsePackagePayload(c *fiber.Ctx) (createPackagePayload, error) {
 	if productType == "" {
 		productType = "subscription"
 	}
-	if err := validateAdminQuotaInput(raw.PriceAmount); err != nil {
-		return createPackagePayload{}, fmt.Errorf("price_amount: %w", err)
-	}
-	priceMicro, ok := database.USDToMicro(raw.PriceAmount)
-	if !ok {
-		return createPackagePayload{}, fmt.Errorf("price_amount overflow")
+	if err := validateAdminQuotaMicroInput(raw.PriceMicroUSD); err != nil {
+		return createPackagePayload{}, fmt.Errorf("price_micro_usd: %w", err)
 	}
 	out := createPackagePayload{
 		Package: database.Package{
@@ -452,7 +441,7 @@ func parsePackagePayload(c *fiber.Ctx) (createPackagePayload, error) {
 			BadgeColor:           raw.BadgeColor,
 			Gradient:             raw.Gradient,
 			HighlightTag:         raw.HighlightTag,
-			PriceAmount:          priceMicro,
+			PriceAmount:          raw.PriceMicroUSD,
 			CostFloorMicroUSD:    raw.CostFloorMicroUSD,
 			PriceCurrency:        raw.PriceCurrency,
 			BillingPeriodSeconds: raw.BillingPeriodSeconds,

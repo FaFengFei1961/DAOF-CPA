@@ -261,10 +261,10 @@ func TestConservation_AdminAdjustQuota(t *testing.T) {
 	// admin 把 quota 调整为 $80（原 $50 → +$30）
 	code, _ := doJSON(t, app, "PUT", "/admin/users/"+itoaUint(user.ID),
 		map[string]any{
-			"username":   user.Username,
-			"quota":      80.0,
-			"status":     1,
-			"ban_reason": "",
+			"username":        user.Username,
+			"quota_micro_usd": int64(80 * database.MicroPerUSD),
+			"status":          1,
+			"ban_reason":      "",
 		})
 	if code != 200 {
 		t.Fatalf("admin adjust: %d", code)
@@ -351,10 +351,10 @@ func TestConservation_EndToEnd(t *testing.T) {
 	adjustApp.Put("/admin/users/:id", UpdateUser)
 	if code, _ := doJSON(t, adjustApp, "PUT", "/admin/users/"+itoaUint(user.ID),
 		map[string]any{
-			"username":   user.Username,
-			"quota":      100.0,
-			"status":     1,
-			"ban_reason": "",
+			"username":        user.Username,
+			"quota_micro_usd": int64(100 * database.MicroPerUSD),
+			"status":          1,
+			"ban_reason":      "",
 		}); code != 200 {
 		t.Fatalf("adjust: %d", code)
 	}
