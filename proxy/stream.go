@@ -43,6 +43,62 @@ const (
 	maxNonStreamUpstreamTimeout      = 60 * time.Minute
 )
 
+type StatusAction int
+
+const (
+	StatusActionSuccess StatusAction = iota
+	StatusActionRetryableTransient
+	StatusActionRateLimit
+	StatusActionUpstreamFatal
+	StatusActionConfigError
+	StatusActionClientError
+	StatusActionAuthError
+	StatusActionUnknown
+)
+
+func classifyUpstreamStatus(status int) StatusAction {
+	if status >= 200 && status <= 299 {
+		return StatusActionSuccess
+	}
+	switch status {
+	case http.StatusRequestTimeout, http.StatusBadGateway, http.StatusServiceUnavailable, http.StatusGatewayTimeout:
+		return StatusActionRetryableTransient
+	case http.StatusTooManyRequests:
+		return StatusActionRateLimit
+	case http.StatusNotFound, http.StatusGone:
+		return StatusActionConfigError
+	case http.StatusBadRequest, http.StatusUnprocessableEntity:
+		return StatusActionClientError
+	case http.StatusUnauthorized, http.StatusForbidden:
+		return StatusActionAuthError
+	}
+	if status >= 500 {
+		return StatusActionUpstreamFatal
+	}
+	return StatusActionUnknown
+}
+
+func parseRetryAfter(raw string) time.Duration {
+	raw = strings.TrimSpace(raw)
+	if raw == "" {
+		return 0
+	}
+	if seconds, err := strconv.ParseInt(raw, 10, 64); err == nil {
+		if seconds <= 0 {
+			return 0
+		}
+		return time.Duration(seconds) * time.Second
+	}
+	if at, err := http.ParseTime(raw); err == nil {
+		d := time.Until(at)
+		if d <= 0 {
+			return 0
+		}
+		return d
+	}
+	return 0
+}
+
 // safeTransport 是 http.DefaultTransport 的派生，带 DNS-rebinding-resistant DialContext。
 // 仅在没有 proxyURL 时使用（直连上游）；走 HTTP 代理时由代理服务器自己解析 host，
 // 我们的 DialContext 拿到的是代理 IP，无法防御代理之外的 rebinding，但代理本身是 admin 可信节点。
@@ -718,8 +774,18 @@ func ChatCompletionProxyHandler(c *fiber.Ctx) error {
 		// 打开（open / half-open 已有 probe inflight）的 channel——防止本请求继续打挂的上游。
 		var availableRoutes []*database.ChannelModel
 		totalWeight := 0
+		skippedRateLimited := 0
+		skippedConfigUnhealthy := 0
 		for _, r := range routes {
 			if failedChannels[r.ChannelID] {
+				continue
+			}
+			if IsChannelRateLimited(r.ChannelID) {
+				skippedRateLimited++
+				continue
+			}
+			if IsChannelModelUnhealthy(r.ChannelID, modelName) {
+				skippedConfigUnhealthy++
 				continue
 			}
 			if IsChannelCircuitOpen(r.ChannelID) {
@@ -730,6 +796,17 @@ func ChatCompletionProxyHandler(c *fiber.Ctx) error {
 		}
 
 		if len(availableRoutes) == 0 {
+			if lastErrStatus == 0 && skippedRateLimited > 0 {
+				lastErrStatus = http.StatusTooManyRequests
+				lastErrType = "upstream_rate_limited"
+				lastErrMessage = "all upstream channels are rate limited"
+				lastErrResp = []byte(`{"error":{"message":"all upstream channels are rate limited","type":"upstream_rate_limited"}}`)
+			} else if lastErrStatus == 0 && skippedConfigUnhealthy > 0 {
+				lastErrStatus = http.StatusNotFound
+				lastErrType = "channel_model_unhealthy"
+				lastErrMessage = "all configured upstream routes for model are unhealthy"
+				lastErrResp = []byte(`{"error":{"message":"all configured upstream routes for model are unhealthy","type":"channel_model_unhealthy"}}`)
+			}
 			break // No more healthy routes left
 		}
 
@@ -891,11 +968,78 @@ func ChatCompletionProxyHandler(c *fiber.Ctx) error {
 			continue
 		}
 
-		// 6. Check for Trigger Errors
-		if resp.StatusCode == 429 || resp.StatusCode == 401 || resp.StatusCode == 403 || resp.StatusCode >= 500 {
+		// 6. Classify upstream status before deciding retry/circuit behavior.
+		action := classifyUpstreamStatus(resp.StatusCode)
+		switch action {
+		case StatusActionSuccess:
+			httpResp = resp
+			// 保留这个 cancel 给 SSE 路径，确保最后能取消上游连接
+			successfulUpstreamCancel = upstreamCancel
+			MarkChannelSuccess(selectedPath.ChannelID)
+			break
+		case StatusActionClientError:
+			httpResp = resp
+			successfulUpstreamCancel = upstreamCancel
+			releaseChannelProbe(selectedPath.ChannelID)
+			break
+		case StatusActionRateLimit:
+			upstreamCancel()
+			failedChannels[selectedPath.ChannelID] = true
+			retryAfter := parseRetryAfter(resp.Header.Get("Retry-After"))
+			setChannelRateLimitCooldown(selectedPath.ChannelID, retryAfter)
+			releaseChannelProbe(selectedPath.ChannelID)
+			lastErrStatus = resp.StatusCode
+			lastErrType = "upstream_rate_limited"
+			respBytes, _ := io.ReadAll(io.LimitReader(resp.Body, 4*1024))
+			resp.Body.Close()
+			lastErrMessage = string(respBytes)
+			log.Printf("[UPSTREAM-RATE-LIMIT] channel=%d status=%d retry_after=%s body=%q", selectedPath.ChannelID, resp.StatusCode, resp.Header.Get("Retry-After"), truncForLog(respBytes, 256))
+			lastErrResp, _ = json.Marshal(map[string]any{
+				"error": map[string]any{
+					"message": fmt.Sprintf("upstream returned %d (channel rate-limited)", resp.StatusCode),
+					"type":    "upstream_rate_limited",
+				},
+			})
+			continue
+		case StatusActionConfigError:
+			upstreamCancel()
+			failedChannels[selectedPath.ChannelID] = true
+			markChannelModelUnhealthy(selectedPath.ChannelID, modelName)
+			releaseChannelProbe(selectedPath.ChannelID)
+			lastErrStatus = resp.StatusCode
+			lastErrType = "channel_model_unhealthy"
+			respBytes, _ := io.ReadAll(io.LimitReader(resp.Body, 4*1024))
+			resp.Body.Close()
+			lastErrMessage = string(respBytes)
+			log.Printf("[UPSTREAM-CONFIG-ERR] channel=%d model=%s status=%d body=%q", selectedPath.ChannelID, modelName, resp.StatusCode, truncForLog(respBytes, 256))
+			lastErrResp, _ = json.Marshal(map[string]any{
+				"error": map[string]any{
+					"message": fmt.Sprintf("upstream returned %d for configured model (route marked unhealthy)", resp.StatusCode),
+					"type":    "channel_model_unhealthy",
+				},
+			})
+			continue
+		case StatusActionAuthError:
+			upstreamCancel()
+			failedChannels[selectedPath.ChannelID] = true
+			MarkChannelSoftFailure(selectedPath.ChannelID)
+			releaseChannelProbe(selectedPath.ChannelID)
+			lastErrStatus = resp.StatusCode
+			lastErrType = "upstream_auth_error"
+			respBytes, _ := io.ReadAll(io.LimitReader(resp.Body, 4*1024))
+			resp.Body.Close()
+			lastErrMessage = string(respBytes)
+			log.Printf("[UPSTREAM-AUTH-ERR] channel=%d status=%d body=%q", selectedPath.ChannelID, resp.StatusCode, truncForLog(respBytes, 256))
+			lastErrResp, _ = json.Marshal(map[string]any{
+				"error": map[string]any{
+					"message": fmt.Sprintf("upstream returned %d (channel rotated)", resp.StatusCode),
+					"type":    "upstream_auth_error",
+				},
+			})
+			continue
+		case StatusActionRetryableTransient, StatusActionUpstreamFatal, StatusActionUnknown:
 			upstreamCancel() // 失败的 upstream ctx 立即释放
 			failedChannels[selectedPath.ChannelID] = true
-			// fix CRITICAL Sprint5-M2：跨请求级 circuit breaker 标记失败（连续 N 次后 open）
 			MarkChannelFailure(selectedPath.ChannelID, resp.StatusCode)
 			lastErrStatus = resp.StatusCode
 			lastErrType = "upstream_error"
@@ -905,7 +1049,7 @@ func ChatCompletionProxyHandler(c *fiber.Ctx) error {
 			respBytes, _ := io.ReadAll(io.LimitReader(resp.Body, 4*1024))
 			resp.Body.Close()
 			lastErrMessage = string(respBytes)
-			log.Printf("[UPSTREAM-ERR] channel=%d status=%d body=%q", selectedPath.ChannelID, resp.StatusCode, truncForLog(respBytes, 256))
+			log.Printf("[UPSTREAM-ERR] channel=%d status=%d action=%d body=%q", selectedPath.ChannelID, resp.StatusCode, action, truncForLog(respBytes, 256))
 			lastErrResp, _ = json.Marshal(map[string]any{
 				"error": map[string]any{
 					"message": fmt.Sprintf("upstream returned %d (channel rotated)", resp.StatusCode),
@@ -914,13 +1058,6 @@ func ChatCompletionProxyHandler(c *fiber.Ctx) error {
 			})
 			continue
 		}
-
-		// Success! (Or 400 Bad Request which shouldn't be retried)
-		httpResp = resp
-		// 保留这个 cancel 给 SSE 路径，确保最后能取消上游连接
-		successfulUpstreamCancel = upstreamCancel
-		// fix CRITICAL Sprint5-M2：跨请求级 circuit breaker 标记成功（重置失败计数 + 关闭 open 状态）
-		MarkChannelSuccess(selectedPath.ChannelID)
 		break
 	}
 

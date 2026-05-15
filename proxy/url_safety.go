@@ -17,8 +17,22 @@ import (
 	"fmt"
 	"net"
 	"net/http"
+	"net/netip"
 	"net/url"
 	"strings"
+	"time"
+)
+
+var (
+	lookupIPAddr = net.DefaultResolver.LookupIPAddr
+
+	forbiddenDestPrefixes = []netip.Prefix{
+		netip.MustParsePrefix("169.254.0.0/16"),
+		netip.MustParsePrefix("168.63.129.16/32"),
+		netip.MustParsePrefix("100.100.100.200/32"),
+		netip.MustParsePrefix("fd00:ec2::254/128"),
+		netip.MustParsePrefix("fe80::/10"),
+	}
 )
 
 // isForbiddenDestIP 判定 TCP 连接前已解析的对端 IP 是否落入禁飞名单。
@@ -32,10 +46,15 @@ func isForbiddenDestIP(ip net.IP) bool {
 	if ip.IsLinkLocalUnicast() || ip.IsLinkLocalMulticast() || ip.IsMulticast() {
 		return true
 	}
-	switch ip.String() {
-	// AWS / 阿里云元数据 IPv4，AWS IPv6
-	case "169.254.169.254", "100.100.100.200", "fd00:ec2::254":
-		return true
+	addr, ok := netip.AddrFromSlice(ip)
+	if !ok {
+		return false
+	}
+	addr = addr.Unmap()
+	for _, p := range forbiddenDestPrefixes {
+		if p.Contains(addr) {
+			return true
+		}
 	}
 	return false
 }
@@ -43,9 +62,10 @@ func isForbiddenDestIP(ip net.IP) bool {
 // safeDialContext 是带 DNS 重绑定防御的 net.Dial 包装。
 // 流程：用 ctx 上的 resolver 解析 host → 校验每条 IP → 全部安全才 dial。
 //
-// 不替换真正建连的目的 IP（保留 Go 标准 happy-eyeballs 行为），但：
+// 不把未校验的二次 DNS 结果交给 net.Dialer，而是对已校验 IP 做小型 Happy-Eyeballs：
 //   - 任何一条解析结果命中禁飞名单 → 立即拒绝（不拉一个再 fallback 另一个）
 //   - 解析失败 → 直接拒绝（避免 fallthrough 到无校验路径）
+//   - 已校验地址交错拨号，首个成功连接胜出
 func safeDialContext(ctx context.Context, network, addr string) (net.Conn, error) {
 	host, port, err := net.SplitHostPort(addr)
 	if err != nil {
@@ -60,8 +80,7 @@ func safeDialContext(ctx context.Context, network, addr string) (net.Conn, error
 		return d.DialContext(ctx, network, addr)
 	}
 	// 域名：先 LookupIPAddr（用 ctx 的 resolver，遵守 timeout），再校验所有解析结果
-	resolver := net.DefaultResolver
-	addrs, err := resolver.LookupIPAddr(ctx, host)
+	addrs, err := lookupIPAddr(ctx, host)
 	if err != nil {
 		return nil, fmt.Errorf("resolve %s: %w", host, err)
 	}
@@ -73,9 +92,70 @@ func safeDialContext(ctx context.Context, network, addr string) (net.Conn, error
 			return nil, fmt.Errorf("DNS rebinding guard: %s resolved to forbidden IP %s", host, a.IP)
 		}
 	}
-	// 全部 IP 都安全，dial 到第一条（让标准库选 v4/v6）
-	var d net.Dialer
-	return d.DialContext(ctx, network, net.JoinHostPort(addrs[0].IP.String(), port))
+	// 全部 IP 都安全，手写 Happy-Eyeballs：对预校验地址交错拨号，首个成功胜出。
+	return dialPrevalidatedAddrs(ctx, network, port, addrs, 0)
+}
+
+func dialPrevalidatedAddrs(ctx context.Context, network, port string, addrs []net.IPAddr, timeout time.Duration) (net.Conn, error) {
+	type dialResult struct {
+		conn   net.Conn
+		err    error
+		target string
+	}
+
+	ctx, cancel := context.WithCancel(ctx)
+	defer cancel()
+
+	results := make(chan dialResult, len(addrs))
+	attempts := 0
+	for _, addr := range addrs {
+		ip := addr.IP
+		if ip == nil {
+			continue
+		}
+		if network == "tcp4" && ip.To4() == nil {
+			continue
+		}
+		if network == "tcp6" && ip.To4() != nil {
+			continue
+		}
+		target := net.JoinHostPort(ip.String(), port)
+		delay := time.Duration(attempts) * 50 * time.Millisecond
+		attempts++
+		go func(target string, delay time.Duration) {
+			if delay > 0 {
+				timer := time.NewTimer(delay)
+				select {
+				case <-timer.C:
+				case <-ctx.Done():
+					timer.Stop()
+					results <- dialResult{target: target, err: ctx.Err()}
+					return
+				}
+			}
+			dialer := net.Dialer{Timeout: timeout}
+			conn, err := dialer.DialContext(ctx, network, target)
+			results <- dialResult{conn: conn, err: err, target: target}
+		}(target, delay)
+	}
+	if attempts == 0 {
+		return nil, fmt.Errorf("no resolved addresses usable for network %s", network)
+	}
+
+	errs := make([]string, 0, attempts)
+	for i := 0; i < attempts; i++ {
+		select {
+		case result := <-results:
+			if result.err == nil {
+				cancel()
+				return result.conn, nil
+			}
+			errs = append(errs, fmt.Sprintf("%s: %v", result.target, result.err))
+		case <-ctx.Done():
+			return nil, ctx.Err()
+		}
+	}
+	return nil, fmt.Errorf("dial resolved addresses failed: %s", strings.Join(errs, "; "))
 }
 
 // ValidateChannelURL 校验 Channel.BaseURL 或 ProxyURL（允许空字符串）。
@@ -124,13 +204,8 @@ func ValidateChannelURL(raw string) error {
 
 	// IP 形式额外检查
 	if ip := net.ParseIP(host); ip != nil {
-		if ip.IsLinkLocalUnicast() || ip.IsLinkLocalMulticast() || ip.IsMulticast() {
-			return fmt.Errorf("link-local / multicast IP not allowed")
-		}
-		// AWS / GCP / Azure 元数据 IP（v4 + v6）
-		switch ip.String() {
-		case "169.254.169.254", "fd00:ec2::254", "100.100.100.200":
-			return fmt.Errorf("cloud metadata IP not allowed")
+		if isForbiddenDestIP(ip) {
+			return fmt.Errorf("cloud metadata / link-local / multicast IP not allowed")
 		}
 	}
 

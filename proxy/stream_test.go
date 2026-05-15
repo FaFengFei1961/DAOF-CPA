@@ -26,6 +26,38 @@ func pricePicoForTest(price float64) int64 {
 	return int64(price * float64(database.PicoPerTokenPerUSDPerMTok))
 }
 
+func TestClassifyUpstreamStatus(t *testing.T) {
+	cases := []struct {
+		status int
+		want   StatusAction
+	}{
+		{200, StatusActionSuccess},
+		{204, StatusActionSuccess},
+		{299, StatusActionSuccess},
+		{408, StatusActionRetryableTransient},
+		{502, StatusActionRetryableTransient},
+		{503, StatusActionRetryableTransient},
+		{504, StatusActionRetryableTransient},
+		{429, StatusActionRateLimit},
+		{500, StatusActionUpstreamFatal},
+		{501, StatusActionUpstreamFatal},
+		{505, StatusActionUpstreamFatal},
+		{404, StatusActionConfigError},
+		{410, StatusActionConfigError},
+		{400, StatusActionClientError},
+		{422, StatusActionClientError},
+		{401, StatusActionAuthError},
+		{403, StatusActionAuthError},
+		{302, StatusActionUnknown},
+		{418, StatusActionUnknown},
+	}
+	for _, tc := range cases {
+		if got := classifyUpstreamStatus(tc.status); got != tc.want {
+			t.Fatalf("status %d classified as %d, want %d", tc.status, got, tc.want)
+		}
+	}
+}
+
 func TestCostCalculationZeroBias(t *testing.T) {
 	const iterations = 1_000_000
 	pricePico := pricePicoForTest(1)

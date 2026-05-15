@@ -1,8 +1,12 @@
 package proxy
 
 import (
+	"context"
+	"net"
 	"net/http"
+	"net/netip"
 	"testing"
+	"time"
 )
 
 func TestValidateChannelURL(t *testing.T) {
@@ -28,6 +32,7 @@ func TestValidateChannelURL(t *testing.T) {
 		{"control chars", "http://a.com/\nattack", true},
 		{"AWS metadata IPv4", "http://169.254.169.254/latest/meta-data/", true},
 		{"GCP metadata host", "http://metadata.google.internal/", true},
+		{"Azure wireserver IP", "http://168.63.129.16/", true},
 		{"link-local IP", "http://169.254.10.5/", true}, // also link-local
 		{"multicast IP", "http://224.0.0.1/", true},
 		{"malformed", "ht!tp://foo", true},
@@ -67,5 +72,76 @@ func TestRedirectGuard_BlocksCrossHost(t *testing.T) {
 	}
 	if err := redirectGuard(req, []*http.Request{prev}); err == nil {
 		t.Fatal("expected cross-host redirect to be blocked")
+	}
+}
+
+func TestYifutSSRF_AzureWireserver(t *testing.T) {
+	if !isUnsafeYifutIP(netip.MustParseAddr("168.63.129.16")) {
+		t.Fatalf("Azure Wireserver should be denied")
+	}
+	if err := ValidateGateway("https://168.63.129.16"); err == nil {
+		t.Fatalf("ValidateGateway should reject Azure Wireserver")
+	}
+}
+
+func TestYifutSSRF_CGNAT(t *testing.T) {
+	if !isUnsafeYifutIP(netip.MustParseAddr("100.64.0.1")) {
+		t.Fatalf("CGNAT should be denied")
+	}
+	if err := ValidateGateway("https://100.64.0.1"); err == nil {
+		t.Fatalf("ValidateGateway should reject CGNAT")
+	}
+}
+
+func TestYifutSSRF_6to4(t *testing.T) {
+	if !isUnsafeYifutIP(netip.MustParseAddr("2002::1")) {
+		t.Fatalf("IPv6 6to4 should be denied")
+	}
+	if err := ValidateGateway("https://[2002::1]"); err == nil {
+		t.Fatalf("ValidateGateway should reject IPv6 6to4")
+	}
+}
+
+func TestSafeDialContext_HappyEyeballs(t *testing.T) {
+	listener, err := net.Listen("tcp4", "127.0.0.1:0")
+	if err != nil {
+		t.Fatalf("listen: %v", err)
+	}
+	defer listener.Close()
+
+	accepted := make(chan struct{})
+	go func() {
+		conn, err := listener.Accept()
+		if err == nil {
+			conn.Close()
+			close(accepted)
+		}
+	}()
+
+	_, port, err := net.SplitHostPort(listener.Addr().String())
+	if err != nil {
+		t.Fatalf("split listener addr: %v", err)
+	}
+	oldLookup := lookupIPAddr
+	lookupIPAddr = func(ctx context.Context, host string) ([]net.IPAddr, error) {
+		return []net.IPAddr{
+			{IP: net.ParseIP("127.0.0.2")},
+			{IP: net.ParseIP("127.0.0.1")},
+		}, nil
+	}
+	defer func() { lookupIPAddr = oldLookup }()
+
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+	defer cancel()
+	conn, err := safeDialContext(ctx, "tcp", net.JoinHostPort("happy.test", port))
+	if err != nil {
+		t.Fatalf("safeDialContext should fall through to second prevalidated IP: %v", err)
+	}
+	conn.Close()
+
+	select {
+	case <-accepted:
+	case <-time.After(2 * time.Second):
+		t.Fatalf("listener did not accept connection")
 	}
 }

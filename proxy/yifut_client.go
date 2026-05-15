@@ -21,6 +21,7 @@ import (
 	"io"
 	"net"
 	"net/http"
+	"net/netip"
 	"net/url"
 	"strconv"
 	"strings"
@@ -35,6 +36,34 @@ type YifutConfig struct {
 	Gateway            string
 	MerchantPrivateKey *rsa.PrivateKey
 	PlatformPublicKey  *rsa.PublicKey
+}
+
+var yifutDenyPrefixes = []netip.Prefix{
+	netip.MustParsePrefix("169.254.0.0/16"),     // Link-local (含 IMDS)
+	netip.MustParsePrefix("100.64.0.0/10"),      // CGNAT
+	netip.MustParsePrefix("168.63.129.16/32"),   // Azure Wireserver
+	netip.MustParsePrefix("100.100.100.200/32"), // 阿里云 IMDS
+	netip.MustParsePrefix("2002::/16"),          // IPv6 6to4
+	netip.MustParsePrefix("2001::/32"),          // IPv6 Teredo
+	netip.MustParsePrefix("fd00::/8"),           // IPv6 ULA
+	netip.MustParsePrefix("fe80::/10"),          // IPv6 Link-local
+	netip.MustParsePrefix("198.18.0.0/15"),      // benchmark
+	netip.MustParsePrefix("192.0.2.0/24"),       // documentation
+	netip.MustParsePrefix("10.0.0.0/8"),
+	netip.MustParsePrefix("172.16.0.0/12"),
+	netip.MustParsePrefix("192.168.0.0/16"),
+	netip.MustParsePrefix("127.0.0.0/8"),
+	netip.MustParsePrefix("::1/128"),
+}
+
+func isUnsafeYifutIP(ip netip.Addr) bool {
+	ip = ip.Unmap()
+	for _, p := range yifutDenyPrefixes {
+		if p.Contains(ip) {
+			return true
+		}
+	}
+	return false
 }
 
 // LoadYifutConfig 从 SysConfigCache 拉一次配置 + 解析 RSA 密钥。
@@ -66,7 +95,7 @@ func (c YifutConfig) IsConfigured() bool {
 	return c.PID != "" && c.Gateway != "" && c.MerchantPrivateKey != nil && c.PlatformPublicKey != nil
 }
 
-// ValidateGateway 防 SSRF：scheme 必须 https；主机不能是回环 / 私网
+// ValidateGateway 防 SSRF：scheme 必须 https；主机不能落入公网支付网关不应使用的特殊网段。
 func ValidateGateway(raw string) error {
 	if raw == "" {
 		return fmt.Errorf("gateway empty")
@@ -83,7 +112,8 @@ func ValidateGateway(raw string) error {
 		return fmt.Errorf("gateway host empty")
 	}
 	if ip := net.ParseIP(host); ip != nil {
-		if ip.IsLoopback() || ip.IsPrivate() || ip.IsLinkLocalUnicast() || ip.IsLinkLocalMulticast() || ip.IsMulticast() || ip.IsUnspecified() {
+		addr, ok := netip.AddrFromSlice(ip)
+		if !ok || ip.IsLinkLocalMulticast() || ip.IsMulticast() || ip.IsUnspecified() || isUnsafeYifutIP(addr) {
 			return fmt.Errorf("gateway IP %s not allowed", ip)
 		}
 	}
@@ -377,9 +407,8 @@ func ssrfSafeDialContext(ctx context.Context, network, addr string) (net.Conn, e
 			return nil, fmt.Errorf("ssrf-safe: refused unsafe IP %s for host %s (private/loopback/link-local/metadata)", ipa.IP, host)
 		}
 	}
-	// 所有 IP 都安全：用第一个 IP 拨号（绕过再次 DNS，防 rebinding）
-	dialer := &net.Dialer{Timeout: 10 * time.Second}
-	return dialer.DialContext(ctx, network, net.JoinHostPort(ips[0].IP.String(), port))
+	// 所有 IP 都安全：对预校验地址做交错拨号，避免固定第一条导致 IPv4/IPv6 失败拖慢。
+	return dialPrevalidatedAddrs(ctx, network, port, ips, 10*time.Second)
 }
 
 // isUnsafeIP 返回 true 表示该 IP 不应被 yifut HTTP client 连接。
@@ -388,17 +417,14 @@ func isUnsafeIP(ip net.IP) bool {
 	if ip == nil {
 		return true
 	}
-	// 标准库的 IsPrivate 覆盖 RFC1918 + RFC4193；这里再加 link-local + loopback + metadata
-	if ip.IsLoopback() || ip.IsLinkLocalUnicast() || ip.IsLinkLocalMulticast() || ip.IsMulticast() || ip.IsUnspecified() {
+	addr, ok := netip.AddrFromSlice(ip)
+	if !ok {
 		return true
 	}
-	if ip.IsPrivate() {
+	if ip.IsLinkLocalMulticast() || ip.IsMulticast() || ip.IsUnspecified() {
 		return true
 	}
-	// 云服务商元数据 IP（AWS / GCP / 阿里云 / Azure 共用 169.254.169.254，已被 LinkLocal 覆盖）
-	// 但 Azure IMDS 也可能用其它 IP，加几个常见的：
-	// （169.254.169.254 已被 IsLinkLocalUnicast 覆盖；这里仅留扩展点）
-	return false
+	return isUnsafeYifutIP(addr)
 }
 
 // postFormToYifut 把 params map 序列化为 application/x-www-form-urlencoded POST 出去。

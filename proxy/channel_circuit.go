@@ -7,18 +7,18 @@
 //
 // 状态机：
 //
-//   closed (健康)
-//     │  连续失败 >= openThreshold (默认 5 次)
-//     ↓
-//   open  (拒绝所有请求 openDuration 秒，默认 30s 起阶；最大 5min)
-//     │  cooldown 到期
-//     ↓
-//   half-open (允许 1 个 probe，原子占位 inflight 防多探针)
-//     ├─ probe 成功 → closed + 失败计数清零
-//     └─ probe 失败 → open（cooldown 翻倍，上限 5min）
+//	closed (健康)
+//	  │  连续失败 >= openThreshold (默认 5 次)
+//	  ↓
+//	open  (拒绝所有请求 openDuration 秒，默认 30s 起阶；最大 5min)
+//	  │  cooldown 到期
+//	  ↓
+//	half-open (允许 1 个 probe，原子占位 inflight 防多探针)
+//	  ├─ probe 成功 → closed + 失败计数清零
+//	  └─ probe 失败 → open（cooldown 翻倍，上限 5min）
 //
-// 失败定义：HTTP 4xx (401/403/429) 或 5xx 或 connect failure。
-// 400 不视作 channel 故障（请求侧问题，不应触发熔断）。
+// 失败定义由 stream.go 的 StatusAction 分类集中控制：
+// transient/fatal 及 connect failure 才累加熔断；400/401/403/429/404/410 不再直接熔断。
 //
 // 内存状态：进程重启即清零（cold start 视所有 channel 健康）。
 // admin force-reset 可通过 ForceCloseChannelCircuit(id) 调用。
@@ -26,6 +26,7 @@ package proxy
 
 import (
 	"math"
+	mrand "math/rand/v2"
 	"strconv"
 	"strings"
 	"sync"
@@ -33,17 +34,29 @@ import (
 	"time"
 )
 
+type circuitState struct {
+	cooldownSec   int64
+	openUntilNano int64
+}
+
 // channelHealth 单个 channel 的健康状态（in-memory，per-process）。
 type channelHealth struct {
 	consecutiveFailures atomic.Int32 // 连续失败次数（成功清零）
-	openUntilNano       atomic.Int64 // unix nano；> now 表示 circuit open
-	currentCooldownSec  atomic.Int64 // 当前 open 周期的秒数（指数退避）
+	state               atomic.Pointer[circuitState]
 	halfOpenInflight    atomic.Bool  // half-open 时只允许 1 个 probe
 	lastFailureNano     atomic.Int64 // 最近一次失败时间（仅审计）
 }
 
 var (
-	channelCircuits sync.Map // key=uint(channel_id) → *channelHealth
+	channelCircuits              sync.Map // key=uint(channel_id) → *channelHealth
+	channelRateLimitCooldowns    sync.Map // key=uint(channel_id) → int64(unix nano)
+	channelModelUnhealthyUntilNs sync.Map // key=channelID + modelName → int64(unix nano)
+	circuitConfigCache           atomic.Pointer[circuitConfig]
+)
+
+const (
+	maxChannelRateLimitCooldown = time.Hour
+	channelModelUnhealthyTTL    = 5 * time.Minute
 )
 
 // circuitConfig 当前生效的配置（从 SysConfig 读取，带合理默认值）。
@@ -54,8 +67,11 @@ type circuitConfig struct {
 	BackoffFactor   int64         // 每次 open 翻倍因子（默认 2）
 }
 
-func loadCircuitConfig() circuitConfig {
-	cfg := circuitConfig{
+func loadCircuitConfig() *circuitConfig {
+	if cached := circuitConfigCache.Load(); cached != nil {
+		return cached
+	}
+	cfg := &circuitConfig{
 		OpenThreshold:   5,
 		InitialCooldown: 30 * time.Second,
 		MaxCooldown:     5 * time.Minute,
@@ -78,7 +94,12 @@ func loadCircuitConfig() circuitConfig {
 			cfg.MaxCooldown = time.Duration(n) * time.Second
 		}
 	}
+	circuitConfigCache.Store(cfg)
 	return cfg
+}
+
+func ResetCircuitConfigCache() {
+	circuitConfigCache.Store(nil)
 }
 
 // getChannelHealth 返回（或创建）某 channel 的健康状态。
@@ -97,7 +118,11 @@ func getChannelHealth(channelID uint) *channelHealth {
 // 调用方应在请求结束后调用 MarkChannelSuccess / MarkChannelFailure。
 func IsChannelCircuitOpen(channelID uint) bool {
 	h := getChannelHealth(channelID)
-	openUntil := h.openUntilNano.Load()
+	state := h.state.Load()
+	if state == nil {
+		return false
+	}
+	openUntil := state.openUntilNano
 	if openUntil == 0 {
 		return false // 从未失败，绝对 closed
 	}
@@ -116,8 +141,18 @@ func IsChannelCircuitOpen(channelID uint) bool {
 func MarkChannelSuccess(channelID uint) {
 	h := getChannelHealth(channelID)
 	h.consecutiveFailures.Store(0)
-	h.openUntilNano.Store(0)
-	h.currentCooldownSec.Store(0)
+	h.state.Store(nil)
+	h.halfOpenInflight.Store(false)
+}
+
+// MarkChannelSoftFailure 只记录本请求内失败时间，不累加 consecutiveFailures。
+func MarkChannelSoftFailure(channelID uint) {
+	h := getChannelHealth(channelID)
+	h.lastFailureNano.Store(time.Now().UnixNano())
+}
+
+func releaseChannelProbe(channelID uint) {
+	h := getChannelHealth(channelID)
 	h.halfOpenInflight.Store(false)
 }
 
@@ -138,7 +173,7 @@ func MarkChannelFailure(channelID uint, statusCode int) {
 	cfg := loadCircuitConfig()
 	if failures >= cfg.OpenThreshold {
 		// 首次 open 或从 closed 进 open
-		if h.openUntilNano.Load() == 0 || h.currentCooldownSec.Load() == 0 {
+		if state := h.state.Load(); state == nil || state.openUntilNano == 0 || state.cooldownSec == 0 {
 			openCircuit(h, cfg.InitialCooldown.Nanoseconds(), int64(cfg.InitialCooldown.Seconds()), cfg.MaxCooldown)
 		} else {
 			// 已 open 状态下再次累加失败（不应该发生，因为 open 时请求会被跳过）
@@ -149,8 +184,10 @@ func MarkChannelFailure(channelID uint, statusCode int) {
 
 // openCircuit 设置 circuit 为 open 状态，cooldown = cooldownNano。
 func openCircuit(h *channelHealth, cooldownNano int64, cooldownSec int64, maxCooldown time.Duration) {
-	h.openUntilNano.Store(time.Now().UnixNano() + cooldownNano)
-	h.currentCooldownSec.Store(cooldownSec)
+	h.state.Store(&circuitState{
+		cooldownSec:   cooldownSec,
+		openUntilNano: time.Now().UnixNano() + cooldownNano,
+	})
 	h.halfOpenInflight.Store(false)
 	_ = maxCooldown // 仅供 caller 文档，本函数内不需要
 }
@@ -158,7 +195,10 @@ func openCircuit(h *channelHealth, cooldownNano int64, cooldownSec int64, maxCoo
 // extendCircuitOpen 把当前 cooldown 翻倍后重新 open（probe 失败时调用）。
 func extendCircuitOpen(h *channelHealth) {
 	cfg := loadCircuitConfig()
-	curSec := h.currentCooldownSec.Load()
+	curSec := int64(0)
+	if state := h.state.Load(); state != nil {
+		curSec = state.cooldownSec
+	}
 	if curSec == 0 {
 		curSec = int64(cfg.InitialCooldown.Seconds())
 	}
@@ -167,8 +207,10 @@ func extendCircuitOpen(h *channelHealth) {
 	if nextSec > maxSec {
 		nextSec = maxSec
 	}
-	h.currentCooldownSec.Store(nextSec)
-	h.openUntilNano.Store(time.Now().UnixNano() + nextSec*int64(time.Second))
+	h.state.Store(&circuitState{
+		cooldownSec:   nextSec,
+		openUntilNano: time.Now().Add(time.Duration(nextSec) * time.Second).UnixNano(),
+	})
 	h.halfOpenInflight.Store(false)
 }
 
@@ -195,11 +237,17 @@ func GetChannelCircuitSnapshot() []ChannelCircuitSnapshot {
 	channelCircuits.Range(func(k, v any) bool {
 		id, _ := k.(uint)
 		h, _ := v.(*channelHealth)
-		openUntilNano := h.openUntilNano.Load()
+		state := h.state.Load()
+		openUntilNano := int64(0)
+		cooldownSec := int64(0)
+		if state != nil {
+			openUntilNano = state.openUntilNano
+			cooldownSec = state.cooldownSec
+		}
 		snap := ChannelCircuitSnapshot{
 			ChannelID:           id,
 			ConsecutiveFailures: h.consecutiveFailures.Load(),
-			CurrentCooldownSec:  h.currentCooldownSec.Load(),
+			CurrentCooldownSec:  cooldownSec,
 		}
 		if openUntilNano == 0 {
 			snap.State = "closed"
@@ -239,8 +287,55 @@ func computeRetryBackoff(attempt int) time.Duration {
 	}
 	// jitter：0 ~ delay/2，避免多请求同时退避命中同一波
 	jitter := int64(0)
-	if delay > 0 {
-		jitter = int64(time.Now().UnixNano()/1000) % (delay / 2)
+	if delay > 1 {
+		jitter = mrand.Int64N(delay / 2)
 	}
 	return time.Duration(delay+jitter) * time.Millisecond
+}
+
+func setChannelRateLimitCooldown(channelID uint, retryAfter time.Duration) {
+	MarkChannelSoftFailure(channelID)
+	if retryAfter <= 0 {
+		return
+	}
+	if retryAfter > maxChannelRateLimitCooldown {
+		retryAfter = maxChannelRateLimitCooldown
+	}
+	channelRateLimitCooldowns.Store(channelID, time.Now().Add(retryAfter).UnixNano())
+}
+
+func IsChannelRateLimited(channelID uint) bool {
+	v, ok := channelRateLimitCooldowns.Load(channelID)
+	if !ok {
+		return false
+	}
+	untilNano, _ := v.(int64)
+	if untilNano <= time.Now().UnixNano() {
+		channelRateLimitCooldowns.Delete(channelID)
+		return false
+	}
+	return true
+}
+
+func channelModelHealthKey(channelID uint, modelName string) string {
+	return strconv.FormatUint(uint64(channelID), 10) + "\x00" + strings.TrimSpace(modelName)
+}
+
+func markChannelModelUnhealthy(channelID uint, modelName string) {
+	MarkChannelSoftFailure(channelID)
+	channelModelUnhealthyUntilNs.Store(channelModelHealthKey(channelID, modelName), time.Now().Add(channelModelUnhealthyTTL).UnixNano())
+}
+
+func IsChannelModelUnhealthy(channelID uint, modelName string) bool {
+	key := channelModelHealthKey(channelID, modelName)
+	v, ok := channelModelUnhealthyUntilNs.Load(key)
+	if !ok {
+		return false
+	}
+	untilNano, _ := v.(int64)
+	if untilNano <= time.Now().UnixNano() {
+		channelModelUnhealthyUntilNs.Delete(key)
+		return false
+	}
+	return true
 }

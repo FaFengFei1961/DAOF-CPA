@@ -3,14 +3,14 @@
 // Sprint5-M2：channel circuit breaker 回归测试。
 //
 // 测试矩阵：
-//   1. 默认 closed → 不阻拦
-//   2. 连续失败到阈值 → open，跳过该 channel
-//   3. cooldown 过期 → half-open，允许 1 个 probe
-//   4. probe 成功 → closed + 失败计数清零
-//   5. probe 失败 → 重新 open（cooldown 翻倍）
-//   6. ForceCloseChannelCircuit → 立即重置
-//   7. 多请求并发：half-open 仅允许 1 个 probe（CAS 占位）
-//   8. computeRetryBackoff 指数退避 + jitter 边界
+//  1. 默认 closed → 不阻拦
+//  2. 连续失败到阈值 → open，跳过该 channel
+//  3. cooldown 过期 → half-open，允许 1 个 probe
+//  4. probe 成功 → closed + 失败计数清零
+//  5. probe 失败 → 重新 open（cooldown 翻倍）
+//  6. ForceCloseChannelCircuit → 立即重置
+//  7. 多请求并发：half-open 仅允许 1 个 probe（CAS 占位）
+//  8. computeRetryBackoff 指数退避 + jitter 边界
 package proxy
 
 import (
@@ -22,6 +22,11 @@ import (
 // resetCircuitForTest 清理 channelCircuits sync.Map，确保各测试间不污染
 func resetCircuitForTest(channelID uint) {
 	channelCircuits.Delete(channelID)
+	channelRateLimitCooldowns.Delete(channelID)
+}
+
+func resetChannelModelHealthForTest(channelID uint, modelName string) {
+	channelModelUnhealthyUntilNs.Delete(channelModelHealthKey(channelID, modelName))
 }
 
 func TestChannelCircuit_DefaultClosed(t *testing.T) {
@@ -81,7 +86,14 @@ func TestChannelCircuit_ForceCloseRecovers(t *testing.T) {
 func setCooldownExpired(channelID uint) {
 	h := getChannelHealth(channelID)
 	// 把 openUntilNano 设为过去时间
-	h.openUntilNano.Store(time.Now().UnixNano() - int64(time.Second))
+	cooldownSec := int64(30)
+	if state := h.state.Load(); state != nil && state.cooldownSec > 0 {
+		cooldownSec = state.cooldownSec
+	}
+	h.state.Store(&circuitState{
+		cooldownSec:   cooldownSec,
+		openUntilNano: time.Now().UnixNano() - int64(time.Second),
+	})
 	h.halfOpenInflight.Store(false)
 }
 
@@ -130,7 +142,11 @@ func TestChannelCircuit_HalfOpenProbeFailure_ReopensWithBackoff(t *testing.T) {
 		MarkChannelFailure(107, 500)
 	}
 	h := getChannelHealth(107)
-	initialCooldown := h.currentCooldownSec.Load()
+	initialState := h.state.Load()
+	if initialState == nil {
+		t.Fatalf("expected initial open state")
+	}
+	initialCooldown := initialState.cooldownSec
 	if initialCooldown != 30 {
 		t.Fatalf("expected initial cooldown 30s, got %d", initialCooldown)
 	}
@@ -145,7 +161,11 @@ func TestChannelCircuit_HalfOpenProbeFailure_ReopensWithBackoff(t *testing.T) {
 	if !IsChannelCircuitOpen(107) {
 		t.Errorf("after probe failure, should be open again")
 	}
-	newCooldown := h.currentCooldownSec.Load()
+	newState := h.state.Load()
+	if newState == nil {
+		t.Fatalf("expected reopened state")
+	}
+	newCooldown := newState.cooldownSec
 	if newCooldown != 60 {
 		t.Errorf("expected doubled cooldown 60s, got %d", newCooldown)
 	}
@@ -198,6 +218,103 @@ func TestComputeRetryBackoff_ExponentialWithJitter(t *testing.T) {
 	d10 := computeRetryBackoff(10)
 	if d10 < 2000*time.Millisecond || d10 > 3000*time.Millisecond {
 		t.Errorf("attempt=10 should clamp to 2000~3000ms, got %v", d10)
+	}
+}
+
+func TestComputeRetryBackoff_JitterDistribution(t *testing.T) {
+	seen := make(map[time.Duration]int)
+	for i := 0; i < 1000; i++ {
+		d := computeRetryBackoff(3)
+		if d < 400*time.Millisecond || d > 600*time.Millisecond {
+			t.Fatalf("attempt=3 should be 400~600ms, got %v", d)
+		}
+		seen[d]++
+	}
+	if len(seen) < 50 {
+		t.Fatalf("jitter distribution too narrow: got %d unique durations", len(seen))
+	}
+}
+
+func TestCircuitState_AtomicPointer(t *testing.T) {
+	const channelID uint = 301
+	resetCircuitForTest(channelID)
+	base := time.Unix(2_000_000_000, 0)
+	h := getChannelHealth(channelID)
+
+	stop := make(chan struct{})
+	var wg sync.WaitGroup
+	wg.Add(1)
+	go func() {
+		defer wg.Done()
+		secs := []int64{30, 60}
+		i := 0
+		for {
+			select {
+			case <-stop:
+				return
+			default:
+				sec := secs[i%len(secs)]
+				h.state.Store(&circuitState{
+					cooldownSec:   sec,
+					openUntilNano: base.Add(time.Duration(sec) * time.Second).UnixNano(),
+				})
+				i++
+			}
+		}
+	}()
+
+	for i := 0; i < 1000; i++ {
+		snaps := GetChannelCircuitSnapshot()
+		for _, snap := range snaps {
+			if snap.ChannelID != channelID || snap.OpenUntil == nil {
+				continue
+			}
+			gotSec := int64(snap.OpenUntil.Sub(base) / time.Second)
+			if gotSec != snap.CurrentCooldownSec {
+				close(stop)
+				wg.Wait()
+				t.Fatalf("inconsistent snapshot: cooldown=%d openUntilDelta=%d", snap.CurrentCooldownSec, gotSec)
+			}
+		}
+	}
+	close(stop)
+	wg.Wait()
+}
+
+func TestLoadCircuitConfig_Cached(t *testing.T) {
+	SysConfigMutex.Lock()
+	old := SysConfigCache
+	SysConfigCache = map[string]string{"channel_circuit_open_threshold": "7"}
+	SysConfigMutex.Unlock()
+	ResetCircuitConfigCache()
+	defer func() {
+		SysConfigMutex.Lock()
+		SysConfigCache = old
+		SysConfigMutex.Unlock()
+		ResetCircuitConfigCache()
+	}()
+
+	first := loadCircuitConfig()
+	if first.OpenThreshold != 7 {
+		t.Fatalf("first threshold=%d want 7", first.OpenThreshold)
+	}
+
+	SysConfigMutex.Lock()
+	SysConfigCache["channel_circuit_open_threshold"] = "11"
+	SysConfigMutex.Unlock()
+
+	second := loadCircuitConfig()
+	if second != first {
+		t.Fatalf("second load should return cached pointer")
+	}
+	if second.OpenThreshold != 7 {
+		t.Fatalf("cached threshold=%d want 7", second.OpenThreshold)
+	}
+
+	ResetCircuitConfigCache()
+	third := loadCircuitConfig()
+	if third.OpenThreshold != 11 {
+		t.Fatalf("after reset threshold=%d want 11", third.OpenThreshold)
 	}
 }
 
