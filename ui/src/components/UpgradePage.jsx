@@ -10,6 +10,8 @@ import { useAuth } from '../context/AuthContext';
 import { useCurrency } from '../context/CurrencyContext';
 import { formatDuration } from './DurationInput';
 import { StorePage } from './store/StorePrimitives';
+import Select from './ui/Select';
+import StatusBadge from './ui/StatusBadge';
 import MySubscriptions from './MySubscriptions';
 
 // 用户购买套餐入口页。展示元数据（图标 / 颜色 / 渐变 / 标签）来自 Package 表，admin 自由配置。

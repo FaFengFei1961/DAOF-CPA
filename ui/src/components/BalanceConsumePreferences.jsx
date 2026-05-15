@@ -5,6 +5,9 @@ import toast from 'react-hot-toast';
 import { useConfirm } from '../context/ConfirmContext';
 import { authFetch, isLoggedIn, readAuthState } from '../utils/authFetch';
 import { isPageCacheFresh, readPageCache, writePageCache } from '../utils/pageCache';
+import TextInput from './ui/TextInput';
+import Select from './ui/Select';
+import Switch from './ui/Switch';
 
 // 单位换算（与后端 60s ~ 365d 范围对齐）
 const UNITS = [

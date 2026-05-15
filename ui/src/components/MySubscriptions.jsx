@@ -8,6 +8,8 @@ import { authFetch, readAuthState } from '../utils/authFetch';
 import { isPageCacheFresh, readPageCache, writePageCache } from '../utils/pageCache';
 import { useCurrency } from '../context/CurrencyContext';
 import { StorePage, StoreSection } from './store/StorePrimitives';
+import StatusBadge from './ui/StatusBadge';
+import ProgressBar from './ui/ProgressBar';
 
 const SUB_CACHE_TTL_MS = 15000;
 

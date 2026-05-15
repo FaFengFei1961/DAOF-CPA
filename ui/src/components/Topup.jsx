@@ -9,6 +9,7 @@ import { StorePage, StoreSection } from './store/StorePrimitives';
 import PageHeader from './ui/PageHeader';
 import Pagination from './common/Pagination';
 import { PAGE_SIZE_HISTORY } from './common/constants';
+import TextInput from './ui/TextInput';
 
 const PAY_METHOD_META = {
   alipay:    { i18n: 'PAY_ALIPAY',    color: 'bg-[#1677ff]', text: 'text-white' },

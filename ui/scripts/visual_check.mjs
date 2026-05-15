@@ -36,6 +36,20 @@ const ADMIN_PAGES = [
   { name: 'admin-sync',           path: '/admin/sync' },
   { name: 'admin-notifications',  path: '/admin/notifications' },
   { name: 'admin-finance-topups', path: '/admin/finance/topups' },
+  { name: 'admin-moderation',     path: '/admin/moderation' },
+  { name: 'admin-coupons',        path: '/admin/coupons' },
+  { name: 'admin-packages',       path: '/admin/packages' },
+  { name: 'admin-quota-plans',    path: '/admin/quota-plans' },
+  { name: 'admin-credits',        path: '/admin/credits' },
+  { name: 'admin-general',        path: '/admin/general' },
+  { name: 'admin-oauth',          path: '/admin/oauth' },
+  { name: 'admin-sms',            path: '/admin/sms' },
+  { name: 'admin-risk',           path: '/admin/risk' },
+  { name: 'admin-i18n',           path: '/admin/i18n' },
+  { name: 'admin-tickets',        path: '/admin/tickets' },
+  { name: 'admin-users-usage',    path: '/admin/users/usage' },
+  { name: 'admin-upstream',       path: '/admin/upstream/margin' },
+  { name: 'admin-audit',          path: '/admin/audit/events' },
 ];
 
 const VIEWPORTS = [
@@ -45,8 +59,15 @@ const VIEWPORTS = [
 
 await mkdir(outDir, { recursive: true });
 
-const browser = await chromium.launch();
-const ctx = await browser.newContext({ ignoreHTTPSErrors: true });
+// 禁用 HTTP cache：Fiber Static 默认带 Last-Modified，
+// Chromium 会用 heuristic cache 复用 dist 文件 → build 后看到的还是旧 hash。
+const browser = await chromium.launch({
+  args: ['--disable-cache', '--disk-cache-size=1', '--media-cache-size=1', '--disable-application-cache'],
+});
+const ctx = await browser.newContext({
+  ignoreHTTPSErrors: true,
+  extraHTTPHeaders: { 'Cache-Control': 'no-cache, no-store, must-revalidate', 'Pragma': 'no-cache' },
+});
 const report = { issues: [], pages: {}, adminLoggedIn: false };
 
 // admin 登录（如有凭证）

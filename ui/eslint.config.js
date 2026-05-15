@@ -2,6 +2,7 @@ import js from '@eslint/js'
 import globals from 'globals'
 import reactHooks from 'eslint-plugin-react-hooks'
 import reactRefresh from 'eslint-plugin-react-refresh'
+import react from 'eslint-plugin-react'
 import { defineConfig, globalIgnores } from 'eslint/config'
 import designSystem from './eslint-plugins/no-design-violation.js'
 
@@ -10,13 +11,17 @@ export default defineConfig([
   {
     files: ['**/*.{js,jsx}'],
     plugins: {
-      'design-system': designSystem
+      'design-system': designSystem,
+      react,
     },
     extends: [
       js.configs.recommended,
       reactHooks.configs.flat.recommended,
       reactRefresh.configs.vite,
     ],
+    settings: {
+      react: { version: 'detect' },
+    },
     languageOptions: {
       ecmaVersion: 2020,
       // Phase 6：logger.js 等用 process.env.NODE_ENV，需 node globals
@@ -30,6 +35,15 @@ export default defineConfig([
     rules: {
       // Enforce design system tokens
       'design-system/strict-tokens': 'error',
+
+      // 防止 JSX 标签 undef（之前漏过 <DataTable> <TextInput> 等 import 缺失导致运行时
+      // ReferenceError，整页被 React ErrorBoundary 兜住）。js.configs.recommended 的 no-undef
+      // 不识别 JSX 元素引用，必须用 react/jsx-no-undef 补足。
+      'react/jsx-no-undef': 'error',
+      'react/jsx-uses-vars': 'error',
+      // React 17+ 新 JSX transform 不需要 import React in scope
+      'react/react-in-jsx-scope': 'off',
+      'react/jsx-uses-react': 'off',
 
       // Phase 6：放宽 catch 未用 err（业内 React 大量 catch (err) {} 模式）+
       // PascalCase 参数（如 destructure prop `({ icon: Icon })`）通常是组件/HOC 引用，
