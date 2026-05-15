@@ -4,6 +4,7 @@ import toast from 'react-hot-toast';
 import { useConfirm } from '../context/ConfirmContext';
 import { authFetch } from '../utils/authFetch';
 import DurationInput, { formatDuration } from './DurationInput';
+import { SortableGrid, GripHandle } from './ui';
 import { toCSV, downloadCSV, parseCSV, pickCSVFile } from '../utils/csv';
 import { useModalA11y } from '../hooks/useModalA11y';
 
@@ -236,13 +237,37 @@ const QuotaPlanManagement = () => {
           <p className="text-on-surface-variant text-sm">还没有配额计划，点右上角创建</p>
         </div>
       ) : (
-        <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-4">
-          {plans.map(p => (
-            <div key={p.id} className="bg-surface-container border border-outline-variant rounded-overlay p-5">
+        <SortableGrid
+          items={plans}
+          getId={(p) => p.id}
+          onReorder={async (newOrderIds, newItems) => {
+            const oldItems = plans;
+            setPlans(newItems);
+            try {
+              const res = await authFetch('/api/admin/quota-plans/reorder', {
+                method: 'POST',
+                body: JSON.stringify({ ids: newOrderIds })
+              });
+              if (res.success) {
+                toast.success('排序已保存');
+              } else {
+                setPlans(oldItems);
+                toast.error(res.message || '排序保存失败');
+              }
+            } catch (e) {
+              setPlans(oldItems);
+              toast.error('网络异常，排序失败');
+            }
+          }}
+          renderItem={(p, dragHandleProps) => (
+            <div className="bg-surface-container border border-outline-variant rounded-overlay p-5 h-full">
               <div className="flex items-start justify-between mb-3">
-                <div className="flex-1 min-w-0">
-                  <div className="font-bold text-on-surface truncate">{p.display_name || p.name}</div>
-                  <div className="text-xs text-outline font-mono truncate">{p.name}</div>
+                <div className="flex gap-2">
+                  <GripHandle {...dragHandleProps} className="shrink-0 -ml-2 -mt-1 cursor-grab active:cursor-grabbing text-on-surface-variant hover:text-on-surface p-1 rounded-control hover:bg-on-surface/[0.04]" />
+                  <div className="flex-1 min-w-0">
+                    <div className="font-bold text-on-surface truncate">{p.display_name || p.name}</div>
+                    <div className="text-xs text-outline font-mono truncate">{p.name}</div>
+                  </div>
                 </div>
                 <div className="flex gap-1 shrink-0">
                   <button onClick={() => startEdit(p)} className="p-1.5 text-on-surface-variant hover:text-primary">
@@ -266,8 +291,8 @@ const QuotaPlanManagement = () => {
                 <span className="text-outline">ID: {p.id}</span>
               </div>
             </div>
-          ))}
-        </div>
+          )}
+        />
       )}
 
       {editing && (

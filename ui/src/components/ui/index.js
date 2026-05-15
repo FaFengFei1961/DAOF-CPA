@@ -19,3 +19,4 @@ export { default as Select } from './Select';
 export { default as Switch } from './Switch';
 export { default as StatusBadge } from './StatusBadge';
 export { default as ProgressBar } from './ProgressBar';
+export { default as SortableGrid, GripHandle } from './SortableGrid';

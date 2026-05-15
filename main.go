@@ -290,6 +290,7 @@ func main() {
 	adminApi.Get("/quota-plans", controller.ListQuotaPlans)
 	adminApi.Get("/quota-plans/:id", controller.GetQuotaPlan)
 	adminApi.Post("/quota-plans", controller.CreateQuotaPlan)
+	adminApi.Post("/quota-plans/reorder", controller.ReorderQuotaPlans)
 	adminApi.Put("/quota-plans/:id", controller.UpdateQuotaPlan)
 	adminApi.Delete("/quota-plans/:id", controller.DeleteQuotaPlan)
 
@@ -297,6 +298,7 @@ func main() {
 	adminApi.Get("/packages", controller.ListPackagesAdmin)
 	adminApi.Get("/packages/:id", controller.GetPackageAdmin)
 	adminApi.Post("/packages", controller.CreatePackage)
+	adminApi.Post("/packages/reorder", controller.ReorderPackages)
 	adminApi.Put("/packages/:id", controller.UpdatePackage)
 	adminApi.Delete("/packages/:id", controller.DeletePackage)
 

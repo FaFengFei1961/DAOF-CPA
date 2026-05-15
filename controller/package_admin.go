@@ -688,3 +688,30 @@ func ListPublicPackages(c *fiber.Ctx) error {
 	}
 	return c.JSON(fiber.Map{"success": true, "data": out})
 }
+
+// ReorderPackages 批量重排 sort_order。
+// 请求体：{ "ids": [10, 12, 11] } — 按此顺序 sort_order = 10, 20, 30 ...
+// 拖拽 UI onDragEnd 调用，事务内批量 UPDATE。
+func ReorderPackages(c *fiber.Ctx) error {
+	var req struct {
+		IDs []uint `json:"ids"`
+	}
+	if err := c.BodyParser(&req); err != nil {
+		return c.Status(400).JSON(fiber.Map{"success": false, "message_code": "ERR_PARSE_PAYLOAD"})
+	}
+	if len(req.IDs) == 0 {
+		return c.Status(400).JSON(fiber.Map{"success": false, "message_code": "ERR_INVALID_PARAMS"})
+	}
+	if err := database.DB.Transaction(func(tx *gorm.DB) error {
+		for i, id := range req.IDs {
+			if err := tx.Model(&database.Package{}).Where("id = ?", id).Update("sort_order", (i+1)*10).Error; err != nil {
+				return fmt.Errorf("reorder package %d: %w", id, err)
+			}
+		}
+		return nil
+	}); err != nil {
+		log.Printf("[PACKAGE-REORDER] failed: %v", err)
+		return c.Status(500).JSON(fiber.Map{"success": false, "message_code": "ERR_DB_QUERY"})
+	}
+	return c.JSON(fiber.Map{"success": true, "message_code": "SUCCESS_REORDERED"})
+}

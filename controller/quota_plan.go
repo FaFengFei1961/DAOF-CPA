@@ -12,6 +12,7 @@ import (
 	"daof-ai-hub/database"
 
 	"github.com/gofiber/fiber/v2"
+	"gorm.io/gorm"
 )
 
 // isFinite 浮点数边界检查：拒绝 NaN / +Inf / -Inf。
@@ -219,4 +220,31 @@ func DeleteQuotaPlan(c *fiber.Ctx) error {
 		return c.Status(500).JSON(fiber.Map{"success": false, "message_code": "ERR_DB_DELETE"})
 	}
 	return c.JSON(fiber.Map{"success": true, "message_code": "SUCCESS_DELETED"})
+}
+
+// ReorderQuotaPlans 批量重排 priority。
+// 请求体：{ "ids": [10, 12, 11] } — 按此顺序 priority = 10, 20, 30 ...
+// ListQuotaPlans 已用 priority asc 排序，重排后立即生效。
+func ReorderQuotaPlans(c *fiber.Ctx) error {
+	var req struct {
+		IDs []uint `json:"ids"`
+	}
+	if err := c.BodyParser(&req); err != nil {
+		return c.Status(400).JSON(fiber.Map{"success": false, "message_code": "ERR_PARSE_PAYLOAD"})
+	}
+	if len(req.IDs) == 0 {
+		return c.Status(400).JSON(fiber.Map{"success": false, "message_code": "ERR_INVALID_PARAMS"})
+	}
+	if err := database.DB.Transaction(func(tx *gorm.DB) error {
+		for i, id := range req.IDs {
+			if err := tx.Model(&database.QuotaPlan{}).Where("id = ?", id).Update("priority", (i+1)*10).Error; err != nil {
+				return err
+			}
+		}
+		return nil
+	}); err != nil {
+		log.Printf("[QUOTA-PLAN-REORDER] failed: %v", err)
+		return c.Status(500).JSON(fiber.Map{"success": false, "message_code": "ERR_DB_QUERY"})
+	}
+	return c.JSON(fiber.Map{"success": true, "message_code": "SUCCESS_REORDERED"})
 }

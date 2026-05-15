@@ -5,6 +5,7 @@ import { useConfirm } from '../context/ConfirmContext';
 import { authFetch } from '../utils/authFetch';
 import { logger } from '../utils/logger';
 import DurationInput, { formatDuration } from './DurationInput';
+import { SortableGrid, GripHandle } from './ui';
 import { toCSV, downloadCSV, parseCSV, pickCSVFile } from '../utils/csv';
 import { useModalA11y } from '../hooks/useModalA11y';
 
@@ -309,17 +310,41 @@ const PackageManagement = () => {
             <p className="text-on-surface-variant text-sm">还没有套餐，点右上角创建</p>
           </div>
         ) : (
-          <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-4">
-            {pkgs.map(p => (
-              <div key={p.id} className="bg-surface-container border border-outline-variant rounded-overlay p-5">
+          <SortableGrid
+            items={pkgs}
+            getId={(p) => p.id}
+            onReorder={async (newOrderIds, newItems) => {
+              const oldItems = pkgs;
+              setPkgs(newItems);
+              try {
+                const res = await authFetch('/api/admin/packages/reorder', {
+                  method: 'POST',
+                  body: JSON.stringify({ ids: newOrderIds })
+                });
+                if (res.success) {
+                  toast.success('排序已保存');
+                } else {
+                  setPkgs(oldItems);
+                  toast.error(res.message || '排序保存失败');
+                }
+              } catch (e) {
+                setPkgs(oldItems);
+                toast.error('网络异常，排序失败');
+              }
+            }}
+            renderItem={(p, dragHandleProps) => (
+              <div className="bg-surface-container border border-outline-variant rounded-overlay p-5 h-full">
                 <div className="flex items-start justify-between mb-3">
-                  <div className="flex-1 min-w-0">
-                    <div className="font-bold text-on-surface flex items-center gap-2">
-                      {p.name}
-                      {p.highlight_tag && <span className="text-[10px] px-1.5 py-0.5 rounded-control bg-primary/20 text-primary">{p.highlight_tag}</span>}
-                    </div>
-                    <div className="text-xs text-outline mt-0.5">
-                      {p.price_currency} {p.price_amount} / {formatDuration(p.billing_period_seconds)}
+                  <div className="flex gap-2">
+                    <GripHandle {...dragHandleProps} className="shrink-0 -ml-2 -mt-1 cursor-grab active:cursor-grabbing text-on-surface-variant hover:text-on-surface p-1 rounded-control hover:bg-on-surface/[0.04]" />
+                    <div className="flex-1 min-w-0">
+                      <div className="font-bold text-on-surface flex items-center gap-2">
+                        {p.name}
+                        {p.highlight_tag && <span className="text-[10px] px-1.5 py-0.5 rounded-control bg-primary/20 text-primary">{p.highlight_tag}</span>}
+                      </div>
+                      <div className="text-xs text-outline mt-0.5">
+                        {p.price_currency} {p.price_amount} / {formatDuration(p.billing_period_seconds)}
+                      </div>
                     </div>
                   </div>
                   <div className="flex gap-1 shrink-0">
@@ -336,8 +361,8 @@ const PackageManagement = () => {
                   <span className={p.enabled ? 'text-success' : 'text-outline'}>{p.enabled ? '启用' : '禁用'}</span>
                 </div>
               </div>
-            ))}
-          </div>
+            )}
+          />
         )}
 
       {editing && (
