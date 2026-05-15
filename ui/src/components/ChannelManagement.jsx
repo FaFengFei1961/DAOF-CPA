@@ -8,6 +8,7 @@ import { useConfirm } from '../context/ConfirmContext';
 import { useModalA11y } from '../hooks/useModalA11y';
 import DataTable from './ui/DataTable';
 import StatusBadge from './ui/StatusBadge';
+import ChannelCircuitMonitor from './ChannelCircuitMonitor';
 
 const ChannelManagement = () => {
     const confirm = useConfirm();
@@ -970,6 +971,8 @@ const ChannelManagement = () => {
                     {t('CHANNEL_MGMT.BTN_ADD_CHANNEL')}
                 </button>
             </div>
+
+            <ChannelCircuitMonitor />
 
             <div className="bg-surface-container border border-outline-variant rounded-overlay overflow-hidden ">
                 <div className="overflow-x-auto">
