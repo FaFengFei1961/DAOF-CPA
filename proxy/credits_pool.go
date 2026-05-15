@@ -101,11 +101,6 @@ var (
 	startOnce sync.Once
 	stopOnce  sync.Once
 
-	// 一次性 debug：只打一次 Claude usage 完整响应，用于排查 max_5x / max_20x 字段位置。
-	claudeUsageDebugOnce sync.Once
-	// 一次性 debug：Antigravity / Gemini-CLI 的 loadCodeAssist 响应（看 paidTier 实际结构）
-	antigravityCodeAssistDebugOnce sync.Once
-	geminiCliCodeAssistDebugOnce   sync.Once
 
 	// CPA 通用代理调用：30s 超时，连接池避免高频刷新时端口耗尽
 	cpaHTTPClient = &http.Client{
@@ -1248,16 +1243,6 @@ func fetchClaudeQuota(ctx context.Context, af authFileLite, entry *CreditEntry) 
 		return fmt.Errorf("Claude usage HTTP %d: %s", r.StatusCode, sanitizeError(string(r.Body), errorBodyMaxBytes))
 	}
 
-	// debug：第一次拉到 Claude usage 时打印完整响应（截 1000 字符），便于排查
-	// max_5x / max_20x 是否有可推断的 limit 字段。同一 auth_index 只打一次。
-	claudeUsageDebugOnce.Do(func() {
-		body := string(r.Body)
-		if len(body) > 1000 {
-			body = body[:1000] + "...[truncated]"
-		}
-		log.Printf("[CREDITS-DEBUG] Claude usage 完整响应 auth=%s: %s", af.AuthIndex, body)
-	})
-
 	var usage map[string]any
 	if err := json.Unmarshal(r.Body, &usage); err != nil {
 		// fix MEDIUM M19-3（codex 第十九轮）：%v 丢失原始 error 类型 → 上层 errors.Is/As 判断失效。
@@ -1457,23 +1442,6 @@ func fetchAntigravityQuota(ctx context.Context, af authFileLite, entry *CreditEn
 	r, err := cpaAPICall(ctx, af.AuthIndex, "POST",
 		"https://cloudcode-pa.googleapis.com/v1internal:loadCodeAssist",
 		caHeaders, string(caPayload))
-	antigravityCodeAssistDebugOnce.Do(func() {
-		body := ""
-		status := 0
-		if r != nil {
-			status = r.StatusCode
-			body = string(r.Body)
-			if len(body) > 800 {
-				body = body[:800] + "...[truncated]"
-			}
-		}
-		errStr := ""
-		if err != nil {
-			errStr = err.Error()
-		}
-		log.Printf("[CREDITS-DEBUG] Antigravity loadCodeAssist auth=%s status=%d err=%q body=%s",
-			af.AuthIndex, status, errStr, body)
-	})
 	if err == nil && r != nil && r.StatusCode == 200 {
 		if tier := pickGoogleCodeAssistTier(r.Body); tier != "" {
 			entry.PlanType = tier
@@ -1842,23 +1810,6 @@ func fetchGeminiCliQuota(ctx context.Context, af authFileLite, entry *CreditEntr
 	r2, err2 := cpaAPICall(ctx, af.AuthIndex, "POST",
 		"https://cloudcode-pa.googleapis.com/v1internal:loadCodeAssist",
 		caHeaders, string(caPayload))
-	geminiCliCodeAssistDebugOnce.Do(func() {
-		body := ""
-		status := 0
-		if r2 != nil {
-			status = r2.StatusCode
-			body = string(r2.Body)
-			if len(body) > 800 {
-				body = body[:800] + "...[truncated]"
-			}
-		}
-		errStr := ""
-		if err2 != nil {
-			errStr = err2.Error()
-		}
-		log.Printf("[CREDITS-DEBUG] Gemini-CLI loadCodeAssist auth=%s status=%d err=%q body=%s",
-			af.AuthIndex, status, errStr, body)
-	})
 	if err2 == nil && r2 != nil && r2.StatusCode == 200 {
 		if tier := pickGoogleCodeAssistTier(r2.Body); tier != "" {
 			entry.PlanType = tier
