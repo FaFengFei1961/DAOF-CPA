@@ -128,6 +128,38 @@ func TestLocalhostGuard(t *testing.T) {
 	}
 }
 
+func TestLocalhostMiddleware_LoopbackParsedIP(t *testing.T) {
+	app := fiber.New(fiber.Config{
+		ProxyHeader: "X-Test-IP",
+	})
+	app.Use(LocalhostOnly)
+	app.Get("/", func(c *fiber.Ctx) error {
+		return c.SendString("OK")
+	})
+
+	tests := []struct {
+		name       string
+		ip         string
+		wantStatus int
+	}{
+		{"IPv4Loopback", "127.0.0.1", 200},
+		{"IPv6Loopback", "::1", 200},
+		{"LocalhostHostnameRejected", "localhost", 403},
+		{"PublicIPRejected", "8.8.8.8", 403},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			req := httptest.NewRequest("GET", "/", nil)
+			req.Header.Set("X-Test-IP", tc.ip)
+			resp, _ := app.Test(req)
+			if resp.StatusCode != tc.wantStatus {
+				t.Fatalf("status=%d want %d", resp.StatusCode, tc.wantStatus)
+			}
+		})
+	}
+}
+
 func TestSetupGuard(t *testing.T) {
 	setupTestDB() // Reinitialize memory DB
 	InvalidateSetupGuardCache()

@@ -140,7 +140,7 @@ func TestPurgeUserDependents_PreservesOperationLog(t *testing.T) {
 		&database.Notification{}, &database.NotificationBroadcastTarget{},
 		&database.SubscriptionUsage{}, &database.UserSubscription{},
 		&database.TopupOrder{}, &database.TopupRefund{}, &database.PaymentWebhookReceipt{}, &database.Ticket{}, &database.TicketMessage{},
-		&database.NotificationPreference{}, &database.BillingEntry{}); err != nil {
+		&database.NotificationPreference{}, &database.BillingEntry{}, &database.UserSession{}); err != nil {
 		t.Fatalf("migrate dependents: %v", err)
 	}
 	if err := database.DB.Create(&database.AccessToken{UserID: 555, Key: "sk-test-555", Name: "T"}).Error; err != nil {

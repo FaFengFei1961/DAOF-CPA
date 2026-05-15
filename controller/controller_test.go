@@ -160,7 +160,8 @@ func TestGetUsersMega(t *testing.T) {
 
 func TestUpdateUserMega(t *testing.T) {
 	app := initializeMegaTestDB()
-	payload := UserPayload{QuotaMicroUSD: 10 * database.MicroPerUSD, Status: 2}
+	status := 2
+	payload := UserPayload{QuotaMicroUSD: 10 * database.MicroPerUSD, Status: &status}
 	resp := sendRequest(app, "PUT", "/api/admin/users/2", payload, "")
 	if resp.StatusCode != 200 {
 		t.Errorf("expected 200, got %d", resp.StatusCode)

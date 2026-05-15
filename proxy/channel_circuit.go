@@ -25,7 +25,6 @@
 package proxy
 
 import (
-	"math"
 	mrand "math/rand/v2"
 	"strconv"
 	"strings"
@@ -276,21 +275,30 @@ func GetChannelCircuitSnapshot() []ChannelCircuitSnapshot {
 // 让"上游 thundering herd"获得喘息时间，同时单次重试总延迟 < 2s + 2s + 2s = 6s。
 // attempt=0 返回 0（首次尝试不退避）。
 func computeRetryBackoff(attempt int) time.Duration {
-	if attempt <= 0 {
-		return 0
-	}
-	const baseMs = 100
-	const maxMs = 2000
-	delay := int64(baseMs) * int64(math.Pow(2, float64(attempt-1)))
-	if delay > maxMs {
-		delay = maxMs
-	}
+	delay := retryBackoffBaseDelayMS(attempt)
 	// jitter：0 ~ delay/2，避免多请求同时退避命中同一波
 	jitter := int64(0)
 	if delay > 1 {
 		jitter = mrand.Int64N(delay / 2)
 	}
 	return time.Duration(delay+jitter) * time.Millisecond
+}
+
+func retryBackoffBaseDelayMS(attempt int) int64 {
+	if attempt <= 0 {
+		return 0
+	}
+	const baseMs = 100
+	const maxMs = 2000
+	shift := attempt - 1
+	if shift >= 5 {
+		return maxMs
+	}
+	delay := int64(baseMs) << uint(shift)
+	if delay > maxMs {
+		delay = maxMs
+	}
+	return delay
 }
 
 func setChannelRateLimitCooldown(channelID uint, retryAfter time.Duration) {

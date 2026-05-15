@@ -236,6 +236,50 @@ func TestSyncCLIProxyUsage_SkippedIfLockHeld(t *testing.T) {
 	}
 }
 
+func TestKeepCLIProxyUsageSyncLockAlive_WaitsForGoroutine(t *testing.T) {
+	var err error
+	database.DB, err = gorm.Open(sqlite.Open("file:cliproxy_usage_sync_lock_alive_wait?mode=memory&cache=shared"), &gorm.Config{})
+	if err != nil {
+		t.Fatalf("open db: %v", err)
+	}
+	if err := database.DB.AutoMigrate(&database.DistributedLock{}); err != nil {
+		t.Fatalf("migrate: %v", err)
+	}
+
+	ownerID, acquired, err := database.AcquireLock(cliproxyUsageSyncLockKey, cliproxyUsageSyncLockTTL)
+	if err != nil {
+		t.Fatalf("acquire lock: %v", err)
+	}
+	if !acquired {
+		t.Fatalf("expected to acquire test lock")
+	}
+
+	exited := make(chan struct{})
+	cliproxyUsageSyncLockAliveExitHook = func() {
+		close(exited)
+	}
+	defer func() {
+		cliproxyUsageSyncLockAliveExitHook = nil
+	}()
+
+	release := keepCLIProxyUsageSyncLockAlive(context.Background(), ownerID)
+	release()
+
+	select {
+	case <-exited:
+	default:
+		t.Fatalf("release returned before renew goroutine exited")
+	}
+
+	var count int64
+	if err := database.DB.Model(&database.DistributedLock{}).Where("lock_key = ?", cliproxyUsageSyncLockKey).Count(&count).Error; err != nil {
+		t.Fatalf("count lock: %v", err)
+	}
+	if count != 0 {
+		t.Fatalf("lock row count=%d want 0", count)
+	}
+}
+
 func TestSyncCLIProxyUsage_PersistsRawBeforeMatching(t *testing.T) {
 	var err error
 	database.DB, err = gorm.Open(sqlite.Open("file:cliproxy_usage_sync_raw_first?mode=memory&cache=shared"), &gorm.Config{

@@ -21,6 +21,13 @@ import (
 	"github.com/gofiber/fiber/v2/middleware/logger"
 )
 
+func getCORSOrigins() string {
+	if v := os.Getenv("DAOF_CORS_ALLOWED_ORIGINS"); v != "" {
+		return v
+	}
+	return "http://localhost:3000, http://127.0.0.1:3000"
+}
+
 func main() {
 	// 1. 孵化底层 AES 军事级加密解密模组
 	// 必须位于 InitDB 之前：SeedSubscriptionDefaults 会写入加密的 SysConfig，
@@ -93,7 +100,7 @@ func main() {
 	// AllowCredentials=true 允许浏览器跨域携带 HttpOnly cookie（admin token 走 cookie 必需）。
 	// AllowOrigins 不能是 wildcard *，必须显式列出受信源。
 	app.Use(cors.New(cors.Config{
-		AllowOrigins:     "https://daof-cpa.fafengfei.top, http://localhost:3000, http://127.0.0.1:3000",
+		AllowOrigins:     getCORSOrigins(),
 		AllowHeaders:     "Origin, Content-Type, Accept, Authorization",
 		AllowMethods:     "GET, POST, HEAD, PUT, DELETE, PATCH",
 		AllowCredentials: true,

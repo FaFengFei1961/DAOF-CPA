@@ -11,6 +11,7 @@ import (
 	"net/http/httptest"
 	"strconv"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -1106,6 +1107,61 @@ func TestGetTransportEdge(t *testing.T) {
 	tr3 := getTransport("http://127.0.0.1:1080") // Cache
 	if tr1 == nil || tr2 == nil || tr3 == nil {
 		t.Error("Transport is nil")
+	}
+}
+
+func TestTransportCache_NoDoubleWrite(t *testing.T) {
+	transportCache = sync.Map{}
+	const proxyURL = "http://127.0.0.1:1080"
+	const workers = 128
+
+	start := make(chan struct{})
+	results := make(chan *http.Transport, workers)
+	var wg sync.WaitGroup
+	for i := 0; i < workers; i++ {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			<-start
+			results <- getTransport(proxyURL)
+		}()
+	}
+	close(start)
+	wg.Wait()
+	close(results)
+
+	seen := make(map[*http.Transport]struct{})
+	for tr := range results {
+		seen[tr] = struct{}{}
+	}
+	if len(seen) != 1 {
+		t.Fatalf("getTransport returned %d transport pointers for one cache key, want 1", len(seen))
+	}
+}
+
+func TestHTTPClientCache_Reused(t *testing.T) {
+	transportCache = sync.Map{}
+	httpClientCache = sync.Map{}
+
+	c1 := getHTTPClient("http://127.0.0.1:1080", 10*time.Second)
+	c2 := getHTTPClient("http://127.0.0.1:1080", 10*time.Second)
+	if c1 == nil || c2 == nil {
+		t.Fatalf("cached clients must not be nil")
+	}
+	if c1 != c2 {
+		t.Fatalf("same proxyURL+timeout should reuse http client")
+	}
+	if c1.Timeout != 10*time.Second {
+		t.Fatalf("client timeout=%v want 10s", c1.Timeout)
+	}
+
+	c3 := getHTTPClient("http://127.0.0.1:1080", 20*time.Second)
+	if c3 == c1 {
+		t.Fatalf("different timeout should use a different client")
+	}
+	c4 := getHTTPClient("http://127.0.0.1:1081", 10*time.Second)
+	if c4 == c1 {
+		t.Fatalf("different proxyURL should use a different client")
 	}
 }
 

@@ -14,6 +14,7 @@
 package proxy
 
 import (
+	"math"
 	"sync"
 	"testing"
 	"time"
@@ -218,6 +219,21 @@ func TestComputeRetryBackoff_ExponentialWithJitter(t *testing.T) {
 	d10 := computeRetryBackoff(10)
 	if d10 < 2000*time.Millisecond || d10 > 3000*time.Millisecond {
 		t.Errorf("attempt=10 should clamp to 2000~3000ms, got %v", d10)
+	}
+}
+
+func TestComputeRetryBackoff_BitShift(t *testing.T) {
+	if got := retryBackoffBaseDelayMS(0); got != 0 {
+		t.Fatalf("attempt=0 base delay=%d want 0", got)
+	}
+	for attempt := 1; attempt <= 10; attempt++ {
+		want := int64(100) * int64(math.Pow(2, float64(attempt-1)))
+		if want > 2000 {
+			want = 2000
+		}
+		if got := retryBackoffBaseDelayMS(attempt); got != want {
+			t.Fatalf("attempt=%d base delay=%d want %d", attempt, got, want)
+		}
 	}
 }
 

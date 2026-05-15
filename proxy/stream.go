@@ -33,7 +33,8 @@ import (
 )
 
 var (
-	transportCache sync.Map
+	transportCache  sync.Map
+	httpClientCache sync.Map
 )
 
 const (
@@ -169,8 +170,33 @@ func getTransport(proxyURL string) *http.Transport {
 		DialContext:     safeDialContext,
 		TLSClientConfig: &tls.Config{InsecureSkipVerify: skipVerify}, //nolint:gosec // 仅 localhost 上游
 	}
-	transportCache.Store(cacheKey, t)
+	actual, loaded := transportCache.LoadOrStore(cacheKey, t)
+	if loaded {
+		t.CloseIdleConnections()
+		return actual.(*http.Transport)
+	}
 	return t
+}
+
+type clientKey struct {
+	proxyURL string
+	timeout  time.Duration
+}
+
+func getHTTPClient(proxyURL string, timeout time.Duration) *http.Client {
+	key := clientKey{proxyURL: proxyURL, timeout: timeout}
+	if c, ok := httpClientCache.Load(key); ok {
+		return c.(*http.Client)
+	}
+	c := &http.Client{
+		Transport: getTransport(proxyURL),
+		Timeout:   timeout,
+	}
+	actual, loaded := httpClientCache.LoadOrStore(key, c)
+	if loaded {
+		return actual.(*http.Client)
+	}
+	return c
 }
 
 // isLocalProxy 判断代理 host 是否为本机回环或 RFC1918 私有段。
@@ -934,13 +960,11 @@ func ChatCompletionProxyHandler(c *fiber.Ctx) error {
 			}
 		}
 
-		httpClient := &http.Client{
-			Timeout:   nonStreamUpstreamTimeout(),
-			Transport: getTransport(selectedChan.ProxyURL),
-		}
+		upstreamTimeout := nonStreamUpstreamTimeout()
 		if isStream {
-			httpClient.Timeout = 0
+			upstreamTimeout = 0
 		}
+		httpClient := getHTTPClient(selectedChan.ProxyURL, upstreamTimeout)
 
 		// 5. Execute Request
 		resp, err := httpClient.Do(httpReq)

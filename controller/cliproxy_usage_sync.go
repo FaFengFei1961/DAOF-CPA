@@ -30,9 +30,10 @@ const (
 )
 
 var (
-	cliproxyUsageSyncDone chan struct{}
-	cliproxyUsageSyncOnce sync.Once
-	cliproxyUsageSyncStop sync.Once
+	cliproxyUsageSyncDone              chan struct{}
+	cliproxyUsageSyncOnce              sync.Once
+	cliproxyUsageSyncStop              sync.Once
+	cliproxyUsageSyncLockAliveExitHook func()
 )
 
 type cpaUsageQueueRecord struct {
@@ -215,7 +216,15 @@ func keepCLIProxyUsageSyncLockAlive(ctx context.Context, ownerID string) func() 
 		ctxDone = ctx.Done()
 	}
 
+	var wg sync.WaitGroup
+	wg.Add(1)
 	go func() {
+		defer wg.Done()
+		defer func() {
+			if cliproxyUsageSyncLockAliveExitHook != nil {
+				cliproxyUsageSyncLockAliveExitHook()
+			}
+		}()
 		ticker := time.NewTicker(cliproxyUsageSyncRenewEvery)
 		defer ticker.Stop()
 		for {
@@ -240,6 +249,7 @@ func keepCLIProxyUsageSyncLockAlive(ctx context.Context, ownerID string) func() 
 
 	return func() {
 		close(done)
+		wg.Wait()
 		if err := database.ReleaseLock(cliproxyUsageSyncLockKey, ownerID); err != nil {
 			log.Printf("[CLIPROXY-USAGE-SYNC] release lock failed: %v", err)
 		}
