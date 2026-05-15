@@ -586,7 +586,15 @@ func buildSubscriptionUsageSummary(snapshotJSON string, usages []database.Subscr
 		}
 		limit := p.LimitValue * mult
 		if p.LimitUnit == "api_cost_usd" {
-			limit = database.MicroToUSD(scaleMicroByFloatForDisplay(p.LimitValueMicroUSD, mult))
+			// 旧快照（fixed-point 改造前购买的订阅）的 LimitValueMicroUSD=0，
+			// 此时 fallback 用 LimitValue × 1e6 精确转换（无 float 漂移：25.0 USD × 1e6 = 25_000_000 整数）
+			limitMicro := p.LimitValueMicroUSD
+			if limitMicro == 0 && p.LimitValue > 0 {
+				if m, ok := database.USDToMicro(p.LimitValue); ok {
+					limitMicro = m
+				}
+			}
+			limit = database.MicroToUSD(scaleMicroByFloatForDisplay(limitMicro, mult))
 		}
 		consumed := 0.0
 		requestCount := int64(0)
@@ -1377,7 +1385,14 @@ func AdminListSubscriptions(c *fiber.Ctx) error {
 			}
 			effectiveLimit := p.LimitValue * mult
 			if p.LimitUnit == "api_cost_usd" {
-				effectiveLimit = database.MicroToUSD(scaleMicroByFloatForDisplay(p.LimitValueMicroUSD, mult))
+				// 同 line 587-595：旧快照 LimitValueMicroUSD=0 时 fallback
+				limitMicro := p.LimitValueMicroUSD
+				if limitMicro == 0 && p.LimitValue > 0 {
+					if m, ok := database.USDToMicro(p.LimitValue); ok {
+						limitMicro = m
+					}
+				}
+				effectiveLimit = database.MicroToUSD(scaleMicroByFloatForDisplay(limitMicro, mult))
 			}
 			d := map[string]any{
 				"plan_id":        p.ID,
