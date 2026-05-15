@@ -37,13 +37,17 @@ func TestValidateTemplate_Required(t *testing.T) {
 		wantErr bool
 	}{
 		{"空名拒", database.CouponTemplate{Name: ""}, true},
-		{"合法", database.CouponTemplate{Name: "x", DiscountType: "fixed_price", DiscountValue: 10, ValidDays: 30}, false},
+		// fix Sprint3-M5 P0-2：DiscountValue 单位是 micro_usd，需 ≥ 10000（0.01 USD）
+		{"合法", database.CouponTemplate{Name: "x", DiscountType: "fixed_price", DiscountValue: 100_000, ValidDays: 30}, false},
 		{"负值拒", database.CouponTemplate{Name: "x", DiscountType: "fixed_price", DiscountValue: -1}, true},
+		// 旧 case DiscountValue=10（micro_usd）现拒：低于 10000 最低面额
+		{"过低面额拒（fixed_price < 10000 micro）", database.CouponTemplate{Name: "x", DiscountType: "fixed_price", DiscountValue: 10, ValidDays: 30}, true},
+		{"零面额拒（防 $0 全套餐券）", database.CouponTemplate{Name: "x", DiscountType: "fixed_price", DiscountValue: 0, ValidDays: 30}, true},
 		{"未知类型拒", database.CouponTemplate{Name: "x", DiscountType: "weird", DiscountValue: 10}, true},
-		{"负有效期拒", database.CouponTemplate{Name: "x", DiscountType: "fixed_price", ValidDays: -1}, true},
-		{"非法 package_ids JSON 拒", database.CouponTemplate{Name: "x", DiscountType: "fixed_price", PackageIDs: "not-json"}, true},
-		{"合法 package_ids JSON 通过", database.CouponTemplate{Name: "x", DiscountType: "fixed_price", PackageIDs: "[1,2,3]"}, false},
-		{"空 package_ids 通过", database.CouponTemplate{Name: "x", DiscountType: "fixed_price", PackageIDs: ""}, false},
+		{"负有效期拒", database.CouponTemplate{Name: "x", DiscountType: "fixed_price", DiscountValue: 100_000, ValidDays: -1}, true},
+		{"非法 package_ids JSON 拒", database.CouponTemplate{Name: "x", DiscountType: "fixed_price", DiscountValue: 100_000, PackageIDs: "not-json"}, true},
+		{"合法 package_ids JSON 通过", database.CouponTemplate{Name: "x", DiscountType: "fixed_price", DiscountValue: 100_000, PackageIDs: "[1,2,3]"}, false},
+		{"空 package_ids 通过", database.CouponTemplate{Name: "x", DiscountType: "fixed_price", DiscountValue: 100_000, PackageIDs: ""}, false},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {

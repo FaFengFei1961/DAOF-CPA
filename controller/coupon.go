@@ -71,7 +71,20 @@ func parsePackageIDsStrict(s string) ([]uint, bool) {
 	return ids, true
 }
 
+// couponMinFixedPriceMicroUSD fixed_price 优惠券的最低面额（micro_usd 单位）。
+// 防 admin 误配 / 配置错误生成"$0 全套餐券"放大亏损（参见 codex 模块 5 审计 P0 #2）。
+//
+// 默认 0.01 USD = 10000 micro_usd（一分钱保底，远低于任何套餐价但绝非"免费"）。
+// 业务侧若需更严格成本下限，可通过 SysConfig `coupon_min_fixed_price_micro_usd` 调高。
+const couponMinFixedPriceMicroUSD = int64(10_000)
+
 // validateTemplate 校验模板字段。
+//
+// fix CRITICAL Sprint3-M5 P0-2：fixed_price 不允许等于 0（旧实现 DiscountValue ≥ 0 通过，
+// 但 fixed_price=0 等于"任意套餐 0 元购"，被批量发券放大后即亏损黑洞）。
+// 改为：fixed_price 必须 ≥ couponMinFixedPriceMicroUSD 微 USD。
+// 若 admin 真需要"免费券"，应通过赠送订阅（AdminGrantSubscription）路径，那条路径有
+// IsGranted=true 字段防止冲账与退款，且产品语义清晰。
 func validateTemplate(t *database.CouponTemplate) error {
 	if strings.TrimSpace(t.Name) == "" {
 		return fmt.Errorf("name 必填")
@@ -84,6 +97,11 @@ func validateTemplate(t *database.CouponTemplate) error {
 	}
 	if t.DiscountValue < 0 {
 		return fmt.Errorf("discount_value 必须 ≥ 0")
+	}
+	// fix CRITICAL Sprint3-M5 P0-2：禁止 fixed_price = 0 / 过低
+	if t.DiscountType == "fixed_price" && t.DiscountValue < couponMinFixedPriceMicroUSD {
+		return fmt.Errorf("fixed_price 不能低于 %d micro_usd（$%.4f）；若需赠送服务请走赠送订阅路径",
+			couponMinFixedPriceMicroUSD, float64(couponMinFixedPriceMicroUSD)/1_000_000)
 	}
 	if t.ValidDays < 0 {
 		return fmt.Errorf("valid_days 不能为负数（0 = 永久）")
