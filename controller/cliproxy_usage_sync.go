@@ -23,6 +23,9 @@ import (
 const (
 	defaultCLIProxyUsageSyncCount = 100
 	maxCLIProxyUsageSyncCount     = 1000
+	cliproxyUsageSyncLockKey      = "cliproxy_usage_sync"
+	cliproxyUsageSyncLockTTL      = 60 * time.Second
+	cliproxyUsageSyncRenewEvery   = 20 * time.Second
 )
 
 var (
@@ -186,11 +189,60 @@ func SyncCLIProxyUsage(c *fiber.Ctx) error {
 }
 
 func SyncCLIProxyUsageQueue(ctx context.Context, count int) (CLIProxyUsageSyncResult, error) {
+	ownerID, acquired, err := database.AcquireLock(cliproxyUsageSyncLockKey, cliproxyUsageSyncLockTTL)
+	if err != nil {
+		return CLIProxyUsageSyncResult{}, fmt.Errorf("acquire cliproxy usage sync lock: %w", err)
+	}
+	if !acquired {
+		log.Printf("[CLIPROXY-USAGE-SYNC] skipped: lock held by another owner")
+		return CLIProxyUsageSyncResult{}, nil
+	}
+	release := keepCLIProxyUsageSyncLockAlive(ctx, ownerID)
+	defer release()
+
 	records, err := fetchCLIProxyUsageQueue(ctx, count)
 	if err != nil {
 		return CLIProxyUsageSyncResult{}, err
 	}
 	return storeAndMatchCLIProxyUsageRecords(records)
+}
+
+func keepCLIProxyUsageSyncLockAlive(ctx context.Context, ownerID string) func() {
+	done := make(chan struct{})
+	var ctxDone <-chan struct{}
+	if ctx != nil {
+		ctxDone = ctx.Done()
+	}
+
+	go func() {
+		ticker := time.NewTicker(cliproxyUsageSyncRenewEvery)
+		defer ticker.Stop()
+		for {
+			select {
+			case <-ticker.C:
+				renewed, err := database.RenewLock(cliproxyUsageSyncLockKey, ownerID, cliproxyUsageSyncLockTTL)
+				if err != nil {
+					log.Printf("[CLIPROXY-USAGE-SYNC] renew lock failed: %v", err)
+					continue
+				}
+				if !renewed {
+					log.Printf("[CLIPROXY-USAGE-SYNC] lock lost before sync completed")
+					return
+				}
+			case <-ctxDone:
+				return
+			case <-done:
+				return
+			}
+		}
+	}()
+
+	return func() {
+		close(done)
+		if err := database.ReleaseLock(cliproxyUsageSyncLockKey, ownerID); err != nil {
+			log.Printf("[CLIPROXY-USAGE-SYNC] release lock failed: %v", err)
+		}
+	}
 }
 
 func parseUsageSyncCount(raw string) int {
@@ -254,14 +306,25 @@ func fetchCLIProxyUsageQueue(ctx context.Context, count int) ([]cpaUsageQueueRec
 
 func storeAndMatchCLIProxyUsageRecords(records []cpaUsageQueueRecord) (CLIProxyUsageSyncResult, error) {
 	result := CLIProxyUsageSyncResult{Fetched: len(records)}
-	for _, raw := range records {
-		rec := convertCPAUsageRecord(raw)
-		err := database.DB.Transaction(func(tx *gorm.DB) error {
-			if err := tx.Create(&rec).Error; err != nil {
-				return err
-			}
-			result.Stored++
+	if len(records) == 0 {
+		return result, nil
+	}
 
+	usageRecords := make([]database.UpstreamUsageRecord, 0, len(records))
+	for _, raw := range records {
+		usageRecords = append(usageRecords, convertCPAUsageRecord(raw))
+	}
+
+	if err := database.DB.Transaction(func(tx *gorm.DB) error {
+		return tx.CreateInBatches(&usageRecords, 100).Error
+	}); err != nil {
+		return result, err
+	}
+	result.Stored = len(usageRecords)
+
+	for i := range usageRecords {
+		rec := usageRecords[i]
+		err := database.DB.Transaction(func(tx *gorm.DB) error {
 			matched, reason, err := matchUpstreamUsageRecordTx(tx, &rec)
 			if err != nil {
 				return err
@@ -277,7 +340,7 @@ func storeAndMatchCLIProxyUsageRecords(records []cpaUsageQueueRecord) (CLIProxyU
 			}).Error
 		})
 		if err != nil {
-			return result, err
+			log.Printf("[CLIPROXY-USAGE-SYNC] match raw usage record id=%d failed: %v", rec.ID, err)
 		}
 	}
 	return result, nil

@@ -1,6 +1,7 @@
 package controller
 
 import (
+	"context"
 	"testing"
 	"time"
 
@@ -8,6 +9,7 @@ import (
 
 	"gorm.io/driver/sqlite"
 	"gorm.io/gorm"
+	"gorm.io/gorm/logger"
 )
 
 func TestStoreAndMatchCLIProxyUsageRecordsExactTokens(t *testing.T) {
@@ -117,5 +119,108 @@ func TestStoreAndMatchCLIProxyUsageRecordsKeepsUnmatched(t *testing.T) {
 	}
 	if usage.MatchStatus != "unmatched" || usage.MatchReason != "no_candidate" {
 		t.Fatalf("usage status=%q reason=%q", usage.MatchStatus, usage.MatchReason)
+	}
+}
+
+func TestSyncCLIProxyUsage_SkippedIfLockHeld(t *testing.T) {
+	var err error
+	database.DB, err = gorm.Open(sqlite.Open("file:cliproxy_usage_sync_lock_held?mode=memory&cache=shared"), &gorm.Config{})
+	if err != nil {
+		t.Fatalf("open db: %v", err)
+	}
+	if err := database.DB.AutoMigrate(&database.DistributedLock{}); err != nil {
+		t.Fatalf("migrate: %v", err)
+	}
+
+	now := time.Now().UTC()
+	lock := database.DistributedLock{
+		LockKey:     cliproxyUsageSyncLockKey,
+		OwnerID:     "other-owner",
+		AcquiredAt:  now,
+		HeartbeatAt: now,
+		ExpiresAt:   now.Add(time.Minute),
+	}
+	if err := database.DB.Create(&lock).Error; err != nil {
+		t.Fatalf("create held lock: %v", err)
+	}
+
+	result, err := SyncCLIProxyUsageQueue(context.Background(), 1)
+	if err != nil {
+		t.Fatalf("sync queue: %v", err)
+	}
+	if result != (CLIProxyUsageSyncResult{}) {
+		t.Fatalf("expected skipped zero result, got %+v", result)
+	}
+
+	var got database.DistributedLock
+	if err := database.DB.Where("lock_key = ?", cliproxyUsageSyncLockKey).First(&got).Error; err != nil {
+		t.Fatalf("read lock: %v", err)
+	}
+	if got.OwnerID != "other-owner" {
+		t.Fatalf("lock owner changed to %q", got.OwnerID)
+	}
+}
+
+func TestSyncCLIProxyUsage_PersistsRawBeforeMatching(t *testing.T) {
+	var err error
+	database.DB, err = gorm.Open(sqlite.Open("file:cliproxy_usage_sync_raw_first?mode=memory&cache=shared"), &gorm.Config{
+		Logger: logger.Default.LogMode(logger.Silent),
+	})
+	if err != nil {
+		t.Fatalf("open db: %v", err)
+	}
+	if err := database.DB.AutoMigrate(&database.UpstreamUsageRecord{}); err != nil {
+		t.Fatalf("migrate: %v", err)
+	}
+
+	records := []cpaUsageQueueRecord{
+		{
+			Provider:  "openai",
+			Model:     "gpt-5.5",
+			Alias:     "gpt-5.5",
+			Endpoint:  "POST /v1/responses",
+			AuthIndex: "auth-index-1",
+			RequestID: "req-raw-1",
+			Timestamp: time.Date(2026, 5, 13, 10, 0, 0, 0, time.UTC),
+			Tokens: cpaUsageTokens{
+				InputTokens:  10,
+				OutputTokens: 2,
+				TotalTokens:  12,
+			},
+		},
+		{
+			Provider:  "claude",
+			Model:     "claude-opus-4-7",
+			Alias:     "claude-opus-4-7",
+			Endpoint:  "POST /v1/messages",
+			AuthIndex: "auth-index-2",
+			RequestID: "req-raw-2",
+			Timestamp: time.Date(2026, 5, 13, 10, 1, 0, 0, time.UTC),
+			Tokens: cpaUsageTokens{
+				InputTokens:  20,
+				OutputTokens: 4,
+				TotalTokens:  24,
+			},
+		},
+	}
+	result, err := storeAndMatchCLIProxyUsageRecords(records)
+	if err != nil {
+		t.Fatalf("store and match: %v", err)
+	}
+	if result.Fetched != 2 || result.Stored != 2 || result.Matched != 0 || result.Unmatched != 0 {
+		t.Fatalf("unexpected result: %+v", result)
+	}
+
+	var usages []database.UpstreamUsageRecord
+	if err := database.DB.Order("request_id ASC").Find(&usages).Error; err != nil {
+		t.Fatalf("read usage records: %v", err)
+	}
+	if len(usages) != 2 {
+		t.Fatalf("usage record count=%d want 2", len(usages))
+	}
+	for _, usage := range usages {
+		if usage.MatchStatus != "pending" {
+			t.Fatalf("usage %s match_status=%q want pending", usage.RequestID, usage.MatchStatus)
+		}
 	}
 }
