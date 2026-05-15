@@ -1,5 +1,6 @@
 import React, { useMemo, useState, useRef, useEffect, useCallback } from 'react';
 import { createPortal } from 'react-dom';
+import { useTranslation } from 'react-i18next';
 
 const BLOCKS_COUNT = 60;
 const TOOLTIP_SAFE_WIDTH = 240;
@@ -99,6 +100,7 @@ const formatDateTime = (ts) => {
 };
 
 export function HealthMonitor({ logs, summary }) {
+    const { t } = useTranslation();
     const [activeTooltip, setActiveTooltip] = useState(null);
     const gridRef = useRef(null);
 
@@ -191,12 +193,12 @@ export function HealthMonitor({ logs, summary }) {
                 <div className="text-[10px] text-on-surface-variant mb-1.5 whitespace-nowrap">{timeRange}</div>
                 {total > 0 ? (
                     <div className="flex items-center gap-3 text-xs">
-                        <span className="text-success font-mono">成功: {detail.success}</span>
-                        <span className="text-error font-mono">失败: {detail.failure}</span>
+                        <span className="text-success font-mono">{t('HEALTH.SUCCESS', '成功')}: {detail.success}</span>
+                        <span className="text-error font-mono">{t('HEALTH.FAILURE', '失败')}: {detail.failure}</span>
                         <span className="text-on-surface font-mono">({(detail.rate * 100).toFixed(1)}%)</span>
                     </div>
                 ) : (
-                    <div className="text-xs text-on-surface-variant font-mono">无请求</div>
+                    <div className="text-xs text-on-surface-variant font-mono">{t('HEALTH.NO_REQUESTS', '无请求')}</div>
                 )}
             </div>
         );
@@ -207,11 +209,11 @@ export function HealthMonitor({ logs, summary }) {
         <div className="bg-surface border border-outline-variant rounded-overlay p-5 w-full mb-6 relative overflow-hidden group">
             <div className="flex items-center justify-between mb-4">
                 <div className="flex items-center gap-2">
-                    <h3 className="text-sm font-semibold text-on-surface-variant">服务健康监测</h3>
-                    <div className="px-2 py-0.5 rounded-control text-[10px] bg-surface-container border border-outline-variant text-on-surface-variant">最近日志</div>
+                    <h3 className="text-sm font-semibold text-on-surface-variant">{t('HEALTH.TITLE', '服务健康监测')}</h3>
+                    <div className="px-2 py-0.5 rounded-control text-[10px] bg-surface-container border border-outline-variant text-on-surface-variant">{t('HEALTH.RECENT_LOGS', '最近日志')}</div>
                 </div>
                 <div className="flex items-center gap-2">
-                    <span className="text-xs text-on-surface-variant">整体可用率</span>
+                    <span className="text-xs text-on-surface-variant">{t('HEALTH.OVERALL_AVAILABILITY', '整体可用率')}</span>
                     <span className={`text-sm font-bold font-mono ${healthData.successRate >= 90 ? 'text-success' : healthData.successRate >= 50 ? 'text-warning' : 'text-error'}`}>
                         {hasData ? `${healthData.successRate.toFixed(1)}%` : '--'}
                     </span>
@@ -243,16 +245,16 @@ export function HealthMonitor({ logs, summary }) {
             </div>
 
             <div className="flex items-center justify-between mt-3 px-1 text-[10px] text-on-surface-variant font-mono">
-                <span>{hasData ? formatDateTime(healthData.blockDetails[0].startTime) : '很久以前'}</span>
+                <span>{hasData ? formatDateTime(healthData.blockDetails[0].startTime) : t('HEALTH.LONG_AGO', '很久以前')}</span>
 
                 <div className="flex items-center gap-3">
-                    <div className="flex items-center gap-1"><span className="w-2 h-2 rounded-control-[1px] bg-white/10"></span>闲置</div>
-                    <div className="flex items-center gap-1"><span className="w-2 h-2 rounded-control-[1px] bg-error"></span>故障</div>
-                    <div className="flex items-center gap-1"><span className="w-2 h-2 rounded-control-[1px] bg-warning"></span>部分可用</div>
-                    <div className="flex items-center gap-1"><span className="w-2 h-2 rounded-control-[1px] bg-success"></span>正常</div>
+                    <div className="flex items-center gap-1"><span className="w-2 h-2 rounded-control-[1px] bg-white/10"></span>{t('HEALTH.IDLE', '闲置')}</div>
+                    <div className="flex items-center gap-1"><span className="w-2 h-2 rounded-control-[1px] bg-error"></span>{t('HEALTH.FAULTY', '故障')}</div>
+                    <div className="flex items-center gap-1"><span className="w-2 h-2 rounded-control-[1px] bg-warning"></span>{t('HEALTH.DEGRADED', '部分可用')}</div>
+                    <div className="flex items-center gap-1"><span className="w-2 h-2 rounded-control-[1px] bg-success"></span>{t('HEALTH.NORMAL', '正常')}</div>
                 </div>
 
-                <span>现在</span>
+                <span>{t('HEALTH.NOW', '现在')}</span>
             </div>
         </div>
     );

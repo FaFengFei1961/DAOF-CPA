@@ -4,31 +4,31 @@ import EmptyState from './EmptyState';
 import Skeleton from './Skeleton';
 
 /**
- * DataTable — 标准数据表格（Phase 1，codex+gemini ccg 共同最高优先级）
+ * DataTable: standard data-table shell.
  *
- * 核心目标（解决"看起来不舒服"的视觉灾难）：
- *  - sticky header（长滚不丢表头）
- *  - 边缘渐变（fl-table-shell）— 提示用户右侧还有数据
- *  - 行点击 → 触发 onRowClick（通常打开 Drawer 看完整字段）
- *  - 列定义统一 columns API：{ key, header, render, align, width, truncate }
- *  - loading / empty 三态完整
- *  - 可选 pagination（总数 + 上下页）
+ * Goals:
+ *  - sticky header for long tables
+ *  - edge gradient that hints at horizontal overflow
+ *  - row click support for drill-down surfaces
+ *  - unified column API: { key, header, render, align, width, truncate }
+ *  - complete loading, empty, and data states
+ *  - optional pagination
  *
- * 用法：
+ * Usage:
  *   <DataTable
  *     columns={columns}
  *     rows={rows}
  *     rowKey={r => r.id}
  *     loading={loading}
- *     emptyTitle="暂无请求事件"
+ *     emptyTitle="No request events"
  *     onRowClick={r => setDrawerRow(r)}
  *     pagination={{ page, pageSize, total, onPageChange }}
  *   />
  *
- * 列定义示例：
- *   { key: 'time', header: '时间', width: 140, render: r => fmt(r.created_at) },
- *   { key: 'amount', header: '金额', align: 'right', render: r => `$${r.cost}` },
- *   { key: 'model', header: '模型', truncate: 200 },
+ * Column examples:
+ *   { key: 'time', header: 'Time', width: 140, render: r => fmt(r.created_at) },
+ *   { key: 'amount', header: 'Amount', align: 'right', render: r => `$${r.cost}` },
+ *   { key: 'model', header: 'Model', truncate: 200 },
  */
 const ALIGN_CLS = { left: 'text-left', right: 'text-right', center: 'text-center' };
 
@@ -43,7 +43,7 @@ const DataTable = ({
   emptyIcon,
   onRowClick,
   pagination,
-  // 表格规则（默认全开）
+  // Table behavior flags.
   stickyHeader = true,
   edgeGradient = true,
   className = '',
@@ -132,7 +132,7 @@ const DataTablePagination = ({ page, pageSize, total, onPageChange }) => {
   return (
     <div className="flex items-center justify-between gap-3 px-4 py-2.5 border-t border-outline-variant/40 bg-surface-container/40 text-xs text-on-surface-variant">
       <div className="tabular-nums">
-        {t('COMMON.PAGINATION_RANGE', '{{from}}-{{to}} / 共 {{total}} 条', { from, to, total })}
+        {t('COMMON.PAGINATION_RANGE', { from, to, total, defaultValue: '{{from}}-{{to}} / 共 {{total}} 条' })}
       </div>
       <div className="flex items-center gap-1">
         <button

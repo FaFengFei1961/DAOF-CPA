@@ -18,7 +18,9 @@
     "SAVING": "保存中...",
     "SAVE": "保存",
     "EMPTY": "暂无数据",
-    "SUBMITTING": "提交中…"
+    "SUBMITTING": "提交中…",
+    "YES": "是",
+    "NO": "否"
   },
   "NOTIF": {
     "CENTER": "通知中心",
@@ -156,7 +158,7 @@
       "ALREADY_CLOSED": "工单已关闭"
     }
   },
-  "BALANCE_CONSUME": {
+  "BALANCE_PREF": {
     "TITLE": "余额消费控制",
     "DESC": "订阅用尽后，是否允许从美元余额继续扣费",
     "ENABLED": "允许余额消费",
@@ -183,6 +185,28 @@
     "SAVE": "保存",
     "SAVE_OK": "已保存",
     "SAVE_FAIL": "保存失败"
+  },
+  "DURATION": {
+    "UNIT_ARIA": "单位",
+    "VALUE": "{{value}} {{unit}}",
+    "UNIT_SECOND_SELECT": "秒",
+    "UNIT_MINUTE_SELECT": "分",
+    "UNIT_HOUR_SELECT": "小时",
+    "UNIT_DAY_SELECT": "天",
+    "UNIT_WEEK_SELECT": "周",
+    "UNIT_MONTH_SELECT": "月",
+    "UNIT_SECOND_ONE": "秒",
+    "UNIT_SECOND_OTHER": "秒",
+    "UNIT_MINUTE_ONE": "分钟",
+    "UNIT_MINUTE_OTHER": "分钟",
+    "UNIT_HOUR_ONE": "小时",
+    "UNIT_HOUR_OTHER": "小时",
+    "UNIT_DAY_ONE": "天",
+    "UNIT_DAY_OTHER": "天",
+    "UNIT_WEEK_ONE": "周",
+    "UNIT_WEEK_OTHER": "周",
+    "UNIT_MONTH_ONE": "月",
+    "UNIT_MONTH_OTHER": "月"
   },
   "TOPUP": {
     "TABLE_USER": "用户",
@@ -692,7 +716,12 @@
     "DISABLED_OK": "已禁用",
     "UPDATE_FAILED": "保存失败",
     "DELETE_OK": "令牌已删除",
-    "NEVER_EXPIRE": "Never"
+    "NEVER_EXPIRE": "Never",
+    "CREATE_FAIL": "创建失败",
+    "OPERATION_FAILED": "操作失败",
+    "DELETE_FAIL": "删除失败",
+    "CREATE_FIRST": "创建你的第一个 token",
+    "EDIT_LIMIT_PLACEHOLDER": "额度"
   },
   "PROFILE": {
     "ADMIN_UPDATE_WARN": "警告：更新后您当前的管理员身份将变更！\n您的管理入口将变为 ?sys={{username}}\n\n确定要保存配置吗？",
@@ -795,6 +824,8 @@
     "GENERAL_DESC": "在此调整您的本地客户端体验参数。",
     "EXCHANGE_RATE_TITLE": "全局法币结算汇率",
     "EXCHANGE_RATE_DESC": "美元兑人民币的比率 (例如: 7.25)，用于前台换算展示及控制台录入基准",
+    "EXCHANGE_RATE_DESC_MICROS": "人民币 → USD 汇率（int64 定点：RMB/USD × 1e6，例 7200000 = 7.2）；杜绝 float 进入金额计算链路",
+    "EXCHANGE_RATE_MICROS_LABEL": "汇率 (RMB/USD × 1e6)",
     "THEME_LABEL": "外观",
     "THEME_HINT": "深色 / 浅色 / 跟随系统",
     "SEED_COLOR_LABEL": "主题色",
@@ -842,7 +873,17 @@
     "NAV_LABEL": "设置导航",
     "CONSUME_PREFS_DESC": "订阅用尽后是否允许从美元余额继续扣费 + 周期限额控制",
     "SAVE_SUCCESS": "保存成功",
-    "MODERATION_DESC": "上游模型池审核 / 关键字 / 缓存 / 长 prompt 限制 / 多模态策略 / 拒绝文案的全局配置"
+    "MODERATION_DESC": "上游模型池审核 / 关键字 / 缓存 / 长 prompt 限制 / 多模态策略 / 拒绝文案的全局配置",
+    "SEED_COLOR_ARIA": "主题色: {{name}}",
+    "SEED_COLOR_CUSTOM": "自定义",
+    "SEED_COLOR_PURPLE": "紫",
+    "SEED_COLOR_BLUE": "蓝",
+    "SEED_COLOR_CYAN": "青",
+    "SEED_COLOR_ORANGE": "橙",
+    "SEED_COLOR_RED": "红",
+    "SEED_COLOR_TEAL": "湖",
+    "SEED_COLOR_GOLD": "金",
+    "SEED_COLOR_GRAY": "灰"
   },
   "USER_MGMT": {
     "BULK_GRANT_COUPON": "批量发券",
@@ -1122,7 +1163,9 @@
       "COOLDOWN_REMAINING": "剩余冷却",
       "ACTIONS": "操作",
       "RESET": "强制重置",
-      "EMPTY": "暂无 circuit 状态"
+      "EMPTY": "暂无 circuit 状态",
+      "LOAD_FAIL": "读取 Channel Circuit 状态失败",
+      "RESET_FAIL": "Circuit 重置失败"
     },
     "TYPE_CLIPROXY": "CLIProxyAPI 多协议网关",
     "TYPE_OPENAI_COMPAT": "OpenAI / DeepSeek / 国产模型通用兼容",
@@ -1336,8 +1379,49 @@
     "RISK_NO_STRUCTURED_DETAILS": "无结构化详情",
     "RISK_CONTENT_PREVIEW": "命中内容预览（已脱敏）",
     "RISK_RAW_DETAILS": "查看原始详情",
-    "TEST_SANDBOX": "MODERATION.TEST_SANDBOX",
-    "TEST_SANDBOX_DESC": "MODERATION.TEST_SANDBOX_DESC"
+    "TEST_SANDBOX": "内容审核测试沙盒",
+    "TEST_SANDBOX_DESC": "使用当前已保存的配置，模拟发送测试文本请求审核。",
+    "DRY_RUN": {
+      "ACTION": {
+        "ALL": "全部事件",
+        "MODERATION_BLOCK_POLICY": "智能审核拦截",
+        "MODERATION_BLOCK_KEYWORD": "关键字拦截",
+        "MODERATION_BLOCK_RISK_RULE": "规则直接拦截",
+        "MODERATION_RISK_SCORE": "风险打分",
+        "MODERATION_BLOCK_OVERSIZE": "超长拦截",
+        "MODERATION_BLOCK_IMAGE_POLICY": "图片策略拦截",
+        "MODERATION_UNAVAILABLE_CLOSED": "审核不可达拦截",
+        "MODERATION_FAIL_OPEN": "审核失败放行",
+        "SECURITY_AUTOBAN": "自动封禁"
+      },
+      "SEGMENT": {
+        "USER_MESSAGE": "用户输入",
+        "NON_USER_CONTEXT": "非用户上下文",
+        "TOOL_CONTEXT": "工具上下文",
+        "CLIENT_CONTEXT": "客户端上下文",
+        "SYSTEM_INSTRUCTION": "系统指令",
+        "TOOL_RESULT": "工具结果",
+        "FUNCTION_OUTPUT": "函数结果",
+        "UNKNOWN": "未知来源"
+      },
+      "BADGE": {
+        "MODEL": "模型",
+        "SOURCE": "来源",
+        "CATEGORY": "分类",
+        "SCORE": "分数",
+        "RULE": "规则",
+        "CACHE": "缓存",
+        "ERROR": "错误",
+        "HIT": "命中",
+        "LENGTH": "长度",
+        "CONTENT": "内容",
+        "PREVIEW": "预览",
+        "REDACTED": "脱敏",
+        "REASON": "原因"
+      },
+      "CHAR_COUNT": "{{count}} 字符",
+      "TRUNCATED": "已截断"
+    }
   },
   "I18N_MGMT": {
     "TITLE": "多语言环境管理",
@@ -1416,6 +1500,20 @@
     "STAT_LAST": "上次调用",
     "STAT_FULL_LINK": "查看完整用量统计 (24h / 7d / 30d) →",
     "STAT_SNAPSHOT_N": "近 {{n}} 条快照"
+  },
+  "HEALTH": {
+    "SUCCESS": "成功",
+    "FAILURE": "失败",
+    "NO_REQUESTS": "无请求",
+    "TITLE": "服务健康监测",
+    "RECENT_LOGS": "最近日志",
+    "OVERALL_AVAILABILITY": "整体可用率",
+    "LONG_AGO": "很久以前",
+    "IDLE": "闲置",
+    "FAULTY": "故障",
+    "DEGRADED": "部分可用",
+    "NORMAL": "正常",
+    "NOW": "现在"
   },
   "STATS": {
     "LOADING": "加载中...",
@@ -1844,7 +1942,9 @@
     "TECH_WEIGHT": "该模型对应的消耗系数。",
     "TECH_HEALTH": "繁忙时段或健康度调整系数。",
     "TECH_CHARGED": "最终从套餐额度里扣减的数值。",
-    "TECH_FALLBACK": "只有显式允许 fallback 时才可能改变 served_model。"
+    "TECH_FALLBACK": "只有显式允许 fallback 时才可能改变 served_model。",
+    "OTHER_MODEL": "其他模型",
+    "DEFAULT_NO_PEAK_REASON": "默认无高峰加权"
   },
   "A11Y": {
     "SKIP_TO_MAIN": "跳至主要内容"

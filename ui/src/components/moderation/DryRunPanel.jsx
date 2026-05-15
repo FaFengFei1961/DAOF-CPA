@@ -8,20 +8,45 @@ import Switch from '../ui/Switch';
 import Select from '../ui/Select';
 import FormRow from '../ui/FormRow';
 
-const riskActionOptions = [
-    ['ALL', '全部事件'],
-    ['MODERATION_BLOCK_POLICY', '智能审核拦截'],
-    ['MODERATION_BLOCK_KEYWORD', '关键字拦截'],
-    ['MODERATION_BLOCK_RISK_RULE', '规则直接拦截'],
-    ['MODERATION_RISK_SCORE', '风险打分'],
-    ['MODERATION_BLOCK_OVERSIZE', '超长拦截'],
-    ['MODERATION_BLOCK_IMAGE_POLICY', '图片策略拦截'],
-    ['MODERATION_UNAVAILABLE_CLOSED', '审核不可达拦截'],
-    ['MODERATION_FAIL_OPEN', '审核失败放行'],
-    ['SECURITY_AUTOBAN', '自动封禁'],
+const riskActionValues = [
+    'ALL',
+    'MODERATION_BLOCK_POLICY',
+    'MODERATION_BLOCK_KEYWORD',
+    'MODERATION_BLOCK_RISK_RULE',
+    'MODERATION_RISK_SCORE',
+    'MODERATION_BLOCK_OVERSIZE',
+    'MODERATION_BLOCK_IMAGE_POLICY',
+    'MODERATION_UNAVAILABLE_CLOSED',
+    'MODERATION_FAIL_OPEN',
+    'SECURITY_AUTOBAN',
 ];
 
-const actionLabels = Object.fromEntries(riskActionOptions.filter(([value]) => value !== 'ALL'));
+const riskActionLabel = (action, t) => {
+    switch (action) {
+        case 'ALL':
+            return t('MODERATION.DRY_RUN.ACTION.ALL', '全部事件');
+        case 'MODERATION_BLOCK_POLICY':
+            return t('MODERATION.DRY_RUN.ACTION.MODERATION_BLOCK_POLICY', '智能审核拦截');
+        case 'MODERATION_BLOCK_KEYWORD':
+            return t('MODERATION.DRY_RUN.ACTION.MODERATION_BLOCK_KEYWORD', '关键字拦截');
+        case 'MODERATION_BLOCK_RISK_RULE':
+            return t('MODERATION.DRY_RUN.ACTION.MODERATION_BLOCK_RISK_RULE', '规则直接拦截');
+        case 'MODERATION_RISK_SCORE':
+            return t('MODERATION.DRY_RUN.ACTION.MODERATION_RISK_SCORE', '风险打分');
+        case 'MODERATION_BLOCK_OVERSIZE':
+            return t('MODERATION.DRY_RUN.ACTION.MODERATION_BLOCK_OVERSIZE', '超长拦截');
+        case 'MODERATION_BLOCK_IMAGE_POLICY':
+            return t('MODERATION.DRY_RUN.ACTION.MODERATION_BLOCK_IMAGE_POLICY', '图片策略拦截');
+        case 'MODERATION_UNAVAILABLE_CLOSED':
+            return t('MODERATION.DRY_RUN.ACTION.MODERATION_UNAVAILABLE_CLOSED', '审核不可达拦截');
+        case 'MODERATION_FAIL_OPEN':
+            return t('MODERATION.DRY_RUN.ACTION.MODERATION_FAIL_OPEN', '审核失败放行');
+        case 'SECURITY_AUTOBAN':
+            return t('MODERATION.DRY_RUN.ACTION.SECURITY_AUTOBAN', '自动封禁');
+        default:
+            return action || '';
+    }
+};
 
 const actionTone = (action) => {
     if (action === 'SECURITY_AUTOBAN') return 'border-error/30 bg-error/10 text-error';
@@ -38,17 +63,6 @@ const actionIcon = (action) => {
     return ShieldAlert;
 };
 
-const segmentScopeLabels = {
-    user_message: '用户输入',
-    non_user_context: '非用户上下文',
-    tool_context: '工具上下文',
-    client_context: '客户端上下文',
-    system_instruction: '系统指令',
-    tool_result: '工具结果',
-    function_output: '函数结果',
-    unknown: '未知来源',
-};
-
 const getSegmentScope = (data = {}) => {
     const scope = String(data.segment_scope || data.source || '').trim();
     if (scope) return scope;
@@ -56,7 +70,28 @@ const getSegmentScope = (data = {}) => {
     return '';
 };
 
-const formatSegmentScope = (scope) => segmentScopeLabels[scope] || scope;
+const formatSegmentScope = (scope, t) => {
+    switch (scope) {
+        case 'user_message':
+            return t('MODERATION.DRY_RUN.SEGMENT.USER_MESSAGE', '用户输入');
+        case 'non_user_context':
+            return t('MODERATION.DRY_RUN.SEGMENT.NON_USER_CONTEXT', '非用户上下文');
+        case 'tool_context':
+            return t('MODERATION.DRY_RUN.SEGMENT.TOOL_CONTEXT', '工具上下文');
+        case 'client_context':
+            return t('MODERATION.DRY_RUN.SEGMENT.CLIENT_CONTEXT', '客户端上下文');
+        case 'system_instruction':
+            return t('MODERATION.DRY_RUN.SEGMENT.SYSTEM_INSTRUCTION', '系统指令');
+        case 'tool_result':
+            return t('MODERATION.DRY_RUN.SEGMENT.TOOL_RESULT', '工具结果');
+        case 'function_output':
+            return t('MODERATION.DRY_RUN.SEGMENT.FUNCTION_OUTPUT', '函数结果');
+        case 'unknown':
+            return t('MODERATION.DRY_RUN.SEGMENT.UNKNOWN', '未知来源');
+        default:
+            return scope || '';
+    }
+};
 
 const segmentScopeTone = (scope) => {
     if (scope === 'user_message') return 'border-error/25 bg-error/10 text-error';
@@ -96,7 +131,7 @@ const formatRiskTime = (value) => {
     return date.toLocaleString();
 };
 
-const riskBadgesForEvent = (evt) => {
+const riskBadgesForEvent = (evt, t) => {
     const parsed = parseRiskDetails(evt.details);
     const data = parsed.data || {};
     const firstMatch = Array.isArray(data.matches) && data.matches.length > 0 ? data.matches[0] : null;
@@ -107,20 +142,24 @@ const riskBadgesForEvent = (evt) => {
         badges.push({ label, value: String(value), tone });
     };
 
-    push('模型', data.model || data.trigger_model, 'border-primary/25 bg-primary/10 text-primary');
+    push(t('MODERATION.DRY_RUN.BADGE.MODEL', '模型'), data.model || data.trigger_model, 'border-primary/25 bg-primary/10 text-primary');
     const segmentScope = getSegmentScope(data);
-    push('来源', formatSegmentScope(segmentScope), segmentScopeTone(segmentScope));
-    push('分类', data.highest_cat || firstMatch?.category, 'border-warning/25 bg-warning/10 text-warning');
-    push('分数', formatRiskScore(data.highest_score ?? data.total_score ?? firstMatch?.score), 'border-primary/25 bg-primary/10 text-primary');
-    push('规则', firstMatch?.id || data.trigger_keyword || data.auto_ban_group);
-    push('缓存', typeof data.from_cache === 'boolean' ? (data.from_cache ? '是' : '否') : undefined);
-    push('错误', data.err_tag || data.upstream_error_type, 'border-error/25 bg-error/10 text-error');
-    push('命中', data.hit_count && data.threshold ? `${data.hit_count}/${data.threshold}` : undefined, 'border-error/25 bg-error/10 text-error');
-    push('长度', data.len && data.max ? `${data.len}/${data.max}` : undefined, 'border-warning/25 bg-warning/10 text-warning');
-    push('内容', data.content_runes ? `${Number(data.content_runes).toLocaleString()} 字符` : undefined, 'border-success/25 bg-success/10 text-success');
-    push('预览', data.content_truncated ? '已截断' : undefined, 'border-success/25 bg-success/10 text-success');
-    push('脱敏', data.content_redacted ? '是' : undefined, 'border-success/25 bg-success/10 text-success');
-    push('原因', data.trigger_reason || data.reason);
+    push(t('MODERATION.DRY_RUN.BADGE.SOURCE', '来源'), formatSegmentScope(segmentScope, t), segmentScopeTone(segmentScope));
+    push(t('MODERATION.DRY_RUN.BADGE.CATEGORY', '分类'), data.highest_cat || firstMatch?.category, 'border-warning/25 bg-warning/10 text-warning');
+    push(t('MODERATION.DRY_RUN.BADGE.SCORE', '分数'), formatRiskScore(data.highest_score ?? data.total_score ?? firstMatch?.score), 'border-primary/25 bg-primary/10 text-primary');
+    push(t('MODERATION.DRY_RUN.BADGE.RULE', '规则'), firstMatch?.id || data.trigger_keyword || data.auto_ban_group);
+    push(t('MODERATION.DRY_RUN.BADGE.CACHE', '缓存'), typeof data.from_cache === 'boolean' ? (data.from_cache ? t('COMMON.YES', '是') : t('COMMON.NO', '否')) : undefined);
+    push(t('MODERATION.DRY_RUN.BADGE.ERROR', '错误'), data.err_tag || data.upstream_error_type, 'border-error/25 bg-error/10 text-error');
+    push(t('MODERATION.DRY_RUN.BADGE.HIT', '命中'), data.hit_count && data.threshold ? `${data.hit_count}/${data.threshold}` : undefined, 'border-error/25 bg-error/10 text-error');
+    push(t('MODERATION.DRY_RUN.BADGE.LENGTH', '长度'), data.len && data.max ? `${data.len}/${data.max}` : undefined, 'border-warning/25 bg-warning/10 text-warning');
+    push(
+        t('MODERATION.DRY_RUN.BADGE.CONTENT', '内容'),
+        data.content_runes ? t('MODERATION.DRY_RUN.CHAR_COUNT', { count: Number(data.content_runes).toLocaleString(), defaultValue: '{{count}} 字符' }) : undefined,
+        'border-success/25 bg-success/10 text-success'
+    );
+    push(t('MODERATION.DRY_RUN.BADGE.PREVIEW', '预览'), data.content_truncated ? t('MODERATION.DRY_RUN.TRUNCATED', '已截断') : undefined, 'border-success/25 bg-success/10 text-success');
+    push(t('MODERATION.DRY_RUN.BADGE.REDACTED', '脱敏'), data.content_redacted ? t('COMMON.YES', '是') : undefined, 'border-success/25 bg-success/10 text-success');
+    push(t('MODERATION.DRY_RUN.BADGE.REASON', '原因'), data.trigger_reason || data.reason);
 
     return { parsed, badges, segmentScope };
 };
@@ -282,7 +321,7 @@ const DryRunPanel = ({ configs, handleChange }) => {
                                 value={riskEventAction}
                                 onChange={e => setRiskEventAction(e.target.value)}
                                 className="w-full h-10"
-                                options={riskActionOptions.map(([value, label]) => ({value, label}))} 
+                                options={riskActionValues.map(value => ({ value, label: riskActionLabel(value, t) }))}
                             />
                         </label>
                         <label className="block">
@@ -347,7 +386,7 @@ const DryRunPanel = ({ configs, handleChange }) => {
                         )}
                         {!riskEventsLoading && riskEvents.map((evt) => {
                             const Icon = actionIcon(evt.action_type);
-                            const { parsed, badges, segmentScope } = riskBadgesForEvent(evt);
+                            const { parsed, badges, segmentScope } = riskBadgesForEvent(evt, t);
                             return (
                                 <div key={evt.id} className="px-4 py-4 text-sm hover:bg-surface-container/30 transition-colors">
                                     <div className="grid grid-cols-1 gap-4 lg:grid-cols-[200px,160px,1fr]">
@@ -355,7 +394,7 @@ const DryRunPanel = ({ configs, handleChange }) => {
                                             <div className={`inline-flex max-w-full items-center gap-2 rounded-full border px-3 py-1.5 ${actionTone(evt.action_type)}`}>
                                                 <Icon size={16} className="shrink-0" />
                                                 <span className="truncate font-bold text-xs tracking-wide">
-                                                    {actionLabels[evt.action_type] || evt.action_type}
+                                                    {riskActionLabel(evt.action_type, t) || evt.action_type}
                                                 </span>
                                             </div>
                                             <div className="mt-2.5 font-mono text-xs text-on-surface-variant/80 truncate">
@@ -364,7 +403,7 @@ const DryRunPanel = ({ configs, handleChange }) => {
                                             {segmentScope && (
                                                 <div className={`mt-2.5 inline-flex max-w-full items-center gap-1.5 rounded-full border px-2.5 py-1 text-xs font-medium ${segmentScopeTone(segmentScope)}`}>
                                                     <span className="shrink-0 text-on-surface-variant opacity-80">{t('MODERATION.RISK_SEGMENT_SCOPE', '来源')}</span>
-                                                    <span className="truncate">{formatSegmentScope(segmentScope)}</span>
+                                                    <span className="truncate">{formatSegmentScope(segmentScope, t)}</span>
                                                 </div>
                                             )}
                                         </div>

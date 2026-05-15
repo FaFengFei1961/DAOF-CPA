@@ -21,8 +21,7 @@ const PricingDash = () => {
         return t;
     };
 
-    // Phase 7.8 ccg P0-3：用 useMemo 缓存 filter + group 派生计算
-    // 之前每次 render 都全量 O(N) 遍历 + 重新分组，搜索框高频输入会造成 UI 掉帧
+    // Cache filter and grouping work so high-frequency search input stays smooth.
     const filteredModels = useMemo(() => {
         const q = searchTerm.toLowerCase();
         return q ? models.filter(m => m.model_id.toLowerCase().includes(q)) : models;
@@ -50,7 +49,7 @@ const PricingDash = () => {
 
             <BillingRulesPanel />
 
-            {/* Phase 7：用 design system fl-table-shell 替代手写 bg-[#xx] 魔法颜色 */}
+            {/* Use the shared table shell instead of page-local table styling. */}
             <div className="fl-table-shell">
                 <div className="fl-table-scroll">
                     
@@ -156,8 +155,7 @@ const PricingDash = () => {
                 </div>
             </div>
 
-            {/* Phase 8：删 footer hint 长文 —— 计费规则已在上方 BillingRulesPanel
-                内完整说明，footer 重复就是冗余信息 */}
+            {/* Billing rules are already explained above by BillingRulesPanel. */}
         </StorePage>
     );
 };

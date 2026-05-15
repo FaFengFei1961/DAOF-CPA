@@ -12,6 +12,30 @@ const stateVariant = {
   half_open: 'warning',
 };
 
+const circuitStateLabel = (state, t) => {
+  switch (state) {
+    case 'closed': return t('CHANNEL_MGMT.CIRCUIT.STATE_CLOSED', '正常 (closed)');
+    case 'open': return t('CHANNEL_MGMT.CIRCUIT.STATE_OPEN', '熔断 (open)');
+    case 'half_open': return t('CHANNEL_MGMT.CIRCUIT.STATE_HALF_OPEN', '半开探测 (half-open)');
+    default: return t('CHANNEL_MGMT.CIRCUIT.STATE_UNKNOWN', '未知');
+  }
+};
+
+const circuitApiMessage = (code, t) => {
+  switch (code) {
+    case 'ERR_CHANNEL_READ_FAILED':
+      return t('API.ERR_CHANNEL_READ_FAILED', '获取渠道配置失败。');
+    case 'ERR_CIRCUIT_RESET_AUDIT_FAILED':
+      return t('API.ERR_CIRCUIT_RESET_AUDIT_FAILED', '渠道熔断已重置，但审计日志写入失败，请人工核查。');
+    case 'ERR_INVALID_PARAMS':
+      return t('API.ERR_INVALID_PARAMS', '参数不合法。');
+    case 'ERR_FORBIDDEN':
+      return t('API.ERR_FORBIDDEN', '无权执行该操作。');
+    default:
+      return '';
+  }
+};
+
 const formatRemaining = (openUntil, nowMs) => {
   if (!openUntil) return '0s';
   const target = Date.parse(openUntil);
@@ -40,7 +64,7 @@ const ChannelCircuitMonitor = () => {
       if (data.success) {
         setRows(Array.isArray(data.data) ? data.data : []);
       } else {
-        toast.error(data.message || t('API.' + data.message_code, '读取 Channel Circuit 状态失败'));
+        toast.error(data.message || circuitApiMessage(data.message_code, t) || t('CHANNEL_MGMT.CIRCUIT.LOAD_FAIL', '读取 Channel Circuit 状态失败'));
       }
     } catch {
       toast.error(t('API.ERR_NETWORK', '网络异常'));
@@ -69,7 +93,7 @@ const ChannelCircuitMonitor = () => {
         toast.success(t('API.SUCCESS_CIRCUIT_RESET', 'Circuit 已重置'));
         await fetchCircuits({ silent: true });
       } else {
-        toast.error(data.message || t('API.' + data.message_code, 'Circuit 重置失败'));
+        toast.error(data.message || circuitApiMessage(data.message_code, t) || t('CHANNEL_MGMT.CIRCUIT.RESET_FAIL', 'Circuit 重置失败'));
       }
     } catch {
       toast.error(t('API.ERR_NETWORK', '网络异常'));
@@ -99,7 +123,7 @@ const ChannelCircuitMonitor = () => {
       width: 130,
       render: row => (
         <StatusBadge variant={stateVariant[row.state] || 'neutral'}>
-          {t(`CHANNEL_MGMT.CIRCUIT.STATE_${String(row.state || 'unknown').toUpperCase()}`, row.state || 'unknown')}
+          {circuitStateLabel(row.state, t)}
         </StatusBadge>
       ),
     },

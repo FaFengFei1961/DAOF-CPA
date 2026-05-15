@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useCallback, useMemo } from 'react';
+import React, { useState, useEffect, useCallback, useMemo, useRef } from 'react';
 import { useTranslation } from 'react-i18next';
 import { Key, Plus, Copy, Trash2, CheckCircle2, Activity, ShieldAlert, Power, Clock, Save, FileBox, Edit2, Link } from 'lucide-react';
 import { useCurrency } from '../context/CurrencyContext';
@@ -17,13 +17,39 @@ const getTokenCacheKey = () => {
     return `tokens:${isAdmin ? 'admin' : userToken || 'guest'}`;
 };
 
+const tokenApiMessage = (code, t) => {
+    switch (code) {
+        case 'ERR_EMPTY_KEY':
+            return t('API.ERR_EMPTY_KEY', '密钥不能为空。');
+        case 'ERR_EXPIRED_AT_PAST':
+            return t('API.ERR_EXPIRED_AT_PAST', '过期时间不能早于当前时间。');
+        case 'ERR_TOKEN_LIMIT_REACHED':
+            return t('API.ERR_TOKEN_LIMIT_REACHED', '已达到 Token 创建数量上限。');
+        case 'ERR_TOKEN_LOST':
+            return t('API.ERR_TOKEN_LOST', '指定的令牌不存在。');
+        case 'ERR_MISSING_AUTH_TOKEN':
+            return t('API.ERR_MISSING_AUTH_TOKEN', '请求未附带鉴权令牌。');
+        case 'ERR_NO_AUTH':
+            return t('API.ERR_NO_AUTH', '请先登录。');
+        case 'ERR_DB_UPDATE':
+            return t('API.ERR_DB_UPDATE', '数据库更新失败。');
+        case 'ERR_BAD_REQUEST':
+            return t('API.ERR_BAD_REQUEST', '请求格式不正确。');
+        case 'ERR_FORBIDDEN':
+            return t('API.ERR_FORBIDDEN', '无权执行该操作。');
+        default:
+            return '';
+    }
+};
+
 const TokenManager = ({ isAuthenticated }) => {
     const confirm = useConfirm();
     const { t } = useTranslation();
     const { formatCurrency } = useCurrency();
+    const newTokenNameRef = useRef(null);
     const tokenCacheKey = useMemo(getTokenCacheKey, [isAuthenticated]);
     const [tokens, setTokens] = useState(() => readPageCache(tokenCacheKey) || []);
-    // 未登录时不需要加载（避免显示"加载中…"卡住，让 RequireAuth banner 提示登录即可）
+    // Avoid a loading card for signed-out users; RequireAuth already owns that state.
     const [loadingTokens, setLoadingTokens] = useState(() => isAuthenticated && !readPageCache(tokenCacheKey));
     const [isCreating, setIsCreating] = useState(false);
     const [newTokenName, setNewTokenName] = useState('');
@@ -89,7 +115,7 @@ const TokenManager = ({ isAuthenticated }) => {
                 fetchTokens({ force: true });
                 toast.success(t('TOKEN_MGMT.CREATE_OK', '令牌已创建'));
             } else {
-                toast.error((data.message_code ? t('API.' + data.message_code) : data.message));
+                toast.error(tokenApiMessage(data.message_code, t) || data.message || t('TOKEN_MGMT.CREATE_FAIL', '创建失败'));
             }
         } catch {
             toast.error(t('TOKEN_MGMT.NET_ERROR'));
@@ -108,7 +134,7 @@ const TokenManager = ({ isAuthenticated }) => {
                 fetchTokens({ force: true });
                 toast.success(newStatus === 1 ? t('TOKEN_MGMT.ENABLED_OK', '已启用') : t('TOKEN_MGMT.DISABLED_OK', '已禁用'));
             } else {
-                toast.error(data.message || '操作失败');
+                toast.error(data.message || tokenApiMessage(data.message_code, t) || t('TOKEN_MGMT.OPERATION_FAILED', '操作失败'));
             }
         } catch {
             toast.error(t('TOKEN_MGMT.NET_ERROR'));
@@ -123,18 +149,18 @@ const TokenManager = ({ isAuthenticated }) => {
     };
 
     const handleSaveName = async (id) => {
-        // Prevent multiple triggers or empty saves
+        // Prevent multiple triggers or empty saves.
         if (editingTokenId !== id) return;
 
         const trimmed = editingName.trim();
-        setEditingTokenId(null); // Instantly collapse input box
+        setEditingTokenId(null);
 
         if (!trimmed) return;
 
         const parsedQuota = editingQuota ? parseFloat(editingQuota) : 0;
         const parsedExpiry = editingExpiry ? new Date(editingExpiry).toISOString() : null;
 
-        // Optimistic UI Update: instantly show the new name to prevent flashing
+        // Optimistic UI update: instantly show the new name to prevent flashing.
         setTokens(prev => prev.map(t => t.id === id ? { ...t, name: trimmed, quota_limit: parsedQuota, expired_at: parsedExpiry } : t));
 
         try {
@@ -145,9 +171,8 @@ const TokenManager = ({ isAuthenticated }) => {
             if (data.success) {
                 fetchTokens({ force: true });
             } else {
-                // 修改失败必须告诉用户原因，而不是静默 fetch（之前 optimistic update 已写入界面，
-                // 用户会以为修改成功，实际服务端拒绝了）
-                toast.error((data.message_code ? t('API.' + data.message_code) : data.message) || t('TOKEN_MGMT.UPDATE_FAILED', '保存失败'));
+                // Show the rejection explicitly because the optimistic UI already changed the row.
+                toast.error(tokenApiMessage(data.message_code, t) || data.message || t('TOKEN_MGMT.UPDATE_FAILED', '保存失败'));
                 fetchTokens({ force: true });
             }
         } catch {
@@ -164,7 +189,7 @@ const TokenManager = ({ isAuthenticated }) => {
                 fetchTokens({ force: true });
                 toast.success(t('TOKEN_MGMT.DELETE_OK', '令牌已删除'));
             } else {
-                toast.error(data.message || '删除失败');
+                toast.error(data.message || tokenApiMessage(data.message_code, t) || t('TOKEN_MGMT.DELETE_FAIL', '删除失败'));
             }
         } catch {
             toast.error(t('TOKEN_MGMT.NET_ERROR'));
@@ -190,6 +215,7 @@ const TokenManager = ({ isAuthenticated }) => {
                     </div>
                     <div className="flex w-full md:w-auto items-center gap-3 flex-wrap md:flex-nowrap mt-4 md:mt-0">
                         <input
+                            ref={newTokenNameRef}
                             type="text"
                             placeholder={t('TOKEN_MGMT.INPUT_PLACEHOLDER')}
                             className="w-full md:w-[150px] bg-surface-container-high border border-outline rounded-overlay px-4 py-2 text-sm outline-none focus:border-primary "
@@ -272,10 +298,10 @@ const TokenManager = ({ isAuthenticated }) => {
                                             <Key size={32} className="text-on-surface-variant/50" />
                                             <span>{t('TOKEN_MGMT.EMPTY')}</span>
                                             <button 
-                                                onClick={() => document.querySelector('input[placeholder="Name / Purpose"]').focus()}
+                                                onClick={() => newTokenNameRef.current?.focus()}
                                                 className="mt-2 text-sm font-semibold text-primary hover:underline inline-flex items-center gap-1"
                                             >
-                                                <Plus size={14} /> 创建你的第一个 token
+                                                <Plus size={14} /> {t('TOKEN_MGMT.CREATE_FIRST', '创建你的第一个 token')}
                                             </button>
                                         </div>
                                     </td>
@@ -322,7 +348,7 @@ const TokenManager = ({ isAuthenticated }) => {
                                                 type="number"
                                                 className="bg-surface-container-high border border-primary rounded-control px-2 py-1 text-xs w-20 outline-none text-on-surface focus:ring-2 ring-primary/20"
                                                 value={editingQuota}
-                                                placeholder="Limit"
+                                                placeholder={t('TOKEN_MGMT.EDIT_LIMIT_PLACEHOLDER', '额度')}
                                                 onChange={e => setEditingQuota(e.target.value)}
                                             />
                                         ) : (

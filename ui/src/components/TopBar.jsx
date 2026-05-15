@@ -8,14 +8,14 @@ import { logger } from '../utils/logger';
 import NotificationCenter from './NotificationCenter';
 
 /**
- * Microsoft Store / Win11 Settings 风格 CommandBar。
+ * Microsoft Store / Windows 11 Settings style command bar.
  *
- * 视觉规则：
- *  - 高度 48px（Win11 Mica 顶栏标准）
- *  - 中央居中搜索框（占 max-w-2xl），仅桌面端显示
- *  - 右侧紧凑控件簇：通知 / 语言 / 货币 / 余额 / 头像 / 退出
- *  - 控件统一 32px 高，rounded-control (8px)，hover 时 subtle bg
- *  - 移动端：左侧露 logo + 应用名，右侧只保留头像 / 登录
+ * Visual rules:
+ *  - 48px height
+ *  - centered desktop search box
+ *  - compact right-side controls
+ *  - 32px controls with subtle hover states
+ *  - mobile keeps only logo, app name, and account or sign-in controls
  */
 const TopBar = ({ isAuthenticated, onOpenAuth, isAdmin, profile }) => {
   const confirm = useConfirm();
@@ -28,10 +28,10 @@ const TopBar = ({ isAuthenticated, onOpenAuth, isAdmin, profile }) => {
   const menuRef = useRef(null);
   const menuTriggerRef = useRef(null);
 
-  // 头像菜单 a11y（Phase 7.8 ccg 共识 P0）：
-  // - 点外部关闭（mousedown）
-  // - Escape 键关闭 + 焦点回 trigger（WCAG 2.2 AA 强制）
-  // - 打开后自动 focus 第一个可交互项（菜单内首个 button），便于键盘用户立即操作
+  // Account menu a11y:
+  // - close on outside click
+  // - close on Escape and restore focus to the trigger
+  // - focus the first interactive menu item after opening
   useEffect(() => {
     if (!menuOpen) return;
     const onClick = (e) => {
@@ -41,13 +41,11 @@ const TopBar = ({ isAuthenticated, onOpenAuth, isAdmin, profile }) => {
       if (e.key === 'Escape') {
         e.preventDefault();
         setMenuOpen(false);
-        // 关闭后焦点回 trigger 按钮（screen reader 用户的"返回锚点"）
         menuTriggerRef.current?.focus();
       }
     };
     document.addEventListener('mousedown', onClick);
     document.addEventListener('keydown', onKey);
-    // 打开后自动聚焦菜单首项（rAF 等 DOM 渲染完成）
     const focusId = requestAnimationFrame(() => {
       const firstFocusable = menuRef.current?.querySelector(
         'button:not([disabled]), a[href]'
@@ -90,7 +88,7 @@ const TopBar = ({ isAuthenticated, onOpenAuth, isAdmin, profile }) => {
     navigate(`/pricing?q=${encodeURIComponent(q)}`);
   };
 
-  // ⌘K / Ctrl+K：聚焦搜索框，对齐 Microsoft Store 的全局搜索快捷键
+  // Focus search with Cmd+K / Ctrl+K.
   useEffect(() => {
     const onKey = (e) => {
       if ((e.metaKey || e.ctrlKey) && e.key.toLowerCase() === 'k') {
@@ -104,13 +102,13 @@ const TopBar = ({ isAuthenticated, onOpenAuth, isAdmin, profile }) => {
 
   return (
     <header className="h-12 flex items-center gap-2 px-3 sm:px-4 bg-surface/85 backdrop-blur-md w-full shrink-0 sticky top-0 z-40 border-b border-outline-variant/40">
-      {/* 左：移动端 Logo */}
+      {/* Mobile logo */}
       <div className="flex items-center gap-2 lg:hidden shrink-0">
         <img src="/daof_logo.png" alt="" className="w-7 h-7 rounded-control" />
         <span className="text-sm font-semibold text-on-surface">DAOF-CPA</span>
       </div>
 
-      {/* 中：搜索框（MS Store 标志性元素） — acrylic 胶囊 + ⌘K 快捷键提示 */}
+      {/* Desktop search box */}
       <form onSubmit={onSearchSubmit} className="hidden lg:flex flex-1 max-w-2xl mx-auto relative">
         <label htmlFor="topbar-search" className="sr-only">
           {t('TOPBAR.SEARCH_PLACEHOLDER', '搜索模型、套餐')}
@@ -132,10 +130,7 @@ const TopBar = ({ isAuthenticated, onOpenAuth, isAdmin, profile }) => {
         </kbd>
       </form>
 
-      {/* 右：控件簇 — Phase 7 极简化（MS Store 风格）
-          原 6 个独立按钮（通知/语言/货币/余额/admin/退出）压缩为：
-          通知 + Admin 入口（仅 admin）+ 头像菜单 + Login/Register（未登录）
-          语言/货币/退出全收进头像 dropdown */}
+      {/* Right-side control cluster */}
       <div className="flex items-center gap-1 ml-auto shrink-0">
         <NotificationCenter
           isAuthenticated={isAuthenticated || isAdmin}
@@ -175,7 +170,7 @@ const TopBar = ({ isAuthenticated, onOpenAuth, isAdmin, profile }) => {
                 role="menu"
                 className="absolute right-0 top-full mt-2 w-72 bg-surface-container-high border border-outline-variant rounded-overlay shadow-black/40 z-[100] overflow-hidden"
               >
-                {/* Header: 用户名 + role + 余额 */}
+                {/* Header: username, role, and balance */}
                 <div className="px-4 py-3 border-b border-outline-variant/40">
                   <div className="flex items-center gap-3">
                     <div className="w-10 h-10 rounded-full bg-primary text-on-primary flex items-center justify-center">
@@ -194,7 +189,7 @@ const TopBar = ({ isAuthenticated, onOpenAuth, isAdmin, profile }) => {
                   </div>
                 </div>
 
-                {/* 偏好：货币 + 语言 */}
+                {/* Preferences: currency and language */}
                 <div className="py-1">
                   <button
                     type="button"
@@ -239,7 +234,7 @@ const TopBar = ({ isAuthenticated, onOpenAuth, isAdmin, profile }) => {
                   )}
                 </div>
 
-                {/* 退出 */}
+                {/* Logout */}
                 <div className="border-t border-outline-variant/40 py-1">
                   <button
                     type="button"

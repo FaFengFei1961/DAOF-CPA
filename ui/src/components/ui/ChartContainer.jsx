@@ -2,16 +2,16 @@ import React, { useMemo } from 'react';
 import { useTheme } from '../../context/ThemeContext';
 
 /**
- * ChartContainer — Recharts 等可视化的统一外壳（Phase 1，gemini ccg #6 token 化）
+ * ChartContainer: shared shell for Recharts and similar visualizations.
  *
- * 责任：
- *   - 卡片外壳（fl-card）+ 标题 / actions / hint
- *   - 高度统一可控（h='sm' | 'md' | 'lg' | 数值）
- *   - 内部 ResponsiveContainer 由消费方提供
- *   - 提供 chartColors hook：从 CSS 变量读 series 配色，跟主题 seed 联动
+ * Responsibilities:
+ *   - card shell, title, actions, and hint
+ *   - controlled height, h='sm' | 'md' | 'lg' | number
+ *   - consumer-provided chart body
+ *   - chart color hook driven by the theme seed
  *
- * 用法：
- *   <ChartContainer title="用户趋势" h="md">
+ * Usage:
+ *   <ChartContainer title="User Trend" h="md">
  *     <ResponsiveContainer>
  *       <LineChart ...>
  *         <Line stroke={chartColors[0]} ... />
@@ -62,16 +62,14 @@ const ChartContainer = ({
   );
 };
 
-// ─── Color helpers (HSL ↔ HEX) ─────────────────────────────────
+// Color helpers (HSL <-> HEX).
 //
-// 用 HSL hue rotation 派生图表 series 调色板。简单、稳定、无依赖。
-// 也可以用 @material/material-color-utilities 的 HCT 旋转，但那会让 8 色太靠近 seed。
-// 图表需要"色相距离大"以便分辨多条线，HSL 等距旋转更合适。
+// HSL hue rotation keeps the series palette simple, stable, and visually separated.
 
 const hexToHsl = (hex) => {
   let h = (hex || '').replace('#', '');
   if (h.length === 3) h = h.split('').map(c => c + c).join('');
-  if (h.length !== 6) return [240, 0.6, 0.55]; // 默认紫调
+  if (h.length !== 6) return [240, 0.6, 0.55];
   const r = parseInt(h.slice(0, 2), 16) / 255;
   const g = parseInt(h.slice(2, 4), 16) / 255;
   const b = parseInt(h.slice(4, 6), 16) / 255;
@@ -109,14 +107,9 @@ const hslToHex = (h, s, l) => {
 };
 
 /**
- * useChartColors — 从主题 seed 派生的 series 调色板（Phase 2 完成 token 化）
+ * useChartColors: derive a series palette from the current theme seed.
  *
- * 实现：
- *   - 读 ThemeContext.seedColor + isDarkMode
- *   - HSL: 以 seed hue 为起点，等距旋转 360°/N 步
- *   - 饱和度、亮度根据深浅模式微调，保证图表线条与 surface 至少 4.5:1 对比
- *
- * 切主题色 → 图表颜色自动跟随。
+ * HSL starts from the seed hue and rotates evenly across the requested count.
  */
 export const useChartColors = (count = 8) => {
   const theme = useTheme?.() || {};
@@ -124,7 +117,7 @@ export const useChartColors = (count = 8) => {
   const isDark = theme.isDarkMode ?? true;
   return useMemo(() => {
     const [baseH, baseS] = hexToHsl(seed);
-    // 图表线饱和度比 seed 略提（避免过于灰），亮度按 dark/light 模式分两档
+    // Slightly raise saturation and tune lightness per theme mode for readable lines.
     const sat = Math.max(0.55, Math.min(0.85, baseS));
     const lit = isDark ? 0.62 : 0.50;
     const out = [];

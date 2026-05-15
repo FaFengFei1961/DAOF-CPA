@@ -8,7 +8,7 @@ const formatWeight = (n) => {
   return v.toFixed(v % 1 === 0 ? 0 : 2);
 };
 
-const humanModelLabel = (rule) => {
+const humanModelLabel = (rule, t) => {
   if (rule?.label) return rule.label;
   return String(rule?.pattern || '*')
     .replaceAll('*', '')
@@ -17,7 +17,7 @@ const humanModelLabel = (rule) => {
     .replaceAll('opus', 'Claude Opus')
     .replaceAll('sonnet', 'Claude Sonnet')
     .replaceAll('haiku', 'Claude Haiku')
-    .trim() || '其他模型';
+    .trim() || t('BILLING_RULES.OTHER_MODEL', '其他模型');
 };
 
 const fetchBillingRules = async () => {
@@ -59,7 +59,7 @@ const BillingRulesPanel = ({ compact = false }) => {
     () => (compact ? modelWeights.slice(0, 5) : modelWeights),
     [compact, modelWeights]
   );
-  const normalHealth = (healthMultipliers.length ? healthMultipliers : [{ pattern: '*', weight: 1, reason: '默认无高峰加权' }])
+  const normalHealth = (healthMultipliers.length ? healthMultipliers : [{ pattern: '*', weight: 1, reason: '' }])
     .every((r) => Number(r.weight || 1) === 1);
 
   return (
@@ -95,7 +95,7 @@ const BillingRulesPanel = ({ compact = false }) => {
 
       {error && (
         <div className="rounded-control border border-error/30 bg-error/10 px-3 py-2 text-sm text-error">
-          {t('BILLING_RULES.LOAD_FAIL', '规则加载失败')}：{error}
+          {t('BILLING_RULES.LOAD_FAIL', '规则加载失败')}: {error}
         </div>
       )}
 
@@ -134,7 +134,7 @@ const BillingRulesPanel = ({ compact = false }) => {
                     {!loading && visibleWeights.map((r, idx) => (
                       <tr key={`${r.pattern}-${idx}`} className="hover:bg-on-surface/[0.02]">
                         <td className="px-3 py-2 text-on-surface">
-                          <div className="font-medium">{humanModelLabel(r)}</div>
+                          <div className="font-medium">{humanModelLabel(r, t)}</div>
                           <div className="text-[11px] text-on-surface-variant font-mono mt-0.5">{r.pattern}</div>
                         </td>
                         <td className="px-3 py-2 text-right font-mono text-primary">×{formatWeight(r.weight)}</td>
@@ -173,7 +173,7 @@ const BillingRulesPanel = ({ compact = false }) => {
               />
               <InfoBox
                 title={t('BILLING_RULES.HEALTH_TITLE', '繁忙时段系数')}
-                lines={(healthMultipliers.length ? healthMultipliers : [{ pattern: '*', weight: 1, reason: '默认无高峰加权' }]).map(
+                lines={(healthMultipliers.length ? healthMultipliers : [{ pattern: '*', weight: 1, reason: t('BILLING_RULES.DEFAULT_NO_PEAK_REASON', '默认无高峰加权') }]).map(
                   (r) => Number(r.weight || 1) === 1
                     ? t('BILLING_RULES.HEALTH_NORMAL', '当前没有繁忙时段加价。')
                     : `${r.pattern}: ×${formatWeight(r.weight)}${r.reason ? ` · ${r.reason}` : ''}`

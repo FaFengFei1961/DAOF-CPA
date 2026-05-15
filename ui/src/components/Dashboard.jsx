@@ -12,14 +12,14 @@ import UpgradePage from './UpgradePage';
 import { StatusBadge } from './ui';
 
 /**
- * Dashboard — 综合信息控制台（Phase 8 重做）
+ * Dashboard: consolidated user console.
  *
- * 三种角色分支（务实优先，零营销）：
- *   - admin            → AdminBanner 单行（admin 不消费、不订阅）
- *   - 已登录普通用户   → CurrentSubscriptions（嵌 MySubscriptions） + StatStrip
- *   - 未登录           → SignInBanner（"登录后可查看您的订阅与用量"）
+ * Three role branches:
+ *   - admin: one-line admin banner
+ *   - signed-in user: subscriptions plus stat strip
+ *   - signed-out visitor: sign-in banner plus public packages
  *
- * 不再展示：模型分组列表（→ /pricing）/ 最近调用（→ /stats）/ 营销 hero。
+ * Model lists, recent calls, and marketing hero content live elsewhere.
  */
 
 const Dashboard = () => {
@@ -56,7 +56,7 @@ const Dashboard = () => {
     return () => ctrl.abort();
   }, [isAuthenticated, isAdmin]);
 
-  // ─── admin ────────────────────────────────────────────────────────────
+  // Admin
   if (isAdmin) {
     return (
       <div className="space-y-6 py-6">
@@ -77,9 +77,7 @@ const Dashboard = () => {
     );
   }
 
-  // ─── 未登录 ───────────────────────────────────────────────────────────
-  // SignInBanner 提示登录可看个人数据 + 下方直接展示套餐 grid（套餐定价是公开
-  // 信息，让访客看到平台提供什么；点购买时再弹登录）
+  // Signed-out visitors see the sign-in prompt plus public package pricing.
   if (!isAuthenticated) {
     return (
       <div className="space-y-6 py-6">
@@ -100,7 +98,7 @@ const Dashboard = () => {
     );
   }
 
-  // ─── 已登录普通用户 ──────────────────────────────────────────────────
+  // Signed-in user
   return (
     <div className="space-y-6 py-6">
       {meLoading ? (
@@ -113,11 +111,9 @@ const Dashboard = () => {
   );
 };
 
-// ─── StatStrip ──────────────────────────────────────────────────────────
-// 4-up 数据条：余额 / 最近请求 / Token 用量 / 上次调用
+// Stat strip: balance, recent requests, token usage, and last call.
 //
-// Phase 8：明示是"近 8 条快照"，不是真正的总统计 — 跟 /stats 数据看板的
-// "24h/7d/30d 真聚合"区分；底部加"详细统计"链接引导用户去 /stats 看完整数据
+// The request and token numbers are recent snapshots, not full-window aggregates.
 const StatStrip = ({ me, recentLogs, formatCurrency, i18n, t }) => {
   const totalReqs = recentLogs.length;
   const totalTokens = recentLogs.reduce(
@@ -194,6 +190,6 @@ const StatStripSkeleton = () => (
     ))}
   </section>
 );
-// ─── helpers ────────────────────────────────────────────────────────────
+// Helpers
 
 export default Dashboard;

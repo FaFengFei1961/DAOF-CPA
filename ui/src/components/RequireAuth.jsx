@@ -3,12 +3,11 @@ import { useTranslation } from 'react-i18next';
 import { Lock, ArrowRight } from 'lucide-react';
 
 /**
- * 鉴权守卫：
- *  - 已登录：直接渲染 children
- *  - 未登录：只渲染登录提示，不挂载受保护页面
+ * Hard auth guard:
+ *  - signed in: render children
+ *  - signed out: render only the sign-in prompt
  *
- * 之前的软守卫会把账单、充值、工单等页面继续挂载，导致未登录访问时仍然发起
- * 受保护 API 请求并刷出 401 噪音。项目未上线，直接收紧为硬阻断。
+ * Protected pages are not mounted for signed-out users, avoiding unnecessary 401 requests.
  */
 const RequireAuth = ({ isAuthenticated, onSignIn, children }) => {
   const { t } = useTranslation();

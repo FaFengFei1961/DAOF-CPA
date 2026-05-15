@@ -18,7 +18,9 @@
     "SAVING": "Saving...",
     "SAVE": "Save",
     "EMPTY": "No data",
-    "SUBMITTING": "Submitting…"
+    "SUBMITTING": "Submitting…",
+    "YES": "Yes",
+    "NO": "No"
   },
   "NOTIF": {
     "CENTER": "Notifications",
@@ -156,7 +158,7 @@
       "ALREADY_CLOSED": "Ticket already closed"
     }
   },
-  "BALANCE_CONSUME": {
+  "BALANCE_PREF": {
     "TITLE": "Balance Billing Control",
     "DESC": "When subscriptions and addons run out, allow further billing from USD balance",
     "ENABLED": "Enable balance billing",
@@ -183,6 +185,28 @@
     "SAVE": "Save",
     "SAVE_OK": "Saved",
     "SAVE_FAIL": "Failed to save"
+  },
+  "DURATION": {
+    "UNIT_ARIA": "Unit",
+    "VALUE": "{{value}} {{unit}}",
+    "UNIT_SECOND_SELECT": "sec",
+    "UNIT_MINUTE_SELECT": "min",
+    "UNIT_HOUR_SELECT": "hr",
+    "UNIT_DAY_SELECT": "day",
+    "UNIT_WEEK_SELECT": "wk",
+    "UNIT_MONTH_SELECT": "mo",
+    "UNIT_SECOND_ONE": "second",
+    "UNIT_SECOND_OTHER": "seconds",
+    "UNIT_MINUTE_ONE": "minute",
+    "UNIT_MINUTE_OTHER": "minutes",
+    "UNIT_HOUR_ONE": "hour",
+    "UNIT_HOUR_OTHER": "hours",
+    "UNIT_DAY_ONE": "day",
+    "UNIT_DAY_OTHER": "days",
+    "UNIT_WEEK_ONE": "week",
+    "UNIT_WEEK_OTHER": "weeks",
+    "UNIT_MONTH_ONE": "month",
+    "UNIT_MONTH_OTHER": "months"
   },
   "TOPUP": {
     "TABLE_USER": "User",
@@ -692,7 +716,12 @@
     "DISABLED_OK": "Disabled",
     "UPDATE_FAILED": "Failed to save",
     "DELETE_OK": "Token deleted",
-    "NEVER_EXPIRE": "Never"
+    "NEVER_EXPIRE": "Never",
+    "CREATE_FAIL": "Failed to create token",
+    "OPERATION_FAILED": "Operation failed",
+    "DELETE_FAIL": "Failed to delete token",
+    "CREATE_FIRST": "Create your first token",
+    "EDIT_LIMIT_PLACEHOLDER": "Limit"
   },
   "PROFILE": {
     "ADMIN_UPDATE_WARN": "WARNING: Updating will log out your current admin session!\nAnd your admin panel suffix will permanently lock to ?sys={{username}}\n\nAre you sure you want to forcibly override the profile?",
@@ -795,6 +824,8 @@
     "GENERAL_DESC": "Adjust your local client experience parameters here, changes apply only to your local browser.",
     "EXCHANGE_RATE_TITLE": "Exchange Rate (Global Settlement)",
     "EXCHANGE_RATE_DESC": "The ratio of USD to CNY (e.g. 7.25), used for frontend display conversion and console entry reference",
+    "EXCHANGE_RATE_DESC_MICROS": "RMB to USD exchange rate (int64 fixed point: RMB/USD × 1e6, e.g. 7200000 = 7.2). Keeps float values out of monetary calculations.",
+    "EXCHANGE_RATE_MICROS_LABEL": "Exchange rate (RMB/USD × 1e6)",
     "THEME_LABEL": "Appearance",
     "THEME_HINT": "Dark / Light / Follow System",
     "SEED_COLOR_LABEL": "Accent Color",
@@ -842,7 +873,17 @@
     "NAV_LABEL": "Settings navigation",
     "CONSUME_PREFS_DESC": "Allow continued billing from USD balance after subscriptions are depleted, with per-window spend limits",
     "SAVE_SUCCESS": "Saved successfully",
-    "MODERATION_DESC": "Global configuration for upstream model-pool moderation, keywords, cache, long-prompt limits, multimodal policy, and rejection messages"
+    "MODERATION_DESC": "Global configuration for upstream model-pool moderation, keywords, cache, long-prompt limits, multimodal policy, and rejection messages",
+    "SEED_COLOR_ARIA": "Theme color: {{name}}",
+    "SEED_COLOR_CUSTOM": "Custom",
+    "SEED_COLOR_PURPLE": "Purple",
+    "SEED_COLOR_BLUE": "Blue",
+    "SEED_COLOR_CYAN": "Cyan",
+    "SEED_COLOR_ORANGE": "Orange",
+    "SEED_COLOR_RED": "Red",
+    "SEED_COLOR_TEAL": "Teal",
+    "SEED_COLOR_GOLD": "Gold",
+    "SEED_COLOR_GRAY": "Gray"
   },
   "USER_MGMT": {
     "BULK_GRANT_COUPON": "Bulk Grant Coupon",
@@ -1122,7 +1163,9 @@
       "COOLDOWN_REMAINING": "Cooldown remaining",
       "ACTIONS": "Actions",
       "RESET": "Force reset",
-      "EMPTY": "No circuit state available"
+      "EMPTY": "No circuit state available",
+      "LOAD_FAIL": "Failed to load channel circuit status",
+      "RESET_FAIL": "Failed to reset circuit"
     },
     "TYPE_CLIPROXY": "CLIProxyAPI multi-protocol gateway",
     "TYPE_OPENAI_COMPAT": "OpenAI / DeepSeek / domestic model compatible",
@@ -1336,8 +1379,49 @@
     "RISK_NO_STRUCTURED_DETAILS": "No structured details",
     "RISK_CONTENT_PREVIEW": "Matched content preview (redacted)",
     "RISK_RAW_DETAILS": "View raw details",
-    "TEST_SANDBOX": "MODERATION.TEST_SANDBOX",
-    "TEST_SANDBOX_DESC": "MODERATION.TEST_SANDBOX_DESC"
+    "TEST_SANDBOX": "Content Moderation Test Sandbox",
+    "TEST_SANDBOX_DESC": "Use the currently saved configuration to simulate a moderation test request.",
+    "DRY_RUN": {
+      "ACTION": {
+        "ALL": "All events",
+        "MODERATION_BLOCK_POLICY": "AI moderation block",
+        "MODERATION_BLOCK_KEYWORD": "Keyword block",
+        "MODERATION_BLOCK_RISK_RULE": "Rule block",
+        "MODERATION_RISK_SCORE": "Risk score",
+        "MODERATION_BLOCK_OVERSIZE": "Oversize block",
+        "MODERATION_BLOCK_IMAGE_POLICY": "Image policy block",
+        "MODERATION_UNAVAILABLE_CLOSED": "Moderation unavailable block",
+        "MODERATION_FAIL_OPEN": "Moderation fail-open",
+        "SECURITY_AUTOBAN": "Auto-ban"
+      },
+      "SEGMENT": {
+        "USER_MESSAGE": "User input",
+        "NON_USER_CONTEXT": "Non-user context",
+        "TOOL_CONTEXT": "Tool context",
+        "CLIENT_CONTEXT": "Client context",
+        "SYSTEM_INSTRUCTION": "System instruction",
+        "TOOL_RESULT": "Tool result",
+        "FUNCTION_OUTPUT": "Function output",
+        "UNKNOWN": "Unknown source"
+      },
+      "BADGE": {
+        "MODEL": "Model",
+        "SOURCE": "Source",
+        "CATEGORY": "Category",
+        "SCORE": "Score",
+        "RULE": "Rule",
+        "CACHE": "Cache",
+        "ERROR": "Error",
+        "HIT": "Hits",
+        "LENGTH": "Length",
+        "CONTENT": "Content",
+        "PREVIEW": "Preview",
+        "REDACTED": "Redacted",
+        "REASON": "Reason"
+      },
+      "CHAR_COUNT": "{{count}} chars",
+      "TRUNCATED": "Truncated"
+    }
   },
   "I18N_MGMT": {
     "TITLE": "System Language Management",
@@ -1416,6 +1500,20 @@
     "STAT_LAST": "Last call",
     "STAT_FULL_LINK": "View full usage statistics (24h / 7d / 30d) →",
     "STAT_SNAPSHOT_N": "Last {{n}} snapshots"
+  },
+  "HEALTH": {
+    "SUCCESS": "Success",
+    "FAILURE": "Failure",
+    "NO_REQUESTS": "No requests",
+    "TITLE": "Service Health",
+    "RECENT_LOGS": "Recent logs",
+    "OVERALL_AVAILABILITY": "Overall availability",
+    "LONG_AGO": "A long time ago",
+    "IDLE": "Idle",
+    "FAULTY": "Down",
+    "DEGRADED": "Degraded",
+    "NORMAL": "Healthy",
+    "NOW": "Now"
   },
   "STATS": {
     "LOADING": "LOADING TELEMETRY...",
@@ -1844,7 +1942,9 @@
     "TECH_WEIGHT": "The consumption coefficient for this model.",
     "TECH_HEALTH": "Peak-period or health adjustment coefficient.",
     "TECH_CHARGED": "Final amount deducted from package quota.",
-    "TECH_FALLBACK": "served_model can change only when fallback is explicitly allowed."
+    "TECH_FALLBACK": "served_model can change only when fallback is explicitly allowed.",
+    "OTHER_MODEL": "Other models",
+    "DEFAULT_NO_PEAK_REASON": "No peak-period surcharge by default"
   },
   "A11Y": {
     "SKIP_TO_MAIN": "Skip to main content"

@@ -9,14 +9,27 @@ import { useTheme } from '../context/ThemeContext';
 import { SEED_COLORS } from '../utils/theme-seeds';
 
 /**
- * Settings — 用户个人设置（Phase 4 完成瘦身）
+ * Settings: user-facing personal preferences.
  *
- * 责任只剩用户视角：外观（主题模式 + 主题色）/ 账号 / 通知偏好 / 我的优惠券。
- * admin 配置全部已迁到独立 page（pages/admin/system/* + pages/admin/finance/*）。
+ * Scope is intentionally limited to appearance, account, notification preferences, and coupons.
+ * Admin settings live under the dedicated admin pages.
  *
- * 旧 props（initialTab / hideNav / isAdmin / isAuthenticated）现在仅 initialTab 还有用，
- * 其它已退役。保留 isAuthenticated 兼容旧调用。
+ * Legacy props were removed before launch; only initialTab is still honored.
  */
+
+const seedColorName = (hex, fallbackName, t) => {
+  switch (hex.toLowerCase()) {
+    case '#7c5cff': return t('SETTINGS.SEED_COLOR_PURPLE', '紫');
+    case '#2563eb': return t('SETTINGS.SEED_COLOR_BLUE', '蓝');
+    case '#059669': return t('SETTINGS.SEED_COLOR_CYAN', '青');
+    case '#ea580c': return t('SETTINGS.SEED_COLOR_ORANGE', '橙');
+    case '#dc2626': return t('SETTINGS.SEED_COLOR_RED', '红');
+    case '#0891b2': return t('SETTINGS.SEED_COLOR_TEAL', '湖');
+    case '#a16207': return t('SETTINGS.SEED_COLOR_GOLD', '金');
+    case '#475569': return t('SETTINGS.SEED_COLOR_GRAY', '灰');
+    default: return fallbackName || hex;
+  }
+};
 
 const Settings = ({ initialTab }) => {
   const { themePref, changeTheme, seedColor, changeSeedColor } = useTheme();
@@ -37,7 +50,7 @@ const Settings = ({ initialTab }) => {
 
   return (
     <div className="w-full min-h-full flex flex-col md:flex-row gap-4 animate-in fade-in slide-in-from-bottom-2">
-      {/* 移动端：下拉切换 */}
+      {/* Mobile tab selector */}
       <div className="md:hidden -mx-4 px-4 py-3 sticky top-0 z-10 bg-surface/90 backdrop-blur-md border-b border-outline-variant">
         <select
           value={activeTab}
@@ -50,8 +63,7 @@ const Settings = ({ initialTab }) => {
         </select>
       </div>
 
-      {/* 桌面端：sticky 左侧菜单（在 Settings 内部 flex 流内，不再 fixed —
-          原 fixed left-4 与 UserShell 的 lg:ml-60 完全重叠，造成双 nav 视觉 bug） */}
+      {/* Desktop sticky tab rail inside the Settings layout. */}
       <aside className="hidden md:block w-48 shrink-0">
         <nav
           aria-label={t('SETTINGS.NAV_LABEL', '设置导航')}
@@ -80,9 +92,9 @@ const Settings = ({ initialTab }) => {
         </nav>
       </aside>
 
-      {/* 主面板 */}
+      {/* Main panel */}
       <div className="flex-1 min-w-0 pb-12">
-        {/* ─── 外观（主题模式 + 主题色）─────────── */}
+        {/* Appearance */}
         {activeTab === 'general' && (
           <div className="w-full">
             <header className="mb-8 border-b border-outline-variant pb-6">
@@ -95,7 +107,7 @@ const Settings = ({ initialTab }) => {
             </header>
 
             <div className="bg-surface-container border border-outline-variant rounded-overlay p-4 md:p-6 w-full">
-              {/* 主题模式 */}
+              {/* Theme mode */}
               <div className="flex flex-col md:flex-row md:items-center justify-between py-4 border-b border-outline-variant/30 gap-4">
                 <div className="flex flex-col gap-1">
                   <span className="text-on-surface font-medium">{t('SETTINGS.THEME_LABEL', '外观模式')}</span>
@@ -124,28 +136,32 @@ const Settings = ({ initialTab }) => {
                 </div>
               </div>
 
-              {/* 主题色 */}
+              {/* Seed color */}
               <div className="flex flex-col md:flex-row md:items-center justify-between py-4 gap-4">
                 <div className="flex flex-col gap-1">
                   <span className="text-on-surface font-medium">{t('SETTINGS.SEED_COLOR_LABEL', '主题色')}</span>
                   <span className="text-xs text-on-surface-variant">{t('SETTINGS.SEED_COLOR_HINT', '选一个种子色，整套界面调色板自动生成')}</span>
                 </div>
                 <div className="flex items-center gap-2 flex-wrap">
-                  {SEED_COLORS.map(({ hex, name }) => (
-                    <button
-                      key={hex} type="button" onClick={() => changeSeedColor(hex)}
-                      title={name} aria-label={`主题色: ${name}`}
-                      className={`w-7 h-7 rounded-full border-2 transition ${
-                        seedColor.toLowerCase() === hex.toLowerCase()
-                          ? 'border-on-surface scale-110'
-                          : 'border-outline-variant hover:scale-110'
-                      }`}
-                      style={{ background: hex }}
-                    />
-                  ))}
+                  {SEED_COLORS.map(({ hex, name }) => {
+                    const label = seedColorName(hex, name, t);
+                    return (
+                      <button
+                        key={hex} type="button" onClick={() => changeSeedColor(hex)}
+                        title={label}
+                        aria-label={t('SETTINGS.SEED_COLOR_ARIA', { name: label, defaultValue: '主题色: {{name}}' })}
+                        className={`w-7 h-7 rounded-full border-2 transition ${
+                          seedColor.toLowerCase() === hex.toLowerCase()
+                            ? 'border-on-surface scale-110'
+                            : 'border-outline-variant hover:scale-110'
+                        }`}
+                        style={{ background: hex }}
+                      />
+                    );
+                  })}
                   <label
                     className="w-7 h-7 rounded-full border-2 border-dashed border-outline-variant flex items-center justify-center cursor-pointer hover:border-primary text-[10px] text-on-surface-variant"
-                    title="自定义"
+                    title={t('SETTINGS.SEED_COLOR_CUSTOM', '自定义')}
                   >
                     <input
                       type="color"
@@ -153,7 +169,7 @@ const Settings = ({ initialTab }) => {
                       onChange={(e) => changeSeedColor(e.target.value)}
                       className="w-0 h-0 opacity-0"
                     />
-                    ＋
+                    +
                   </label>
                 </div>
               </div>
@@ -161,7 +177,7 @@ const Settings = ({ initialTab }) => {
           </div>
         )}
 
-        {/* ─── 账号 ───────────────────── */}
+        {/* Account */}
         {activeTab === 'account' && <AccountProfile />}
 
         {activeTab === 'consume_prefs' && (
@@ -179,7 +195,7 @@ const Settings = ({ initialTab }) => {
           </div>
         )}
 
-        {/* ─── 通知偏好 ─────────────────── */}
+        {/* Notification preferences */}
         {activeTab === 'notification_prefs' && (
           <div className="w-full">
             <header className="mb-8 border-b border-outline-variant pb-6">
@@ -197,7 +213,7 @@ const Settings = ({ initialTab }) => {
           </div>
         )}
 
-        {/* ─── 我的优惠券 ─────────────────── */}
+        {/* User coupons */}
         {activeTab === 'my_coupons' && (
           <div className="w-full">
             <header className="mb-8 border-b border-outline-variant pb-6">

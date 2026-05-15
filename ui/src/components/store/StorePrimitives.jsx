@@ -2,13 +2,12 @@ import React from 'react';
 import { ChevronRight, ArrowUpRight } from 'lucide-react';
 
 /*
- * Store 风格基本组件三件套（与 Microsoft Store 主页/类目页一致）。
+ * Store-style primitive components inspired by Microsoft Store surfaces.
  *
- * 抽出动机：之前各页（Topup / Product / MySubscriptions / Channels）
- * 各自实现 H1 + p + 卡片网格，padding/圆角/typography 不统一。
- * 统一到这一组组件后，所有页面"开页就具备 Store 质感"。
+ * Centralizes page headers, sections, cards, heroes, and grids so feature pages
+ * keep consistent spacing, radius, and typography.
  *
- * 用法：
+ * Usage:
  *   <StorePage title="..." subtitle="..." actions={<...>}>
  *     <StoreSection title="..." onSeeAll={...}>
  *       <StoreCard ...>
@@ -16,12 +15,9 @@ import { ChevronRight, ArrowUpRight } from 'lucide-react';
  *   </StorePage>
  */
 
-// ════════ 1. StorePage —— 页面级容器 ════════
+// 1. StorePage: page-level container.
 //
-// 提供：
-//   - 统一的页面 padding（lg:px-10 py-8 与 Dashboard 一致）
-//   - Hero 头部（title + subtitle + 右侧 actions slot）
-//   - 与 fl-mica 配合的可选 mica 外壳
+// Provides a unified header and optional mica-like shell.
 export function StorePage({ title, subtitle, icon: Icon, actions, children, mica = false }) {
   return (
     <div className={`w-full ${mica ? 'bg-surface-container border border-outline-variant rounded-overlay' : ''}`}>
@@ -46,12 +42,9 @@ export function StorePage({ title, subtitle, icon: Icon, actions, children, mica
   );
 }
 
-// ════════ 2. StoreSection —— 区块（标题 + chevron + content） ════════
+// 2. StoreSection: section header plus content.
 //
-// 严格按 Microsoft Store "热门游戏 / 新潮应用" 风格：
-//   - 标题左侧 + chevron-right 在标题旁边（点击跳到详情）
-//   - 右侧可放分页箭头或筛选 chip
-//   - 内容区由 children 自由排版
+// Title can be clickable, with an optional right-side control slot.
 export function StoreSection({ title, onSeeAll, right, children, dense = false }) {
   return (
     <section>
@@ -73,16 +66,14 @@ export function StoreSection({ title, onSeeAll, right, children, dense = false }
   );
 }
 
-// ════════ 3. StoreCard —— 通用卡片（应用风格） ════════
+// 3. StoreCard: reusable app-style card.
 //
-// 三种密度：
-//   - 'app' (默认)：图标 64×64 + 标题 + 副标 + CTA，对应 MS Store 应用列表行
-//   - 'compact'：图标 40×40，整行小卡（用于历史列表 / 通知）
-//   - 'feature'：图标 96×96，大尺寸特卡（专属页头部展示）
+// Density modes:
+//   - 'app': 64px icon plus title, subtitle, and CTA
+//   - 'compact': 40px icon for smaller list rows
+//   - 'feature': 96px icon for featured headers
 //
-// 视觉锚点：
-//   - 圆角矩形彩色背景容器作 logo（accent hue 渐变）
-//   - hover 时整行轻微提亮（fl-card 的 hover behavior）
+// Accent color is used to create a lightweight logo tile.
 export function StoreCard({
   icon: Icon,
   iconColor,
@@ -108,7 +99,7 @@ export function StoreCard({
       onClick={onClick}
       className={`fl-card group flex items-center gap-4 ${isCompact ? 'p-3' : 'p-4'} text-left w-full ${onClick ? 'cursor-pointer' : ''} ${className}`}
     >
-      {/* Logo 容器：accent hue 衍生的浅渐变 + 边框（与 Dashboard ModelRow 同款） */}
+      {/* Logo tile derived from the accent hue. */}
       {Icon && (
         <div
           className={`${iconBox} rounded-overlay flex items-center justify-center shrink-0 border`}
@@ -121,7 +112,7 @@ export function StoreCard({
         </div>
       )}
 
-      {/* 中间：标题 + 副标 + meta */}
+      {/* Main text */}
       <div className="flex-1 min-w-0">
         <div className="flex items-center gap-2 flex-wrap">
           <span className={`font-semibold text-on-surface truncate ${isFeature ? 'text-xl' : isCompact ? 'text-sm' : 'text-base'}`}>
@@ -141,7 +132,7 @@ export function StoreCard({
         {meta && <div className={`mt-1.5 ${isCompact ? 'text-[11px]' : 'text-xs'}`}>{meta}</div>}
       </div>
 
-      {/* 右侧：CTA / trailing */}
+      {/* Trailing content */}
       {trailing && <div className="shrink-0">{trailing}</div>}
       {cta && (
         <span className="shrink-0 inline-flex items-center justify-center h-8 px-3 rounded-control text-xs font-semibold bg-primary text-on-primary group-hover:brightness-110 transition">
@@ -155,10 +146,9 @@ export function StoreCard({
   );
 }
 
-// ════════ 4. StoreHero —— 页面顶部 hero 大卡（Dashboard 之外的页面共用） ════════
+// 4. StoreHero: shared page-level hero card.
 //
-// 比 Dashboard HeroFeatured 简化：仅 1 块，纯文案 + CTA + 装饰图标
-// 用于 Topup / Tickets / Products 这类"功能起点"页面的顶部
+// Used by feature entry pages that need one compact headline surface.
 export function StoreHero({
   title,
   subtitle,
@@ -209,7 +199,7 @@ export function StoreHero({
   );
 }
 
-// ════════ 5. StoreGrid —— 卡片栅格（响应式 1/2/3/4 列） ════════
+// 5. StoreGrid: responsive card grid.
 export function StoreGrid({ children, columns = 'auto' }) {
   const cls =
     columns === 2 ? 'grid grid-cols-1 md:grid-cols-2 gap-3' :
@@ -219,7 +209,7 @@ export function StoreGrid({ children, columns = 'auto' }) {
   return <div className={cls}>{children}</div>;
 }
 
-// hex → rgba（与 Dashboard 同款 helper，避免循环依赖）
+// hex to rgba helper; kept local to avoid a circular import.
 function hexA(hex, alpha) {
   if (!hex || hex[0] !== '#') return `rgba(124, 92, 255, ${alpha})`;
   const m = hex.match(/^#([0-9a-f]{6})$/i);
