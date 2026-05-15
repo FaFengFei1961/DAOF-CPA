@@ -35,10 +35,10 @@ func TestSyncCacheConfig(t *testing.T) {
 	SyncCacheConfig()
 
 	// Verify Auth
-	authMutex.RLock()
+	authSnapshotMutex.RLock()
 	parentUser, ok1 := AuthCache["parent-token"]
 	childUser, ok2 := AuthCache["child-token"]
-	authMutex.RUnlock()
+	authSnapshotMutex.RUnlock()
 
 	if !ok1 || parentUser.ID != 1 {
 		t.Errorf("AuthCache parent token failed")
@@ -48,16 +48,16 @@ func TestSyncCacheConfig(t *testing.T) {
 	}
 
 	// Verify Map/Routes
-	channelMutex.RLock()
+	gatewayMutex.RLock()
 	_, chOk := ChannelMapCache[1]
-	channelMutex.RUnlock()
+	gatewayMutex.RUnlock()
 	if !chOk {
 		t.Errorf("ChannelMapCache failed")
 	}
 
-	routeMutex.RLock()
+	gatewayMutex.RLock()
 	routes, rOk := RouteCache["gpt-mock"]
-	routeMutex.RUnlock()
+	gatewayMutex.RUnlock()
 	if !rOk || len(routes) == 0 {
 		t.Errorf("RouteCache failed")
 	}

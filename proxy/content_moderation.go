@@ -188,18 +188,18 @@ func isLongContextModerationModel(modelName string, minTokens int) bool {
 		return false
 	}
 
-	routeMutex.RLock()
+	gatewayMutex.RLock()
 	routes := RouteCache[modelName]
 	if len(routes) == 0 {
 		routes = RouteCache[name]
 	}
 	for _, route := range routes {
 		if route != nil && route.MaxContextLength >= minTokens {
-			routeMutex.RUnlock()
+			gatewayMutex.RUnlock()
 			return true
 		}
 	}
-	routeMutex.RUnlock()
+	gatewayMutex.RUnlock()
 
 	switch name {
 	case "gpt-5.4", "gpt-5.5", "claude-opus-4-6", "claude-opus-4-7", "claude-sonnet-4-6":
@@ -628,8 +628,8 @@ func getModerationCliproxyAPIKey(baseURL string) string {
 
 func findCliproxyChannelAPIKey(baseURL string) string {
 	want := normalizeCliproxyBaseURLForKeyLookup(baseURL)
-	channelMutex.RLock()
-	defer channelMutex.RUnlock()
+	gatewayMutex.RLock()
+	defer gatewayMutex.RUnlock()
 
 	var fallback string
 	count := 0

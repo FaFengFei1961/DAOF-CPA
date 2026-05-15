@@ -449,9 +449,12 @@ func ChatCompletionProxyHandler(c *fiber.Ctx) error {
 		token = strings.TrimSpace(c.Get("x-goog-api-key"))
 	}
 
-	authMutex.RLock()
+	// fix CRITICAL Sprint4-M2：user + subToken 在同一 RLock 段内读，保证一致快照
+	// （AuthCache 与 AuthTokenCache 来自同一次 SyncCacheConfig 合并发布）
+	authSnapshotMutex.RLock()
 	user, exists := AuthCache[token]
-	authMutex.RUnlock()
+	subToken, isSubToken := AuthTokenCache[token]
+	authSnapshotMutex.RUnlock()
 
 	if !exists {
 		recordProxyApiLog(0, token, "unknown", 401, clientIP, startTime, path, "auth_error", "Invalid API Key")
@@ -460,16 +463,12 @@ func ChatCompletionProxyHandler(c *fiber.Ctx) error {
 	// fix Major（codex 第五轮）：纵深防御——即使 RefreshUserAuth 漏过封禁用户的清理（DB 异步竞态），
 	// 入口也要二次验证 user.Status==1，让封禁用户的旧 token 在到达 LLM 上游前被拦截。
 	if user.Status != 1 {
-		authMutex.Lock()
+		authSnapshotMutex.Lock()
 		delete(AuthCache, token)
-		authMutex.Unlock()
+		authSnapshotMutex.Unlock()
 		recordProxyApiLog(user.ID, token, "unknown", 403, clientIP, startTime, path, "auth_error", "Account suspended")
 		return c.Status(403).JSON(fiber.Map{"error": fiber.Map{"message": "Account suspended", "type": "auth_error"}})
 	}
-
-	authTokenMutex.RLock()
-	subToken, isSubToken := AuthTokenCache[token]
-	authTokenMutex.RUnlock()
 
 	// Intercept Sub-token lifespan and quota logic
 	if isSubToken {
@@ -619,13 +618,13 @@ func ChatCompletionProxyHandler(c *fiber.Ctx) error {
 	c.Locals("subscription_decision", engineDecision)
 
 	// 3. Fast Routing & Weight calculation
-	// 避免跨 mutex 读到不一致状态（route 引用的 channel 已在并发 SyncCacheConfig 中被替换）
-	routeMutex.RLock()
+	// fix CRITICAL Sprint4-M2：route + channel 在同一 RLock 段内读，保证一致快照
+	// （旧实现两次独立 RLock，并发 SyncCacheConfig 可在中间换新 channel map，
+	// 导致 routes 引用的 ChannelID 在新 ChannelMapCache 中查不到 → 路由失败）。
+	gatewayMutex.RLock()
 	routes, hasRoute := RouteCache[modelName]
-	routeMutex.RUnlock()
-	channelMutex.RLock()
 	channelMapRef := ChannelMapCache
-	channelMutex.RUnlock()
+	gatewayMutex.RUnlock()
 
 	if !hasRoute || len(routes) == 0 {
 		recordProxyApiLog(user.ID, token, modelName, 404, clientIP, startTime, path, "model_not_found", "Model not available via any channel")
@@ -1495,13 +1494,13 @@ func ChatCompletionProxyHandler(c *fiber.Ctx) error {
 					log.Printf("[SUB-TOKEN-OVERLIMIT] token_id=%d charged_cost_micro=%d used-quota-exceeded-limit", subToken.ID, chargedCostMicroUSD)
 				}
 				// clone-on-write 防 data race
-				authTokenMutex.Lock()
+				authSnapshotMutex.Lock()
 				if existing, ok := AuthTokenCache[token]; ok {
 					updated := *existing
 					updated.UsedQuota += chargedCostMicroUSD
 					AuthTokenCache[token] = &updated
 				}
-				authTokenMutex.Unlock()
+				authSnapshotMutex.Unlock()
 			}
 		}
 		return true
@@ -1910,9 +1909,9 @@ func estimatePrecheckBalanceDelta(modelName string, inputTokens, outputTokens in
 	maxInputPico := int64(0)
 	maxOutputPico := int64(0)
 
-	routeMutex.RLock()
+	gatewayMutex.RLock()
 	routes := RouteCache[modelName]
-	routeMutex.RUnlock()
+	gatewayMutex.RUnlock()
 
 	for _, r := range routes {
 		if r == nil {

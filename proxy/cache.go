@@ -8,22 +8,30 @@ import (
 	"daof-ai-hub/utils"
 )
 
+// fix CRITICAL Sprint4-M2：合并 channel/route 锁 + 合并 auth/authToken 锁
+// 原 4 把 RWMutex 分别保护 4 个 map，导致跨 cache 读取存在 race window：
+//   reader: lockA.RLock → mapA（旧）→ lockA.RUnlock
+//   writer:                          lockA.Lock → mapA 换新 → Unlock
+//                                    lockB.Lock → mapB 换新 → Unlock
+//   reader: lockB.RLock → mapB（新）→ lockB.RUnlock
+// 结果：reader 拿到旧 mapA + 新 mapB，使用了失效的组合（例如旧 route + 新 channel）。
+//
+// 修复：用 gatewayMutex 同时守护 ChannelMapCache + RouteCache，authSnapshotMutex
+// 同时守护 AuthCache + AuthTokenCache。SyncCacheConfig 一次 Lock 同时 swap 双 map，
+// reader 同一 RLock 段内读双 map 保证一致快照。
+//
+// 性能影响：读路径多读一个 map 在同一 RLock 段内，无额外锁开销；写路径只取一次锁
+// 同时 swap 两个 map，比旧"取两次锁"更短的临界区。
 var (
-	// ChannelMapCache key: channel_id, value: Channel 指针 (提供URL和Key)
-	ChannelMapCache map[uint]*database.Channel
-	channelMutex    sync.RWMutex
+	// ChannelMapCache + RouteCache 共享 gatewayMutex，保证跨 cache 读取一致性
+	ChannelMapCache map[uint]*database.Channel             // key: channel_id
+	RouteCache      map[string][]*database.ChannelModel    // key: model_name
+	gatewayMutex    sync.RWMutex
 
-	// RouteCache key: model_name, value: 支持此模型的所有渠道高维计价与权重集合
-	RouteCache map[string][]*database.ChannelModel
-	routeMutex sync.RWMutex
-
-	// AuthCache key: token, value: User 指针，用于真正的秒级鉴权
-	AuthCache map[string]*database.User
-	authMutex sync.RWMutex
-
-	// AuthTokenCache key: token key, value: AccessToken 指针，用于拦截子凭证超期和限额
-	AuthTokenCache map[string]*database.AccessToken
-	authTokenMutex sync.RWMutex
+	// AuthCache + AuthTokenCache 共享 authSnapshotMutex
+	AuthCache         map[string]*database.User        // key: token
+	AuthTokenCache    map[string]*database.AccessToken // key: token key
+	authSnapshotMutex sync.RWMutex
 
 	// SysConfigCache key: config_key, value: decrypted value
 	SysConfigCache map[string]string
@@ -41,8 +49,8 @@ func init() {
 
 // LookupUserByToken 安全地通过 token 查询缓存中的 User 指针（线程安全）
 func LookupUserByToken(token string) *database.User {
-	authMutex.RLock()
-	defer authMutex.RUnlock()
+	authSnapshotMutex.RLock()
+	defer authSnapshotMutex.RUnlock()
 	return AuthCache[token]
 }
 
@@ -51,9 +59,9 @@ func AddUserToAuthCache(user *database.User) {
 	if user == nil || user.Token == "" {
 		return
 	}
-	authMutex.Lock()
+	authSnapshotMutex.Lock()
 	AuthCache[user.Token] = user
-	authMutex.Unlock()
+	authSnapshotMutex.Unlock()
 }
 
 // EvictUserToken 精准从 AuthCache 移除某个 token 的 entry。
@@ -66,9 +74,9 @@ func EvictUserToken(token string) {
 	if token == "" {
 		return
 	}
-	authMutex.Lock()
+	authSnapshotMutex.Lock()
 	delete(AuthCache, token)
-	authMutex.Unlock()
+	authSnapshotMutex.Unlock()
 }
 
 // RefreshUserAuth 精确刷新某个用户在 AuthCache 中的实例。
@@ -89,67 +97,41 @@ func RefreshUserAuth(userID uint) {
 		return
 	}
 
-	// fix CRITICAL（codex 第六轮）：原实现只刷新主 token 在 AuthCache 的指针，
-	// 但 SyncCacheConfig 也把"子 token key → 父 user 指针"放进了 AuthCache（line ~169）。
-	// 余额扣到负数后，子 token 仍指向**旧的** user 对象（含旧 Quota），
-	// 子 token API 调用的 precheck 看到的是陈旧 Quota，可继续消费直到下次全量 SyncCacheConfig。
-	// 必须把同一用户的所有子 token 在 AuthCache 里的映射也同步指到新 user 对象。
+	// fix CRITICAL Sprint4-M2：合并锁简化前后一致性。
+	// 旧实现需要嵌套两层锁（auth token + auth user）来同时改两个 map；
+	// 合并 authSnapshotMutex 后单 Lock 内同时读 AuthTokenCache + 写 AuthCache。
 	//
-	// fix Major（codex 第六轮）：原 evict 分支在 authTokenMutex 下做 delete(AuthCache,...)
-	// 而未持 authMutex，并发读 AuthCache 会触发 map race / panic。
-	// 改为：先在 authTokenMutex 下收集要操作的 sub keys，再在 authMutex 下做实际写。
-	//
-	// 同时，被封禁用户的旧 token 不能被刷新回 AuthCache。
+	// 历史风险（已自然消除）：
+	//  1. 双层 RLock→Lock 升级窗口里 SyncCacheConfig 写者插入 → 写回死键
+	//  2. delete(AuthCache,...) 与 delete(AuthTokenCache,...) 不同步 → map race
+	// 现在 authSnapshotMutex.Lock() 同时排他双 map，race 与升级窗口都关闭。
 
-	// fix CRITICAL（codex 第七轮）：原实现两阶段——先 RLock 收集 subKeys，再 Lock 写回。
-	// 中间窗口里 DeleteToken/SyncCacheConfig 可能并发删除某个子 token，
-	// 导致我们把"已被删除的 key"重新写回 AuthCache，让被禁/被删的子 token 被当主 token 放行。
-	//
-	// 修复：把 AuthTokenCache 的读 + AuthCache 的写放在同一个原子区——
-	// 持有 authTokenMutex.RLock 收集 keys 之后立刻 Lock authMutex 写入，
-	// 期间任何 SyncCacheConfig 写者必须等待。
-	// 锁顺序统一为：authTokenMutex 先于 authMutex（与 SyncCacheConfig 一致）。
+	authSnapshotMutex.Lock()
+	defer authSnapshotMutex.Unlock()
 
-	if user.Status != 1 {
-		// 封禁/异常：在 authTokenMutex Lock 内同时清 AuthCache 主+子 token
-		authTokenMutex.Lock()
-		subKeys := make([]string, 0, 4)
-		for k, t := range AuthTokenCache {
-			if t.UserID == userID {
-				subKeys = append(subKeys, k)
-				delete(AuthTokenCache, k)
-			}
-		}
-		authMutex.Lock()
-		delete(AuthCache, user.Token)
-		for _, k := range subKeys {
-			delete(AuthCache, k)
-		}
-		authMutex.Unlock()
-		authTokenMutex.Unlock()
-		log.Printf("[AUTH-REFRESH] user=%d status=%d → evicted main + %d sub tokens", userID, user.Status, len(subKeys))
-		return
-	}
-
-	// 正常路径：在 authTokenMutex.RLock 持有期间收集 + 写 AuthCache，
-	// 防止收集后并发删除导致写回死键。
-	authTokenMutex.RLock()
 	subKeys := make([]string, 0, 4)
 	for k, t := range AuthTokenCache {
 		if t.UserID == userID {
 			subKeys = append(subKeys, k)
 		}
 	}
-	authMutex.Lock()
+
+	if user.Status != 1 {
+		// 封禁/异常：清主 token + 所有子 token（双 map 同步驱逐）
+		delete(AuthCache, user.Token)
+		for _, k := range subKeys {
+			delete(AuthTokenCache, k)
+			delete(AuthCache, k)
+		}
+		log.Printf("[AUTH-REFRESH] user=%d status=%d → evicted main + %d sub tokens", userID, user.Status, len(subKeys))
+		return
+	}
+
+	// 正常路径：刷新主 token + 所有子 token 都指向新 user 对象（含最新 Quota）
 	AuthCache[user.Token] = &user
 	for _, k := range subKeys {
-		// 双保险：写前再校验 AuthTokenCache 仍含该 key（虽然 RLock 内不会被删，但显式更安全）
-		if _, ok := AuthTokenCache[k]; ok {
-			AuthCache[k] = &user
-		}
+		AuthCache[k] = &user
 	}
-	authMutex.Unlock()
-	authTokenMutex.RUnlock()
 }
 
 // SyncCacheConfig 钩子：查询 DB，并在并行锁的保护下暴力覆写高速内存池，耗时远 < 2ms
@@ -184,7 +166,7 @@ func SyncCacheConfig() {
 	}
 
 	// ====================
-	// 1. 缓存信道源点 (BaseURL + Key)
+	// 1+2. Gateway 快照（channel + route）原子发布
 	// ====================
 	// fix Major SSRF：纵深防御——即使 controller 校验被绕过（旧数据/SQL 注入），
 	// 在 cache 层也拒绝向不安全 URL 的 channel 发出请求。坏 channel 不进缓存即等同被禁用。
@@ -201,13 +183,6 @@ func SyncCacheConfig() {
 		}
 		newChannelMap[ch.ID] = ch
 	}
-	channelMutex.Lock()
-	ChannelMapCache = newChannelMap
-	channelMutex.Unlock()
-
-	// ====================
-	// 2. 路由矩阵及各自计分阶梯 (model_name -> []ChannelModel)
-	// ====================
 	newRouteMap := make(map[string][]*database.ChannelModel)
 	for i := range channelModels {
 		chm := &channelModels[i]
@@ -220,12 +195,15 @@ func SyncCacheConfig() {
 			newRouteMap[chm.ModelID] = append(newRouteMap[chm.ModelID], chm)
 		}
 	}
-	routeMutex.Lock()
+	// fix CRITICAL Sprint4-M2：单次 Lock 内同时 swap channel + route，杜绝 reader 拿到
+	// 旧 route + 新 channel 的不一致快照
+	gatewayMutex.Lock()
+	ChannelMapCache = newChannelMap
 	RouteCache = newRouteMap
-	routeMutex.Unlock()
+	gatewayMutex.Unlock()
 
 	// ====================
-	// 3. User 鉴权秒通凭证 (聚合 Web Root Token 与全链路 子 Tokens)
+	// 3. Auth 快照（user + access_token）原子发布
 	// ====================
 	newAuthMap := make(map[string]*database.User)
 	newAuthTokenMap := make(map[string]*database.AccessToken)
@@ -243,14 +221,12 @@ func SyncCacheConfig() {
 			newAuthTokenMap[tk.Key] = tk
 		}
 	}
-
-	authMutex.Lock()
+	// fix CRITICAL Sprint4-M2：单次 Lock 内同时 swap auth + access token，杜绝新子 token
+	// 短暂绕过 AuthTokenCache 检查的 race window
+	authSnapshotMutex.Lock()
 	AuthCache = newAuthMap
-	authMutex.Unlock()
-
-	authTokenMutex.Lock()
 	AuthTokenCache = newAuthTokenMap
-	authTokenMutex.Unlock()
+	authSnapshotMutex.Unlock()
 
 	// ====================
 	// 4. 重构底层明文配置缓存

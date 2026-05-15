@@ -713,17 +713,17 @@ func TestModerationReviewChunks_RejectsUnsampledTruncation(t *testing.T) {
 }
 
 func TestModerationConfigForRequestModel_LongContextFromRouteCache(t *testing.T) {
-	routeMutex.Lock()
+	gatewayMutex.Lock()
 	saved := RouteCache
 	RouteCache = map[string][]*database.ChannelModel{
 		"claude-opus-4-7": []*database.ChannelModel{{ModelID: "claude-opus-4-7", MaxContextLength: 1000000}},
 		"claude-haiku":    []*database.ChannelModel{{ModelID: "claude-haiku", MaxContextLength: 200000}},
 	}
-	routeMutex.Unlock()
+	gatewayMutex.Unlock()
 	defer func() {
-		routeMutex.Lock()
+		gatewayMutex.Lock()
 		RouteCache = saved
-		routeMutex.Unlock()
+		gatewayMutex.Unlock()
 	}()
 
 	cfg := ModerationConfig{
@@ -804,17 +804,17 @@ func withSysConfig(t *testing.T, kv map[string]string, fn func()) {
 
 func withChannelMapCache(t *testing.T, channels map[uint]*database.Channel, fn func()) {
 	t.Helper()
-	channelMutex.Lock()
+	gatewayMutex.Lock()
 	saved := make(map[uint]*database.Channel, len(ChannelMapCache))
 	for k, v := range ChannelMapCache {
 		saved[k] = v
 	}
 	ChannelMapCache = channels
-	channelMutex.Unlock()
+	gatewayMutex.Unlock()
 	defer func() {
-		channelMutex.Lock()
+		gatewayMutex.Lock()
 		ChannelMapCache = saved
-		channelMutex.Unlock()
+		gatewayMutex.Unlock()
 	}()
 	fn()
 }
