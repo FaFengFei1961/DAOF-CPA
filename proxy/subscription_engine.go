@@ -65,6 +65,10 @@ type EngineDecision struct {
 	// 否则有有效订阅的用户在 DB 抖动期间被错误扣美元。NeedsRetry=true 让调用方返回 503
 	// 让客户端走 backoff 重试，等 DB 恢复。
 	NeedsRetry bool
+	// fix CRITICAL Sprint2-M4：HardBlock=true 表示命中 OverflowStrategy="block" 的计划，
+	// Decide 必须立即返回，不再尝试下一订阅 / 不 fallback 到余额。
+	// 语义：用户配置 block 表达"用尽则停"，违反此约束会让余额代偿（违反用户意图）。
+	HardBlock bool
 }
 
 // EngineRequest 单次扣费请求的输入
@@ -120,6 +124,14 @@ func Decide(req EngineRequest) EngineDecision {
 		// fix CRITICAL C2：trySharedQuota 触达 DB 故障 → 直接返回不允许 + NeedsRetry，
 		// 严禁继续尝试下一订阅或 fallback 到余额（防止 DB 故障期间被错误扣 USD）。
 		if d.NeedsRetry {
+			return d
+		}
+		// fix CRITICAL Sprint2-M4：OverflowStrategy="block" 命中 → 立即拒绝，
+		// 不尝试下一订阅、不 fallback 余额。语义：用户配置 block 表达"该计划用尽则停整体"。
+		if d.HardBlock {
+			if d.BlockMessage == "" {
+				d.BlockMessage = "订阅额度已用尽，本次请求被订阅策略阻断（block）"
+			}
 			return d
 		}
 		// fix MINOR（多模型审计第二十五轮 P3）：lastLimitDecision 优先保留 BlockQuotaPlanID != 0 的
@@ -181,6 +193,22 @@ func Decide(req EngineRequest) EngineDecision {
 		Allowed:      false,
 		BlockReason:  "no_subscription_match",
 		BlockMessage: get402Message(),
+	}
+}
+
+// normalizeOverflowStrategy 收敛订阅额度溢出策略到唯一两值：
+//
+//	"block"             — 用尽即停，不尝试下一订阅，不 fallback 余额（用户配置"硬停"）
+//	"next_subscription" — 软跳过（默认）：让 Decide 继续尝试下一订阅 + 余额
+//
+// 历史数据/前端误传的任意值都收敛为 "next_subscription"。
+// fix CRITICAL Sprint2-M4：之前字段未被引擎读取，所有值等价。
+func normalizeOverflowStrategy(s string) string {
+	switch strings.ToLower(strings.TrimSpace(s)) {
+	case "block":
+		return "block"
+	default:
+		return "next_subscription"
 	}
 }
 
@@ -262,6 +290,7 @@ func trySharedQuota(cs *CachedSubscription, req EngineRequest) EngineDecision {
 			WindowSeconds:      plan.WindowSeconds,
 			LimitValue:         limitValue,
 			LimitValueMicroUSD: limitValueMicroUSD,
+			OverflowStrategy:   normalizeOverflowStrategy(plan.OverflowStrategy),
 		})
 	}
 
@@ -281,7 +310,18 @@ func trySharedQuota(cs *CachedSubscription, req EngineRequest) EngineDecision {
 		}
 	}
 	if !ok {
-		d := EngineDecision{Allowed: false, BlockReason: "plan_full_skip_sub"}
+		// fix CRITICAL Sprint2-M4：根据失败 plan 的 OverflowStrategy 决定 hard-block vs soft-skip。
+		// 默认 "next_subscription"（向后兼容旧默认行为）；"block" 即时拒绝不再向下尝试。
+		// failSnap 由 consumePlanInTx 在事务内填充，包含触发的 plan 的 OverflowStrategy。
+		strategy := "next_subscription"
+		if failSnap != nil {
+			strategy = failSnap.OverflowStrategy
+		}
+		reason := "plan_full_skip_sub"
+		if strategy == "block" {
+			reason = "plan_full_hard_block"
+		}
+		d := EngineDecision{Allowed: false, BlockReason: reason, HardBlock: strategy == "block"}
 		// fix CRITICAL（多模型审计第二十五轮）：snapshot 由 consumePlanInTx 在事务内捕获，
 		// 不再事务外重新 SELECT — 杜绝并发写造成的"剩余额度"展示错乱（"明明没用尽却提示用尽"）。
 		if req.IsPrecheck && failSnap != nil {
@@ -323,6 +363,11 @@ type consumeSpec struct {
 	WindowSeconds      int
 	LimitValue         float64
 	LimitValueMicroUSD int64
+	// OverflowStrategy 命中限额时引擎行为：
+	//   "block"             → 硬阻断：拒绝请求，不尝试下一订阅 / 不 fallback 到余额
+	//   "next_subscription" → 软跳过：尝试下一订阅，仍可走余额（默认行为）
+	// Sprint2-M4 修复前所有值都等价于 next_subscription（字段未被引擎读取）。
+	OverflowStrategy string
 }
 
 type precheckLimitDetail struct {
@@ -337,6 +382,8 @@ type precheckLimitDetail struct {
 	RemainingMicroUSD int64
 	WindowEndAt       *time.Time
 	Unit              string
+	// OverflowStrategy 触发的策略，从 consumeSpec 透传。Sprint2-M4 用于决定硬阻断 vs 软跳过。
+	OverflowStrategy string
 }
 
 // fix CRITICAL（多模型审计第二十五轮）：原 diagnosePrecheckLimit 在事务外重新 SELECT，
@@ -651,6 +698,7 @@ func consumePlanInTx(tx *gorm.DB, subID uint, spec consumeSpec, isPrecheck bool)
 			LimitMicroUSD:     spec.LimitValueMicroUSD,
 			RemainingMicroUSD: remainingMicroUSD,
 			Unit:              spec.Unit,
+			OverflowStrategy:  spec.OverflowStrategy,
 		}
 		if !windowEndAt.IsZero() {
 			end := windowEndAt

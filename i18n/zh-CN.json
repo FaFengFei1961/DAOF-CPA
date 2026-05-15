@@ -1265,6 +1265,7 @@
     "ERR_INVALID_LANG_CODE": "无效的语言包代码。",
     "ERR_INVALID_LIMIT": "限制参数不合法。",
     "ERR_INVALID_LIMIT_UNIT": "配额计量单位不受支持。",
+    "ERR_INVALID_OVERFLOW_STRATEGY": "溢出策略只能是 block（用尽即停）或 next_subscription（软跳过）。",
     "ERR_INVALID_MODE": "调整模式不合法。",
     "ERR_INVALID_MODEL_PAYLOAD": "参数解析失败。",
     "ERR_INVALID_MODERATION_FAIL_MODE": "内容安全失败策略不合法。",

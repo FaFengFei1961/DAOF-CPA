@@ -1265,6 +1265,7 @@
     "ERR_INVALID_LANG_CODE": "Illegal language pack identifier",
     "ERR_INVALID_LIMIT": "Invalid limit parameter.",
     "ERR_INVALID_LIMIT_UNIT": "Unsupported quota limit unit.",
+    "ERR_INVALID_OVERFLOW_STRATEGY": "Overflow strategy must be 'block' (stop on exhaustion) or 'next_subscription' (soft skip).",
     "ERR_INVALID_MODE": "Invalid adjustment mode.",
     "ERR_INVALID_MODEL_PAYLOAD": "Illegal model parameter payload",
     "ERR_INVALID_MODERATION_FAIL_MODE": "Invalid content moderation failure mode.",

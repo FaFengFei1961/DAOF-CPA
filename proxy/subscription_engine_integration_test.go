@@ -587,3 +587,71 @@ func TestEngineIntegration_OverflowNextSubscription(t *testing.T) {
 		t.Errorf("overflow=next_subscription should skip sub1(%d) → sub2(%d), got %d", sub1.ID, sub2.ID, d.SubscriptionID)
 	}
 }
+
+// ─── overflow_strategy=block：硬阻断 ─────────────────────────
+//
+// fix CRITICAL Sprint2-M4：旧实现下 block / next_subscription / allow / degrade_model 等价（字段未被引擎读取）。
+// 新实现：block 命中后立即返回 HardBlock=true，不尝试下一订阅、不 fallback 余额。
+func TestEngineIntegration_OverflowBlockHardStops(t *testing.T) {
+	setupEngineTestDB(t)
+	userID := uint(7)
+
+	// sub1 满 (limit 1, block strategy), sub2 还有额度（但不应被尝试）
+	snap1 := makeSnapshot([]map[string]any{{
+		"id": 60, "model_match": `["*"]`, "limit_unit": "request_count",
+		"limit_value": 1.0, "overflow_strategy": "block", "priority": 1,
+	}})
+	snap2 := makeSnapshot([]map[string]any{{
+		"id": 61, "model_match": `["*"]`, "limit_unit": "request_count",
+		"limit_value": 100.0, "priority": 1,
+	}})
+	sub1 := seedSub(t, userID, snap1, 1)
+	sub2 := seedSub(t, userID, snap2, 2)
+	_ = sub1
+
+	// 用满 sub1
+	Decide(EngineRequest{UserID: userID, ModelName: "gpt-4o"})
+	FlushAllSubscriptionCache()
+
+	// 第二次调用：sub1 已满 + block strategy → 必须直接拒绝，不能流向 sub2 或余额
+	d := Decide(EngineRequest{UserID: userID, ModelName: "gpt-4o"})
+	if d.Allowed {
+		t.Fatalf("block strategy should reject; got Allowed=true SubscriptionID=%d", d.SubscriptionID)
+	}
+	if !d.HardBlock {
+		t.Errorf("expected HardBlock=true, got %v", d.HardBlock)
+	}
+	if d.SubscriptionID == sub2.ID {
+		t.Errorf("block strategy must NOT fall through to sub2(%d), but did", sub2.ID)
+	}
+	if d.FallbackToBalance {
+		t.Errorf("block strategy must NOT fallback to balance, but did")
+	}
+	if d.BlockReason != "plan_full_hard_block" {
+		t.Errorf("expected BlockReason=plan_full_hard_block, got %q", d.BlockReason)
+	}
+}
+
+// TestNormalizeOverflowStrategy_CollapsesUnknownToDefault 验证 legacy 数据收敛：
+// 历史 DB 可能存有 "allow" / "degrade_model" / "" / 空格等值，引擎统一视为 next_subscription，
+// 不再产生未定义行为。
+func TestNormalizeOverflowStrategy_CollapsesUnknownToDefault(t *testing.T) {
+	cases := []struct {
+		in   string
+		want string
+	}{
+		{"block", "block"},
+		{"BLOCK", "block"},
+		{"  block  ", "block"},
+		{"next_subscription", "next_subscription"},
+		{"", "next_subscription"},
+		{"allow", "next_subscription"},       // legacy 未实现值
+		{"degrade_model", "next_subscription"}, // legacy 未实现值
+		{"任意自定义", "next_subscription"},
+	}
+	for _, tc := range cases {
+		if got := normalizeOverflowStrategy(tc.in); got != tc.want {
+			t.Errorf("normalizeOverflowStrategy(%q) = %q, want %q", tc.in, got, tc.want)
+		}
+	}
+}

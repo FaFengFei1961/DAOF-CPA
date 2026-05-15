@@ -36,7 +36,8 @@ const parseQuotaRow = (r) => ({
 //   - limit_unit: api_cost_usd/request_count/input_tokens/output_tokens/total_tokens/weighted_tokens
 //   - model_match: JSON 数组的 glob 通配
 //   - weight_factor: 灵活 JSON
-//   - overflow_strategy: block/next_subscription/degrade_model/任意自定义
+//   - overflow_strategy: 仅 block / next_subscription（Sprint2-M4 收敛枚举，
+//     删除了未实现的 allow / degrade_model；后端 isValidOverflowStrategy 强校验）
 
 const EMPTY_PLAN = {
   name: '', display_name: '', description: '',
@@ -367,9 +368,12 @@ const QuotaPlanManagement = () => {
                 <input type="number" className={inputCls} value={editing.priority}
                   onChange={e => updateField('priority', parseInt(e.target.value) || 100)} />
               </Field>
-              <Field label="溢出策略" hint="block | next_subscription | degrade_model">
-                <input className={inputCls} value={editing.overflow_strategy}
-                  onChange={e => updateField('overflow_strategy', e.target.value)} />
+              <Field label="溢出策略" hint="block=用尽即停 / next_subscription=软跳到下一订阅">
+                <select className={inputCls} value={editing.overflow_strategy}
+                  onChange={e => updateField('overflow_strategy', e.target.value)}>
+                  <option value="next_subscription">next_subscription（软跳过）</option>
+                  <option value="block">block（用尽即停）</option>
+                </select>
               </Field>
               <Field label="启用">
                 <select className={inputCls} value={editing.enabled ? '1' : '0'}

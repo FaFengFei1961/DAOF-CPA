@@ -35,6 +35,19 @@ func validateQuotaPlanUnit(unit string) bool {
 	return allowedQuotaLimitUnits[unit]
 }
 
+// allowedOverflowStrategies 列出 admin 可配置的 overflow_strategy 枚举。
+// Sprint2-M4 删除了未实现的 "allow" / "degrade_model"（旧实现字段未被引擎读取，全部等价）。
+var allowedOverflowStrategies = map[string]bool{
+	"block":             true, // 用尽即停：拒绝请求，不尝试下一订阅 / 不 fallback 余额
+	"next_subscription": true, // 软跳过：让 Decide 继续尝试下一订阅 + 余额（默认）
+}
+
+// isValidOverflowStrategy 校验 admin 输入的 overflow_strategy 是否为合法枚举。
+// 空串视为非法（必须显式指定，避免歧义）。
+func isValidOverflowStrategy(s string) bool {
+	return allowedOverflowStrategies[s]
+}
+
 func validateJSONText(v string, fallback string) (string, bool) {
 	if v == "" {
 		v = fallback
@@ -133,6 +146,15 @@ func CreateQuotaPlan(c *fiber.Ctx) error {
 	} else {
 		return c.Status(400).JSON(fiber.Map{"success": false, "message": "extra_config 必须是合法 JSON", "message_code": "ERR_INVALID_JSON"})
 	}
+	// fix CRITICAL Sprint2-M4：OverflowStrategy 仅接受 canonical 枚举值；admin 误传非法值拒绝。
+	// 不再接受任意字符串（旧实现允许任意值，但引擎也从不读取该字段）。
+	if !isValidOverflowStrategy(p.OverflowStrategy) {
+		return c.Status(400).JSON(fiber.Map{
+			"success":      false,
+			"message":      "overflow_strategy 仅支持 block / next_subscription",
+			"message_code": "ERR_INVALID_OVERFLOW_STRATEGY",
+		})
+	}
 	// 注：QuotaPlan.Enabled 已改为 `*bool`（自审第十三轮），
 	// admin 显式 `enabled=false` → ptr(false) → 写入 false；不传 → nil → DB default true。
 	if err := database.DB.Create(&p).Error; err != nil {
@@ -184,6 +206,17 @@ func UpdateQuotaPlan(c *fiber.Ctx) error {
 		unit, uok := v.(string)
 		if !uok || !validateQuotaPlanUnit(unit) {
 			return c.Status(400).JSON(fiber.Map{"success": false, "message_code": "ERR_INVALID_LIMIT_UNIT", "message": "limit_unit 不受支持"})
+		}
+	}
+	// fix CRITICAL Sprint2-M4：UpdateQuotaPlan 也必须校验 overflow_strategy（与 Create 一致）
+	if v, ok := updates["overflow_strategy"]; ok {
+		s, sok := v.(string)
+		if !sok || !isValidOverflowStrategy(s) {
+			return c.Status(400).JSON(fiber.Map{
+				"success":      false,
+				"message_code": "ERR_INVALID_OVERFLOW_STRATEGY",
+				"message":      "overflow_strategy 仅支持 block / next_subscription",
+			})
 		}
 	}
 	for _, key := range []string{"model_match", "weight_factor", "extra_config"} {
