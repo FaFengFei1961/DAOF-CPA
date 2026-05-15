@@ -8,6 +8,8 @@ import { useConfirm } from '../context/ConfirmContext';
 import { authFetch } from '../utils/authFetch';
 import AdminUserBills from './AdminUserBills';
 import { useModalA11y } from '../hooks/useModalA11y';
+import DataTable from './ui/DataTable';
+import StatusBadge from './ui/StatusBadge';
 
 const UserManagement = () => {
     const confirm = useConfirm();

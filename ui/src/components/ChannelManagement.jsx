@@ -6,6 +6,8 @@ import toast from 'react-hot-toast';
 import { authFetch } from '../utils/authFetch';
 import { useConfirm } from '../context/ConfirmContext';
 import { useModalA11y } from '../hooks/useModalA11y';
+import DataTable from './ui/DataTable';
+import StatusBadge from './ui/StatusBadge';
 
 const ChannelManagement = () => {
     const confirm = useConfirm();
