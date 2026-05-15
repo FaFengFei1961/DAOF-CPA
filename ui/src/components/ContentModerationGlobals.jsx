@@ -524,7 +524,7 @@ const ContentModerationGlobals = ({ configs, handleChange }) => {
                         <label htmlFor="mod-model" className="block text-xs font-medium text-on-surface-variant mb-1.5">
                             {t('MODERATION.MODEL', '审核模型')}
                         </label>
-                        <input
+                        <TextInput
                             id="mod-model"
                             type="text"
                             value={configs[moderationModelKey] || ''}
@@ -562,7 +562,7 @@ const ContentModerationGlobals = ({ configs, handleChange }) => {
                         <label htmlFor="mod-api-timeout" className="block text-xs font-medium text-on-surface-variant mb-1.5">
                             {t('MODERATION.API_TIMEOUT', '审核超时（秒）')}
                         </label>
-                        <input
+                        <TextInput
                             id="mod-api-timeout"
                             type="number"
                             min="1"
@@ -616,7 +616,7 @@ const ContentModerationGlobals = ({ configs, handleChange }) => {
                             </p>
                         </div>
                         <div className="flex items-center gap-2">
-                            <input
+                            <TextInput
                                 type="number"
                                 min="1"
                                 max="200"
@@ -661,12 +661,8 @@ const ContentModerationGlobals = ({ configs, handleChange }) => {
                             <div className="max-h-72 overflow-auto divide-y divide-outline-variant/70">
                                 {keywordCandidates.map((c, idx) => (
                                     <label key={`${c.keyword}-${idx}`} className="grid cursor-pointer grid-cols-[auto,1fr] gap-3 px-3 py-2 hover:bg-surface-container-high/60">
-                                        <input
-                                            type="checkbox"
-                                            checked={selectedCandidates.has(idx)}
-                                            onChange={() => toggleCandidate(idx)}
-                                            className="mt-1 accent-primary"
-                                        />
+                                        <Switch
+                                            checked={selectedCandidates.has(idx)} onChange={() => toggleCandidate(idx)} />
                                         <div className="min-w-0">
                                             <div className="flex flex-wrap items-center gap-2">
                                                 <span className="font-mono text-xs text-on-surface break-all">{c.keyword}</span>
@@ -752,7 +748,7 @@ const ContentModerationGlobals = ({ configs, handleChange }) => {
                             <span className="block text-xs font-semibold text-on-surface">{t('MODERATION.AUTOBAN_ENABLED', '自动封禁')}</span>
                             <span className="mt-1 block text-[11px] text-on-surface-variant">{t('MODERATION.AUTOBAN_ENABLED_HINT', '命中阈值后直接限制账户')}</span>
                         </span>
-                        <input
+                        <Switch
                             type="checkbox"
                             checked={String(configs.moderation_autoban_enabled || 'false').toLowerCase() === 'true'}
                             onChange={e => handleChange('moderation_autoban_enabled', e.target.checked ? 'true' : 'false')}
@@ -769,14 +765,13 @@ const ContentModerationGlobals = ({ configs, handleChange }) => {
                     ].map(([key, label, fallback]) => (
                         <div key={key}>
                             <label className="mb-1.5 block text-xs font-medium text-on-surface-variant">{label}</label>
-                            <input
+                            <TextInput
                                 type="number"
                                 min="0"
                                 max="100"
                                 value={configs[key] || fallback}
                                 onChange={e => handleChange(key, e.target.value)}
-                                className="w-full rounded-control border border-outline bg-surface-container-high px-3 py-2 text-sm text-on-surface outline-none focus:border-primary"
-                            />
+                                />
                             <p className="mt-1 text-[10px] text-on-surface-variant">{t('MODERATION.AUTOBAN_ZERO_OFF', '0 表示关闭该类自动封禁')}</p>
                         </div>
                     ))}
@@ -784,13 +779,12 @@ const ContentModerationGlobals = ({ configs, handleChange }) => {
                         <label className="mb-1.5 block text-xs font-medium text-on-surface-variant">
                             {t('MODERATION.AUTOBAN_WINDOW', '统计窗口（秒）')}
                         </label>
-                        <input
+                        <TextInput
                             type="number"
                             min="60"
                             value={configs.moderation_autoban_window_seconds || '86400'}
                             onChange={e => handleChange('moderation_autoban_window_seconds', e.target.value)}
-                            className="w-full rounded-control border border-outline bg-surface-container-high px-3 py-2 text-sm text-on-surface outline-none focus:border-primary"
-                        />
+                            />
                     </div>
                 </div>
 
@@ -818,42 +812,36 @@ const ContentModerationGlobals = ({ configs, handleChange }) => {
                                 <Filter size={12} />
                                 {t('MODERATION.RISK_FILTER_ACTION', '事件类型')}
                             </span>
-                            <select
+                            <Select
                                 value={riskEventAction}
                                 onChange={e => setRiskEventAction(e.target.value)}
                                 className="w-full rounded-control border border-outline bg-surface-container-high px-3 py-2 text-xs text-on-surface outline-none focus:border-primary"
-                            >
-                                {riskActionOptions.map(([value, label]) => (
-                                    <option key={value} value={value}>{label}</option>
-                                ))}
-                            </select>
+                            options={riskActionOptions.map(([value, label]) => ({value, label}))} />
                         </label>
                         <label className="block">
                             <span className="mb-1.5 flex items-center gap-1.5 text-[11px] font-medium text-on-surface-variant">
                                 <Hash size={12} />
                                 {t('MODERATION.RISK_FILTER_USER', '用户 ID')}
                             </span>
-                            <input
+                            <TextInput
                                 type="number"
                                 min="1"
                                 value={riskEventUserID}
                                 onChange={e => setRiskEventUserID(e.target.value)}
                                 placeholder={t('MODERATION.RISK_FILTER_USER_PLACEHOLDER', '全部用户')}
-                                className="w-full rounded-control border border-outline bg-surface-container-high px-3 py-2 text-xs text-on-surface outline-none focus:border-primary"
-                            />
+                                />
                         </label>
                         <label className="block">
                             <span className="mb-1.5 block text-[11px] font-medium text-on-surface-variant">
                                 {t('MODERATION.RISK_FILTER_LIMIT', '数量')}
                             </span>
-                            <input
+                            <TextInput
                                 type="number"
                                 min="1"
                                 max="200"
                                 value={riskEventLimit}
                                 onChange={e => setRiskEventLimit(e.target.value)}
-                                className="w-full rounded-control border border-outline bg-surface-container-high px-3 py-2 text-xs text-on-surface outline-none focus:border-primary"
-                            />
+                                />
                         </label>
                         <button
                             type="button"
@@ -986,36 +974,34 @@ const ContentModerationGlobals = ({ configs, handleChange }) => {
                         <label htmlFor="mod-cache-ttl" className="block text-xs font-medium text-on-surface-variant mb-1.5">
                             {t('MODERATION.CACHE_TTL', '缓存 TTL (秒)')}
                         </label>
-                        <input
+                        <TextInput
                             id="mod-cache-ttl"
                             type="number"
                             min="0"
                             value={configs.moderation_cache_ttl_sec || ''}
                             onChange={e => handleChange('moderation_cache_ttl_sec', e.target.value)}
                             placeholder="300"
-                            className="w-full bg-surface-container-high border border-outline rounded-control px-3 py-2 text-on-surface outline-none focus:border-primary"
-                        />
+                            />
                     </div>
                     <div>
                         <label htmlFor="mod-cache-max" className="block text-xs font-medium text-on-surface-variant mb-1.5">
                             {t('MODERATION.CACHE_MAX', 'LRU 最大条目数')}
                         </label>
-                        <input
+                        <TextInput
                             id="mod-cache-max"
                             type="number"
                             min="100"
                             value={configs.moderation_cache_max_entries || ''}
                             onChange={e => handleChange('moderation_cache_max_entries', e.target.value)}
                             placeholder="10000"
-                            className="w-full bg-surface-container-high border border-outline rounded-control px-3 py-2 text-on-surface outline-none focus:border-primary"
-                        />
+                            />
                     </div>
                     <div className="md:col-span-2">
                         <label htmlFor="mod-secret" className="block text-xs font-medium text-on-surface-variant mb-1.5">
                             {t('MODERATION.HMAC_SECRET', 'HMAC 缓存密钥（防侧信道）')}
                         </label>
                         <div className="relative">
-                            <input
+                            <TextInput
                                 id="mod-secret"
                                 type={showSecret ? 'text' : 'password'}
                                 value={configs.moderation_cache_secret || ''}
@@ -1059,85 +1045,79 @@ const ContentModerationGlobals = ({ configs, handleChange }) => {
                         <label htmlFor="mod-max-chars" className="block text-xs font-medium text-on-surface-variant mb-1.5">
                             {t('MODERATION.MAX_CHARS', '单次最大字符数 (rune)')}
                         </label>
-                        <input
+                        <TextInput
                             id="mod-max-chars"
                             type="number"
                             min="0"
                             value={configs.moderation_max_chars || ''}
                             onChange={e => handleChange('moderation_max_chars', e.target.value)}
                             placeholder="262144"
-                            className="w-full bg-surface-container-high border border-outline rounded-control px-3 py-2 text-on-surface outline-none focus:border-primary"
-                        />
+                            />
                     </div>
                     <div>
                         <label htmlFor="mod-chunk-chars" className="block text-xs font-medium text-on-surface-variant mb-1.5">
                             {t('MODERATION.CHUNK_CHARS', '分块大小 (rune)')}
                         </label>
-                        <input
+                        <TextInput
                             id="mod-chunk-chars"
                             type="number"
                             min="0"
                             value={configs.moderation_chunk_chars || ''}
                             onChange={e => handleChange('moderation_chunk_chars', e.target.value)}
                             placeholder="28672"
-                            className="w-full bg-surface-container-high border border-outline rounded-control px-3 py-2 text-on-surface outline-none focus:border-primary"
-                        />
+                            />
                     </div>
                     <div>
                         <label htmlFor="mod-max-chunks" className="block text-xs font-medium text-on-surface-variant mb-1.5">
                             {t('MODERATION.MAX_CHUNKS', '最大分块数')}
                         </label>
-                        <input
+                        <TextInput
                             id="mod-max-chunks"
                             type="number"
                             min="1"
                             value={configs.moderation_max_chunks || ''}
                             onChange={e => handleChange('moderation_max_chunks', e.target.value)}
                             placeholder="8"
-                            className="w-full bg-surface-container-high border border-outline rounded-control px-3 py-2 text-on-surface outline-none focus:border-primary"
-                        />
+                            />
                     </div>
                     <div>
                         <label htmlFor="mod-long-min-tokens" className="block text-xs font-medium text-on-surface-variant mb-1.5">
                             {t('MODERATION.LONG_CONTEXT_MIN_TOKENS', '长上下文阈值 tokens')}
                         </label>
-                        <input
+                        <TextInput
                             id="mod-long-min-tokens"
                             type="number"
                             min="0"
                             value={configs.moderation_long_context_min_tokens || ''}
                             onChange={e => handleChange('moderation_long_context_min_tokens', e.target.value)}
                             placeholder="800000"
-                            className="w-full bg-surface-container-high border border-outline rounded-control px-3 py-2 text-on-surface outline-none focus:border-primary"
-                        />
+                            />
                     </div>
                     <div>
                         <label htmlFor="mod-long-max-chars" className="block text-xs font-medium text-on-surface-variant mb-1.5">
                             {t('MODERATION.LONG_CONTEXT_MAX_CHARS', '长上下文最大字符数')}
                         </label>
-                        <input
+                        <TextInput
                             id="mod-long-max-chars"
                             type="number"
                             min="0"
                             value={configs.moderation_long_context_max_chars || ''}
                             onChange={e => handleChange('moderation_long_context_max_chars', e.target.value)}
                             placeholder="4194304"
-                            className="w-full bg-surface-container-high border border-outline rounded-control px-3 py-2 text-on-surface outline-none focus:border-primary"
-                        />
+                            />
                     </div>
                     <div>
                         <label htmlFor="mod-long-max-chunks" className="block text-xs font-medium text-on-surface-variant mb-1.5">
                             {t('MODERATION.LONG_CONTEXT_MAX_CHUNKS', '长上下文抽样块数')}
                         </label>
-                        <input
+                        <TextInput
                             id="mod-long-max-chunks"
                             type="number"
                             min="1"
                             value={configs.moderation_long_context_max_chunks || ''}
                             onChange={e => handleChange('moderation_long_context_max_chunks', e.target.value)}
                             placeholder="12"
-                            className="w-full bg-surface-container-high border border-outline rounded-control px-3 py-2 text-on-surface outline-none focus:border-primary"
-                        />
+                            />
                     </div>
                 </div>
                 <p className="text-[11px] text-on-surface-variant mt-2">
@@ -1162,16 +1142,12 @@ const ContentModerationGlobals = ({ configs, handleChange }) => {
                         </span>
                     </label>
                     {/* fix MINOR R23-m5：补 focus 状态，键盘 Tab 用户能看到聚焦 */}
-                    <select
+                    <Select
                         id="mod-image-policy"
                         value={configs.moderation_image_policy || 'submit'}
                         onChange={e => handleChange('moderation_image_policy', e.target.value)}
                         className="bg-surface-container-high border border-outline text-on-surface rounded-control px-4 py-2 outline-none text-sm w-full md:w-48 cursor-pointer hover:border-primary focus:border-primary focus:ring-2 focus:ring-primary/40"
-                    >
-                        <option value="submit">{t('MODERATION.IMAGE_SUBMIT', 'submit — 预留，当前会按审核不可达处理')}</option>
-                        <option value="skip">{t('MODERATION.IMAGE_SKIP', 'skip — 跳过图片')}</option>
-                        <option value="reject">{t('MODERATION.IMAGE_REJECT', 'reject — 直接拒绝（推荐）')}</option>
-                    </select>
+                    options={[{value: 'submit', label: t('MODERATION.IMAGE_SUBMIT', 'submit — 预留，当前会按审核不可达处理')}, {value: 'skip', label: t('MODERATION.IMAGE_SKIP', 'skip — 跳过图片')}, {value: 'reject', label: t('MODERATION.IMAGE_REJECT', 'reject — 直接拒绝（推荐）')}]} />
                 </div>
             </section>
 
@@ -1238,3 +1214,22 @@ const ContentModerationGlobals = ({ configs, handleChange }) => {
 };
 
 export default ContentModerationGlobals;
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+

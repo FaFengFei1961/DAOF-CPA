@@ -6,6 +6,7 @@ import { StorePage } from './store/StorePrimitives';
 import { groupModelsByProvider, inferModelProvider, brandFor, hexA } from '../utils/modelProviders';
 import { usePublicPricing } from '../hooks/usePublicPricing';
 import BillingRulesPanel from './BillingRulesPanel';
+import DataTable from './ui/DataTable';
 
 const PricingDash = () => {
     const { t } = useTranslation();
@@ -52,73 +53,106 @@ const PricingDash = () => {
             {/* Phase 7：用 design system fl-table-shell 替代手写 bg-[#xx] 魔法颜色 */}
             <div className="fl-table-shell">
                 <div className="fl-table-scroll">
-                    <table className="w-full text-left border-collapse">
-                        <thead>
-                            <tr className="border-b border-outline-variant">
-                                <th className="px-4 py-3 text-[11px] font-semibold text-on-surface-variant uppercase tracking-wider">
-                                    {t('PRICING.COL_MODEL', 'Model')}
-                                </th>
-                                <th className="px-4 py-3 text-[11px] font-semibold text-on-surface-variant uppercase tracking-wider text-center w-[120px]">
-                                    {t('PRICING.COL_MAX_CTX')}
-                                </th>
-                                <th className="px-4 py-3 text-[11px] font-semibold text-on-surface-variant uppercase tracking-wider text-right">
-                                    {t('PRICING.COL_INPUT', 'Input ($/1M)')}
-                                </th>
-                                <th className="px-4 py-3 text-[11px] font-semibold text-on-surface-variant uppercase tracking-wider text-right">
-                                    {t('PRICING.COL_OUTPUT', 'Output ($/1M)')}
-                                </th>
-                                <th className="px-4 py-3 text-[11px] font-semibold text-on-surface-variant uppercase tracking-wider text-right">
-                                    {t('PRICING.COL_CACHE', 'Cached ($/1M)')}
-                                </th>
-                            </tr>
-                        </thead>
-                        <tbody>
-                            {loading ? (
-                                <tr>
-                                    <td colSpan="5" className="p-12 text-center text-on-surface-variant">
-                                        <div className="flex flex-col items-center justify-center space-y-3">
-                                            <Database className="animate-pulse" size={32} />
-                                            <span>{t('PRICING.LOADING', '聚合全网模型算力中...')}</span>
-                                        </div>
-                                    </td>
-                                </tr>
-                            ) : filteredModels.length === 0 ? (
-                                <tr>
-                                    <td colSpan="5" className="p-12 text-center text-on-surface-variant">
-                                        {searchTerm ? t('PRICING.NOT_FOUND', '未找到该模型') : t('PRICING.EMPTY', '暂无可用模型')}
-                                    </td>
-                                </tr>
-                            ) : (
-                                providerGroups.map((group, gi) => {
-                                    const brand = brandFor(group.provider.name);
+                    
+                    <DataTable
+                        edgeGradient={false}
+                        columns={[
+                            { key: 'model', header: t('PRICING.COL_MODEL', 'Model'), render: row => {
+                                if (row.isGroup) {
                                     return (
-                                    <React.Fragment key={group.provider.name}>
-                                        <tr className={gi === 0 ? '' : 'border-t-4 border-surface'}>
-                                            <td colSpan="5" className="px-4 py-3 bg-surface-container/60">
-                                                <div className="flex items-center gap-2.5">
-                                                    <ProviderIcon provider={group.provider} />
-                                                    <span className="text-sm font-semibold text-on-surface">{group.provider.name}</span>
-                                                    <span className="fl-brand-chip" data-brand={brand}>{group.items.length}</span>
-                                                    <ChevronRight size={16} className="text-on-surface-variant ml-auto" />
-                                                </div>
-                                            </td>
-                                        </tr>
-                                        {group.items.map((m, idx) => (
-                                            <PricingRow
-                                                key={`${m.model_id}-${idx}`}
-                                                model={m}
-                                                provider={inferModelProvider(m.model_id)}
-                                                formatCurrency={formatCurrency}
-                                                formatTokens={formatTokens}
-                                                t={t}
-                                            />
-                                        ))}
-                                    </React.Fragment>
+                                        <div className="flex items-center gap-2.5">
+                                            <ProviderIcon provider={row.provider} />
+                                            <span className="text-sm font-semibold text-on-surface">{row.provider.name}</span>
+                                            <span className="fl-brand-chip" data-brand={brandFor(row.provider.name)}>{row.items.length}</span>
+                                            <ChevronRight size={16} className="text-on-surface-variant ml-auto" />
+                                        </div>
                                     );
-                                })
-                            )}
-                        </tbody>
-                    </table>
+                                }
+                                return (
+                                    <div className="flex items-center gap-3">
+                                        <ProviderIcon provider={row.providerObj} />
+                                        <span className="font-mono text-sm font-semibold text-on-surface">
+                                            {row.m.model_id}
+                                        </span>
+                                    </div>
+                                );
+                            }},
+                            { key: 'max_ctx', header: t('PRICING.COL_MAX_CTX', 'Max Context'), align: 'center', width: 120, render: row => {
+                                if (row.isGroup) return null;
+                                return row.m.max_context_length > 0 ? (
+                                    <span className="text-xs font-medium bg-surface-container text-on-surface-variant border border-outline-variant/60 px-2 py-0.5 rounded-control font-mono">
+                                        {formatTokens(row.m.max_context_length)}
+                                    </span>
+                                ) : (
+                                    <span className="text-xs text-outline-variant">-</span>
+                                );
+                            }},
+                            { key: 'input', header: t('PRICING.COL_INPUT', 'Input ($/1M)'), align: 'right', render: row => {
+                                if (row.isGroup) return null;
+                                return (
+                                    <div className="flex flex-col items-end gap-1.5">
+                                        <div className="font-mono text-sm tabular-nums text-on-surface">
+                                            {formatCurrency(row.m.min_input_price, 4)}
+                                        </div>
+                                        {row.m.context_threshold > 0 && (
+                                            <div className="flex items-center gap-1.5 cursor-help" title={t('PRICING.LONG_CONTEXT_HINT', { threshold: row.m.context_threshold })}>
+                                                <span className="text-[10px] font-medium bg-warning/15 text-warning rounded-control px-1.5 py-0.5 border border-warning/30">{`>${formatTokens(row.m.context_threshold)} `}{t('PRICING.TIER_TAG', '阶梯')}</span>
+                                                <span className="font-mono text-xs tabular-nums text-warning/90">{formatCurrency(row.m.min_high_in_price, 4)}</span>
+                                            </div>
+                                        )}
+                                    </div>
+                                );
+                            }},
+                            { key: 'output', header: t('PRICING.COL_OUTPUT', 'Output ($/1M)'), align: 'right', render: row => {
+                                if (row.isGroup) return null;
+                                return (
+                                    <div className="flex flex-col items-end gap-1.5">
+                                        <div className="font-mono text-sm tabular-nums text-on-surface">
+                                            {formatCurrency(row.m.min_output_price, 4)}
+                                        </div>
+                                        {row.m.context_threshold > 0 && (
+                                            <div className="flex items-center gap-1.5 cursor-help" title={t('PRICING.LONG_CONTEXT_HINT', { threshold: row.m.context_threshold })}>
+                                                <span className="text-[10px] font-medium bg-warning/15 text-warning rounded-control px-1.5 py-0.5 border border-warning/30">{`>${formatTokens(row.m.context_threshold)} `}{t('PRICING.TIER_TAG', '阶梯')}</span>
+                                                <span className="font-mono text-xs tabular-nums text-warning/90">{formatCurrency(row.m.min_high_out_price, 4)}</span>
+                                            </div>
+                                        )}
+                                    </div>
+                                );
+                            }},
+                            { key: 'cache', header: t('PRICING.COL_CACHE', 'Cached ($/1M)'), align: 'right', render: row => {
+                                if (row.isGroup) return null;
+                                return (
+                                    <div className="flex flex-col items-end gap-1.5">
+                                        <div className="font-mono text-sm tabular-nums text-on-surface">{row.m.min_cache_price > 0 ? formatCurrency(row.m.min_cache_price, 4) : '-'}</div>
+                                        {row.m.context_threshold > 0 && row.m.min_high_cache_price > 0 && (
+                                            <div className="flex items-center gap-1.5 cursor-help" title={t('PRICING.LONG_CONTEXT_HINT', { threshold: row.m.context_threshold })}>
+                                                <span className="text-[10px] font-medium bg-warning/15 text-warning rounded-control px-1.5 py-0.5 border border-warning/30">{`>${formatTokens(row.m.context_threshold)} `}{t('PRICING.TIER_TAG', '阶梯')}</span>
+                                                <span className="font-mono text-xs tabular-nums text-warning/90">{formatCurrency(row.m.min_high_cache_price, 4)}</span>
+                                            </div>
+                                        )}
+                                        {row.m.min_cache_write_price > 0 && (
+                                            <div className="font-mono text-[11px] tabular-nums text-on-surface-variant">
+                                                {t('PRICING.CACHE_WRITE_5M', '写入5m')}: {formatCurrency(row.m.min_cache_write_price, 4)}
+                                            </div>
+                                        )}
+                                        {row.m.min_cache_write_1h_price > 0 && (
+                                            <div className="font-mono text-[11px] tabular-nums text-on-surface-variant">
+                                                {t('PRICING.CACHE_WRITE_1H', '写入1h')}: {formatCurrency(row.m.min_cache_write_1h_price, 4)}
+                                            </div>
+                                        )}
+                                    </div>
+                                );
+                            }}
+                        ]}
+                        rows={providerGroups.flatMap(group => [
+                            { isGroup: true, provider: group.provider, items: group.items },
+                            ...group.items.map(m => ({ m, providerObj: inferModelProvider(m.model_id) }))
+                        ])}
+                        rowKey={row => row.isGroup ? `group-${row.provider.name}` : row.m.model_id}
+                        loading={loading}
+                        emptyTitle={searchTerm ? t('PRICING.NOT_FOUND', '未找到该模型') : t('PRICING.EMPTY', '暂无可用模型')}
+                    />
+
                 </div>
             </div>
 
@@ -142,77 +176,5 @@ const ProviderIcon = ({ provider }) => {
         </span>
     );
 };
-
-// Phase 7：清理魔法 hex（bg-[#25262c] / text-on-surface-variant / divide-[#2b2b2b]）→ design system token
-// input/output/cache 三列保留语义化色（蓝/紫/绿），但用 token 而非裸 tailwind 色
-// 阶梯价继续用 amber，与"长上下文 = 暖色提示"语义一致
-const PricingRow = ({ model: m, provider, formatCurrency, formatTokens, t }) => (
-    <tr className="hover:bg-on-surface/[0.04] border-b border-outline-variant/30 last:border-0 transition-colors">
-        <td className="px-4 py-3">
-            <div className="flex items-center gap-3">
-                <ProviderIcon provider={provider} />
-                <span className="font-mono text-sm font-semibold text-on-surface">
-                    {m.model_id}
-                </span>
-            </div>
-        </td>
-        <td className="px-4 py-3 text-center">
-            {m.max_context_length > 0 ? (
-                <span className="text-xs font-medium bg-surface-container text-on-surface-variant border border-outline-variant/60 px-2 py-0.5 rounded-control font-mono">
-                    {formatTokens(m.max_context_length)}
-                </span>
-            ) : (
-                <span className="text-xs text-outline-variant">-</span>
-            )}
-        </td>
-        <td className="px-4 py-3">
-            <div className="flex flex-col items-end gap-1.5">
-                <div className="font-mono text-sm tabular-nums text-on-surface">
-                    {formatCurrency(m.min_input_price, 4)}
-                </div>
-                {m.context_threshold > 0 && (
-                    <div className="flex items-center gap-1.5 cursor-help" title={t('PRICING.LONG_CONTEXT_HINT', { threshold: m.context_threshold })}>
-                        <span className="text-[10px] font-medium bg-warning/15 text-warning rounded-control px-1.5 py-0.5 border border-warning/30">{`>${formatTokens(m.context_threshold)} `}{t('PRICING.TIER_TAG', '阶梯')}</span>
-                        <span className="font-mono text-xs tabular-nums text-warning/90">{formatCurrency(m.min_high_in_price, 4)}</span>
-                    </div>
-                )}
-            </div>
-        </td>
-        <td className="px-4 py-3">
-            <div className="flex flex-col items-end gap-1.5">
-                <div className="font-mono text-sm tabular-nums text-on-surface">
-                    {formatCurrency(m.min_output_price, 4)}
-                </div>
-                {m.context_threshold > 0 && (
-                    <div className="flex items-center gap-1.5 cursor-help" title={t('PRICING.LONG_CONTEXT_HINT', { threshold: m.context_threshold })}>
-                        <span className="text-[10px] font-medium bg-warning/15 text-warning rounded-control px-1.5 py-0.5 border border-warning/30">{`>${formatTokens(m.context_threshold)} `}{t('PRICING.TIER_TAG', '阶梯')}</span>
-                        <span className="font-mono text-xs tabular-nums text-warning/90">{formatCurrency(m.min_high_out_price, 4)}</span>
-                    </div>
-                )}
-            </div>
-        </td>
-        <td className="px-4 py-3 text-right">
-            <div className="flex flex-col items-end gap-1.5">
-                <div className="font-mono text-sm tabular-nums text-on-surface">{m.min_cache_price > 0 ? formatCurrency(m.min_cache_price, 4) : '-'}</div>
-                {m.context_threshold > 0 && m.min_high_cache_price > 0 && (
-                    <div className="flex items-center gap-1.5 cursor-help" title={t('PRICING.LONG_CONTEXT_HINT', { threshold: m.context_threshold })}>
-                        <span className="text-[10px] font-medium bg-warning/15 text-warning rounded-control px-1.5 py-0.5 border border-warning/30">{`>${formatTokens(m.context_threshold)} `}{t('PRICING.TIER_TAG', '阶梯')}</span>
-                        <span className="font-mono text-xs tabular-nums text-warning/90">{formatCurrency(m.min_high_cache_price, 4)}</span>
-                    </div>
-                )}
-                {m.min_cache_write_price > 0 && (
-                    <div className="font-mono text-[11px] tabular-nums text-on-surface-variant">
-                        {t('PRICING.CACHE_WRITE_5M', '写入5m')}: {formatCurrency(m.min_cache_write_price, 4)}
-                    </div>
-                )}
-                {m.min_cache_write_1h_price > 0 && (
-                    <div className="font-mono text-[11px] tabular-nums text-on-surface-variant">
-                        {t('PRICING.CACHE_WRITE_1H', '写入1h')}: {formatCurrency(m.min_cache_write_1h_price, 4)}
-                    </div>
-                )}
-            </div>
-        </td>
-    </tr>
-);
 
 export default PricingDash;

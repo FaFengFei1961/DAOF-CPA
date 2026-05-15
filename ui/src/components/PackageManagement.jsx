@@ -140,7 +140,7 @@ const PackageManagement = () => {
   };
 
   const remove = async (p) => {
-    if (!(await confirm(`删除套餐「${p.name}」？`))) return;
+    if (!(await confirm({ level: 'L1', danger: true, message: `删除套餐「${p.name}」？该套餐下的活跃订阅不受影响，但用户不能再续费` }))) return;
     try {
       // fix MAJOR（多模型审计第二十五轮 P2）：admin 写操作改 authFetch
       const json = await authFetch(`/api/admin/packages/${p.id}`, { method: 'DELETE' });

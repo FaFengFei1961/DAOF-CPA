@@ -1,6 +1,7 @@
 import React from 'react';
 import { useTranslation } from 'react-i18next';
 import { Save, Eye, EyeOff, KeyRound } from 'lucide-react';
+import TextInput from '../../../components/ui/TextInput';
 
 // Phase 6：useMaskState 已拆到 hooks/useMaskState.js — 调用方直接 import 那个文件，
 // 不再通过此文件中转（避免 react-refresh/only-export-components）。
@@ -37,27 +38,17 @@ export const SecretInputField = ({ label, id, val, onChange, show, onToggle, isP
   return (
     <div className="flex flex-col gap-2">
       <label htmlFor={inputId} className="text-xs font-semibold text-on-surface-variant ml-1">{label}</label>
-      <div className="relative group">
-        <div className="absolute inset-y-0 left-0 pl-3 flex items-center pointer-events-none">
-          <KeyRound size={16} className="text-on-surface-variant" />
-        </div>
-        <input
-          id={inputId}
-          type={isPassword && !show ? 'password' : 'text'}
-          value={val ?? ''}
-          onChange={(e) => onChange(id, e.target.value)}
-          placeholder="••••••••••••"
-          className="w-full h-8 bg-surface-container-high border border-outline group-hover:border-primary/50 rounded-control pl-8 pr-8 text-sm text-on-surface outline-none focus:border-primary font-mono placeholder:text-on-surface-variant/50"
-        />
-        <button
-          type="button"
-          onClick={onToggle}
-          aria-label={show ? '隐藏' : '显示'}
-          className="absolute inset-y-0 right-0 pr-3 flex items-center text-on-surface-variant hover:text-white"
-        >
-          {show ? <EyeOff size={16} /> : <Eye size={16} />}
-        </button>
-      </div>
+      <TextInput
+        id={inputId}
+        type={isPassword && !show ? 'password' : 'text'}
+        value={val ?? ''}
+        onChange={(e) => onChange(id, e.target.value)}
+        placeholder="••••••••••••"
+        prefix={KeyRound}
+        suffix={show ? EyeOff : Eye}
+        onSuffixClick={onToggle}
+        className="font-mono"
+      />
     </div>
   );
 };

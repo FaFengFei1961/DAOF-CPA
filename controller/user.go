@@ -21,6 +21,7 @@ import (
 // fix MAJOR M23-A6（codex 第二十三轮）：标准 JSON 不接 NaN/Inf，但接 1e308 这种超大有限数。
 // 业务上 admin 改额度通常 ≤ $10000，10亿美元已远超合理范围，作为保护性上限。
 const MaxAdminQuotaUSD = 1e9
+const bulkQuotaPreviewUserLimit = 500
 
 // validateAdminQuotaInput 校验 admin 输入的 quota / amount 值。
 //
@@ -298,6 +299,119 @@ type BulkQuotaPayload struct {
 	UserIDs []uint  `json:"user_ids"`
 	Mode    string  `json:"mode"`   // "add" / "sub" / "set"
 	Amount  float64 `json:"amount"` // 美金（USD float）
+}
+
+type BulkQuotaPreviewPayload struct {
+	UserIDs   []int64 `json:"user_ids"`
+	Action    string  `json:"action"`     // "add" / "subtract" / "set"
+	AmountUSD float64 `json:"amount_usd"` // 美金（USD float）
+}
+
+type bulkQuotaPreviewUser struct {
+	ID         uint    `json:"id"`
+	Username   string  `json:"username"`
+	CurrentUSD float64 `json:"current_usd"`
+	FutureUSD  float64 `json:"future_usd"`
+}
+
+func bulkQuotaPreviewFutureMicro(currentMicro, amountMicro int64, action string) int64 {
+	switch action {
+	case "add":
+		if amountMicro > 0 && currentMicro > math.MaxInt64-amountMicro {
+			return math.MaxInt64
+		}
+		futureMicro := currentMicro + amountMicro
+		if futureMicro < 0 {
+			return 0
+		}
+		return futureMicro
+	case "subtract":
+		if currentMicro <= amountMicro {
+			return 0
+		}
+		return currentMicro - amountMicro
+	case "set":
+		return amountMicro
+	default:
+		return currentMicro
+	}
+}
+
+func dedupePositiveUserIDs(rawIDs []int64) ([]uint, error) {
+	idSet := make(map[uint]struct{}, len(rawIDs))
+	uniqIDs := make([]uint, 0, len(rawIDs))
+	for _, rawID := range rawIDs {
+		if rawID <= 0 {
+			return nil, fmt.Errorf("bad user id")
+		}
+		id := uint(rawID)
+		if _, ok := idSet[id]; !ok {
+			idSet[id] = struct{}{}
+			uniqIDs = append(uniqIDs, id)
+		}
+	}
+	return uniqIDs, nil
+}
+
+// BulkAdjustQuotaPreview 批量额度调整预检，只读计算影响范围与未来余额。
+func BulkAdjustQuotaPreview(c *fiber.Ctx) error {
+	var req BulkQuotaPreviewPayload
+	if err := c.BodyParser(&req); err != nil {
+		return c.Status(400).JSON(fiber.Map{"success": false, "message": "数据解析异常", "message_code": "ERR_PARSE_EXCEPTION"})
+	}
+	if len(req.UserIDs) == 0 {
+		return c.Status(400).JSON(fiber.Map{"success": false, "message": "未选择任何用户", "message_code": "ERR_EMPTY_SELECTION"})
+	}
+	if len(req.UserIDs) > bulkQuotaPreviewUserLimit {
+		return c.Status(400).JSON(fiber.Map{"success": false, "message_code": MessageCodeBulkPreviewLimit})
+	}
+	if req.Action != "add" && req.Action != "subtract" && req.Action != "set" {
+		return c.Status(400).JSON(fiber.Map{"success": false, "message": "无效的调整模式", "message_code": "ERR_INVALID_MODE"})
+	}
+	if err := validateAdminQuotaInput(req.AmountUSD); err != nil {
+		return c.Status(400).JSON(fiber.Map{"success": false, "message": err.Error(), "message_code": "ERR_INVALID_QUOTA"})
+	}
+	if req.AmountUSD < 0 {
+		return c.Status(400).JSON(fiber.Map{"success": false, "message": "金额不能为负", "message_code": "ERR_NEGATIVE_AMOUNT"})
+	}
+	amountMicro, ok := database.USDToMicro(req.AmountUSD)
+	if !ok {
+		return c.Status(400).JSON(fiber.Map{"success": false, "message": "金额非法", "message_code": "ERR_INVALID_QUOTA"})
+	}
+	uniqIDs, err := dedupePositiveUserIDs(req.UserIDs)
+	if err != nil {
+		return c.Status(400).JSON(fiber.Map{"success": false, "message": "用户 ID 不合法", "message_code": "ERR_BAD_USER_ID"})
+	}
+
+	var users []database.User
+	if err := database.DB.Select("id, username, quota").
+		Where("id IN ? AND role = ?", uniqIDs, "user").
+		Order("id ASC").
+		Find(&users).Error; err != nil {
+		return c.Status(500).JSON(fiber.Map{"success": false, "message": "用户读取失败", "message_code": "ERR_READ_USERS"})
+	}
+
+	previewUsers := make([]bulkQuotaPreviewUser, 0, len(users))
+	totalDeltaMicro := int64(0)
+	for _, u := range users {
+		futureMicro := bulkQuotaPreviewFutureMicro(u.Quota, amountMicro, req.Action)
+		totalDeltaMicro += futureMicro - u.Quota
+		previewUsers = append(previewUsers, bulkQuotaPreviewUser{
+			ID:         u.ID,
+			Username:   u.Username,
+			CurrentUSD: database.MicroToUSD(u.Quota),
+			FutureUSD:  database.MicroToUSD(futureMicro),
+		})
+	}
+
+	return c.JSON(fiber.Map{
+		"success": true,
+		"data": fiber.Map{
+			"affected_count":  len(previewUsers),
+			"total_delta_usd": database.MicroToUSD(totalDeltaMicro),
+			"users":           previewUsers,
+		},
+	})
 }
 
 // BulkAdjustQuota 批量调整额度。

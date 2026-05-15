@@ -2,6 +2,7 @@ import React, { useState } from 'react';
 import { useTranslation } from 'react-i18next';
 import { Monitor, Server, Save, Eye, EyeOff } from 'lucide-react';
 import { PageContainer, PageHeader, Section } from '../../../components/ui';
+import TextInput from '../../../components/ui/TextInput';
 import { useAdminConfigs } from '../../../hooks/useAdminConfigs';
 import { useTheme } from '../../../context/ThemeContext';
 import { authFetch } from '../../../utils/authFetch';
@@ -136,13 +137,14 @@ const GeneralAdminPage = () => {
             <span className="text-on-surface-variant font-medium text-sm">服务地址</span>
             <span className="text-xs text-outline">CLIProxyAPI 本地服务的 HTTP 地址</span>
           </div>
-          <input
-            type="text"
-            value={configs.cliproxy_url || ''}
-            onChange={e => handleChange('cliproxy_url', e.target.value)}
-            placeholder="http://127.0.0.1:8080"
-            className="bg-surface-container-high border border-outline text-on-surface rounded-control px-4 py-2 outline-none text-sm w-full md:w-72 focus:border-primary transition-colors"
-          />
+          <div className="w-full md:w-72">
+            <TextInput
+              type="text"
+              value={configs.cliproxy_url || ''}
+              onChange={e => handleChange('cliproxy_url', e.target.value)}
+              placeholder="http://127.0.0.1:8080"
+            />
+          </div>
         </div>
 
         <div className="flex flex-col md:flex-row md:items-center justify-between py-3 gap-3">
@@ -150,21 +152,15 @@ const GeneralAdminPage = () => {
             <span className="text-on-surface-variant font-medium text-sm">Management Key</span>
             <span className="text-xs text-outline">config.yaml 中 remote-management.secret-key 或环境变量 MANAGEMENT_PASSWORD</span>
           </div>
-          <div className="relative w-full md:w-72">
-            <input
+          <div className="w-full md:w-72">
+            <TextInput
               type={showClipKey ? 'text' : 'password'}
               value={configs.cliproxy_key || ''}
               onChange={e => handleChange('cliproxy_key', e.target.value)}
               placeholder="输入 Management Key"
-              className="bg-surface-container-high border border-outline text-on-surface rounded-control px-4 py-2 pr-10 outline-none text-sm w-full focus:border-primary transition-colors"
+              suffix={showClipKey ? EyeOff : Eye}
+              onSuffixClick={() => setShowClipKey(v => !v)}
             />
-            <button
-              type="button"
-              onClick={() => setShowClipKey(v => !v)}
-              className="absolute right-3 top-2.5 text-on-surface-variant hover:text-on-surface transition-colors"
-            >
-              {showClipKey ? <EyeOff size={16} /> : <Eye size={16} />}
-            </button>
           </div>
         </div>
       </Section>

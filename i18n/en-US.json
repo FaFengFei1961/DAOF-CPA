@@ -299,10 +299,7 @@
     "HINT_SERVER_ADDRESS": "Note: server_address must be configured in Finance Workspace → Basics before top-up orders can be created."
   },
   "UPGRADE": {
-    "TITLE": "Choose Your Plan",
-    "SUBTITLE": "Quota is managed by API-equivalent USD, request count, or token units.",
     "LOADING": "Loading...",
-    "EMPTY": "No packages available",
     "INSTANT": "⚡ Instant",
     "STACKABLE": "Stackable",
     "USE_COUPON": "Use Coupon",
@@ -508,8 +505,6 @@
     "BASE_URL_TITLE": "API Base URL",
     "BASE_URL_DESC": "Use this as the Base URL in your applications (e.g. Chatbox, NextChat) to access models.",
     "COPY_URL": "Copy URL",
-    "TAB_TOKENS": "Token Distribution",
-    "TAB_LOGS": "Usage Logs",
     "UNTITLED_TOKEN": "Untitled Token",
     "DELETE_CONFIRM": "ALERT: Permanently delete this token? All associated systems will lose connection!",
     "COPY_SUCCESS": "Token copied successfully!",
@@ -534,11 +529,6 @@
     "LOGS_DESC": "Proxy call logs will be displayed here.",
     "LOGS_SYNCING": "Loading logs...",
     "LOGS_EMPTY": "No audit logs found.",
-    "ROOT_AUTH": "Master Token",
-    "LOG_HEAD_TIME": "Timestamp",
-    "LOG_HEAD_TOKEN": "Token Identity",
-    "LOG_HEAD_MODEL": "AI Model",
-    "LOG_HEAD_TOKENS": "Prompt / Completion Tokens",
     "LOG_HEAD_COST": "Cost ($)",
     "CREATE_OK": "令牌已创建",
     "ENABLED_OK": "已启用",
@@ -757,7 +747,6 @@
     "LOG_UPDATE_QUOTA": "Changed [{{target}}]'s quota from [{{old}}] to [{{new}}]",
     "LOG_UPDATE_STATUS": "Changed [{{target}}]'s status from [{{old}}] to [{{new}}]",
     "LOG_UPDATE_BAN_REASON": "Changed [{{target}}]'s ban reason from [{{old}}] to [{{new}}]",
-    "MODAL_ADD_TITLE": "Add New User",
     "MODAL_EDIT_TITLE": "Edit User Information",
     "MODAL_USERNAME": "Username",
     "MODAL_QUOTA": "Quota ($)",
@@ -784,7 +773,8 @@
       "KEY": "Private Key",
       "BASE_URL": "Custom Base URL",
       "WEIGHT": "Route Weight",
-      "ACTIONS": "Actions"
+      "ACTIONS": "Actions",
+      "EMPTY": "No channels connected yet"
     },
     "BTN_MODELS": "Models & Pricing",
     "MODAL_CHANNEL": {
@@ -830,7 +820,8 @@
         "WEIGHT": "Weight",
         "BASE_PRICING": "Base Pricing ($/1M)",
         "TIER_PRICING": "Tiered Pricing",
-        "ACTIONS": "Actions"
+        "ACTIONS": "Actions",
+        "EMPTY": "No models found for this channel."
       },
       "MODAL": {
         "ADD_TITLE": "Configure Model Price",
@@ -882,6 +873,7 @@
       "BADGE_ALL": "端点: ALL",
       "BADGE_NO_CHAT_NS": "端点: 禁非流式 Chat",
       "BADGE_RESPONSES": "端点: Responses",
+      "NO_CHAT_NS": "Disable non-stream chat",
       "POLICY": "允许的客户端端点",
       "LEGEND": "端点兼容策略",
       "ALL": "全部允许",
@@ -1306,6 +1298,7 @@
     "ERR_BODY_TOO_LONG": "Body is too long.",
     "ERR_BUILD_REQUEST": "Failed to build upstream request.",
     "ERR_BUILD_SNAPSHOT": "Failed to build package snapshot.",
+    "ERR_BULK_PREVIEW_LIMIT": "Bulk preview supports at most 500 users",
     "ERR_BULK_QUOTA_ALL_FAILED": "Bulk quota adjustment failed for all users. Check the details.",
     "ERR_CHANNEL_BASE_URL_INVALID": "Channel BaseURL is invalid (only http/https; cloud-metadata / link-local addresses are blocked).",
     "ERR_CHANNEL_CREATE_FAILED": "Failed to create provider channel.",
@@ -1646,7 +1639,10 @@
   "ADMIN": {
     "SHELL_TITLE": "管理控制台",
     "BACK_TO_USER": "返回用户视图",
-    "GOTO_USER": "用户仪表盘"
+    "GOTO_USER": "用户仪表盘",
+    "NAV_USAGE_OVERVIEW": "User Usage Overview",
+    "NAV_UPSTREAM_MARGIN": "Upstream Margin",
+    "NAV_AUDIT_EVENTS": "Audit Events"
   },
   "SIDEBAR": {
     "TAGLINE": "AI 模型聚合"

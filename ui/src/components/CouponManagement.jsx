@@ -113,7 +113,7 @@ const CouponManagement = () => {
   };
 
   const onDelete = async (item) => {
-    if (!(await confirm(t('COUPON.DELETE_CONFIRM', `确认删除模板「${item.name}」？已发出的券不受影响。`)))) return;
+    if (!(await confirm({ level: 'L1', danger: true, message: t('COUPON.DELETE_CONFIRM', `确认删除模板「${item.name}」？已发出的券不受影响。`) }))) return;
     try {
       const j = await authFetch(`/api/admin/coupon-templates/${item.id}`, { method: 'DELETE' });
       if (j?.success) {

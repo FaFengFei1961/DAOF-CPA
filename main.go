@@ -250,6 +250,7 @@ func main() {
 	adminApi.Put("/upstream-accounts/:id", controller.UpdateUpstreamAccountCost)
 	adminApi.Delete("/upstream-accounts/:id", controller.DeleteUpstreamAccountCost)
 	adminApi.Get("/upstream-margin", controller.GetUpstreamMarginReport)
+	adminApi.Post("/users/bulk-quota/preview", controller.BulkAdjustQuotaPreview)
 	adminApi.Post("/users/bulk-quota", controller.BulkAdjustQuota)
 	adminApi.Post("/users/bulk-delete", controller.BulkDeleteUsers)
 	adminApi.Put("/users/:id", controller.UpdateUser)

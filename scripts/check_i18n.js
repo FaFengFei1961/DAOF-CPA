@@ -10,6 +10,7 @@ const LOCALE_FILES = {
 };
 const UI_SRC = path.join(ROOT, 'ui', 'src');
 const SCAN_EXTENSIONS = new Set(['.js', '.jsx']);
+const allowOrphan = process.argv.includes('--allow-orphan');
 
 function readJson(filePath) {
   return JSON.parse(fs.readFileSync(filePath, 'utf8'));
@@ -65,10 +66,13 @@ function recordDynamicPrefix(key, usedPrefixes) {
 function collectCodeKeys() {
   const usedKeys = new Map();
   const usedPrefixes = new Set();
-  const callPattern = /(?:^|[^\w$.])(?:i18n\.)?t\s*\(\s*(['"`])([^'"`]*?)\1/g;
+  const callPattern = /(?:^|[^\w$.])(?:i18n\.)?t\s*\(\s*(['"])([^'"]*?)\1/g;
+  const dynamicTemplateCallPattern = /(?:^|[^\w$.])(?:i18n\.)?t\s*\(\s*`([^`]*\$\{[^`]*)`/g;
+  const staticKeyPattern = /(['"`])([A-Z][A-Z0-9_]*(?:\.[A-Z0-9_]+)+)\1/g;
 
   for (const filePath of collectFiles(UI_SRC)) {
     const source = fs.readFileSync(filePath, 'utf8');
+    const relativePath = path.relative(ROOT, filePath).replace(/\\/g, '/');
     let match;
     while ((match = callPattern.exec(source)) !== null) {
       const quote = match[1];
@@ -91,7 +95,16 @@ function collectCodeKeys() {
         continue;
       }
 
-      const relativePath = path.relative(ROOT, filePath).replace(/\\/g, '/');
+      if (!usedKeys.has(key)) usedKeys.set(key, []);
+      usedKeys.get(key).push(`${relativePath}:${lineNumber(source, match.index)}`);
+    }
+
+    while ((match = dynamicTemplateCallPattern.exec(source)) !== null) {
+      recordDynamicPrefix(match[1], usedPrefixes);
+    }
+
+    while ((match = staticKeyPattern.exec(source)) !== null) {
+      const key = match[2];
       if (!usedKeys.has(key)) usedKeys.set(key, []);
       usedKeys.get(key).push(`${relativePath}:${lineNumber(source, match.index)}`);
     }
@@ -102,7 +115,7 @@ function collectCodeKeys() {
 
 function formatList(title, values) {
   if (values.length === 0) return;
-  console.warn(`\n${title}`);
+  console.warn(`\n${title} (${values.length})`);
   for (const value of values) {
     console.warn(`  - ${value}`);
   }
@@ -140,13 +153,22 @@ function main() {
     formatList('Code references missing from locale JSON:', missingInJson);
   }
 
-  formatList('Locale keys not referenced by literal t(...) calls:', orphanKeys);
+  if (orphanKeys.length > 0) {
+    formatList('Locale keys not referenced by UI i18n usage:', orphanKeys);
+    if (!allowOrphan) {
+      failed = true;
+    }
+  }
 
   if (failed) {
     process.exit(1);
   }
 
-  console.log('i18n check passed.');
+  if (orphanKeys.length > 0) {
+    console.log(`i18n check passed with ${orphanKeys.length} orphan key(s) allowed by --allow-orphan.`);
+  } else {
+    console.log('i18n check passed.');
+  }
 }
 
 main();

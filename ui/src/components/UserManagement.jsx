@@ -209,8 +209,6 @@ const UserManagement = () => {
     // search/sort 变化时重置到第一页（page 改了会触发上面的 effect 重新拉取）
     useEffect(() => { setPage(1); }, [searchQuery, sortBy]);
 
-    const totalPages = Math.max(1, Math.ceil(total / pageSize));
-
     const openLogModal = async (u) => {
         setLogModal({ isOpen: true, user: u, logs: [], loading: true });
         try {
@@ -318,153 +316,127 @@ const UserManagement = () => {
             )}
 
             <div className="bg-surface-container border border-outline-variant rounded-overlay overflow-hidden ">
-                <div className="overflow-x-auto">
-                    <table className="w-full min-w-[900px] text-left text-sm text-on-surface-variant table-fixed">
-                        <thead className="bg-surface-container-high text-xs uppercase font-mono tracking-wider text-on-surface-variant border-b border-outline-variant">
-                            <tr>
-                                <th className="px-4 py-4 font-medium w-[40px]">
-                                    <input
-                                        type="checkbox"
-                                        checked={allSelected}
-                                        ref={el => { if (el) el.indeterminate = someSelected; }}
-                                        onChange={toggleSelectAll}
-                                        className="w-4 h-4 cursor-pointer accent-primary"
-                                        title="全选普通用户（admin 不可选）"
-                                    />
-                                </th>
-                                <th className="px-6 py-4 font-medium w-[18%]">{t('USER_MGMT.TABLE.ID_NAME')}</th>
-                                <th className="px-6 py-4 font-medium w-[24%]">{t('USER_MGMT.TABLE.BINDING')}</th>
-                                <th className="px-6 py-4 font-medium w-[18%]">{t('USER_MGMT.TABLE.REG_TIME')}</th>
-                                <th className="px-6 py-4 font-medium w-[14%]">{t('USER_MGMT.TABLE.QUOTA')}</th>
-                                <th className="px-6 py-4 font-medium text-center w-[10%]">{t('USER_MGMT.TABLE.STATUS')}</th>
-                                <th className="px-6 py-4 font-medium text-right w-[10%]">{t('USER_MGMT.TABLE.ACTIONS')}</th>
-                            </tr>
-                        </thead>
-                        <tbody className="divide-y divide-[#2b2b2b]/50">
-                            {loading ? (
-                                <tr>
-                                    <td colSpan="7" className="px-6 py-12 text-center text-on-surface-variant">
-                                        <RefreshCw size={24} className="mx-auto mb-2" />
-                                        {t('USER_MGMT.LOADING_TEXT')}
-                                    </td>
-                                </tr>
-                            ) : users.length === 0 ? (
-                                <tr>
-                                    <td colSpan="7" className="px-6 py-12 text-center text-on-surface-variant">
-                                        {t('USER_MGMT.EMPTY')}
-                                    </td>
-                                </tr>
+                <DataTable
+                    columns={[
+                        {
+                            key: 'select',
+                            header: (
+                                <input
+                                    type="checkbox"
+                                    checked={allSelected}
+                                    ref={el => { if (el) el.indeterminate = someSelected; }}
+                                    onChange={toggleSelectAll}
+                                    className="w-4 h-4 cursor-pointer accent-primary"
+                                    title="全选普通用户（admin 不可选）"
+                                />
+                            ),
+                            width: 60,
+                            render: u => u.role === 'admin' ? (
+                                <span className="text-fuchsia-400 text-xs" title="管理员账号受保护">🔒</span>
                             ) : (
-                                users.map(u => (
-                                    <tr key={u.id} className={`hover:bg-surface-variant group ${selectedIds.has(u.id) ? 'bg-primary/5' : ''}`}>
-                                        <td className="px-4 py-4">
-                                            {u.role === 'admin' ? (
-                                                <span className="text-fuchsia-400 text-xs" title="管理员账号受保护">🔒</span>
-                                            ) : (
-                                                <input
-                                                    type="checkbox"
-                                                    checked={selectedIds.has(u.id)}
-                                                    onChange={() => toggleSelect(u.id)}
-                                                    className="w-4 h-4 cursor-pointer accent-primary"
-                                                    aria-label={`选择用户 ${u.username}`}
-                                                />
-                                            )}
-                                        </td>
-                                        <td className="px-6 py-4">
-                                            <div className="flex flex-col">
-                                                <span className="text-on-surface font-medium">{u.username}</span>
-                                                <span className="text-xs text-primary/70 font-mono mt-1">{t('USER_MGMT.ID_PREFIX', { id: u.id })} {u.role === 'admin' ? '[GOD]' : ''}</span>
-                                            </div>
-                                        </td>
-                                        <td className="px-6 py-4">
-                                            <div className="flex flex-col gap-1">
-                                                {u.github_id ? <span className="text-xs text-on-surface-variant bg-surface-variant px-2 py-0.5 rounded-control w-max">{t('USER_MGMT.GITHUB_BOUND', { id: u.github_id })}</span> : <span className="text-xs text-outline-variant italic">{t('USER_MGMT.GITHUB_UNBOUND')}</span>}
-                                                {u.phone ? <span className="text-xs text-warning bg-warning/10 px-2 py-0.5 rounded-control w-max">{t('USER_MGMT.PHONE_BOUND', { phone: u.phone })}</span> : <span className="text-xs text-outline-variant italic">{t('USER_MGMT.PHONE_UNBOUND')}</span>}
-                                            </div>
-                                        </td>
-                                        <td className="px-6 py-4 text-xs text-on-surface-variant">
-                                            {new Date(u.created_at).toLocaleString('zh-CN', { hour12: false })}
-                                        </td>
-                                        <td className="px-6 py-4 font-mono">
-                                            {u.role === 'admin'
-                                                ? <span className="text-fuchsia-400 font-bold tracking-widest text-lg">∞</span>
-                                                : <span className={u.quota > 0 ? "text-success" : "text-on-surface-variant"}>{formatCurrency(u.quota, 2)}</span>}
-                                        </td>
-                                        <td className="px-6 py-4 text-center">
-                                            {u.status === 1
-                                                ? <div className="flex items-center gap-2 justify-center"><span className="w-2 h-2 rounded-full bg-success "></span> <span className="text-xs text-success">{t('USER_MGMT.STATUS_NORMAL')}</span></div>
-                                                : <div className="flex items-center gap-2 justify-center"><span className="w-2 h-2 rounded-full bg-error"></span> <span className="text-xs text-error">{t('USER_MGMT.STATUS_BANNED')}</span></div>
-                                            }
-                                        </td>
-                                        <td className="px-6 py-4 text-right">
-                                            <div className="flex items-center justify-end gap-3 opacity-50 group-hover:opacity-100 -opacity">
-                                                <button onClick={() => openLogModal(u)} className="text-on-surface-variant hover:text-success tooltip" aria-label={t('USER_MGMT.LOG_TOOLTIP')} title={t('USER_MGMT.LOG_TOOLTIP')}>
-                                                    <History size={16} />
-                                                </button>
-                                                <button
-                                                    onClick={() => setBillsModal({ isOpen: true, user: u })}
-                                                    className="text-on-surface-variant hover:text-primary tooltip"
-                                                    aria-label={t('USER_MGMT.BILLS_TOOLTIP', '查看账单')}
-                                                    title={t('USER_MGMT.BILLS_TOOLTIP', '查看账单')}
-                                                >
-                                                    <Receipt size={16} />
-                                                </button>
-                                                <button
-                                                    onClick={() => setCouponsModal({ isOpen: true, user: u })}
-                                                    className="text-on-surface-variant hover:text-fuchsia-400 tooltip"
-                                                    aria-label={t('USER_MGMT.COUPONS_TOOLTIP', '查看/发放优惠券')}
-                                                    title={t('USER_MGMT.COUPONS_TOOLTIP', '查看/发放优惠券')}
-                                                >
-                                                    <Ticket size={16} />
-                                                </button>
-                                                {u.role !== 'admin' && (
-                                                    <>
-                                                        <button onClick={() => handleOpenModal(u)} className="text-on-surface-variant hover:text-primary tooltip" aria-label={t('USER_MGMT.EDIT_TOOLTIP')} title={t('USER_MGMT.EDIT_TOOLTIP')}>
-                                                            <Edit2 size={16} />
-                                                        </button>
-                                                        <button onClick={() => handleDelete(u.id)} className="text-on-surface-variant hover:text-error" aria-label={t('USER_MGMT.DELETE_TOOLTIP')} title={t('USER_MGMT.DELETE_TOOLTIP')}>
-                                                            <Trash2 size={16} />
-                                                        </button>
-                                                    </>
-                                                )}
-                                            </div>
-                                        </td>
-                                    </tr>
-                                ))
-                            )}
-                        </tbody>
-                    </table>
-                </div>
-                {/* 分页控件（codex 第十六轮 fix）：后端已分页，前端必须暴露翻页 */}
-                {total > pageSize && (
-                    <div className="flex items-center justify-between px-4 py-3 border-t border-outline-variant text-sm">
-                        <span className="text-on-surface-variant">
-                            {t('USER_MGMT.PAGE_INFO', '第 {{page}}/{{total}} 页 · 共 {{count}} 条', {
-                                page,
-                                total: totalPages,
-                                count: total,
-                            })}
-                        </span>
-                        <div className="flex gap-2">
-                            <button
-                                type="button"
-                                disabled={page <= 1}
-                                onClick={() => setPage(p => Math.max(1, p - 1))}
-                                className="px-3 py-1.5 rounded-control border border-outline-variant disabled:opacity-40 hover:bg-on-surface/[0.04]"
-                            >
-                                ← {t('COMMON.PREV', '上一页')}
-                            </button>
-                            <button
-                                type="button"
-                                disabled={page >= totalPages}
-                                onClick={() => setPage(p => Math.min(totalPages, p + 1))}
-                                className="px-3 py-1.5 rounded-control border border-outline-variant disabled:opacity-40 hover:bg-on-surface/[0.04]"
-                            >
-                                {t('COMMON.NEXT', '下一页')} →
-                            </button>
-                        </div>
-                    </div>
-                )}
+                                <input
+                                    type="checkbox"
+                                    checked={selectedIds.has(u.id)}
+                                    onChange={() => toggleSelect(u.id)}
+                                    className="w-4 h-4 cursor-pointer accent-primary"
+                                    aria-label={`选择用户 ${u.username}`}
+                                />
+                            )
+                        },
+                        {
+                            key: 'username',
+                            header: t('USER_MGMT.TABLE.ID_NAME'),
+                            render: u => (
+                                <div className="flex flex-col">
+                                    <span className="text-on-surface font-medium">{u.username}</span>
+                                    <span className="text-xs text-primary/70 font-mono mt-1">
+                                        {t('USER_MGMT.ID_PREFIX', { id: u.id })} {u.role === 'admin' ? '[GOD]' : ''}
+                                    </span>
+                                </div>
+                            )
+                        },
+                        {
+                            key: 'binding',
+                            header: t('USER_MGMT.TABLE.BINDING'),
+                            render: u => (
+                                <div className="flex flex-col gap-1">
+                                    {u.github_id ? <span className="text-xs text-on-surface-variant bg-surface-variant px-2 py-0.5 rounded-control w-max">{t('USER_MGMT.GITHUB_BOUND', { id: u.github_id })}</span> : <span className="text-xs text-outline-variant italic">{t('USER_MGMT.GITHUB_UNBOUND')}</span>}
+                                    {u.phone ? <span className="text-xs text-warning bg-warning/10 px-2 py-0.5 rounded-control w-max">{t('USER_MGMT.PHONE_BOUND', { phone: u.phone })}</span> : <span className="text-xs text-outline-variant italic">{t('USER_MGMT.PHONE_UNBOUND')}</span>}
+                                </div>
+                            )
+                        },
+                        {
+                            key: 'reg_time',
+                            header: t('USER_MGMT.TABLE.REG_TIME'),
+                            render: u => <span className="text-xs text-on-surface-variant">{new Date(u.created_at).toLocaleString('zh-CN', { hour12: false })}</span>
+                        },
+                        {
+                            key: 'quota',
+                            header: t('USER_MGMT.TABLE.QUOTA'),
+                            mono: true,
+                            render: u => u.role === 'admin'
+                                ? <span className="text-fuchsia-400 font-bold tracking-widest text-lg">∞</span>
+                                : <span className={u.quota > 0 ? "text-success" : "text-on-surface-variant"}>{formatCurrency(u.quota, 2)}</span>
+                        },
+                        {
+                            key: 'status',
+                            header: t('USER_MGMT.TABLE.STATUS'),
+                            align: 'center',
+                            render: u => u.status === 1
+                                ? <StatusBadge variant="success">{t('USER_MGMT.STATUS_NORMAL')}</StatusBadge>
+                                : <StatusBadge variant="error">{t('USER_MGMT.STATUS_BANNED')}</StatusBadge>
+                        },
+                        {
+                            key: 'actions',
+                            header: t('USER_MGMT.TABLE.ACTIONS'),
+                            align: 'right',
+                            render: u => (
+                                <div className="flex items-center justify-end gap-3 opacity-50 group-hover:opacity-100 transition-opacity">
+                                    <button onClick={(e) => { e.stopPropagation(); openLogModal(u); }} className="text-on-surface-variant hover:text-success tooltip" aria-label={t('USER_MGMT.LOG_TOOLTIP')} title={t('USER_MGMT.LOG_TOOLTIP')}>
+                                        <History size={16} />
+                                    </button>
+                                    <button
+                                        onClick={(e) => { e.stopPropagation(); setBillsModal({ isOpen: true, user: u }); }}
+                                        className="text-on-surface-variant hover:text-primary tooltip"
+                                        aria-label={t('USER_MGMT.BILLS_TOOLTIP', '查看账单')}
+                                        title={t('USER_MGMT.BILLS_TOOLTIP', '查看账单')}
+                                    >
+                                        <Receipt size={16} />
+                                    </button>
+                                    <button
+                                        onClick={(e) => { e.stopPropagation(); setCouponsModal({ isOpen: true, user: u }); }}
+                                        className="text-on-surface-variant hover:text-fuchsia-400 tooltip"
+                                        aria-label={t('USER_MGMT.COUPONS_TOOLTIP', '查看/发放优惠券')}
+                                        title={t('USER_MGMT.COUPONS_TOOLTIP', '查看/发放优惠券')}
+                                    >
+                                        <Ticket size={16} />
+                                    </button>
+                                    {u.role !== 'admin' && (
+                                        <>
+                                            <button onClick={(e) => { e.stopPropagation(); handleOpenModal(u); }} className="text-on-surface-variant hover:text-primary tooltip" aria-label={t('USER_MGMT.EDIT_TOOLTIP')} title={t('USER_MGMT.EDIT_TOOLTIP')}>
+                                                <Edit2 size={16} />
+                                            </button>
+                                            <button onClick={(e) => { e.stopPropagation(); handleDelete(u.id); }} className="text-on-surface-variant hover:text-error" aria-label={t('USER_MGMT.DELETE_TOOLTIP')} title={t('USER_MGMT.DELETE_TOOLTIP')}>
+                                                <Trash2 size={16} />
+                                            </button>
+                                        </>
+                                    )}
+                                </div>
+                            )
+                        }
+                    ]}
+                    rows={users}
+                    rowKey={u => u.id}
+                    loading={loading}
+                    emptyTitle={t('USER_MGMT.EMPTY')}
+                    emptyIcon={Users}
+                    pagination={{
+                        page,
+                        pageSize,
+                        total,
+                        onPageChange: setPage
+                    }}
+                />
             </div>
 
             {/* 时空审计流弹窗 */}

@@ -114,8 +114,7 @@ const BillingRulesPanel = ({ compact = false }) => {
                 <Activity className="w-4 h-4 text-primary" />
                 {t('BILLING_RULES.MODEL_TABLE', '模型消耗系数')}
               </div>
-              <div className="overflow-x-auto">
-                <table className="w-full text-sm">
+              <div className="fl-table-shell"><div className="fl-table-scroll"><table className="w-full text-sm">
                   <thead className="bg-surface-container-high text-xs text-on-surface-variant">
                     <tr>
                       <th className="text-left px-3 py-2 font-medium">{t('BILLING_RULES.MODEL_TYPE', '模型类型')}</th>
@@ -146,8 +145,7 @@ const BillingRulesPanel = ({ compact = false }) => {
                       </tr>
                     ))}
                   </tbody>
-                </table>
-              </div>
+                </table></div></div>
               {compact && modelWeights.length > visibleWeights.length && (
                 <div className="px-3 py-2 border-t border-outline-variant/40 text-xs text-on-surface-variant">
                   {t('BILLING_RULES.OPEN_PRICING_FULL', '完整规则可在左侧“定价”页面查看。')}

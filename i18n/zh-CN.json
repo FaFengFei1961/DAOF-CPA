@@ -299,10 +299,7 @@
     "HINT_SERVER_ADDRESS": "注意：必须先在 财务工作区 → 基础设置 中配置 server_address 才能创建充值订单。"
   },
   "UPGRADE": {
-    "TITLE": "选择适合你的套餐",
-    "SUBTITLE": "按 API 等值美元 / 调用次数 / token 配置额度，由 admin 统一管理。",
     "LOADING": "加载中...",
-    "EMPTY": "暂无可购买的套餐",
     "INSTANT": "⚡ 即时开通",
     "STACKABLE": "可叠加",
     "USE_COUPON": "使用优惠券",
@@ -508,8 +505,6 @@
     "BASE_URL_TITLE": "API 接口基地址 (Base URL)",
     "BASE_URL_DESC": "这是您的应用程序 (如 Chatbox、NextChat等) 调用大模型所需的 Base URL 地址",
     "COPY_URL": "复制链接",
-    "TAB_TOKENS": "分发管理",
-    "TAB_LOGS": "算力监控",
     "UNTITLED_TOKEN": "未命名令牌",
     "DELETE_CONFIRM": "确认删除此令牌？所有使用该凭证的服务将立即失效！",
     "COPY_SUCCESS": "已成功提取凭证序列 !",
@@ -534,11 +529,6 @@
     "LOGS_DESC": "目前日志可能存在短暂的延迟入库。",
     "LOGS_SYNCING": "加载日志中...",
     "LOGS_EMPTY": "暂无系统令牌审计日志记录产生。",
-    "ROOT_AUTH": "主根授权",
-    "LOG_HEAD_TIME": "请求时间",
-    "LOG_HEAD_TOKEN": "访问令牌",
-    "LOG_HEAD_MODEL": "调用模型",
-    "LOG_HEAD_TOKENS": "消耗 Tokens",
     "LOG_HEAD_COST": "扣费金额 ($)",
     "CREATE_OK": "令牌已创建",
     "ENABLED_OK": "已启用",
@@ -757,7 +747,6 @@
     "LOG_UPDATE_QUOTA": "修改 [{{target}}] 的额度，[{{old}}] -> [{{new}}]",
     "LOG_UPDATE_STATUS": "修改 [{{target}}] 的状态，[{{old}}] -> [{{new}}]",
     "LOG_UPDATE_BAN_REASON": "修改 [{{target}}] 的封禁备注，[{{old}}] -> [{{new}}]",
-    "MODAL_ADD_TITLE": "添加新用户",
     "MODAL_EDIT_TITLE": "修改账户信息",
     "MODAL_USERNAME": "登录账号名",
     "MODAL_QUOTA": "额度 (Quota $)",
@@ -784,7 +773,8 @@
       "KEY": "密钥",
       "BASE_URL": "代理地址",
       "WEIGHT": "路由权重",
-      "ACTIONS": "操作"
+      "ACTIONS": "操作",
+      "EMPTY": "暂无渠道"
     },
     "BTN_MODELS": "模型 & 定价",
     "MODAL_CHANNEL": {
@@ -830,7 +820,8 @@
         "WEIGHT": "权重",
         "BASE_PRICING": "基础计费 ($/1M)",
         "TIER_PRICING": "阶梯费率",
-        "ACTIONS": "操作"
+        "ACTIONS": "操作",
+        "EMPTY": "该渠道暂无模型"
       },
       "MODAL": {
         "ADD_TITLE": "配置模型价格",
@@ -882,6 +873,7 @@
       "BADGE_ALL": "端点: ALL",
       "BADGE_NO_CHAT_NS": "端点: 禁非流式 Chat",
       "BADGE_RESPONSES": "端点: Responses",
+      "NO_CHAT_NS": "禁非流式 Chat",
       "POLICY": "允许的客户端端点",
       "LEGEND": "端点兼容策略",
       "ALL": "全部允许",
@@ -1306,6 +1298,7 @@
     "ERR_BODY_TOO_LONG": "内容过长。",
     "ERR_BUILD_REQUEST": "构建上游请求失败。",
     "ERR_BUILD_SNAPSHOT": "构建套餐快照失败。",
+    "ERR_BULK_PREVIEW_LIMIT": "批量预检最多支持 500 个用户",
     "ERR_BULK_QUOTA_ALL_FAILED": "批量余额调整全部失败，请查看明细。",
     "ERR_CHANNEL_BASE_URL_INVALID": "渠道 BaseURL 不合法（仅允许 http/https，禁止云元数据/链路本地地址）。",
     "ERR_CHANNEL_CREATE_FAILED": "添加渠道失败。",
@@ -1646,7 +1639,10 @@
   "ADMIN": {
     "SHELL_TITLE": "管理控制台",
     "BACK_TO_USER": "返回用户视图",
-    "GOTO_USER": "用户仪表盘"
+    "GOTO_USER": "用户仪表盘",
+    "NAV_USAGE_OVERVIEW": "用户用量大盘",
+    "NAV_UPSTREAM_MARGIN": "上游毛利",
+    "NAV_AUDIT_EVENTS": "请求审计"
   },
   "SIDEBAR": {
     "TAGLINE": "AI 模型聚合"

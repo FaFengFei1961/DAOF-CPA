@@ -1,4 +1,6 @@
 import React, { useState, useEffect, useCallback } from 'react';
+import DataTable from './ui/DataTable';
+import StatusBadge from './ui/StatusBadge';
 import { useTranslation } from 'react-i18next';
 import { Megaphone, Send, RefreshCw, AlertTriangle, Eye, Trash2 } from 'lucide-react';
 import toast from 'react-hot-toast';
@@ -338,58 +340,49 @@ const AdminNotificationManagement = () => {
           </div>
         ) : (
           <div className="overflow-x-auto">
-            <table className="w-full text-sm">
-              <thead className="bg-surface-container text-xs uppercase font-mono tracking-wider text-on-surface-variant border-b border-outline-variant">
-                <tr>
-                  <th className="px-3 py-2 text-left">{t('NOTIF.ADMIN.TABLE_TITLE', '标题')}</th>
-                  <th className="px-3 py-2 text-left">{t('NOTIF.ADMIN.TABLE_SEVERITY', '级别')}</th>
-                  <th className="px-3 py-2 text-left">{t('NOTIF.ADMIN.TABLE_TARGET', '对象')}</th>
-                  <th className="px-3 py-2 text-right">{t('NOTIF.ADMIN.TABLE_RECIPIENTS', '触达数')}</th>
-                  <th className="px-3 py-2 text-right">{t('NOTIF.ADMIN.TABLE_READ_RATE', '已读率')}</th>
-                  <th className="px-3 py-2 text-left">{t('NOTIF.ADMIN.TABLE_STATUS', '状态')}</th>
-                  <th className="px-3 py-2 text-left">{t('NOTIF.ADMIN.TABLE_CREATED_AT', '创建时间')}</th>
-                  <th className="px-3 py-2 text-right">{t('NOTIF.ADMIN.TABLE_OPS', '操作')}</th>
-                </tr>
-              </thead>
-              <tbody className="divide-y divide-outline-variant">
-                {history.map(b => (
-                  <tr key={b.id} className="hover:bg-surface-container">
-                    <td className="px-3 py-2 max-w-xs truncate" title={b.title}>{b.title}</td>
-                    <td className="px-3 py-2">
-                      <span className={`text-xs px-2 py-0.5 rounded-control ${severityClass(b.severity)}`}>
-                        {severityLabel(b.severity)}
-                      </span>
-                    </td>
-                    <td className="px-3 py-2 text-xs text-on-surface-variant">{targetModeLabel(b.target_mode)}</td>
-                    <td className="px-3 py-2 text-right font-mono">{b.recipient_count}</td>
-                    <td className="px-3 py-2 text-right font-mono">
-                      {(b.read_rate * 100).toFixed(0)}%
-                    </td>
-                    <td className="px-3 py-2">
-                      <span className={`text-xs ${statusClass(b.status)}`}>
-                        {t(`NOTIF.ADMIN.STATUS_${b.status.toUpperCase()}`, b.status)}
-                      </span>
-                    </td>
-                    <td className="px-3 py-2 text-xs text-on-surface-variant">
-                      {new Date(b.created_at).toLocaleString('zh-CN', { hour12: false })}
-                    </td>
-                    <td className="px-3 py-2 text-right">
-                      {['sent', 'partial_failed'].includes(b.status) && (
-                        <button
-                          type="button"
-                          onClick={() => handleRevoke(b)}
-                          className="text-xs text-error hover:text-error inline-flex items-center gap-1"
-                          title={t('NOTIF.ADMIN.REVOKE', '撤回')}
-                        >
-                          <Trash2 size={12} />
-                          {t('NOTIF.ADMIN.REVOKE', '撤回')}
-                        </button>
-                      )}
-                    </td>
-                  </tr>
-                ))}
-              </tbody>
-            </table>
+            
+            <DataTable
+              columns={[
+                { key: 'title', header: t('NOTIF.ADMIN.TABLE_TITLE', '标题'), truncate: '200px', render: b => b.title },
+                { key: 'severity', header: t('NOTIF.ADMIN.TABLE_SEVERITY', '级别'), render: b => (
+                  <StatusBadge variant={b.severity === 'info' ? 'neutral' : b.severity}>
+                    {severityLabel(b.severity)}
+                  </StatusBadge>
+                )},
+                { key: 'target', header: t('NOTIF.ADMIN.TABLE_TARGET', '对象'), render: b => <span className="text-xs text-on-surface-variant">{targetModeLabel(b.target_mode)}</span> },
+                { key: 'recipients', header: t('NOTIF.ADMIN.TABLE_RECIPIENTS', '触达数'), align: 'right', mono: true, render: b => b.recipient_count },
+                { key: 'read_rate', header: t('NOTIF.ADMIN.TABLE_READ_RATE', '已读率'), align: 'right', mono: true, render: b => `${(b.read_rate * 100).toFixed(0)}%` },
+                { key: 'status', header: t('NOTIF.ADMIN.TABLE_STATUS', '状态'), render: b => {
+                  const variant = b.status === 'sent' ? 'success'
+                    : b.status === 'partial_failed' ? 'warning'
+                    : b.status === 'draft' ? 'warning'
+                    : 'neutral';
+                  return (
+                    <StatusBadge variant={variant}>
+                      {t(`NOTIF.ADMIN.STATUS_${b.status.toUpperCase()}`, b.status)}
+                    </StatusBadge>
+                  );
+                }},
+                { key: 'created_at', header: t('NOTIF.ADMIN.TABLE_CREATED_AT', '创建时间'), render: b => <span className="text-xs text-on-surface-variant">{new Date(b.created_at).toLocaleString('zh-CN', { hour12: false })}</span> },
+                { key: 'ops', header: t('NOTIF.ADMIN.TABLE_OPS', '操作'), align: 'right', render: b => (
+                  ['sent', 'partial_failed'].includes(b.status) ? (
+                    <button
+                      type="button"
+                      onClick={() => handleRevoke(b)}
+                      className="text-xs text-error hover:text-error inline-flex items-center gap-1"
+                      title={t('NOTIF.ADMIN.REVOKE', '撤回')}
+                    >
+                      <Trash2 size={12} />
+                      {t('NOTIF.ADMIN.REVOKE', '撤回')}
+                    </button>
+                  ) : null
+                )}
+              ]}
+              rows={history}
+              loading={historyLoading}
+              emptyTitle={t('NOTIF.ADMIN.EMPTY', '暂无群发记录')}
+            />
+
           </div>
         )}
       </section>
@@ -402,25 +395,6 @@ const AdminNotificationManagement = () => {
       </div>
     </div>
   );
-};
-
-const severityClass = (s) => {
-  switch (s) {
-    case 'success': return 'bg-success/10 text-success';
-    case 'warning': return 'bg-warning/10 text-warning';
-    case 'error': return 'bg-error/10 text-error';
-    default: return 'bg-primary/10 text-primary';
-  }
-};
-
-const statusClass = (s) => {
-  switch (s) {
-    case 'sent': return 'text-success';
-    case 'partial_failed': return 'text-warning';
-    case 'revoked': return 'text-on-surface-variant line-through';
-    case 'draft': return 'text-warning';
-    default: return 'text-on-surface-variant';
-  }
 };
 
 export default AdminNotificationManagement;

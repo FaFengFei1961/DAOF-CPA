@@ -2,6 +2,8 @@ import React from 'react';
 import { useTranslation } from 'react-i18next';
 import { ShieldCheck, Activity } from 'lucide-react';
 import { PageContainer, PageHeader, Section } from '../../../components/ui';
+import TextInput from '../../../components/ui/TextInput';
+import Select from '../../../components/ui/Select';
 import { useAdminConfigs } from '../../../hooks/useAdminConfigs';
 import { SaveBar } from './_AdminFormPrimitives';
 
@@ -32,15 +34,17 @@ const RiskPage = () => {
             <span className="text-on-surface-variant font-medium">{t('SETTINGS.RISK_STRATEGY_LABEL', '注册策略')}</span>
             <span className="text-xs text-on-surface-variant">{t('SETTINGS.RISK_STRATEGY_DESC', '不同策略对新用户的限制松紧不同')}</span>
           </div>
-          <select
-            value={configs.reg_strategy || 'dynamic'}
-            onChange={(e) => handleChange('reg_strategy', e.target.value)}
-            className="bg-surface-container-high border border-outline text-on-surface-variant rounded-control px-4 py-2 outline-none text-sm w-full md:w-64 cursor-pointer hover:border-primary/50"
-          >
-            <option value="trust">{t('SETTINGS.STRATEGY_TRUST', '宽松（信任模式）')}</option>
-            <option value="dynamic">{t('SETTINGS.STRATEGY_DYNAMIC', '动态（推荐）')}</option>
-            <option value="strict">{t('SETTINGS.STRATEGY_STRICT', '严格')}</option>
-          </select>
+          <div className="w-full md:w-64">
+            <Select
+              value={configs.reg_strategy || 'dynamic'}
+              onChange={(e) => handleChange('reg_strategy', e.target.value)}
+              options={[
+                { value: 'trust', label: t('SETTINGS.STRATEGY_TRUST', '宽松（信任模式）') },
+                { value: 'dynamic', label: t('SETTINGS.STRATEGY_DYNAMIC', '动态（推荐）') },
+                { value: 'strict', label: t('SETTINGS.STRATEGY_STRICT', '严格') }
+              ]}
+            />
+          </div>
         </div>
 
         <div className="flex flex-col md:flex-row md:items-center justify-between py-3 border-b border-outline-variant/30 gap-4">
@@ -48,12 +52,13 @@ const RiskPage = () => {
             <span className="text-on-surface-variant font-medium">{t('SETTINGS.IP_LIMIT_LABEL', '同 IP 注册上限')}</span>
             <span className="text-xs text-on-surface-variant">{t('SETTINGS.IP_LIMIT_DESC', '同一 IP 24h 内最多允许注册的账号数')}</span>
           </div>
-          <div className="relative w-full md:w-auto">
-            <input
+          <div className="relative w-full md:w-32">
+            <TextInput
               type="number"
               value={configs.reg_ip_limit || '3'}
               onChange={(e) => handleChange('reg_ip_limit', e.target.value)}
-              className="w-full md:w-32 bg-surface-container-high border border-outline rounded-control pl-4 pr-10 py-2 text-on-surface outline-none text-right focus:border-primary"
+              className="text-right"
+              style={{ paddingRight: '2.5rem' }}
             />
             <span className="absolute right-4 top-2.5 text-on-surface-variant text-sm pointer-events-none">{t('SETTINGS.UNIT_COUNT', '次')}</span>
           </div>
@@ -64,13 +69,14 @@ const RiskPage = () => {
             <span className="text-on-surface-variant font-medium">平台用户总量上限</span>
             <span className="text-xs text-on-surface-variant">达到上限后停止接受新用户注册（仅统计普通用户，不含管理员）。设为 0 表示无限制。</span>
           </div>
-          <div className="relative w-full md:w-auto">
-            <input
+          <div className="relative w-full md:w-32">
+            <TextInput
               type="number" min="0"
               value={configs.max_users ?? '0'}
               onChange={(e) => handleChange('max_users', e.target.value)}
               placeholder="0"
-              className="w-full md:w-32 bg-surface-container-high border border-outline rounded-control pl-4 pr-10 py-2 text-on-surface outline-none text-right focus:border-primary"
+              className="text-right"
+              style={{ paddingRight: '2.5rem' }}
             />
             <span className="absolute right-4 top-2.5 text-on-surface-variant text-sm pointer-events-none">人</span>
           </div>
@@ -94,13 +100,13 @@ const RiskPage = () => {
               <span className="text-xs text-outline">{item.hint}</span>
             </div>
             <div className="relative w-full md:w-32">
-              <span className="absolute left-3 top-2.5 text-on-surface-variant text-sm pointer-events-none">$</span>
-              <input
+              <span className="absolute left-3 top-2.5 text-on-surface-variant text-sm pointer-events-none z-10">$</span>
+              <TextInput
                 type="number" step="0.01" min="0"
                 value={configs[item.key] ?? item.defaultVal}
                 onChange={(e) => handleChange(item.key, e.target.value)}
                 placeholder={item.placeholder}
-                className="w-full bg-surface-container-high border border-outline rounded-control pl-7 pr-3 py-2 text-on-surface outline-none text-right focus:border-primary"
+                className="pl-7 text-right"
               />
             </div>
           </div>
@@ -124,12 +130,13 @@ const RiskPage = () => {
               <span className="text-xs text-outline">{item.hint}</span>
             </div>
             <div className="relative w-full md:w-32">
-              <input
+              <TextInput
                 type="number" min={item.min} max={item.max}
                 value={configs[item.key] ?? item.defaultVal}
                 onChange={(e) => handleChange(item.key, e.target.value)}
                 placeholder={item.placeholder}
-                className="w-full bg-surface-container-high border border-outline rounded-control pl-3 pr-12 py-2 text-on-surface outline-none text-right focus:border-primary"
+                className="text-right"
+                style={{ paddingRight: '3rem' }}
               />
               <span className="absolute right-3 top-2.5 text-on-surface-variant text-sm pointer-events-none">{item.unit}</span>
             </div>

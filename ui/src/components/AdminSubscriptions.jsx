@@ -144,6 +144,8 @@ const AdminSubscriptions = () => {
     const maxAmount = (sub.purchased_price_usd || 0).toFixed(2);
     const suggested = (sub.suggested_refund_usd || 0).toFixed(2);
     const amountResult = await confirm({
+      level: 'L3',
+      danger: true,
       title: t('ADMIN_SUBS.REFUND_TITLE', '订阅退款（平台内部）'),
       message: t('ADMIN_SUBS.REFUND_BODY', {
         user: sub.username || `#${sub.user_id}`,
@@ -157,6 +159,7 @@ const AdminSubscriptions = () => {
         defaultValue: '退款给「{{user}}」的「{{pkg}}」？\n\n剩余 {{remainDays}} / {{totalDays}} 天\n按时间比例建议退款 ${{suggested}}（最大可退 ${{max}}）\n用量参考: {{usage}}%\n\n注：此操作仅在平台内退还 USD 余额，与外部支付无关。如需退回支付宝/微信，请改走【充值订单】退款。',
       }),
       input: { label: t('ADMIN_SUBS.REFUND_AMOUNT', '退款金额（USD）'), placeholder: maxAmount, defaultValue: suggested },
+      confirmPhrase: `REFUND ${sub.id}`,
       confirmText: t('ADMIN_SUBS.REFUND_CONFIRM', '确认退款'),
     });
     const amountStr = readConfirmValue(amountResult);

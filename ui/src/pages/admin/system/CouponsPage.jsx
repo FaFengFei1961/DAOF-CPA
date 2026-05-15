@@ -3,6 +3,7 @@ import { useTranslation } from 'react-i18next';
 import toast from 'react-hot-toast';
 import { Package as PackageIcon, RefreshCw, Save } from 'lucide-react';
 import { PageContainer, PageHeader, Section } from '../../../components/ui';
+import Select from '../../../components/ui/Select';
 import { useAdminConfigs } from '../../../hooks/useAdminConfigs';
 
 const CouponManagement = lazy(() => import('../../../components/CouponManagement'));
@@ -78,18 +79,21 @@ const CouponsPage = () => {
         }
       >
         <div className="flex flex-col md:flex-row md:items-center gap-3">
-          <select
-            value={configs.signup_coupon_template_id || '0'}
-            onChange={(e) => handleChange('signup_coupon_template_id', e.target.value)}
-            className="h-10 flex-1 bg-surface-container-high border border-outline rounded-control px-3 text-sm text-on-surface focus:border-primary outline-none"
-          >
-            <option value="0">{t('SETTINGS.SIGNUP_COUPON_NONE', '不自动发放')}</option>
-            {templates.map((tpl) => (
-              <option key={tpl.id} value={String(tpl.id)} disabled={tpl.enabled === false}>
-                #{tpl.id} · {tpl.name}{tpl.enabled === false ? `（${t('COUPON.NO', '禁用')}）` : ''}
-              </option>
-            ))}
-          </select>
+          <div className="flex-1">
+            <Select
+              id="signup_coupon_template_id"
+              value={configs.signup_coupon_template_id || '0'}
+              onChange={(e) => handleChange('signup_coupon_template_id', e.target.value)}
+              options={[
+                { value: '0', label: t('SETTINGS.SIGNUP_COUPON_NONE', '不自动发放') },
+                ...templates.map(tpl => ({
+                  value: String(tpl.id),
+                  label: `#${tpl.id} · ${tpl.name}${tpl.enabled === false ? `（${t('COUPON.NO', '禁用')}）` : ''}`,
+                  disabled: tpl.enabled === false
+                }))
+              ]}
+            />
+          </div>
           <button
             type="button"
             onClick={saveSignupCoupon}

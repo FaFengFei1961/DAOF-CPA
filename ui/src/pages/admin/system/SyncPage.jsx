@@ -3,6 +3,8 @@ import { useTranslation } from 'react-i18next';
 import { Activity, Eye, EyeOff, KeyRound, ShieldAlert } from 'lucide-react';
 import toast from 'react-hot-toast';
 import { PageContainer, PageHeader, FormRow } from '../../../components/ui';
+import TextInput from '../../../components/ui/TextInput';
+import Switch from '../../../components/ui/Switch';
 import { useAdminConfigs } from '../../../hooks/useAdminConfigs';
 import { useMaskState } from '../../../hooks/useMaskState';
 import { authFetch } from '../../../utils/authFetch';
@@ -23,30 +25,29 @@ const toBool = (value) => ['true', '1', 'yes', 'on'].includes(String(value ?? ''
 
 const NumberInput = ({ id, value, onChange, min, max, unit }) => (
   <div className="relative w-full md:w-56">
-    <input
+    <TextInput
       id={id}
       type="number"
       min={min}
       max={max}
       value={value}
       onChange={(e) => onChange(e.target.value)}
-      className="w-full bg-surface-container-high border border-outline rounded-control pl-4 pr-12 py-2 text-sm text-on-surface outline-none focus:border-primary text-right"
+      className="text-right"
+      style={{ paddingRight: '3rem' }}
     />
-    <span className="absolute right-3 top-2.5 text-xs text-on-surface-variant pointer-events-none">{unit}</span>
+    <span className="absolute right-3 top-2.5 text-xs text-on-surface-variant pointer-events-none z-10">{unit}</span>
   </div>
 );
 
 const BoolSwitch = ({ id, checked, onChange }) => (
-  <label htmlFor={id} className="inline-flex items-center gap-2 cursor-pointer select-none">
-    <input
+  <div className="inline-flex items-center gap-2">
+    <Switch
       id={id}
-      type="checkbox"
       checked={checked}
-      onChange={(e) => onChange(e.target.checked ? 'true' : 'false')}
-      className="h-4 w-4 accent-primary"
+      onChange={(newChecked) => onChange(newChecked ? 'true' : 'false')}
     />
-    <span className="text-xs font-mono text-on-surface-variant">{checked ? 'true' : 'false'}</span>
-  </label>
+    <span className="text-xs font-mono text-on-surface-variant cursor-pointer select-none" onClick={() => onChange(checked ? 'false' : 'true')}>{checked ? 'true' : 'false'}</span>
+  </div>
 );
 
 const SyncPage = () => {
@@ -62,9 +63,9 @@ const SyncPage = () => {
   const validate = () => {
     const checks = [
       ['cpa_project_id_refresh_seconds', 300, 31536000, 'Project ID 刷新周期必须是 300-31536000 秒'],
-      ['cliproxy_usage_sync_interval_seconds', 10, 3600, 'CLIProxy 同步间隔必须是 10-3600 秒'],
+      ['cliproxy_usage_sync_interval_seconds', 10, 3600, 'CLIProxy 同步间隔必须 是 10-3600 秒'],
       ['cliproxy_usage_sync_batch_size', 1, 1000, 'CLIProxy 同步批次必须是 1-1000 条'],
-      ['apilog_retention_days', 0, 3650, 'API 日志保留天数必须是 0-3650 天'],
+      ['apilog_retention_days', 0, 3650, 'API 日志保留天数必须是 0-3650 天'],   
       ['apilog_cleanup_batch_size', 1, 100000, 'API 日志清理批次必须是 1-100000 条'],
     ];
     for (const [key, min, max, message] of checks) {
@@ -97,7 +98,7 @@ const SyncPage = () => {
         refetch();
       } else {
         toast.error(
-          (data.message_code ? t('API.' + data.message_code) : data.message)
+          (data.message_code ? t('API.' + data.message_code) : data.message)    
           || t('SETTINGS.SAVE_FAILED', '保存失败'),
         );
       }
@@ -110,7 +111,7 @@ const SyncPage = () => {
     <PageContainer>
       <PageHeader
         title={t('SETTINGS.TAB_SYNC', '号池同步')}
-        sub={t('SETTINGS.SYNC_DESC', 'CLIProxy 用量同步、鉴权和日志清理配置')}
+        sub={t('SETTINGS.SYNC_DESC', 'CLIProxy 用量同步、鉴权和日志清理配置')}  
         icon={Activity}
       />
 
@@ -121,7 +122,7 @@ const SyncPage = () => {
         >
           <FormRow
             label="自动同步"
-            hint="SysConfig: cliproxy_usage_sync_enabled；默认 true。关闭后仅保留手动同步。"
+            hint="SysConfig: cliproxy_usage_sync_enabled；默认 true。关闭后仅保 留手动同步。"
             htmlFor="cliproxy_usage_sync_enabled"
           >
             <BoolSwitch
@@ -132,7 +133,7 @@ const SyncPage = () => {
           </FormRow>
           <FormRow
             label="同步间隔"
-            hint="SysConfig: cliproxy_usage_sync_interval_seconds；默认 60 秒，范围 10-3600 秒。"
+            hint="SysConfig: cliproxy_usage_sync_interval_seconds；默认 60 秒， 范围 10-3600 秒。"
             htmlFor="cliproxy_usage_sync_interval_seconds"
           >
             <NumberInput
@@ -184,26 +185,18 @@ const SyncPage = () => {
             hint="SysConfig: moderation_cliproxy_api_key；为空则回退到同地址 cliproxy 渠道 API key，再回退到 cliproxy_key。"
             htmlFor="moderation_cliproxy_api_key"
           >
-            <div className="relative w-full md:w-[420px]">
-              <div className="absolute inset-y-0 left-0 pl-3 flex items-center pointer-events-none">
-                <KeyRound size={16} className="text-on-surface-variant" />
-              </div>
-              <input
+            <div className="w-full md:w-[420px]">
+              <TextInput
                 id="moderation_cliproxy_api_key"
-                type={mask.moderation_cliproxy_api_key ? 'text' : 'password'}
+                type={mask.moderation_cliproxy_api_key ? 'text' : 'password'}   
                 value={values.moderation_cliproxy_api_key}
                 onChange={(e) => handleChange('moderation_cliproxy_api_key', e.target.value)}
                 placeholder="留空则使用渠道 key"
-                className="w-full h-11 bg-surface-container-high border border-outline rounded-control pl-10 pr-10 text-sm text-on-surface outline-none focus:border-primary font-mono"
+                prefix={KeyRound}
+                suffix={mask.moderation_cliproxy_api_key ? EyeOff : Eye}
+                onSuffixClick={() => toggleMask('moderation_cliproxy_api_key')}
+                className="font-mono"
               />
-              <button
-                type="button"
-                onClick={() => toggleMask('moderation_cliproxy_api_key')}
-                aria-label={mask.moderation_cliproxy_api_key ? '隐藏' : '显示'}
-                className="absolute inset-y-0 right-0 pr-3 flex items-center text-on-surface-variant hover:text-on-surface"
-              >
-                {mask.moderation_cliproxy_api_key ? <EyeOff size={16} /> : <Eye size={16} />}
-              </button>
             </div>
           </FormRow>
           <FormRow
@@ -220,10 +213,10 @@ const SyncPage = () => {
           </FormRow>
         </FormRow.Group>
 
-        <FormRow.Group title="API 日志清理" sub="控制审计日志保留周期和单次清理规模。">
+        <FormRow.Group title="API 日志清理" sub="控制审计日志保留周期和单次清理 规模。">
           <FormRow
             label="保留天数"
-            hint="SysConfig: apilog_retention_days；默认 90 天，0 表示不清理。"
+            hint="SysConfig: apilog_retention_days；默认 90 天，0 表示不清理。" 
             htmlFor="apilog_retention_days"
           >
             <NumberInput
@@ -254,7 +247,7 @@ const SyncPage = () => {
       </div>
 
       <div className="mt-6 flex items-start gap-2 text-xs text-on-surface-variant">
-        <ShieldAlert size={14} className="mt-0.5 shrink-0 text-warning" />
+        <ShieldAlert size={14} className="mt-0.5 shrink-0 text-warning" />      
         <p>敏感 key 会按后端统一规则脱敏显示；保存掩码值时后端会跳过该字段，避免覆盖真实密钥。</p>
       </div>
 
