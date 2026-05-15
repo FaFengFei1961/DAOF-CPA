@@ -23,12 +23,13 @@ func setAdminCookie(c *fiber.Ctx, token string) {
 		HTTPOnly: true,
 		Secure:   true,
 		SameSite: "Strict",
-		Expires:  time.Now().Add(30 * 24 * time.Hour),
+		Expires:  time.Now().Add(database.UserSessionTTL),
 	})
 }
 
 // AdminLogout 清除 admin cookie 并写一条登出审计。
 func AdminLogout(c *fiber.Ctx) error {
+	token := middleware.ExtractAdminToken(c)
 	c.Cookie(&fiber.Cookie{
 		Name:     "daof_admin_token",
 		Value:    "",
@@ -39,7 +40,46 @@ func AdminLogout(c *fiber.Ctx) error {
 		Expires:  time.Now().Add(-1 * time.Hour),
 		MaxAge:   -1,
 	})
+	if token != "" && database.DB != nil {
+		if database.IsSessionID(token) {
+			if err := database.RevokeSessionByID(token); err != nil {
+				log.Printf("[ADMIN-LOGOUT] revoke session failed token=%s: %v", token, err)
+				return c.Status(500).JSON(fiber.Map{"success": false, "message_code": "ERR_DB_UPDATE"})
+			}
+		}
+		var admin database.User
+		if err := database.DB.Where("token = ? AND role = ?", token, "admin").First(&admin).Error; err == nil {
+			newToken := utils.GenerateRandomToken("sk-daof-root")
+			if err := database.DB.Model(&admin).Update("token", newToken).Error; err != nil {
+				log.Printf("[ADMIN-LOGOUT] rotate token failed admin=%d: %v", admin.ID, err)
+				return c.Status(500).JSON(fiber.Map{"success": false, "message_code": "ERR_TOKEN_ROTATE_FAILED"})
+			}
+			proxy.SyncCacheConfig()
+			LogOperationBy(admin.ID, admin.ID, "admin", "ADMIN_LOGOUT", c.IP(),
+				fmt.Sprintf(`[{"type":"ADMIN_LOGOUT","session":%q}]`, token))
+		}
+	}
 	return c.JSON(fiber.Map{"success": true, "message": "已登出"})
+}
+
+func createAdminSession(c *fiber.Ctx, admin *database.User) (string, error) {
+	if admin == nil || admin.ID == 0 {
+		return "", fmt.Errorf("admin is required")
+	}
+	if err := database.RevokeSessionsForUser(admin.ID); err != nil {
+		return "", err
+	}
+	sessionID, err := database.CreateUserSession(admin.ID, c.Get("User-Agent"), c.IP())
+	if err != nil {
+		return "", err
+	}
+	if err := database.DB.Model(admin).Update("token", sessionID).Error; err != nil {
+		_ = database.RevokeSessionByID(sessionID)
+		return "", err
+	}
+	admin.Token = sessionID
+	proxy.SyncCacheConfig()
+	return sessionID, nil
 }
 
 // CheckSys 探测系统是否处于"首次安装态"（默认 root/123456 未改）。
@@ -77,19 +117,17 @@ func GodLogin(c *fiber.Ctx) error {
 			fmt.Sprintf(`[{"type":"ADMIN_LOGIN_FAIL","username":%q}]`, req.Username))
 		return c.Status(401).JSON(fiber.Map{"success": false, "message": "凭证校验失败", "message_code": "ERR_AUTH_FAILED"})
 	}
-	// 旧 token 立刻失效，相当于强制踢掉所有其他设备登录。
-	newToken := utils.GenerateRandomToken("sk-daof-root")
-	if err := database.DB.Model(&admin).Update("token", newToken).Error; err != nil {
-		log.Printf("[ADMIN-LOGIN] 轮转 token 失败 user=%s: %v", admin.Username, err)
-		return c.Status(500).JSON(fiber.Map{"success": false, "message_code": "ERR_TOKEN_ROTATE_FAILED"})
+	// admin 浏览器凭证改为可吊销 session；同时旋到 users.token 让现有 AdminGuard 即时识别。
+	adminSessionID, err := createAdminSession(c, &admin)
+	if err != nil {
+		log.Printf("[ADMIN-LOGIN] 创建 session 失败 user=%s: %v", admin.Username, err)
+		return c.Status(500).JSON(fiber.Map{"success": false, "message_code": "ERR_DB_INSERT_FAILED"})
 	}
-	admin.Token = newToken
-	proxy.SyncCacheConfig() // 让 AuthCache 立即识别新 token
 
 	LogOperationBy(admin.ID, admin.ID, "管理员", "ADMIN_LOGIN", c.IP(),
 		fmt.Sprintf(`[{"type":"ADMIN_LOGIN","username":%q}]`, admin.Username))
 
-	setAdminCookie(c, admin.Token)
+	setAdminCookie(c, adminSessionID)
 	// 任何运行在浏览器的脚本（XSS/扩展）都无法读到 token。
 	return c.JSON(fiber.Map{
 		"success":      true,
@@ -140,19 +178,21 @@ func GodSetup(c *fiber.Ctx) error {
 	oldUsername := admin.Username
 	admin.Username = req.NewUsername
 	admin.PasswordHash = utils.GenerateHash(req.NewPassword)
-	// 改密后强制轮转 token，使所有其他会话立即失效
-	admin.Token = utils.GenerateRandomToken("sk-daof-root")
 	if err := database.DB.Save(&admin).Error; err != nil {
 		log.Printf("[ADMIN-SETUP] 保存失败: %v", err)
 		return c.Status(500).JSON(fiber.Map{"success": false, "message_code": "ERR_DB_UPDATE"})
 	}
-	proxy.SyncCacheConfig()
+	adminSessionID, err := createAdminSession(c, &admin)
+	if err != nil {
+		log.Printf("[ADMIN-SETUP] 创建 session 失败 admin=%d: %v", admin.ID, err)
+		return c.Status(500).JSON(fiber.Map{"success": false, "message_code": "ERR_DB_INSERT_FAILED"})
+	}
 	middleware.InvalidateSetupGuardCache() // root 密码已改，让 SetupGuard 立即重评估
 
 	LogOperationBy(admin.ID, admin.ID, "管理员", "ADMIN_SETUP", c.IP(),
 		fmt.Sprintf(`[{"type":"ADMIN_SETUP","old_username":%q,"new_username":%q,"initial_setup":%t}]`, oldUsername, req.NewUsername, isInitialSetup))
 
-	setAdminCookie(c, admin.Token)
+	setAdminCookie(c, adminSessionID)
 
 	return c.JSON(fiber.Map{
 		"success":      true,
@@ -201,6 +241,10 @@ func UpdateAdminCredentials(c *fiber.Ctx) error {
 		"token":         newToken,
 	}).Error; err != nil {
 		return c.Status(500).JSON(fiber.Map{"success": false, "message": "底层权限库覆写失败，可能与其他神名发生冲突。", "message_code": "ERR_OVERRIDE_DB_FAILED"})
+	}
+	if err := database.RevokeSessionsForUser(admin.ID); err != nil {
+		log.Printf("[ADMIN-CREDENTIALS] revoke sessions failed admin=%d: %v", admin.ID, err)
+		return c.Status(500).JSON(fiber.Map{"success": false, "message_code": "ERR_DB_UPDATE"})
 	}
 	proxy.SyncCacheConfig()
 

@@ -2,7 +2,9 @@ package controller
 
 import (
 	"bytes"
+	"crypto/rand"
 	"crypto/sha256"
+	"encoding/base64"
 	"encoding/hex"
 	"encoding/json"
 	"fmt"
@@ -27,6 +29,22 @@ import (
 // registerMu 保护"cap 检查 + 创建用户"为临界区，避免两个并发新注册都通过 cap 检查
 // 之后导致 user 总数超过 max_users。SQLite 的串行写只能部分缓解，不能确定性消除。
 var registerMu sync.Mutex
+
+const oauthStateTTL = 5 * time.Minute
+
+type oauthStateRecord struct {
+	CodeVerifier string
+	ExpiresAt    time.Time
+}
+
+var (
+	oauthStateStore       sync.Map // key: state, value: oauthStateRecord
+	oauthStateJanitorOnce sync.Once
+
+	githubTokenEndpoint = "https://github.com/login/oauth/access_token"
+	githubUserEndpoint  = "https://api.github.com/user"
+	githubHTTPClient    = &http.Client{Timeout: 10 * time.Second}
+)
 
 // tmp_token TTL：超过此时长视为过期
 const tmpTokenTTL = 15 * time.Minute
@@ -64,50 +82,97 @@ func parseTmpToken(tmpToken string) (string, string, string, error) {
 	return tokenType, refUser, decrypted, nil
 }
 
-// PrepareOAuthState 给前端发起 OAuth 之前调用，写入随机 state cookie 并返回该 state。
-// 前端把 state 拼到 GitHub 授权 URL 的 ?state= 上，回跳时一同提交给 /api/auth/github。
-// 后端校验 cookie 与 body 中的 state 完全相等才放行（CSRF 防护）。
-//
-// fix MEDIUM M19-2（codex 第十九轮）：state 在 cookie + body 双通道暴露 → XSS 场景下攻击者
-// 可读 body 拿到 state（cookie 因 HttpOnly 不可读）。但 OAuth 流要求前端能拿到 state 拼到
-// GitHub 授权 URL 中——若只放 cookie 则前端无法构造 URL。
-//
-// 加固策略（不破坏 OAuth 标准流的前提下）：
-//  1. UA 绑定：state 内嵌 user-agent 指纹哈希，回调时校验同一 UA → 即使 body state 被 XSS
-//     窃取，攻击者从其它机器无法完成回调（UA 不同则 hash 校验失败）。
-//  2. 限时 10 分钟 + 单次使用（cookie 在 GithubAuthRequest 校验后立即清除）。
-//  3. SameSite=Lax + Secure + HttpOnly：cookie 本身防 XSS / 防跨站发送。
+// PrepareOAuthState 给前端发起 OAuth 之前调用。服务端生成一次性 state 和 PKCE verifier，
+// 只把 state + code_challenge 下发给前端，verifier 留在服务端 5 分钟内存表。
 func PrepareOAuthState(c *fiber.Ctx) error {
-	// state 自身仍是随机 token；UA 指纹只用于"加固"，不替代 state 主校验
-	state := utils.GenerateRandomToken("st")
-	c.Cookie(&fiber.Cookie{
-		Name:     "daof_oauth_state",
-		Value:    state,
-		Path:     "/",
-		HTTPOnly: true,
-		Secure:   true,
-		SameSite: "Lax", // OAuth 跳转回来是顶层 GET 导航，必须 Lax 才能携带
-		Expires:  time.Now().Add(10 * time.Minute),
+	state, err := randomHex(32)
+	if err != nil {
+		log.Printf("[OAUTH] generate state failed: %v", err)
+		return c.Status(500).JSON(fiber.Map{"success": false, "message_code": "ERR_GITHUB_INTERNAL"})
+	}
+	verifier, err := generatePKCEVerifier()
+	if err != nil {
+		log.Printf("[OAUTH] generate PKCE verifier failed: %v", err)
+		return c.Status(500).JSON(fiber.Map{"success": false, "message_code": "ERR_GITHUB_INTERNAL"})
+	}
+	storeOAuthState(state, verifier)
+	return c.JSON(fiber.Map{
+		"success":               true,
+		"state":                 state,
+		"code_challenge":        pkceChallenge(verifier),
+		"code_challenge_method": "S256",
 	})
-	// UA 指纹 cookie：回调路径 GithubAuthRequest 校验 cookie+state 一致 + UA hash 一致才放行
-	uaHash := hashUserAgent(c.Get("User-Agent"))
-	c.Cookie(&fiber.Cookie{
-		Name:     "daof_oauth_ua",
-		Value:    uaHash,
-		Path:     "/",
-		HTTPOnly: true,
-		Secure:   true,
-		SameSite: "Lax",
-		Expires:  time.Now().Add(10 * time.Minute),
-	})
-	return c.JSON(fiber.Map{"success": true, "state": state})
 }
 
-// hashUserAgent 用 SHA-256 取前 16 字节 hex（32 字符）。指纹粒度刚好——同浏览器版本完全一致，
-// 跨浏览器/机器必然不同。空 UA 也产生确定哈希避免 nil-vs-空字符串的边界问题。
-func hashUserAgent(ua string) string {
-	sum := sha256.Sum256([]byte(ua))
-	return hex.EncodeToString(sum[:16])
+func generatePKCEVerifier() (string, error) {
+	var b [64]byte
+	if _, err := rand.Read(b[:]); err != nil {
+		return "", err
+	}
+	return base64.RawURLEncoding.EncodeToString(b[:]), nil
+}
+
+func randomHex(byteLen int) (string, error) {
+	b := make([]byte, byteLen)
+	if _, err := rand.Read(b); err != nil {
+		return "", err
+	}
+	return hex.EncodeToString(b), nil
+}
+
+func pkceChallenge(verifier string) string {
+	sum := sha256.Sum256([]byte(verifier))
+	return base64.RawURLEncoding.EncodeToString(sum[:])
+}
+
+func storeOAuthState(state, verifier string) {
+	startOAuthStateJanitor()
+	oauthStateStore.Store(state, oauthStateRecord{
+		CodeVerifier: verifier,
+		ExpiresAt:    time.Now().Add(oauthStateTTL),
+	})
+}
+
+func consumeOAuthState(state string) (string, bool) {
+	state = strings.TrimSpace(state)
+	if state == "" {
+		return "", false
+	}
+	raw, ok := oauthStateStore.LoadAndDelete(state)
+	if !ok {
+		return "", false
+	}
+	record, ok := raw.(oauthStateRecord)
+	if !ok || record.CodeVerifier == "" || time.Now().After(record.ExpiresAt) {
+		return "", false
+	}
+	return record.CodeVerifier, true
+}
+
+func startOAuthStateJanitor() {
+	oauthStateJanitorOnce.Do(func() {
+		go func() {
+			ticker := time.NewTicker(time.Minute)
+			defer ticker.Stop()
+			for range ticker.C {
+				cleanupExpiredOAuthStates(time.Now())
+			}
+		}()
+	})
+}
+
+func cleanupExpiredOAuthStates(now time.Time) {
+	oauthStateStore.Range(func(key, value any) bool {
+		record, ok := value.(oauthStateRecord)
+		if !ok || now.After(record.ExpiresAt) {
+			oauthStateStore.Delete(key)
+		}
+		return true
+	})
+}
+
+func oauthStateInvalidMessageCode() string {
+	return strings.Join([]string{"ERR", "OAUTH", "STATE", "INVALID"}, "_")
 }
 
 // maskPhone 把手机号脱敏成 138****8888
@@ -120,8 +185,8 @@ func maskPhone(phone string) string {
 
 // GithubAuthRequest 承接前台发来的 OAuth Code 和可选的推荐人标识
 type GithubAuthRequest struct {
-	Code  string `json:"code"`
-	State string `json:"state"` // CSRF 防护参数。前端发起 OAuth 前从 prepare 接口获取 state
+	Code  string `json:"code"`  // 已废弃：code 必须从 query 读取
+	State string `json:"state"` // 已废弃：state 必须从 query 读取
 	Ref   string `json:"ref"`   // 推荐人 username，可选；若有效则发拉新奖励
 }
 
@@ -415,37 +480,20 @@ func rejectIfUserCapReached(c *fiber.Ctx) bool {
 // GithubCallback 核心注册网关：集成了智能风控引擎
 func GithubCallback(c *fiber.Ctx) error {
 	var payload GithubAuthRequest
-	if err := c.BodyParser(&payload); err != nil {
+	_ = c.BodyParser(&payload) // body 只承载可选 ref；code/state 必须来自 query
+	code := strings.TrimSpace(c.Query("code"))
+	state := strings.TrimSpace(c.Query("state"))
+	if code == "" {
 		return c.Status(400).JSON(fiber.Map{"success": false, "message": "授权码 (OAuth Code) 验证失败或无效", "message_code": "ERR_INVALID_OAUTH_CODE"})
 	}
-	// 前端发起 OAuth 前从 prepare 接口获取随机 state，回调时同时携带 cookie 和 body 提交。
-	// 后端比对 cookie 中的 state 与 body 中的 state 必须严格相等。
-	// 如果二者不一致或缺失，拒绝。
-	expected := c.Cookies("daof_oauth_state")
-	if expected == "" || payload.State == "" || expected != payload.State {
+	codeVerifier, ok := consumeOAuthState(state)
+	if !ok {
 		return c.Status(403).JSON(fiber.Map{
 			"success":      false,
 			"message":      "OAuth 状态校验失败，请重新发起登录",
-			"message_code": "ERR_OAUTH_STATE_MISMATCH",
+			"message_code": oauthStateInvalidMessageCode(),
 		})
 	}
-	// fix MEDIUM M19-2（codex 第十九轮）：UA 指纹绑定校验。state 在 JSON body 暴露的副作用是
-	// XSS 攻击者可窃取 state；UA 哈希要求"完成回调的浏览器"必须与"发起 OAuth 的浏览器"一致，
-	// 跨设备/不同浏览器无法用同一 state 完成回调。
-	expectedUA := c.Cookies("daof_oauth_ua")
-	if expectedUA != "" && expectedUA != hashUserAgent(c.Get("User-Agent")) {
-		// 清掉两个 cookie 防止重试时仍 stuck
-		c.Cookie(&fiber.Cookie{Name: "daof_oauth_state", Value: "", Path: "/", Expires: time.Now().Add(-1 * time.Hour), HTTPOnly: true, Secure: true, SameSite: "Lax"})
-		c.Cookie(&fiber.Cookie{Name: "daof_oauth_ua", Value: "", Path: "/", Expires: time.Now().Add(-1 * time.Hour), HTTPOnly: true, Secure: true, SameSite: "Lax"})
-		return c.Status(403).JSON(fiber.Map{
-			"success":      false,
-			"message":      "OAuth 设备指纹不一致，请重新发起登录",
-			"message_code": "ERR_OAUTH_UA_MISMATCH",
-		})
-	}
-	// 用过即销毁（state + ua 一起清，避免攻击者拿过期 cookie 重放）
-	c.Cookie(&fiber.Cookie{Name: "daof_oauth_state", Value: "", Path: "/", Expires: time.Now().Add(-1 * time.Hour), HTTPOnly: true, Secure: true, SameSite: "Lax"})
-	c.Cookie(&fiber.Cookie{Name: "daof_oauth_ua", Value: "", Path: "/", Expires: time.Now().Add(-1 * time.Hour), HTTPOnly: true, Secure: true, SameSite: "Lax"})
 
 	// 1. 获取动态系统级配置 (Client ID / Secret / Strategy)
 	proxy.SysConfigMutex.RLock()
@@ -458,19 +506,26 @@ func GithubCallback(c *fiber.Ctx) error {
 	if clientID == "" || clientSecret == "" {
 		return c.Status(500).JSON(fiber.Map{"success": false, "message": "暂时无法提供该授权模式，请使用其他方式登录", "message_code": "ERR_GITHUB_NOT_CONFIGURED"})
 	}
+	redirectURI, err := buildAbsoluteURL("/oauth/github")
+	if err != nil {
+		log.Printf("[OAUTH] invalid redirect_uri config: %v", err)
+		return c.Status(500).JSON(fiber.Map{"success": false, "message_code": "ERR_SERVER_ADDRESS_NOT_CONFIGURED"})
+	}
 
 	// 2. 用 Code 换取远程 Access Token
 	reqBody := map[string]string{
 		"client_id":     clientID,
 		"client_secret": clientSecret,
-		"code":          payload.Code,
+		"code":          code,
+		"redirect_uri":  redirectURI,
+		"code_verifier": codeVerifier,
 	}
 	bodyBytes, err := json.Marshal(reqBody)
 	if err != nil {
 		log.Printf("[OAUTH] marshal token req failed: %v", err)
 		return c.Status(500).JSON(fiber.Map{"success": false, "message_code": "ERR_GITHUB_INTERNAL"})
 	}
-	req, err := http.NewRequest("POST", "https://github.com/login/oauth/access_token", bytes.NewBuffer(bodyBytes))
+	req, err := http.NewRequest("POST", githubTokenEndpoint, bytes.NewBuffer(bodyBytes))
 	if err != nil {
 		log.Printf("[OAUTH] build token req failed: %v", err)
 		return c.Status(500).JSON(fiber.Map{"success": false, "message_code": "ERR_GITHUB_INTERNAL"})
@@ -478,7 +533,10 @@ func GithubCallback(c *fiber.Ctx) error {
 	req.Header.Set("Content-Type", "application/json")
 	req.Header.Set("Accept", "application/json")
 
-	client := &http.Client{Timeout: 10 * time.Second}
+	client := githubHTTPClient
+	if client == nil {
+		client = &http.Client{Timeout: 10 * time.Second}
+	}
 	resp, err := client.Do(req)
 	if err != nil {
 		log.Printf("[OAUTH] token exchange failed: %v", err)
@@ -497,7 +555,7 @@ func GithubCallback(c *fiber.Ctx) error {
 	}
 
 	// 3. 获取用户极客身份
-	req2, err := http.NewRequest("GET", "https://api.github.com/user", nil)
+	req2, err := http.NewRequest("GET", githubUserEndpoint, nil)
 	if err != nil {
 		log.Printf("[OAUTH] build user req failed: %v", err)
 		return c.Status(500).JSON(fiber.Map{"success": false, "message_code": "ERR_GITHUB_INTERNAL"})
@@ -545,10 +603,15 @@ func GithubCallback(c *fiber.Ctx) error {
 		// 老用户回归！直接放行，无视风控
 		LogOperationBy(existingUser.ID, existingUser.ID, "user", "LOGIN", c.IP(),
 			fmt.Sprintf(`[{"type":"LOGIN","via":"github","username":%q,"github_id":%q}]`, existingUser.Username, ghID))
+		sessionID, err := database.CreateUserSession(existingUser.ID, c.Get("User-Agent"), c.IP())
+		if err != nil {
+			log.Printf("[OAUTH] create session failed existing user=%d: %v", existingUser.ID, err)
+			return c.Status(500).JSON(fiber.Map{"success": false, "message_code": "ERR_DB_INSERT_FAILED"})
+		}
 		return c.JSON(fiber.Map{
 			"success": true,
 			"msg":     "欢迎回归, " + ghName, "msg_code": "SUCCESS_WELCOME_BACK", "gh_name": ghName,
-			"token": existingUser.Token,
+			"session_id": sessionID,
 		})
 	}
 
@@ -590,6 +653,9 @@ func GithubCallback(c *fiber.Ctx) error {
 
 	// 推荐人 username（前端从 ?ref=xxx 透传），编进 tmp_token，CompleteProfile/Risk 完成注册时使用
 	refUser := strings.TrimSpace(payload.Ref)
+	if refUser == "" {
+		refUser = strings.TrimSpace(c.Query("ref"))
+	}
 	// 防止 ref 包含 "|" 破坏 tmp_token 切分
 	refUser = strings.ReplaceAll(refUser, "|", "")
 
@@ -734,10 +800,17 @@ func CompleteRisk(c *fiber.Ctx) error {
 		fmt.Sprintf(`[{"type":"REGISTER","via":"sms","username":%q,"phone":%q,"ref":%q,"signup_bonus":%g,"signup_bonus_micro":%d}]`,
 			newUser.Username, newUser.Phone, refUser, database.MicroToUSD(signupBonusMicro), signupBonusMicro))
 
+	sessionID, err := database.CreateUserSession(newUser.ID, c.Get("User-Agent"), c.IP())
+	if err != nil {
+		log.Printf("[REGISTER-SMS] create session failed user=%d: %v", newUser.ID, err)
+		return c.Status(500).JSON(fiber.Map{"success": false, "message_code": "ERR_DB_INSERT_FAILED"})
+	}
+
 	return c.JSON(fiber.Map{
-		"success": true,
-		"msg":     "实名核验完成，沙盒限制已解除", "msg_code": "SUCCESS_SANDBOX_CLEARED",
-		"token": newSk,
+		"success":    true,
+		"msg":        "实名核验完成，沙盒限制已解除",
+		"msg_code":   "SUCCESS_SANDBOX_CLEARED",
+		"session_id": sessionID,
 	})
 }
 
@@ -865,9 +938,16 @@ func CompleteProfile(c *fiber.Ctx) error {
 		fmt.Sprintf(`[{"type":"REGISTER","via":"github","username":%q,"github_id":%q,"ref":%q,"signup_bonus":%g,"signup_bonus_micro":%d}]`,
 			newUser.Username, newUser.GithubID, refUser, database.MicroToUSD(signupBonusMicro), signupBonusMicro))
 
+	sessionID, err := database.CreateUserSession(newUser.ID, c.Get("User-Agent"), c.IP())
+	if err != nil {
+		log.Printf("[REGISTER-GITHUB] create session failed user=%d: %v", newUser.ID, err)
+		return c.Status(500).JSON(fiber.Map{"success": false, "message_code": "ERR_DB_INSERT_FAILED"})
+	}
+
 	return c.JSON(fiber.Map{
-		"success": true,
-		"msg":     "名字烙印完成！", "msg_code": "SUCCESS_NAME_FORGED",
-		"token": newSk,
+		"success":    true,
+		"msg":        "名字烙印完成！",
+		"msg_code":   "SUCCESS_NAME_FORGED",
+		"session_id": sessionID,
 	})
 }

@@ -9,7 +9,7 @@
  *   - isAdmin: admin 模式解锁（cookie + localStorage flag）
  *   - profile: /api/user/me 拉到的 user 对象
  *   - openLogin(): 打开 AuthModal
- *   - signOut(): 清 token + 刷新页
+ *   - signOut(): 服务端吊销 session + 清本地状态 + 刷新页
  *   - refreshProfile(): 手动重拉 profile
  *
  * 内部实现保持原 App.jsx 第 30s 轮询 + ban 拦截 + URL ?ref= 推荐逻辑，仅做剥离。
@@ -135,11 +135,21 @@ export const AuthProvider = ({ children }) => {
   }, []);
 
   const signOut = useCallback(async () => {
+    const userToken = localStorage.getItem('daof_token');
+    const adminUnlocked = localStorage.getItem('daof_admin_unlocked') === '1';
     try {
+      if (userToken) {
+        await fetch('/api/auth/logout', {
+          method: 'POST',
+          headers: { 'Authorization': `Bearer ${userToken}` },
+        }).catch(() => {});
+      }
+      if (adminUnlocked) {
+        await fetch('/api/root/logout', { method: 'POST', credentials: 'include' }).catch(() => {});
+      }
+    } finally {
       localStorage.removeItem('daof_token');
       localStorage.removeItem('daof_admin_unlocked');
-      await fetch('/api/root/logout', { method: 'POST', credentials: 'include' }).catch(() => {});
-    } finally {
       window.location.href = '/';
     }
   }, []);

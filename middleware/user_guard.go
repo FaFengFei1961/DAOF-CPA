@@ -10,6 +10,7 @@ package middleware
 import (
 	"strings"
 
+	"daof-ai-hub/database"
 	"daof-ai-hub/proxy"
 
 	"github.com/gofiber/fiber/v2"
@@ -19,6 +20,26 @@ func UserGuard(c *fiber.Ctx) error {
 	authHeader := c.Get("Authorization")
 	if strings.HasPrefix(authHeader, "Bearer ") || strings.HasPrefix(authHeader, "bearer ") {
 		if token := strings.TrimSpace(authHeader[7:]); token != "" {
+			if database.IsSessionID(token) {
+				if u, ok := database.LookupUserBySession(token); ok && u != nil {
+					if u.Status == 2 {
+						return c.Status(403).JSON(fiber.Map{
+							"success":      false,
+							"message":      "账户被封禁",
+							"message_code": "ERR_BANNED",
+							"ban_reason":   u.BanReason,
+						})
+					}
+					c.Locals("user", u)
+					c.Locals("session_id", token)
+					return c.Next()
+				}
+				return c.Status(401).JSON(fiber.Map{
+					"success":      false,
+					"message":      "鉴权失败",
+					"message_code": "ERR_NO_AUTH",
+				})
+			}
 			if u := proxy.LookupUserByToken(token); u != nil {
 				if u.Status == 2 {
 					return c.Status(403).JSON(fiber.Map{

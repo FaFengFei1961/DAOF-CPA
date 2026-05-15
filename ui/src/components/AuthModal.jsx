@@ -70,7 +70,7 @@ const AuthModal = ({ isOpen, onClose, onLoginSuccess, initialStep = 'github', tm
   const handleGithubLogin = async () => {
     setLoading(true);
     try {
-      // 先到后端拿 CSRF state（同时设 HttpOnly cookie），把 state 透传到 GitHub 授权 URL
+      // 先到后端拿一次性 state + PKCE challenge，把公开参数透传到 GitHub 授权 URL
       const [pubRes, stateRes] = await Promise.all([
         fetch('/api/public-config'),
         fetch('/api/auth/github/prepare', { credentials: 'include' }),
@@ -93,7 +93,7 @@ const AuthModal = ({ isOpen, onClose, onLoginSuccess, initialStep = 'github', tm
         setLoading(false);
         return;
       }
-      if (!stateJson.success || !stateJson.state) {
+      if (!stateJson.success || !stateJson.state || !stateJson.code_challenge || !stateJson.code_challenge_method) {
         toast.error(t('AUTH.GITHUB_FETCH_ERROR'));
         setLoading(false);
         return;
@@ -115,7 +115,9 @@ const AuthModal = ({ isOpen, onClose, onLoginSuccess, initialStep = 'github', tm
       const callbackUri = `${baseAddress}/oauth/github`;
       const url = `https://github.com/login/oauth/authorize?client_id=${client_id}` +
         `&redirect_uri=${encodeURIComponent(callbackUri)}` +
-        `&state=${encodeURIComponent(stateJson.state)}`;
+        `&state=${encodeURIComponent(stateJson.state)}` +
+        `&code_challenge=${encodeURIComponent(stateJson.code_challenge)}` +
+        `&code_challenge_method=${encodeURIComponent(stateJson.code_challenge_method)}`;
       window.location.href = url;
     } catch {
       toast.error(t('AUTH.GITHUB_FETCH_ERROR'));
@@ -180,7 +182,8 @@ const AuthModal = ({ isOpen, onClose, onLoginSuccess, initialStep = 'github', tm
       });
       const data = await res.json();
       if (data.success) {
-         localStorage.setItem('daof_token', data.token);
+         if (!data.session_id) throw new Error('missing session_id');
+         localStorage.setItem('daof_token', data.session_id);
          if (data.msg_code) { toast.success(t('API.' + data.msg_code)); } onLoginSuccess();
       } else {
          toast.error((data.message_code ? t('API.' + data.message_code) : data.message) || t('AUTH.BIND_FAILED'));
@@ -209,7 +212,8 @@ const AuthModal = ({ isOpen, onClose, onLoginSuccess, initialStep = 'github', tm
       });
       const data = await res.json();
       if (data.success) {
-         localStorage.setItem('daof_token', data.token);
+         if (!data.session_id) throw new Error('missing session_id');
+         localStorage.setItem('daof_token', data.session_id);
          if (data.msg_code) { toast.success(t('API.' + data.msg_code)); } onLoginSuccess();
       } else {
          toast.error((data.message_code ? t('API.' + data.message_code) : data.message) || t('AUTH.PROFILE_FAILED'));

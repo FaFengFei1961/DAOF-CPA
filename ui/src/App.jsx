@@ -46,11 +46,11 @@ const GithubCallbackHandler = () => {
     window.history.replaceState({}, document.title, '/');
     queueMicrotask(() => openLogin({ step: 'github', loading: true }));
 
-    fetch('/api/auth/github', {
+    fetch(`/api/auth/github?code=${encodeURIComponent(code)}&state=${encodeURIComponent(state)}`, {
       method: 'POST',
       credentials: 'include',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ code, state, ref }),
+      body: JSON.stringify({ ref }),
     })
       .then(async (res) => {
         const ct = res.headers.get('content-type') || '';
@@ -61,7 +61,8 @@ const GithubCallbackHandler = () => {
       })
       .then(data => {
         if (data.success) {
-          localStorage.setItem('daof_token', data.token);
+          if (!data.session_id) throw new Error('missing session_id');
+          localStorage.setItem('daof_token', data.session_id);
           onLoginSuccess();
         } else if (data.action === 'require_sms_bind') {
           openLogin({ step: 'bind', tmpToken: data.tmp_token });
