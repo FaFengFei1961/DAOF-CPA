@@ -103,6 +103,9 @@ var (
 
 	// 一次性 debug：只打一次 Claude usage 完整响应，用于排查 max_5x / max_20x 字段位置。
 	claudeUsageDebugOnce sync.Once
+	// 一次性 debug：Antigravity / Gemini-CLI 的 loadCodeAssist 响应（看 paidTier 实际结构）
+	antigravityCodeAssistDebugOnce sync.Once
+	geminiCliCodeAssistDebugOnce   sync.Once
 
 	// CPA 通用代理调用：30s 超时，连接池避免高频刷新时端口耗尽
 	cpaHTTPClient = &http.Client{
@@ -1391,9 +1394,27 @@ func fetchAntigravityQuota(ctx context.Context, af authFileLite, entry *CreditEn
 		"mode":                     "FULL_ELIGIBILITY_CHECK",
 		"cloudaicompanionProject":  projectID,
 	})
-	if r, err := cpaAPICall(ctx, af.AuthIndex, "POST",
+	r, err := cpaAPICall(ctx, af.AuthIndex, "POST",
 		"https://cloudcode-pa.googleapis.com/v1internal:loadCodeAssist",
-		caHeaders, string(caPayload)); err == nil && r.StatusCode == 200 {
+		caHeaders, string(caPayload))
+	antigravityCodeAssistDebugOnce.Do(func() {
+		body := ""
+		status := 0
+		if r != nil {
+			status = r.StatusCode
+			body = string(r.Body)
+			if len(body) > 800 {
+				body = body[:800] + "...[truncated]"
+			}
+		}
+		errStr := ""
+		if err != nil {
+			errStr = err.Error()
+		}
+		log.Printf("[CREDITS-DEBUG] Antigravity loadCodeAssist auth=%s status=%d err=%q body=%s",
+			af.AuthIndex, status, errStr, body)
+	})
+	if err == nil && r != nil && r.StatusCode == 200 {
 		var resp struct {
 			PaidTier    *struct{ ID string `json:"id"` } `json:"paidTier"`
 			CurrentTier *struct{ ID string `json:"id"` } `json:"currentTier"`
@@ -1767,14 +1788,32 @@ func fetchGeminiCliQuota(ctx context.Context, af authFileLite, entry *CreditEntr
 		"mode":                    "FULL_ELIGIBILITY_CHECK",
 		"cloudaicompanionProject": projectID,
 	})
-	if r, err := cpaAPICall(ctx, af.AuthIndex, "POST",
+	r2, err2 := cpaAPICall(ctx, af.AuthIndex, "POST",
 		"https://cloudcode-pa.googleapis.com/v1internal:loadCodeAssist",
-		caHeaders, string(caPayload)); err == nil && r.StatusCode == 200 {
+		caHeaders, string(caPayload))
+	geminiCliCodeAssistDebugOnce.Do(func() {
+		body := ""
+		status := 0
+		if r2 != nil {
+			status = r2.StatusCode
+			body = string(r2.Body)
+			if len(body) > 800 {
+				body = body[:800] + "...[truncated]"
+			}
+		}
+		errStr := ""
+		if err2 != nil {
+			errStr = err2.Error()
+		}
+		log.Printf("[CREDITS-DEBUG] Gemini-CLI loadCodeAssist auth=%s status=%d err=%q body=%s",
+			af.AuthIndex, status, errStr, body)
+	})
+	if err2 == nil && r2 != nil && r2.StatusCode == 200 {
 		var resp struct {
 			PaidTier    *struct{ ID string `json:"id"` } `json:"paidTier"`
 			CurrentTier *struct{ ID string `json:"id"` } `json:"currentTier"`
 		}
-		if json.Unmarshal(r.Body, &resp) == nil {
+		if json.Unmarshal(r2.Body, &resp) == nil {
 			switch {
 			case resp.PaidTier != nil && resp.PaidTier.ID != "":
 				entry.PlanType = resp.PaidTier.ID
@@ -1782,8 +1821,8 @@ func fetchGeminiCliQuota(ctx context.Context, af authFileLite, entry *CreditEntr
 				entry.PlanType = resp.CurrentTier.ID
 			}
 		}
-	} else if err != nil {
-		log.Printf("[CREDITS] Gemini-CLI loadCodeAssist auth=%s 失败: %s", af.AuthIndex, sanitizeError(err.Error(), 200))
+	} else if err2 != nil {
+		log.Printf("[CREDITS] Gemini-CLI loadCodeAssist auth=%s 失败: %s", af.AuthIndex, sanitizeError(err2.Error(), 200))
 	}
 
 	return nil
