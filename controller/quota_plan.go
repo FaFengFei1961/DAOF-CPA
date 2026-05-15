@@ -46,7 +46,9 @@ func validateJSONText(v string, fallback string) (string, bool) {
 
 // ListQuotaPlans 返回所有配额计划。支持 ?enabled=1 / ?unit=request_count 等过滤。
 func ListQuotaPlans(c *fiber.Ctx) error {
-	q := database.DB.Model(&database.QuotaPlan{}).Order("priority asc, id desc")
+	// 排序：先按 admin 优先级 → 窗口大小（5h 在 7d 前面）→ 额度递增（Pro < Max 5x < Max 20x）
+	// 同 tier 同窗口的 2 个 plan 用 id 兜底。grid 3 列布局下天然形成"短窗口一行 / 长窗口一行"。
+	q := database.DB.Model(&database.QuotaPlan{}).Order("priority asc, window_seconds asc, limit_value asc, id asc")
 	if v := c.Query("enabled"); v == "1" {
 		q = q.Where("enabled = ?", true)
 	}
