@@ -59,7 +59,8 @@ type NotificationPreference struct {
 //
 //	draft   ── 已创建未发送（V1 不支持，预留）
 //	sent    ── 已发送
-//	revoked ── 已撤回（仅改状态，已发的 Notification 不删，避免割裂用户体验）
+//	partial_failed ── 部分用户发送失败，可撤回
+//	revoked ── 已撤回（保留审计记录，用户侧不再展示）
 type NotificationBroadcast struct {
 	ID         uint   `gorm:"primaryKey" json:"id"`
 	OperatorID uint   `gorm:"index;not null" json:"operator_id"`

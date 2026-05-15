@@ -251,16 +251,16 @@ const Topup = ({ isAuthenticated }) => {
           {/* 输入框始终显示，主元素 */}
           <div className="flex items-center gap-2">
             <span className="text-lg text-on-surface-variant font-semibold" aria-hidden="true">¥</span>
-            <input
+            <TextInput
               id="topup-amount"
               type="number"
               step="0.01"
               min={opts.min_amount_rmb}
               max={opts.max_amount_rmb}
               value={amount}
-              onChange={e => setAmount(e.target.value)}
+              onChange={e => { setAmount(e.target.value); }}
               placeholder={`${opts.min_amount_rmb} - ${opts.max_amount_rmb}`}
-              className="flex-1 h-12 bg-surface-container border border-outline rounded-control px-3 text-lg text-on-surface focus:border-primary outline-none font-mono"
+              className="flex-1 font-mono"
             />
           </div>
 

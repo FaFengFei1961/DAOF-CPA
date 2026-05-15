@@ -9,9 +9,9 @@
 //
 // 路径分类（每个都必须满足上述约束）：
 //
-//	路径 A（命中订阅 / 增量包）：
+//	路径 A（命中订阅）：
 //	  ΔQuota = 0
-//	  billing 写 api_usage_sub / api_usage_addon, AmountUSD = 0（仅审计）
+//	  billing 写 api_usage_sub, AmountUSD = 0（仅审计）
 //
 //	路径 B（fallback 余额扣费）：
 //	  ΔQuota = -cost

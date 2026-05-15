@@ -498,14 +498,15 @@ const Tickets = () => {
         <div className="text-center py-20 text-on-surface-variant">{t('SYSTEM.LOADING', '加载中...')}</div>
       ) : tickets.length === 0 ? (
         <div className="fl-card p-16 text-center">
-          <MessageSquare size={36} className="mx-auto mb-3 text-on-surface-variant" />
-          <p className="text-on-surface-variant text-sm mb-3">{t('TICKET.EMPTY', '还没有工单')}</p>
+          <MessageSquare size={36} className="mx-auto mb-3 text-on-surface-variant/50" />
+          <p className="text-on-surface font-semibold mb-1">暂无工单</p>
+          <p className="text-on-surface-variant text-sm mb-4">有任何问题可以随时联系客服</p>
           <button
             type="button"
             onClick={() => setView('create')}
             className="h-9 px-4 bg-primary text-on-primary rounded-control text-sm font-semibold hover:brightness-110 active:scale-[0.98] transition"
           >
-            {t('TICKET.NEW_BTN', '新工单')}
+            联系客服
           </button>
         </div>
       ) : (

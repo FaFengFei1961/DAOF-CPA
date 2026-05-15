@@ -76,6 +76,7 @@ export const adminNav = [
   {
     groupKey: 'SETTINGS.GROUP_SYSTEM', groupFallback: '系统',
     items: [
+      { id: 'sync',           standalone: true, path: '/admin/sync',          icon: Activity,     labelKey: 'SETTINGS.TAB_SYNC',      labelFallback: '号池同步' },
       { id: 'general',        standalone: true, path: '/admin/general',       icon: SettingsIcon, labelKey: 'SETTINGS.TAB_GENERAL',   labelFallback: '常规设置' },
       { id: 'oauth',          standalone: true, path: '/admin/oauth',         icon: Key,          labelKey: 'SETTINGS.TAB_OAUTH',     labelFallback: 'OAuth' },
       { id: 'sms',            standalone: true, path: '/admin/sms',           icon: MessageSquare,labelKey: 'SETTINGS.TAB_SMS',       labelFallback: '短信' },

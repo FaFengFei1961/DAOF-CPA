@@ -57,13 +57,61 @@ const TopupResult = () => {
         {outTradeNo && (
           <p className="text-xs font-mono text-on-surface-variant mb-6 break-all">{outTradeNo}</p>
         )}
-        <button
-          type="button"
-          onClick={() => navigate('/topup')}
-          className="h-10 px-6 bg-primary text-on-primary rounded-control text-sm font-semibold hover:opacity-90"
-        >
-          {t('TOPUP.BACK_TO_TOPUP', '返回充值')}
-        </button>
+        
+        {status === 'success' && (
+          <div className="grid grid-cols-1 sm:grid-cols-3 gap-3 mb-8 text-left">
+            <button
+              onClick={() => navigate('/upgrade')}
+              className="fl-card p-4 hover:border-primary/50 hover:bg-primary/5 transition group"
+            >
+              <div className="font-semibold text-sm group-hover:text-primary mb-1">立刻订阅套餐</div>
+              <div className="text-xs text-on-surface-variant">获取专属额度和优先排队</div>
+            </button>
+            <button
+              onClick={() => navigate('/tokens')}
+              className="fl-card p-4 hover:border-primary/50 hover:bg-primary/5 transition group"
+            >
+              <div className="font-semibold text-sm group-hover:text-primary mb-1">去使用 API</div>
+              <div className="text-xs text-on-surface-variant">管理 Token 并开始调用</div>
+            </button>
+            <button
+              onClick={() => navigate('/bills')}
+              className="fl-card p-4 hover:border-primary/50 hover:bg-primary/5 transition group"
+            >
+              <div className="font-semibold text-sm group-hover:text-primary mb-1">查看账单</div>
+              <div className="text-xs text-on-surface-variant">查看交易明细与记录</div>
+            </button>
+          </div>
+        )}
+
+        {status === 'failed' && (
+          <div className="flex gap-3 justify-center mb-6">
+            <button
+              type="button"
+              onClick={() => navigate('/topup')}
+              className="h-10 px-6 bg-primary text-on-primary rounded-control text-sm font-semibold hover:opacity-90"
+            >
+              重试充值
+            </button>
+            <button
+              type="button"
+              onClick={() => navigate('/tickets')}
+              className="h-10 px-6 bg-surface-container border border-outline rounded-control text-sm font-semibold hover:border-primary hover:text-primary transition"
+            >
+              联系客服
+            </button>
+          </div>
+        )}
+        
+        {status !== 'failed' && (
+          <button
+            type="button"
+            onClick={() => navigate('/topup')}
+            className="h-10 px-6 bg-primary text-on-primary rounded-control text-sm font-semibold hover:opacity-90"
+          >
+            {t('TOPUP.BACK_TO_TOPUP', '返回充值')}
+          </button>
+        )}
       </div>
     </div>
   );

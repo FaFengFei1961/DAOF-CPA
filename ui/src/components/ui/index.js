@@ -14,3 +14,8 @@ export { default as Modal } from './Modal';
 export { default as Drawer } from './Drawer';
 export { default as DataTable } from './DataTable';
 export { default as ChartContainer, useChartColors } from './ChartContainer';
+export { default as TextInput } from './TextInput';
+export { default as Select } from './Select';
+export { default as Switch } from './Switch';
+export { default as StatusBadge } from './StatusBadge';
+export { default as ProgressBar } from './ProgressBar';

@@ -249,28 +249,28 @@ const WindowEditor = ({ currentSeconds, saving, onSave, t }) => {
       </div>
 
       <div className="flex items-center gap-2">
-        <input
-          type="number"
-          min={1}
-          step={1}
-          value={value}
-          onChange={e => setValue(e.target.value)}
-          className="w-32 h-10 bg-surface-container-high border border-outline rounded-control px-3 text-sm font-mono focus:border-primary outline-none"
-        />
-        <select
-          value={unit}
-          onChange={e => setUnit(e.target.value)}
-          className="h-10 bg-surface-container-high border border-outline rounded-control px-3 text-sm focus:border-primary outline-none"
-        >
-          {UNITS.map(u => (
-            <option key={u.id} value={u.id}>{t(`BALANCE_CONSUME.UNIT_${u.id.toUpperCase()}`, u.label)}</option>
-          ))}
-        </select>
+        <div className="w-32">
+          <TextInput
+            type="number"
+            min={1}
+            step={1}
+            value={value}
+            onChange={e => setValue(e.target.value)}
+            className="font-mono"
+          />
+        </div>
+        <div className="w-28">
+          <Select
+            value={unit}
+            onChange={e => setUnit(e.target.value)}
+            options={UNITS.map(u => ({ value: u.id, label: t(`BALANCE_CONSUME.UNIT_${u.id.toUpperCase()}`, u.label) }))}
+          />
+        </div>
         <button
           type="button"
           onClick={handleApply}
           disabled={saving || !valid || !dirty}
-          className="h-10 px-4 bg-primary text-on-primary rounded-control text-sm font-semibold hover:opacity-90 disabled:opacity-40"
+          className="h-9 px-4 bg-primary text-on-primary rounded-control text-sm font-semibold hover:opacity-90 disabled:opacity-40"
         >
           {saving ? t('BALANCE_CONSUME.SAVING', '保存中...') : t('BALANCE_CONSUME.APPLY', '应用')}
         </button>

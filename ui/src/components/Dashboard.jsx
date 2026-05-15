@@ -5,9 +5,11 @@ import { ShieldAlert } from 'lucide-react';
 import { useAuth } from '../context/AuthContext';
 import { useCurrency } from '../context/CurrencyContext';
 import { authFetch, isLoggedIn } from '../utils/authFetch';
+import { formatCompactNumber, formatRelativeTime } from '../utils/format';
 import { logger } from '../utils/logger';
 import MySubscriptions from './MySubscriptions';
 import UpgradePage from './UpgradePage';
+import { StatusBadge } from './ui';
 
 /**
  * Dashboard — 综合信息控制台（Phase 8 重做）
@@ -123,7 +125,7 @@ const StatStrip = ({ me, recentLogs, formatCurrency, i18n, t }) => {
     0
   );
   const lastTime = recentLogs[0]?.created_at;
-  const lastRel = lastTime ? relativeTime(lastTime, i18n.resolvedLanguage || i18n.language) : '—';
+  const lastRel = lastTime ? formatRelativeTime(lastTime, i18n.resolvedLanguage || i18n.language) : '—';
   const snapshotHint = totalReqs > 0
     ? t('DASH.STAT_SNAPSHOT_N', { n: totalReqs, defaultValue: '近 {{n}} 条快照' })
     : t('DASH.STAT_NO_DATA', '暂无数据');
@@ -192,27 +194,6 @@ const StatStripSkeleton = () => (
     ))}
   </section>
 );
-
 // ─── helpers ────────────────────────────────────────────────────────────
-function formatCompactNumber(n) {
-  if (!n) return '0';
-  if (n >= 1_000_000) return (n / 1_000_000).toFixed(2) + 'M';
-  if (n >= 1_000) return (n / 1_000).toFixed(1) + 'k';
-  return n.toLocaleString();
-}
-
-function relativeTime(ts, locale) {
-  const tt = new Date(ts).getTime();
-  if (isNaN(tt)) return '—';
-  const diffSec = Math.round((tt - Date.now()) / 1000);
-  const lang = locale || (typeof navigator !== 'undefined' ? navigator.language : 'en');
-  const rtf = new Intl.RelativeTimeFormat(lang, { numeric: 'auto' });
-  const abs = Math.abs(diffSec);
-  if (abs < 60) return rtf.format(diffSec, 'second');
-  if (abs < 3600) return rtf.format(Math.round(diffSec / 60), 'minute');
-  if (abs < 86400) return rtf.format(Math.round(diffSec / 3600), 'hour');
-  if (abs < 30 * 86400) return rtf.format(Math.round(diffSec / 86400), 'day');
-  return new Date(ts).toLocaleDateString(lang);
-}
 
 export default Dashboard;

@@ -62,6 +62,7 @@ const OAuthPage = lazy(() => import('./pages/admin/system/OAuthPage'));
 const SmsPage = lazy(() => import('./pages/admin/system/SmsPage'));
 const ModerationPage = lazy(() => import('./pages/admin/system/ModerationPage'));
 const CouponsPage = lazy(() => import('./pages/admin/system/CouponsPage'));
+const SyncPage = lazy(() => import('./pages/admin/system/SyncPage'));
 
 // Phase 4 — Settings.jsx 剩余 admin form 全部抽出独立 page
 const GeneralAdminPage = lazy(() => import('./pages/admin/system/GeneralAdminPage'));
@@ -122,6 +123,7 @@ const router = createBrowserRouter([
       { path: 'sms',             element: <SmsPage /> },
       { path: 'moderation',      element: <ModerationPage /> },
       { path: 'coupons',         element: <CouponsPage /> },
+      { path: 'sync',            element: <SyncPage /> },
 
       // ─── Phase 4：Settings 剩余 admin form 全部抽出 ──────────
       { path: 'general',         element: <GeneralAdminPage /> },

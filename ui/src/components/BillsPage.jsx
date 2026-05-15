@@ -329,9 +329,10 @@ const BillsPage = () => {
         {loading ? (
           <div className="text-center py-12 text-on-surface/60">{t('COMMON.LOADING', '加载中…')}</div>
         ) : entries.length === 0 ? (
-          <div className="text-center py-12 text-on-surface/60">
+          <div className="text-center py-12 text-on-surface/60 fl-card">
             <Receipt className="w-12 h-12 mx-auto mb-3 opacity-40" />
-            <p>{t('BILL.EMPTY', '暂无账单记录')}</p>
+            <p className="font-semibold text-on-surface mb-1">暂无账单</p>
+            <p className="text-sm">充值或订阅后会显示账单</p>
           </div>
         ) : (
           <ul className="divide-y divide-outline-variant/30 rounded-overlay border border-outline-variant/40 overflow-hidden bg-surface">

@@ -289,7 +289,7 @@ const AuthModal = ({ isOpen, onClose, onLoginSuccess, initialStep = 'github', tm
                   required
                   value={username}
                   onChange={(e) => setUsername(e.target.value)}
-                  placeholder={t('AUTH.USERNAME_PLACEHOLDER')}
+                  placeholder={t('AUTH.USERNAME_PLACEHOLDER') + ' *'}
                   className="w-full h-11 bg-surface-container border border-white/10 rounded-control px-4 text-sm text-on-surface outline-none focus:border-primary/50 placeholder-on-surface-variant/50"
                 />
               </div>
@@ -303,7 +303,7 @@ const AuthModal = ({ isOpen, onClose, onLoginSuccess, initialStep = 'github', tm
                   required
                   value={phone}
                   onChange={(e) => setPhone(e.target.value)}
-                  placeholder={t('AUTH.PHONE_PLACEHOLDER')}
+                  placeholder={t('AUTH.PHONE_PLACEHOLDER') + ' *'}
                   className="w-full h-11 bg-surface-container border border-white/10 rounded-control pl-[68px] pr-4 text-sm text-on-surface outline-none focus:border-primary/50 placeholder-on-surface-variant/50"
                 />
               </div>
@@ -314,7 +314,7 @@ const AuthModal = ({ isOpen, onClose, onLoginSuccess, initialStep = 'github', tm
                     required
                     value={code}
                     onChange={(e) => setCode(e.target.value)}
-                    placeholder={t('AUTH.CODE_PLACEHOLDER')}
+                    placeholder={t('AUTH.CODE_PLACEHOLDER') + ' *'}
                     className="flex-1 h-11 bg-surface-container border border-white/10 rounded-control px-4 text-sm text-on-surface outline-none focus:border-primary/50 placeholder-on-surface-variant/50"
                   />
                   <button
@@ -342,14 +342,12 @@ const AuthModal = ({ isOpen, onClose, onLoginSuccess, initialStep = 'github', tm
           {step === 'profile' && (
             <form onSubmit={handleCreateProfile} className="w-full flex gap-4 flex-col">
               <div className="relative group">
-                {/* fix MAJOR M-F2（gemini 第二十一轮 + WCAG 3.3.1）：
-                    aria-describedby 关联错误文案 + aria-invalid 让屏幕阅读器播报"无效"语义。 */}
                 <input
                   type="text"
                   required
                   value={profileName}
                   onChange={handleProfileChange}
-                  placeholder={t('AUTH.USERNAME_PLACEHOLDER')}
+                  placeholder={t('AUTH.USERNAME_PLACEHOLDER') + ' *'}
                   aria-invalid={!!profileError}
                   aria-describedby={profileError ? 'auth-profile-error' : undefined}
                   className={`w-full h-11 bg-surface-container border ${profileError ? 'border-error/50 focus:border-error' : 'border-white/10 focus:border-primary/50'} rounded-control px-4 text-sm text-on-surface outline-none  placeholder-on-surface-variant/50`}

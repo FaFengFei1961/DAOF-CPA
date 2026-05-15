@@ -139,7 +139,7 @@ const AdminNotificationManagement = () => {
   const handleRevoke = async (b) => {
     const ok = await confirm({
       title: t('NOTIF.ADMIN.REVOKE', '撤回'),
-      message: t('NOTIF.ADMIN.REVOKE_CONFIRM', '确认撤回？已发的通知不会从用户铃铛中删除。'),
+      message: t('NOTIF.ADMIN.REVOKE_CONFIRM', '撤回后用户侧不再显示，但保留审计记录。'),
       confirmText: t('NOTIF.ADMIN.REVOKE', '撤回'),
     });
     if (!ok) return;
@@ -374,7 +374,7 @@ const AdminNotificationManagement = () => {
                       {new Date(b.created_at).toLocaleString('zh-CN', { hour12: false })}
                     </td>
                     <td className="px-3 py-2 text-right">
-                      {b.status === 'sent' && (
+                      {['sent', 'partial_failed'].includes(b.status) && (
                         <button
                           type="button"
                           onClick={() => handleRevoke(b)}
@@ -397,7 +397,7 @@ const AdminNotificationManagement = () => {
       <div className="flex items-start gap-2 text-xs text-on-surface-variant px-1">
         <AlertTriangle size={12} className="mt-0.5 shrink-0" />
         <p>
-          {t('NOTIF.ADMIN.HINT_FORCE_DELIVER', '系统通知（category=broadcast）默认强制送达，绕过用户偏好屏蔽。撤回仅改群发状态，不会从用户铃铛中删除已发的通知。')}
+          {t('NOTIF.ADMIN.HINT_FORCE_DELIVER', '系统通知（category=broadcast）默认强制送达，绕过用户偏好屏蔽。撤回后用户侧不再显示，但保留审计记录。')}
         </p>
       </div>
     </div>
@@ -416,6 +416,7 @@ const severityClass = (s) => {
 const statusClass = (s) => {
   switch (s) {
     case 'sent': return 'text-success';
+    case 'partial_failed': return 'text-warning';
     case 'revoked': return 'text-on-surface-variant line-through';
     case 'draft': return 'text-warning';
     default: return 'text-on-surface-variant';

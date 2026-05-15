@@ -225,8 +225,8 @@ const UpgradePage = ({ onPurchaseSuccess }) => {
       {isAuthenticated && (
         <div className="inline-flex rounded-overlay border border-outline-variant bg-surface-container p-0.5 self-start">
           {[
-            { id: 'mine', label: t('PRODUCTS.PANE_MINE', '我的') },
-            { id: 'store', label: t('PRODUCTS.PANE_STORE', '商店') },
+            { id: 'mine', label: t('SUB.PANE_MINE', '我的') },
+            { id: 'store', label: t('SUB.PANE_STORE', '商店') },
           ].map(p => {
             const active = pane === p.id;
             return (
@@ -256,7 +256,7 @@ const UpgradePage = ({ onPurchaseSuccess }) => {
           if (filtered.length === 0) {
             return (
               <div className="fl-card p-16 text-center">
-                <p className="text-on-surface-variant">{t('PRODUCTS.EMPTY', '此分类暂无可购买的产品')}</p>
+                <p className="text-on-surface-variant">{t('SUB.STORE_EMPTY', '此分类暂无可购买的套餐')}</p>
               </div>
             );
           }
@@ -344,20 +344,18 @@ const UpgradePage = ({ onPurchaseSuccess }) => {
                       <label htmlFor={`coupon-${pkg.id}`} className="block text-[10px] font-medium text-on-surface-variant mb-1">
                         {t('UPGRADE.USE_COUPON', '使用优惠券')}
                       </label>
-                      <select
+                      <Select
                         id={`coupon-${pkg.id}`}
                         value={selectedCouponId}
                         onChange={(e) => setSelectedCouponByPkg((prev) => ({ ...prev, [pkg.id]: parseInt(e.target.value, 10) || 0 }))}
-                        className="w-full bg-surface-container-high border border-outline rounded-control px-2 py-1 text-xs text-on-surface focus:border-primary focus:ring-1 focus:ring-primary"
-                      >
-                        <option value={0}>{t('UPGRADE.COUPON_NONE', '不使用券')}</option>
-                        {usableCoupons.map((c) => (
-                          <option key={c.id} value={c.id}>
-                            {c.snapshot_name}
-                            {c.snapshot_type === 'fixed_price' ? ` (${formatCurrency(Number(c.snapshot_value || 0), 2)})` : ''}
-                          </option>
-                        ))}
-                      </select>
+                        options={[
+                          { value: 0, label: t('UPGRADE.COUPON_NONE', '不使用券') },
+                          ...usableCoupons.map(c => ({
+                            value: c.id,
+                            label: `${c.snapshot_name}${c.snapshot_type === 'fixed_price' ? ` (${formatCurrency(Number(c.snapshot_value || 0), 2)})` : ''}`
+                          }))
+                        ]}
+                      />
                     </div>
                   )}
 

@@ -6,6 +6,7 @@
   "scripts": {
     "dev": "vite",
     "build": "vite build",
+    "check-i18n": "node ../scripts/check_i18n.js",
     "lint": "eslint .",
     "preview": "vite preview"
   },

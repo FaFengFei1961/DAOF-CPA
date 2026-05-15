@@ -14,7 +14,15 @@
     "LOADING": "Loading…",
     "PREV": "Previous",
     "NEXT": "Next",
-    "PAGINATION_RANGE": "{{from}}-{{to}} of {{total}}"
+    "PAGINATION_RANGE": "{{from}}-{{to}} of {{total}}",
+    "REFRESH": "刷新",
+    "YES": "是",
+    "NO": "否",
+    "HIDE": "隐藏",
+    "SHOW": "显示",
+    "SAVING": "保存中...",
+    "SAVE": "保存",
+    "EMPTY": "暂无数据"
   },
   "NOTIF": {
     "CENTER": "Notifications",
@@ -74,12 +82,13 @@
       "SEND_OK": "Sent (actually reached {{count}} users)",
       "SEND_FAIL": "Failed to send",
       "REVOKE": "Revoke",
-      "REVOKE_CONFIRM": "Confirm revoke? Already-delivered notifications will not be removed from users' inboxes.",
+      "REVOKE_CONFIRM": "After revocation, users will no longer see it, but the audit record is preserved.",
       "REVOKE_OK": "Revoked",
       "STATUS_SENT": "Sent",
+      "STATUS_PARTIAL_FAILED": "Partially failed",
       "STATUS_REVOKED": "Revoked",
       "STATUS_DRAFT": "Draft",
-      "HINT_FORCE_DELIVER": "System broadcasts (category=broadcast) are forced-deliver by default, bypassing user preferences. Revoke only flips the status; already-delivered notifications remain in users' inboxes.",
+      "HINT_FORCE_DELIVER": "System broadcasts (category=broadcast) are force-delivered by default, bypassing user preferences. After revocation, users no longer see it, but the audit record is preserved.",
       "TABLE_TITLE": "Title",
       "TABLE_SEVERITY": "Severity",
       "TABLE_TARGET": "Target",
@@ -89,24 +98,8 @@
       "TABLE_CREATED_AT": "Created",
       "TABLE_OPS": "Actions",
       "EMPTY": "No broadcasts yet"
-    }
-  },
-  "PRODUCTS": {
-    "TITLE": "Product Center",
-    "SUBTITLE": "Subscriptions are the primary consumption; addons fill in when subscriptions run out; balance billing must be enabled separately in account settings.",
-    "TAB_SUBSCRIPTION": "Subscriptions",
-    "TAB_ADDON": "Addons",
-    "TAB_ALL": "All",
-    "SUBSCRIPTION_HINT": "Periodic package, refreshed monthly (consumed first)",
-    "ADDON_HINT": "Used after subscription is depleted",
-    "EMPTY": "No products available in this category"
-  },
-  "MY_PRODUCTS": {
-    "TITLE": "My Products",
-    "SUBTITLE": "Subscriptions consumed first, then addons; balance billing kicks in when both depleted (enable in Account Settings).",
-    "EMPTY": "No active products yet",
-    "GROUP_SUBSCRIPTION": "Subscriptions",
-    "GROUP_ADDON": "Addons"
+    },
+    "AUTH_REQUIRED": "登录后即可查看您的通知"
   },
   "TICKET": {
     "TITLE": "My Tickets",
@@ -244,7 +237,9 @@
     "STATUS_PAID": "Credited",
     "STATUS_FAILED": "Failed/Cancelled",
     "STATUS_REFUNDED": "Refunded",
-    "EMPTY": "No top-up records yet"
+    "EMPTY": "No top-up records yet",
+    "SUB_PLAIN": "人民币按当前汇率换算入账 USD 余额",
+    "RESULT_SUCCESS_SUB": "余额会在收到支付平台异步通知后自动入账，通常几秒到几分钟"
   },
   "PAY_ADMIN": {
     "CHANNELS_TITLE": "Yifut Configuration",
@@ -332,7 +327,10 @@
     "BANNED": {
       "TITLE": "Account Banned",
       "ACCEPT_BTN": "Confirm & Exit"
-    }
+    },
+    "GITHUB_OAUTH_FAILED": "GitHub 登录失败",
+    "LOGIN_NET_ERROR": "登录网络异常",
+    "LOADING": "加载中..."
   },
   "MENU": {
     "DASHBOARD": "Playground",
@@ -346,8 +344,6 @@
     "HOME": "Overview",
     "LOGS": "Logs",
     "TOPUP": "Top Up",
-    "PRODUCTS": "Products",
-    "MY_PRODUCTS": "My Products",
     "BILLS": "Billing",
     "TICKETS": "Tickets",
     "MORE": "More"
@@ -406,17 +402,17 @@
     "REVOKE_OK": "Grant revoked",
     "REVOKE_FAIL": "Failed to revoke",
     "GRANT_BTN": "Grant",
-    "GRANT_BTN_TITLE": "Grant a subscription / addon to a user",
+    "GRANT_BTN_TITLE": "Grant a subscription to a user",
     "GRANTED_TAG": "Granted",
-    "TYPE_ADDON": "Addon"
+    "STATUS_FILTER_LABEL": "按状态筛选订阅"
   },
   "ADMIN_GRANT": {
-    "TITLE": "Grant Subscription / Addon",
+    "TITLE": "Grant Subscription",
     "TARGET_USER": "Target User",
     "USER_SEARCH_PH": "Search by username / phone / GitHub ID (≥2 chars)",
     "SEARCHING": "Searching…",
     "SELECTED_USER": "Selected",
-    "PACKAGE": "Package / Addon",
+    "PACKAGE": "Package",
     "SELECT_PKG": "Please select",
     "LOADING_PKG": "Loading…",
     "LOAD_PKG_FAIL": "Failed to load packages",
@@ -436,7 +432,9 @@
     "ERR_QTY": "Quantity must be an integer between 1 and 100",
     "ERR_REASON": "Please enter a grant reason",
     "ERR_REASON_LONG": "Reason cannot exceed 500 characters",
-    "ERR_REASON_CTRL": "Reason cannot contain newlines / tabs"
+    "ERR_REASON_CTRL": "Reason cannot contain newlines / tabs",
+    "SUGGESTIONS_ARIA": "用户建议列表",
+    "SUBMIT_DISABLED_HINT": "请先选择目标用户、套餐并填写理由"
   },
   "BILL": {
     "TITLE": "Billing",
@@ -457,17 +455,14 @@
     "SUM_BALANCE": "Current Balance",
     "T_TOPUP": "Top-up",
     "T_PURCHASE_SUB": "Purchase Subscription",
-    "T_PURCHASE_ADDON": "Purchase Add-on",
     "T_BONUS": "Reward Credit",
     "T_REFUND_SUB": "Subscription Refund",
     "T_REFUND_TOPUP": "Top-up Refund",
     "T_ADMIN_ADJUST": "Admin Adjustment",
     "T_ADMIN_GRANT_SUB": "Admin-granted Subscription",
-    "T_ADMIN_GRANT_ADDON": "Admin-granted Add-on",
     "T_ADMIN_REVOKE_GRANT": "Admin Grant Revoked",
     "T_API_BALANCE": "Balance Debit",
     "T_API_SUB": "Subscription Quota",
-    "T_API_ADDON": "Add-on Quota",
     "T_API_PENDING": "Pending Reconcile",
     "ADMIN_USER_TITLE": "User Billing",
     "ADMIN_USER_ID": "User ID",
@@ -481,7 +476,10 @@
     "LOGOUT_TOOLTIP": "Disconnect",
     "LOGIN": "Sign In",
     "REGISTER": "Sign Up Free",
-    "TOGGLE_CURRENCY": "Toggle Display Currency"
+    "TOGGLE_CURRENCY": "Toggle Display Currency",
+    "ENTER_ADMIN": "进入管理后台",
+    "ACCOUNT_MENU": "账户菜单",
+    "LANG": "语言"
   },
   "PRICING": {
     "TITLE": "Models & Pricing Dashboard",
@@ -515,6 +513,7 @@
     "UNTITLED_TOKEN": "Untitled Token",
     "DELETE_CONFIRM": "ALERT: Permanently delete this token? All associated systems will lose connection!",
     "COPY_SUCCESS": "Token copied successfully!",
+    "NET_ERROR": "Network error",
     "CREATE_CARD_TITLE": "Manage Access Tokens",
     "CREATE_CARD_DESC": "Create separate API Keys to track usage for different applications.",
     "INPUT_PLACEHOLDER": "e.g., Chatbox Only",
@@ -527,6 +526,8 @@
     "TABLE_HEAD_NAME": "Name",
     "TABLE_HEAD_TOKEN": "API Key",
     "TABLE_HEAD_QUOTA": "Used Quota",
+    "TABLE_HEAD_EXPIRY": "Expires At",
+    "LIMIT": "Maximum quota ($)",
     "TABLE_HEAD_STATUS": "Status",
     "TABLE_HEAD_CTRL": "Control",
     "LOGS_TITLE": "Token Audit Logs",
@@ -538,7 +539,13 @@
     "LOG_HEAD_TOKEN": "Token Identity",
     "LOG_HEAD_MODEL": "AI Model",
     "LOG_HEAD_TOKENS": "Prompt / Completion Tokens",
-    "LOG_HEAD_COST": "Cost ($)"
+    "LOG_HEAD_COST": "Cost ($)",
+    "CREATE_OK": "令牌已创建",
+    "ENABLED_OK": "已启用",
+    "DISABLED_OK": "已禁用",
+    "UPDATE_FAILED": "保存失败",
+    "DELETE_OK": "令牌已删除",
+    "NEVER_EXPIRE": "Never"
   },
   "PROFILE": {
     "ADMIN_UPDATE_WARN": "WARNING: Updating will log out your current admin session!\nAnd your admin panel suffix will permanently lock to ?sys={{username}}\n\nAre you sure you want to forcibly override the profile?",
@@ -586,7 +593,10 @@
     "BTN_BIND": "Complete & Bind",
     "BTN_PROFILE_LOADING": "Creating Account...",
     "BTN_PROFILE": "Enter System",
-    "FOOTER_TOS": "By registering or logging in, you agree to our Terms of Service"
+    "FOOTER_TOS": "By registering or logging in, you agree to our Terms of Service",
+    "PHONE_INVALID": "请输入正确的 11 位手机号",
+    "SMS_SEND_FAILED": "验证码发送失败",
+    "SMS_SENT": "验证码已发送"
   },
   "ADMIN_LOGIN": {
     "LOGIN_FAILED": "Verification failed",
@@ -622,6 +632,8 @@
     "TAB_MY_COUPONS": "My Coupons",
     "TAB_FINANCE": "Finance Workspace",
     "TAB_CREDITS": "Credits Pool",
+    "TAB_SYNC": "Pool Sync",
+    "SYNC_DESC": "CLIProxy usage sync, auth key, and log cleanup settings",
     "TAB_QUOTA_PLANS": "Quota Plans",
     "TAB_PACKAGES": "Packages",
     "GROUP_PERSONAL": "Personal",
@@ -684,7 +696,12 @@
     "BALANCE_DEFAULT_LIMIT": "Default spending limit per window (USD)",
     "BALANCE_DEFAULT_LIMIT_HINT": "0 means unlimited.",
     "BALANCE_DEFAULT_WINDOW": "Default tracking window (seconds)",
-    "BALANCE_DEFAULT_WINDOW_HINT": "60 seconds to 365 days; 2592000 = 30 days."
+    "BALANCE_DEFAULT_WINDOW_HINT": "60 seconds to 365 days; 2592000 = 30 days.",
+    "TAB_CONSUME_PREFS": "消费偏好",
+    "NAV_LABEL": "设置导航",
+    "CONSUME_PREFS_DESC": "订阅用尽后是否允许从美元余额继续扣费 + 周期限额控制",
+    "SAVE_SUCCESS": "保存成功",
+    "MODERATION_DESC": "上游模型池审核 / 关键字 / 缓存 / 长 prompt 限制 / 多模态策略 / 拒绝文案的全局配置"
   },
   "USER_MGMT": {
     "TITLE": "User Management Center",
@@ -749,7 +766,11 @@
     "STATUS_BANNED_OPT": "2 - Banned",
     "MODAL_BAN_REASON": "Ban Reason",
     "MODAL_BAN_PLACEHOLDER": "Fill in abuse or violation details for future reference...",
-    "BTN_SUBMIT": "Confirm Action"
+    "BTN_SUBMIT": "Confirm Action",
+    "LOAD_FAIL": "加载用户列表失败",
+    "DELETE_OK": "用户已删除",
+    "UPDATE_OK": "用户已更新",
+    "PAGE_INFO": "第 {{page}}/{{total}} 页 · 共 {{count}} 条"
   },
   "CHANNEL_MGMT": {
     "TITLE": "Channels",
@@ -853,7 +874,20 @@
       "BADGE_OFF": "OFF",
       "BADGE_KW": "KW",
       "BADGE_MOD": "MOD",
-      "BADGE_STRICT": "STRICT"
+      "BADGE_STRICT": "STRICT",
+      "OPENAI_LOCK_HINT": "OpenAI / Codex-family 模型已全局强制启用 STRICT + CLOSED 内容审查。",
+      "PRESET_OPENAI_DESC": "强制：STRICT + CLOSED"
+    },
+    "ENDPOINT": {
+      "BADGE_ALL": "端点: ALL",
+      "BADGE_NO_CHAT_NS": "端点: 禁非流式 Chat",
+      "BADGE_RESPONSES": "端点: Responses",
+      "POLICY": "允许的客户端端点",
+      "LEGEND": "端点兼容策略",
+      "ALL": "全部允许",
+      "NO_CHAT_NON_STREAM": "禁止 Chat Completions 非流式",
+      "RESPONSES_ONLY": "仅 Responses API",
+      "HINT": "用于 gpt-5.5 等只在特定端点稳定工作的模型；不兼容请求会在平台侧直接返回明确错误。"
     }
   },
   "COUPON": {
@@ -933,7 +967,9 @@
     "CARD_FIXED": "Coupon price: ${{p}}",
     "CARD_CODE": "Code: ",
     "CARD_EXPIRES": "Expires: {{d}}",
-    "CARD_REASON": "Reason: {{r}}"
+    "CARD_REASON": "Reason: {{r}}",
+    "ADMIN_GRANT_QTY_INVALID": "数量必须 ≥ 1",
+    "PAGE_DESC": "管理优惠券模板，配置新用户自动发券规则"
   },
   "MODERATION": {
     "TITLE": "Content Moderation (Global Settings)",
@@ -1013,7 +1049,60 @@
     "TEST_RL_REQ": "Requests remaining",
     "TEST_RL_RESET_REQ": "Request reset",
     "TEST_RL_TOKENS": "Tokens remaining",
-    "TEST_RL_RESET_TOKENS": "Token reset"
+    "TEST_RL_RESET_TOKENS": "Token reset",
+    "RISK_RULES_INVALID": "风险规则必须是合法 JSON 数组",
+    "KEYWORD_AI_FAIL": "AI 词库候选生成失败",
+    "KEYWORD_AI_DONE": "已生成 {{count}} 条候选",
+    "KEYWORD_AI_NONE_SELECTED": "请先选择至少一条候选",
+    "KEYWORD_AI_MERGED": "已合并到词库，记得点击底部保存",
+    "RISK_EVENTS_LOAD_FAIL": "加载风控记录失败",
+    "KEYWORD_AI_TITLE": "AI 词库候选",
+    "KEYWORD_AI_DESC": "通过已保存的审核 provider 生成候选词，只返回候选，不会自动写入词库。选择后合并，再点击底部保存。",
+    "KEYWORD_AI_MAX": "候选数量",
+    "KEYWORD_AI_RUNNING": "生成中...",
+    "KEYWORD_AI_BUTTON": "生成候选",
+    "KEYWORD_AI_FOCUS_PLACEHOLDER": "可选：补充本轮重点，例如“Claude Code 破甲、泄露系统提示词、伪造工具调用”",
+    "KEYWORD_AI_CANDIDATES": "候选词",
+    "KEYWORD_AI_MERGE": "合并已选",
+    "SECTION_RISK_RULES": "组合规则与风险打分",
+    "RISK_RULES_DESC": "用于承载 regex / combo / score_only 规则。block 直接拦截，model_review 升级到智能审核 provider 二审，score_only 只记录风控事件。",
+    "RISK_RULES_LABEL": "规则 JSON",
+    "RISK_RULES_HINT": "当前 {{count}} 条规则。修改后失焦会校验 JSON，点击页面底部「保存」后生效。",
+    "RISK_RULES_BLOCK_HINT": "极低误伤规则，命中后直接拒绝。",
+    "RISK_RULES_REVIEW_HINT": "高风险但需上下文判断，命中后走智能审核 provider 二审。",
+    "RISK_RULES_SCORE_HINT": "中风险信号，只写审计和累计风险。",
+    "SECTION_AUTOBAN": "自动处置与风控记录",
+    "AUTOBAN_DESC": "审核命中会写入风控记录；开启自动封禁后，达到阈值的普通用户会立即封禁并刷新 token 缓存。管理员账号不会被自动封禁。",
+    "AUTOBAN_ENABLED": "自动封禁",
+    "AUTOBAN_ENABLED_HINT": "命中阈值后直接限制账户",
+    "AUTOBAN_KEYWORD": "关键字阈值",
+    "AUTOBAN_POLICY": "智能审核阈值",
+    "AUTOBAN_RISK_RULE": "风险规则阈值",
+    "AUTOBAN_RISK_SCORE": "风险打分阈值",
+    "AUTOBAN_IMAGE": "图片策略阈值",
+    "AUTOBAN_OVERSIZE": "超长阈值",
+    "AUTOBAN_ZERO_OFF": "0 表示关闭该类自动封禁",
+    "AUTOBAN_WINDOW": "统计窗口（秒）",
+    "RISK_SUMMARY_SHOWN": "当前显示",
+    "RISK_SUMMARY_BLOCKED": "请求拦截",
+    "RISK_SUMMARY_REVIEW": "规则二审/打分",
+    "RISK_SUMMARY_UNAVAILABLE": "审核不可达",
+    "RISK_SUMMARY_AUTOBAN": "自动封禁",
+    "RISK_SUMMARY_USER_SCOPE": "用户输入",
+    "RISK_SUMMARY_CONTEXT_SCOPE": "上下文噪声",
+    "RISK_FILTER_ACTION": "事件类型",
+    "RISK_FILTER_USER": "用户 ID",
+    "RISK_FILTER_USER_PLACEHOLDER": "全部用户",
+    "RISK_FILTER_LIMIT": "数量",
+    "RISK_APPLY_FILTERS": "应用筛选",
+    "RISK_AUDIT_NOTE": "新拦截会显示脱敏内容预览和指纹；历史旧记录没有保存请求内容。",
+    "RISK_LOADED_AT": "加载于 {{time}}",
+    "RISK_NOT_LOADED": "尚未加载",
+    "RISK_EMPTY": "暂无风控记录",
+    "RISK_SEGMENT_SCOPE": "来源",
+    "RISK_NO_STRUCTURED_DETAILS": "无结构化详情",
+    "RISK_CONTENT_PREVIEW": "命中内容预览（已脱敏）",
+    "RISK_RAW_DETAILS": "查看原始详情"
   },
   "MODEL_MGMT": {
     "TITLE": "Model Matrix",
@@ -1077,6 +1166,13 @@
   "SUB": {
     "TITLE": "My Subscriptions",
     "SUBTITLE": "Active subscriptions are consumed FIFO. Earliest purchased depletes first.",
+    "MY_TITLE": "My Subscriptions",
+    "MY_SUBTITLE": "Subscriptions are consumed first; balance billing kicks in only after they are depleted (enable it in Account Settings).",
+    "PANE_MINE": "Mine",
+    "PANE_STORE": "Store",
+    "STORE_EMPTY": "No subscription packages available in this category",
+    "GROUP_SUBSCRIPTION": "Subscriptions",
+    "GROUP_SUB_EMPTY": "No active subscriptions",
     "LOADING": "Loading...",
     "LOAD_FAIL": "Load failed",
     "EMPTY": "No active subscriptions yet",
@@ -1117,7 +1213,18 @@
     "NO_MATCH": "No matches",
     "LOADING": "Loading…",
     "OFFLINE": "offline",
-    "FREE": "Free"
+    "FREE": "Free",
+    "ADMIN_HINT": "当前为管理员模式，可前往管理控制台查看渠道、用户与计费",
+    "ADMIN_ENTER": "进入控制台",
+    "SIGN_IN_HINT": "登录后可查看您的订阅、用量与账单",
+    "SIGN_IN_ACTION": "登录",
+    "STAT_NO_DATA": "暂无数据",
+    "STAT_BALANCE": "账户余额",
+    "STAT_REQUESTS": "最近请求",
+    "STAT_TOKENS": "Token 用量",
+    "STAT_LAST": "上次调用",
+    "STAT_FULL_LINK": "查看完整用量统计 (24h / 7d / 30d) →",
+    "STAT_SNAPSHOT_N": "近 {{n}} 条快照"
   },
   "OVERVIEW": {
     "MODELS_TITLE": "Available Models",
@@ -1133,6 +1240,8 @@
     "LOADING": "LOADING TELEMETRY...",
     "TITLE": "Usage Statistics",
     "TOTAL_REQS": "Total Requests",
+    "SUCCESS_REQS": "Successful requests",
+    "FAILED_REQS": "Failed requests",
     "TOTAL_TOKENS": "Total Tokens",
     "RPM": "RPM",
     "TPM": "TPM",
@@ -1166,7 +1275,14 @@
     "FILTER_ALL": "All",
     "CLEAR_FILTERS": "Clear Filters",
     "EXPORT_CSV": "Export CSV",
-    "EVENTS_COUNT": "events"
+    "EVENTS_COUNT": "events",
+    "AUTH_REQUIRED": "登录后查看您的使用统计",
+    "SUBTITLE": "按时间窗口聚合的请求、成本与失败率，支持模型 / Token 维度筛选",
+    "STATUS": "结果",
+    "IP": "来源 IP",
+    "LATENCY": "延迟",
+    "SUCCESS": "成功",
+    "FAIL": "失败"
   },
   "API": {
     "ERR_ACCOUNT_INSTANTIATION": "Account creation failed.",
@@ -1472,5 +1588,67 @@
   },
   "MOBILE_NAV": {
     "BOTTOM_LABEL": "Bottom navigation"
+  },
+  "PAGINATION": {
+    "SUMMARY": "共 {{total}} 条 · 第 {{page}}/{{total_pages}} 页",
+    "SIZE_LABEL": "每页条数",
+    "PAGE": "页",
+    "PREV": "上一页",
+    "NEXT": "下一页"
+  },
+  "CONFIRM": {
+    "CANCEL": "取消",
+    "NEXT": "下一步",
+    "PREV": "上一步",
+    "TITLE": "请确认操作",
+    "OK": "确认"
+  },
+  "BILLING_RULES": {
+    "TITLE": "额度怎么扣？",
+    "VERSION": "规则版本",
+    "SUBTITLE": "不同模型消耗额度不同：轻量模型扣得少，Opus / Thinking / 高推理模型扣得多。平台不会在后台偷偷把你请求的模型换成别的模型。",
+    "LOAD_FAIL": "规则加载失败",
+    "STEP_BASE": "先算基础成本",
+    "STEP_BASE_VALUE": "按公开模型单价折算",
+    "STEP_MODEL": "再看模型消耗",
+    "STEP_MODEL_VALUE": "轻量少扣，重型多扣",
+    "STEP_PEAK": "繁忙时段",
+    "NO_PEAK": "当前没有加价",
+    "PEAK_ACTIVE": "按公开系数调整",
+    "STEP_FINAL": "实际扣减额度",
+    "STEP_FINAL_VALUE": "写入账单明细",
+    "MODEL_TABLE": "模型消耗系数",
+    "MODEL_TYPE": "模型类型",
+    "NORMAL_USE": "普通使用",
+    "THINKING_USE": "Thinking 使用",
+    "HOW_TO_READ": "怎么理解",
+    "OPEN_PRICING_FULL": "完整规则可在左侧“定价”页面查看。",
+    "FALLBACK_TITLE": "不会偷偷换模型",
+    "FALLBACK_DEFAULT_HUMAN": "默认不启用模型替换。",
+    "FALLBACK_AUDIT_HUMAN": "账单会记录“你请求的模型”和“实际服务的模型”。",
+    "FALLBACK_OPTIN_HUMAN": "只有你主动允许 fallback 时，平台才可以按规则切换可用模型。",
+    "THINKING_TITLE": "Thinking 怎么判定",
+    "THINKING_ENABLED_HUMAN": "请求明确启用 thinking / reasoning，或上游返回 reasoning tokens，才按 Thinking 使用扣减。",
+    "THINKING_DISABLED_HUMAN": "仅出现 disabled / none / off / 空 thinking 对象，不算 Thinking 使用。",
+    "THINKING_AUDIT_HUMAN": "请求事件明细会显示思考 tokens 和本次实际模型倍率。",
+    "HEALTH_TITLE": "繁忙时段系数",
+    "HEALTH_NORMAL": "当前没有繁忙时段加价。",
+    "TECH_DETAILS": "技术字段对照",
+    "TECH_RAW": "公开模型单价折算出的 API 等值成本。",
+    "TECH_WEIGHT": "该模型对应的消耗系数。",
+    "TECH_HEALTH": "繁忙时段或健康度调整系数。",
+    "TECH_CHARGED": "最终从套餐额度里扣减的数值。",
+    "TECH_FALLBACK": "只有显式允许 fallback 时才可能改变 served_model。"
+  },
+  "A11Y": {
+    "SKIP_TO_MAIN": "跳至主要内容"
+  },
+  "ADMIN": {
+    "SHELL_TITLE": "管理控制台",
+    "BACK_TO_USER": "返回用户视图",
+    "GOTO_USER": "用户仪表盘"
+  },
+  "SIDEBAR": {
+    "TAGLINE": "AI 模型聚合"
   }
 }

@@ -7,6 +7,8 @@
 // 调用方拿到的是已经 .json() 后的对象，失败时抛出 Error；
 // 401/403 也作为正常 json 返回让调用方决策（避免破坏现有 success/false 响应链路）。
 
+import toast from 'react-hot-toast';
+
 const ADMIN_FLAG_KEY = 'daof_admin_unlocked';
 const USER_TOKEN_KEY = 'daof_token';
 
@@ -75,6 +77,11 @@ export const authFetch = async (url, init = {}) => {
 
   // 始终把 HTTP status 透传给调用方，便于区分 401/403/4xx/5xx
   const ct = res.headers.get('Content-Type') || '';
+  
+  if (res.status === 402) {
+    toast('余额不足，请前往充值页面补充余额或购买套餐。', { duration: 5000 });
+  }
+
   if (!ct.includes('application/json')) {
     return {
       success: false,

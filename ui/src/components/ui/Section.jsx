@@ -9,7 +9,7 @@ import React from 'react';
  *   - children 内容区
  *   - 默认套 fl-card（带 hover reveal），用 `flat` prop 关掉
  *
- * 取代每页自己写 `<div className="bg-surface-container border border-outline-variant rounded-2xl p-4 md:p-6 mb-8">`。
+ * 取代每页自己写 `<div className="bg-surface-container border border-outline-variant rounded-overlay p-4 md:p-6 mb-8">`。
  */
 const Section = ({
   title,

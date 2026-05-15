@@ -1,5 +1,6 @@
-import React, { createContext, useContext, useState, useCallback } from 'react';
+import React, { createContext, useContext, useState, useCallback, useRef } from 'react';
 import { useTranslation } from 'react-i18next';
+import { useModalA11y } from '../hooks/useModalA11y';
 
 const ConfirmContext = createContext();
 
@@ -61,13 +62,22 @@ export const ConfirmProvider = ({ children }) => {
 
   const handleCancel = () => close(false);
 
+  const modalRef = useRef(null);
+  const { onBackdropClick } = useModalA11y(state.isOpen, handleCancel, null, modalRef);
+
   return (
     <ConfirmContext.Provider value={confirm}>
       {children}
       {state.isOpen && (
-        <div className="fixed inset-0 z-[10000] flex items-end sm:items-center justify-center p-3 sm:p-4 bg-black/60 backdrop-blur-sm animate-in fade-in duration-200">
-          <div className="bg-surface-container-high border border-outline-variant rounded-xl w-full max-w-md p-5 sm:p-6 shadow-2xl relative overflow-hidden flex flex-col scale-in-center">
-            <div className={`flex items-center gap-3 mb-4 ${state.danger ? 'text-red-500 dark:text-red-400' : 'text-primary'}`}>
+        <div 
+          className="fixed inset-0 z-[10000] flex items-end sm:items-center justify-center p-3 sm:p-4 bg-black/60 backdrop-blur-sm animate-in fade-in duration-200"
+          onClick={onBackdropClick}
+        >
+          <div 
+            ref={modalRef}
+            className="bg-surface-container-high border border-outline-variant rounded-overlay w-full max-w-md p-5 sm:p-6 shadow-2xl relative overflow-hidden flex flex-col scale-in-center"
+          >
+            <div className={`flex items-center gap-3 mb-4 ${state.danger ? 'text-error' : 'text-primary'}`}>
               <svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
                 <path d="m21.73 18-8-14a2 2 0 0 0-3.48 0l-8 14A2 2 0 0 0 4 21h16a2 2 0 0 0 1.73-3Z" />
                 <path d="M12 9v4" />
@@ -90,7 +100,7 @@ export const ConfirmProvider = ({ children }) => {
                   value={state.inputValue}
                   onChange={(e) => setState((s) => ({ ...s, inputValue: e.target.value }))}
                   placeholder={state.input.placeholder || ''}
-                  className="w-full h-10 bg-surface-container border border-outline rounded-lg px-3 text-sm text-on-surface focus:border-primary outline-none"
+                  className="w-full h-10 bg-surface-container border border-outline rounded-control px-3 text-sm text-on-surface focus:border-primary outline-none"
                   autoFocus
                 />
               </div>

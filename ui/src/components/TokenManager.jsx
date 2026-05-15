@@ -266,7 +266,16 @@ const TokenManager = ({ isAuthenticated }) => {
                             ) : tokens.length === 0 ? (
                                 <tr>
                                     <td colSpan="6" className="p-8 text-center text-on-surface-variant">
-                                        {t('TOKEN_MGMT.EMPTY')}
+                                        <div className="flex flex-col items-center gap-3">
+                                            <Key size={32} className="text-on-surface-variant/50" />
+                                            <span>{t('TOKEN_MGMT.EMPTY')}</span>
+                                            <button 
+                                                onClick={() => document.querySelector('input[placeholder="Name / Purpose"]').focus()}
+                                                className="mt-2 text-sm font-semibold text-primary hover:underline inline-flex items-center gap-1"
+                                            >
+                                                <Plus size={14} /> 创建你的第一个 token
+                                            </button>
+                                        </div>
                                     </td>
                                 </tr>
                             ) : tokens.map(token => (
@@ -334,12 +343,11 @@ const TokenManager = ({ isAuthenticated }) => {
                                         )}
                                     </td>
                                     <td className="p-4">
-                                        <button
-                                            onClick={() => handleToggleStatus(token.id, token.status)}
-                                            className={`inline-flex items-center gap-1.5 px-2.5 py-1 rounded-control-full text-xs font-medium cursor-pointer  ${token.status === 1 ? 'bg-success/10 text-success hover:bg-success/20' : 'bg-error/10 text-error hover:bg-error/20'}`}
-                                        >
-                                            <Power size={12} />
-                                            {token.status === 1 ? t('TOKEN_MGMT.STATUS_ACTIVE') : t('TOKEN_MGMT.STATUS_FROZEN')}
+                                        <button onClick={() => handleToggleStatus(token.id, token.status)}>
+                                            <StatusBadge variant={token.status === 1 ? 'success' : 'error'} className="cursor-pointer hover:opacity-80">
+                                                <Power size={12} className="mr-1" />
+                                                {token.status === 1 ? t('TOKEN_MGMT.STATUS_ACTIVE') : t('TOKEN_MGMT.STATUS_FROZEN')}
+                                            </StatusBadge>
                                         </button>
                                     </td>
                                     <td className="p-4 text-right">

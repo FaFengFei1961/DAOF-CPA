@@ -23,7 +23,7 @@ const FormRow = ({
     <div className="flex flex-col gap-1 w-full md:w-2/3 min-w-0">
       <label htmlFor={htmlFor} className="text-on-surface font-medium text-sm flex items-center gap-1">
         {label}
-        {required && <span className="text-red-400 text-xs">*</span>}
+        {required && <span className="text-error text-xs">*</span>}
       </label>
       {hint && (
         <span className="text-xs text-on-surface-variant leading-relaxed max-w-2xl">{hint}</span>

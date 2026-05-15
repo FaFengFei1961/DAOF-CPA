@@ -102,11 +102,22 @@ const MySubscriptions = ({ isAuthenticated = true, embedded = false }) => {
       />
 
       <StoreSection
-        title={t('MY_PRODUCTS.GROUP_SUBSCRIPTION', '订阅')}
+        title={t('SUB.GROUP_SUBSCRIPTION', '订阅')}
         right={<span className="text-xs text-on-surface-variant">{activeSubscriptions.length} 个活跃订阅</span>}
       >
         {activeSubscriptions.length === 0 ? (
-          <EmptyUsageCard>{t('MY_PRODUCTS.GROUP_SUB_EMPTY', '暂无活跃订阅')}</EmptyUsageCard>
+          <EmptyUsageCard>
+            <div className="flex flex-col items-center gap-3">
+              <PackageIcon size={32} className="text-on-surface-variant/50" />
+              <span>{t('SUB.GROUP_SUB_EMPTY', '暂无活跃订阅')}</span>
+              <button 
+                onClick={() => window.location.href = '/upgrade'}
+                className="mt-2 text-sm font-semibold text-primary hover:underline inline-flex items-center gap-1"
+              >
+                浏览套餐
+              </button>
+            </div>
+          </EmptyUsageCard>
         ) : (
           <div className="grid grid-cols-1 xl:grid-cols-2 gap-4">
             {activeSubscriptions.map((item, idx) => (
@@ -133,8 +144,8 @@ const MySubscriptions = ({ isAuthenticated = true, embedded = false }) => {
     <div className="w-full max-w-[1680px] mx-auto px-4 md:px-8 2xl:px-10 py-8">
       <StorePage
         icon={PackageIcon}
-        title={t('MY_PRODUCTS.TITLE', '我的产品')}
-        subtitle={t('MY_PRODUCTS.SUBTITLE', '订阅最先消耗；用尽后才走余额扣费（在账号设置中开启）。')}
+        title={t('SUB.MY_TITLE', '我的订阅')}
+        subtitle={t('SUB.MY_SUBTITLE', '订阅最先消耗；用尽后才走余额扣费（在账号设置中开启）。')}
       >
         {body}
       </StorePage>
@@ -256,7 +267,7 @@ const UsageMeter = ({ usage, formatMeterCurrency }) => {
 
   return (
     <div className="rounded-overlay bg-surface-container-low border border-outline-variant/40 p-4">
-      <div className="flex items-start justify-between gap-4">
+      <div className="flex items-start justify-between gap-4 mb-2">
         <div className="min-w-0">
           <div className="text-sm font-semibold text-on-surface break-words leading-snug">{formatPlanTitle(usage)}</div>
           <div className="mt-1 text-xs text-outline font-mono break-words [overflow-wrap:anywhere]">{usage.model_bucket || 'default'}</div>
@@ -267,9 +278,7 @@ const UsageMeter = ({ usage, formatMeterCurrency }) => {
         </div>
       </div>
 
-      <div className="mt-3 h-2 rounded-control-full bg-black/35 overflow-hidden">
-        <div className="h-full transition-all" style={{ width: `${consumedPct}%`, background: color }} />
-      </div>
+      <ProgressBar value={consumedPct} max={100} />
 
       <div className="mt-3 grid grid-cols-2 lg:grid-cols-4 gap-3 text-xs">
         <UsageDatum label="已用" value={formatUsageValue(usage.consumed, usage.unit, formatMeterCurrency)} />

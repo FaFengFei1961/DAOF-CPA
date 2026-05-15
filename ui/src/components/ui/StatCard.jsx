@@ -24,8 +24,8 @@ const StatCard = ({
   className = '',
 }) => {
   const trendBg = {
-    up:      'bg-emerald-500/15 text-emerald-300 border-emerald-500/30',
-    down:    'bg-red-500/15 text-red-300 border-red-500/30',
+    up:      'bg-success/15 text-success border-success/30',
+    down:    'bg-error/15 text-error border-error/30',
     neutral: 'bg-on-surface/[0.06] text-on-surface-variant border-outline-variant',
   }[trendTone];
 
@@ -39,7 +39,7 @@ const StatCard = ({
     <Wrapper {...wrapperProps}>
       <header className="flex items-start justify-between gap-2">
         {Icon && (
-          <span className={`w-9 h-9 rounded-lg ${iconBg} ${iconColor} flex items-center justify-center shrink-0`}>
+          <span className={`w-9 h-9 rounded-control ${iconBg} ${iconColor} flex items-center justify-center shrink-0`}>
             <Icon size={18} strokeWidth={1.75} />
           </span>
         )}

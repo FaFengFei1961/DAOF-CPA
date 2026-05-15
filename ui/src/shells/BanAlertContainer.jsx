@@ -39,6 +39,16 @@ const BanAlertContainer = () => {
         >
           {t('APP.BANNED.ACCEPT_BTN', '我知道了')}
         </button>
+        <button
+          type="button"
+          onClick={() => {
+            closeBan();
+            window.location.href = '/tickets';
+          }}
+          className="w-full h-12 mt-3 bg-surface-container hover:bg-surface-variant font-semibold text-on-surface rounded-overlay transition-all border border-outline relative z-10"
+        >
+          联系客服
+        </button>
       </div>
     </div>
   );
