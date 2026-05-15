@@ -354,6 +354,91 @@ func sanitizeError(s string, maxLen int) string {
 	return s
 }
 
+// ─── CPA 响应异常防御（Sprint4-M6） ───────────────────────────────────────
+
+// validateAuthFilesResponse 判断 CPA `/v0/management/auth-files` 响应是否可信。
+//
+// fix CRITICAL Sprint4-M6：旧实现把任何合法 JSON 的 files 列表当作"权威快照"，
+// 直接用 staleCount=N 清空 creditsCache + 软删全部 CPA 凭证。但 CPA 瞬时异常
+// （例如内部 DB 重启 / 上游 OAuth 临时不可用 / 序列化错误）经常返回 files=[]，
+// 一次响应就会让全平台号池失效，全用户 503。
+//
+// 防御策略：
+//
+//  1. 结构校验：过滤掉缺 id/provider 的 malformed 条目（CPA bug 兜底）
+//  2. 异常收缩检测：若本轮 valid 数量 < 上轮 × shrink_threshold（默认 50%），
+//     视作上游异常，整轮 abort，保留上一轮 cache 与 DB 行
+//  3. 全空保护：上一轮有凭证但本轮全空 → 永远视作异常，绝不"自然过渡到 0"
+//     （admin 真要清空号池，应在 CPA 后台逐个删除，自然走 shrink 阈值之上的多轮迁移）
+//
+// 返回 true 表示响应可信，调用方继续 sync；false 表示 abort 本轮。
+func validateAuthFilesResponse(authFiles []authFileLite) bool {
+	// 1) 校验结构：必须有 id 和 provider 才算可用条目
+	validCount := 0
+	malformed := 0
+	for _, af := range authFiles {
+		if strings.TrimSpace(af.ID) == "" || strings.TrimSpace(af.Provider) == "" {
+			malformed++
+			continue
+		}
+		validCount++
+	}
+	if malformed > 0 {
+		log.Printf("[CREDITS] auth-files response has %d malformed entries (missing id/provider) of %d total; treating as potential upstream corruption",
+			malformed, len(authFiles))
+	}
+
+	// 2) 与上一轮对比：拿到 in-memory cache 大小作为 baseline
+	creditsMu.RLock()
+	prevTotal := len(creditsCache)
+	creditsMu.RUnlock()
+
+	// 冷启动：creditsCache 为空 → 任何输入（含 0）都可信，正常初始化
+	if prevTotal == 0 {
+		return true
+	}
+
+	// 3) 全空保护：上轮有 N 条，本轮零有效条目 → 永远视作上游异常
+	if validCount == 0 {
+		log.Printf("[CREDITS-ANOMALY] ABORT: auth-files response is empty but cache has %d credentials. "+
+			"Treating as upstream transient failure; preserving previous cache to avoid full-pool wipeout. "+
+			"If admin真要清空号池，请逐个删除走 shrink 阈值之上的多轮迁移。", prevTotal)
+		return false
+	}
+
+	// 4) 异常收缩检测
+	threshold := credentialsShrinkThreshold()
+	minAcceptable := int64(prevTotal) * threshold / 100
+	if int64(validCount) < minAcceptable {
+		log.Printf("[CREDITS-ANOMALY] ABORT: auth-files response shrunk from %d → %d (below %d%% threshold = %d). "+
+			"Treating as upstream transient failure; preserving previous cache. "+
+			"调高/调低阈值可设 SysConfig credits_shrink_abort_threshold_pct (默认 50)。",
+			prevTotal, validCount, threshold, minAcceptable)
+		return false
+	}
+
+	return true
+}
+
+// credentialsShrinkThreshold 返回触发 abort 的最小占比（百分数 1-100）。
+// 默认 50：本轮有效凭证少于上轮 50% 视作异常。
+func credentialsShrinkThreshold() int64 {
+	const defaultPct = 50
+	const minPct = 1
+	const maxPct = 99
+	SysConfigMutex.RLock()
+	v := strings.TrimSpace(SysConfigCache["credits_shrink_abort_threshold_pct"])
+	SysConfigMutex.RUnlock()
+	if v == "" {
+		return defaultPct
+	}
+	n, err := strconv.ParseInt(v, 10, 64)
+	if err != nil || n < minPct || n > maxPct {
+		return defaultPct
+	}
+	return n
+}
+
 // ─── 主刷新流程 ───────────────────────────────────────────────────────────
 
 func refreshAllCreditsSafe(ctx context.Context) {
@@ -374,6 +459,13 @@ func refreshAllCreditsSafe(ctx context.Context) {
 	authFiles, err := fetchAuthFiles(ctx)
 	if err != nil {
 		log.Printf("[CREDITS] fetch auth files failed: %s", sanitizeError(err.Error(), 500))
+		return
+	}
+
+	// fix CRITICAL Sprint4-M6：异常空/收缩快照防御。
+	// CPA 瞬时异常（合法 JSON 但 files=[] 或字段缺失大量）会让原实现 staleCount=N 清空全部凭证
+	// + syncCPACredentials 软删全部行。必须先识别"上游异常"并 abort，保留上一轮 cache。
+	if !validateAuthFilesResponse(authFiles) {
 		return
 	}
 

@@ -1,6 +1,7 @@
 package proxy
 
 import (
+	"fmt"
 	"strings"
 	"testing"
 )
@@ -96,6 +97,124 @@ func TestSanitizeError_RedactsAllSensitivePatterns(t *testing.T) {
 			}
 		})
 	}
+}
+
+// withCreditsCache 临时替换 creditsCache，并在测试结束时恢复，避免污染其他测试。
+func withCreditsCache(t *testing.T, snapshot map[string]*CreditEntry, fn func()) {
+	t.Helper()
+	creditsMu.Lock()
+	prev := creditsCache
+	creditsCache = snapshot
+	creditsMu.Unlock()
+	defer func() {
+		creditsMu.Lock()
+		creditsCache = prev
+		creditsMu.Unlock()
+	}()
+	fn()
+}
+
+// TestValidateAuthFilesResponse_ColdStartAcceptsAnySize 冷启动（creditsCache 为空）时
+// 任何输入都可信，包括 0 条—— admin 刚启动还没添加凭证是合法状态。
+func TestValidateAuthFilesResponse_ColdStartAcceptsAnySize(t *testing.T) {
+	withCreditsCache(t, map[string]*CreditEntry{}, func() {
+		if !validateAuthFilesResponse(nil) {
+			t.Errorf("cold start with nil input should be accepted")
+		}
+		if !validateAuthFilesResponse([]authFileLite{}) {
+			t.Errorf("cold start with empty input should be accepted")
+		}
+		if !validateAuthFilesResponse([]authFileLite{
+			{ID: "a1", Provider: "claude"},
+		}) {
+			t.Errorf("cold start with 1 valid entry should be accepted")
+		}
+	})
+}
+
+// TestValidateAuthFilesResponse_FullEmptyAbortsWhenCacheHasEntries 上轮有 N 凭证，
+// 本轮全空 → 永远视作上游异常 abort，保留 cache。
+// 这是 Sprint4-M6 核心防御：CPA 瞬时异常不能瞬间清空全平台号池。
+func TestValidateAuthFilesResponse_FullEmptyAbortsWhenCacheHasEntries(t *testing.T) {
+	cache := map[string]*CreditEntry{
+		"a1": {AuthID: "a1", Provider: "claude"},
+		"a2": {AuthID: "a2", Provider: "antigravity"},
+	}
+	withCreditsCache(t, cache, func() {
+		// nil 输入（CPA 返回 files 字段缺失或为 null）→ abort
+		if validateAuthFilesResponse(nil) {
+			t.Errorf("empty input with non-empty cache should ABORT")
+		}
+		// 空 slice 输入（CPA 返回 files=[]）→ abort
+		if validateAuthFilesResponse([]authFileLite{}) {
+			t.Errorf("empty slice with non-empty cache should ABORT")
+		}
+		// 全 malformed 也等价于 valid=0 → abort
+		if validateAuthFilesResponse([]authFileLite{
+			{ID: "", Provider: "claude"},     // missing ID
+			{ID: "a3", Provider: ""},          // missing provider
+			{ID: "   ", Provider: "   "},      // whitespace only
+		}) {
+			t.Errorf("all-malformed input should ABORT (valid_count=0)")
+		}
+	})
+}
+
+// TestValidateAuthFilesResponse_ShrinkBelowThresholdAborts 上轮 10 条，本轮 4 条（< 50%）
+// → abort 防止"批量误删"。
+func TestValidateAuthFilesResponse_ShrinkBelowThresholdAborts(t *testing.T) {
+	cache := make(map[string]*CreditEntry, 10)
+	for i := 0; i < 10; i++ {
+		k := fmt.Sprintf("a%d", i)
+		cache[k] = &CreditEntry{AuthID: k, Provider: "claude"}
+	}
+	withCreditsCache(t, cache, func() {
+		// 默认阈值 50%：10 条 → 50% = 5 条。本轮 4 条 < 5 → abort
+		shrunk := []authFileLite{
+			{ID: "a0", Provider: "claude"},
+			{ID: "a1", Provider: "claude"},
+			{ID: "a2", Provider: "claude"},
+			{ID: "a3", Provider: "claude"},
+		}
+		if validateAuthFilesResponse(shrunk) {
+			t.Errorf("shrink from 10→4 (40%%) should ABORT")
+		}
+		// 5 条恰好达到阈值（50%）→ 通过（边界包含等于）
+		atThreshold := append(shrunk, authFileLite{ID: "a4", Provider: "claude"})
+		if !validateAuthFilesResponse(atThreshold) {
+			t.Errorf("shrink from 10→5 (exactly 50%%) should be accepted (boundary)")
+		}
+		// 6 条 > 50% → 通过
+		above := append(atThreshold, authFileLite{ID: "a5", Provider: "claude"})
+		if !validateAuthFilesResponse(above) {
+			t.Errorf("shrink from 10→6 (60%%) should be accepted")
+		}
+	})
+}
+
+// TestValidateAuthFilesResponse_MalformedFilteredButValidPassesThreshold 部分 malformed
+// 不影响 valid 部分的判定：valid 数量过阈值就接受，过滤的 malformed 仅日志记录。
+func TestValidateAuthFilesResponse_MalformedFilteredButValidPassesThreshold(t *testing.T) {
+	cache := map[string]*CreditEntry{
+		"a1": {AuthID: "a1", Provider: "claude"},
+		"a2": {AuthID: "a2", Provider: "claude"},
+		"a3": {AuthID: "a3", Provider: "claude"},
+		"a4": {AuthID: "a4", Provider: "claude"},
+	}
+	withCreditsCache(t, cache, func() {
+		// 4 条上轮 → 阈值 = 2 条
+		// 本轮：2 valid + 3 malformed → valid_count=2 >= 2 → 通过
+		mixed := []authFileLite{
+			{ID: "a1", Provider: "claude"},
+			{ID: "a2", Provider: "claude"},
+			{ID: "", Provider: "claude"},
+			{ID: "a3", Provider: ""},
+			{ID: "   ", Provider: "   "},
+		}
+		if !validateAuthFilesResponse(mixed) {
+			t.Errorf("2 valid + 3 malformed (valid>=threshold) should be accepted")
+		}
+	})
 }
 
 func TestComputeHealthyTrustsFreshQuotaWindowsOverStaleStatus(t *testing.T) {
