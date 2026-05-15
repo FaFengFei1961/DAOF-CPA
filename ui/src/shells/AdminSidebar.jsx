@@ -62,6 +62,7 @@ const AdminSidebar = () => {
                   <li key={item.id}>
                     <NavLink
                       to={item.path}
+                      end
                       className={({ isActive }) =>
                         `relative w-full h-8 flex items-center gap-2 px-2.5 rounded-control text-sm transition
                          ${isActive
