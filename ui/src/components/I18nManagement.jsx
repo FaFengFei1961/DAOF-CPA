@@ -122,8 +122,8 @@ const I18nManagement = () => {
                 </div>
             </div>
 
-            <div className="bg-surface-container border border-outline-variant rounded-overlay overflow-hidden ">
-                <div className="overflow-x-auto">
+            <div className="fl-table-shell">
+                <div className="fl-table-scroll">
                     <table className="w-full min-w-[800px] text-left text-sm text-on-surface-variant table-fixed">
                         <thead className="bg-surface-container-high text-xs uppercase font-mono tracking-wider text-on-surface-variant border-b border-outline-variant">
                             <tr>
@@ -133,7 +133,7 @@ const I18nManagement = () => {
                                 <th className="px-6 py-4 font-medium text-right w-[20%]">{t('I18N_MGMT.TABLE_ACTIONS')}</th>
                             </tr>
                         </thead>
-                        <tbody className="divide-y divide-[#2b2b2b]/50">
+                        <tbody className="divide-y divide-outline-variant/50">
                             {loading ? (
                                 <tr>
                                     <td colSpan="4" className="px-6 py-12 text-center text-on-surface-variant">{t('I18N_MGMT.LOADING')}</td>

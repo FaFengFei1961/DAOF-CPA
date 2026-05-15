@@ -158,7 +158,8 @@ const CouponManagement = () => {
         </button>
       </div>
 
-      <div className="bg-surface-container border border-outline-variant rounded-overlay overflow-hidden">
+      <div className="fl-table-shell">
+        <div className="fl-table-scroll">
         <table className="w-full text-sm">
           <thead className="bg-surface-container-high text-on-surface-variant text-xs">
             <tr>
@@ -210,6 +211,7 @@ const CouponManagement = () => {
             )}
           </tbody>
         </table>
+        </div>
       </div>
 
       {isOpen && (
