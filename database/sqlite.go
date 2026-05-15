@@ -253,5 +253,17 @@ func InitDB() {
 		log.Printf("[migrate] addon->subscription: %v", err)
 	}
 
+	// 回填 quota_plans.limit_value_micro_usd：codex 加 int64 字段时只在 seed 路径写新值，
+	// 早期创建的 plan 该列默认 0 → admin API 错把 limit=0 当作"不限"。
+	// 一次性扫所有 api_cost_usd plan，把 limit_value(USD float) × 1e6 写入 limit_value_micro_usd。
+	// 已有正确值的不动（limit_value_micro_usd > 0）。
+	if err := DB.Exec(`UPDATE quota_plans
+		SET limit_value_micro_usd = CAST(limit_value * 1000000 AS INTEGER)
+		WHERE limit_unit = 'api_cost_usd'
+		  AND limit_value_micro_usd = 0
+		  AND limit_value > 0`).Error; err != nil {
+		log.Printf("[migrate] backfill quota_plans.limit_value_micro_usd: %v", err)
+	}
+
 	log.Println("⚡️ 数据库连接成功，数据库结构迁移完成。")
 }
