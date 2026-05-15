@@ -148,13 +148,13 @@ func TestConservation_Purchase(t *testing.T) {
 	}
 }
 
-// TestConservation_PurchaseWithFreeCoupon 免费券购买：实付 0
+// TestConservation_PurchaseWithFreeCoupon 零价套餐免费券购买：实付 0
 // → ΔQuota = 0; billing 总和 = 0
 func TestConservation_PurchaseWithFreeCoupon(t *testing.T) {
 	setupSubTestDB(t)
 	user := seedTestUser(t, 100)
 	pkg := seedPackage(t, func(p *database.Package) {
-		p.PriceAmount = 20 * database.MicroPerUSD
+		p.PriceAmount = 0
 	})
 
 	freeCoupon := database.UserCoupon{
@@ -201,7 +201,7 @@ func TestConservation_AdminRefundSub(t *testing.T) {
 	beforeMicro, atTime := snapshotUser(t, user.ID)
 
 	code, _ := doJSON(t, app, "POST", "/admin/sub/"+itoaUint(sub.ID)+"/refund",
-		map[string]any{"amount_usd": 5.0, "reason": "守恒测试"})
+		map[string]any{"amount_micro_usd": 5 * database.MicroPerUSD, "reason": "守恒测试"})
 	if code != 200 {
 		t.Fatalf("refund: %d", code)
 	}
@@ -326,7 +326,7 @@ func TestConservation_EndToEnd(t *testing.T) {
 	database.DB.Where("user_id = ?", user.ID).First(&sub)
 	adminApp := newAdminTestApp(admin)
 	if code, _ := doJSON(t, adminApp, "POST", "/admin/sub/"+itoaUint(sub.ID)+"/refund",
-		map[string]any{"amount_usd": 5.0, "reason": "E2E refund"}); code != 200 {
+		map[string]any{"amount_micro_usd": 5 * database.MicroPerUSD, "reason": "E2E refund"}); code != 200 {
 		t.Fatalf("refund: %d", code)
 	}
 
