@@ -33,6 +33,7 @@ import (
 
 var errCouponInvalid = errors.New("coupon invalid")
 var errCouponNotApplicable = errors.New("coupon not applicable to this package")
+var errCouponFixedPriceBelowPackageCostFloor = errors.New("coupon fixed_price below package cost_floor")
 
 // fix Major（codex 第十五轮）：admin 并发禁用 template / 修改启用状态时，
 // 事务内重读会发现脏快照——返回此哨兵让外层映射到 409 + 明确 message_code
@@ -78,6 +79,45 @@ func parsePackageIDsStrict(s string) ([]uint, bool) {
 // 业务侧若需更严格成本下限，可通过 SysConfig `coupon_min_fixed_price_micro_usd` 调高。
 const couponMinFixedPriceMicroUSD = int64(10_000)
 
+const MessageCodeCouponFixedPriceBelowPackageCostFloor = "ERR" + "_COUPON_FIXED_PRICE_BELOW_PACKAGE_COST_FLOOR"
+
+func couponTemplateValidationMessageCode(err error) string {
+	if errors.Is(err, errCouponFixedPriceBelowPackageCostFloor) {
+		return MessageCodeCouponFixedPriceBelowPackageCostFloor
+	}
+	return "ERR_INVALID_TEMPLATE"
+}
+
+func validateTemplateFixedPriceCostFloor(t *database.CouponTemplate, packageIDs []uint) error {
+	if t.DiscountType != "fixed_price" {
+		return nil
+	}
+	var maxCostPkg database.Package
+	q := database.DB.Model(&database.Package{}).
+		Select("id, name, cost_floor_micro_usd").
+		Where("cost_floor_micro_usd > ?", 0)
+	if len(packageIDs) > 0 {
+		q = q.Where("id IN ?", packageIDs)
+	}
+	if err := q.Order("cost_floor_micro_usd DESC, id ASC").Limit(1).Find(&maxCostPkg).Error; err != nil {
+		return fmt.Errorf("查询套餐成本下限失败: %w", err)
+	}
+	if maxCostPkg.ID == 0 {
+		return nil
+	}
+	if t.DiscountValue >= maxCostPkg.CostFloorMicroUSD {
+		return nil
+	}
+	return fmt.Errorf("%w: fixed_price %d micro_usd ($%s) 低于套餐「%s」(#%d) 成本下限 %d micro_usd ($%s)",
+		errCouponFixedPriceBelowPackageCostFloor,
+		t.DiscountValue,
+		database.FormatMicroUSD(t.DiscountValue),
+		maxCostPkg.Name,
+		maxCostPkg.ID,
+		maxCostPkg.CostFloorMicroUSD,
+		database.FormatMicroUSD(maxCostPkg.CostFloorMicroUSD))
+}
+
 // validateTemplate 校验模板字段。
 //
 // fix CRITICAL Sprint3-M5 P0-2：fixed_price 不允许等于 0（旧实现 DiscountValue ≥ 0 通过，
@@ -106,12 +146,12 @@ func validateTemplate(t *database.CouponTemplate) error {
 	if t.ValidDays < 0 {
 		return fmt.Errorf("valid_days 不能为负数（0 = 永久）")
 	}
-	// PackageIDs 字段可选，但若非空必须能解析为 []uint
-	if s := strings.TrimSpace(t.PackageIDs); s != "" {
-		var ids []uint
-		if err := json.Unmarshal([]byte(s), &ids); err != nil {
-			return fmt.Errorf("package_ids 必须是 JSON 数组（如 [1,2,3]）或留空")
-		}
+	packageIDs, parseOK := parsePackageIDsStrict(t.PackageIDs)
+	if !parseOK {
+		return fmt.Errorf("package_ids 必须是 JSON 数组（如 [1,2,3]）或留空")
+	}
+	if err := validateTemplateFixedPriceCostFloor(t, packageIDs); err != nil {
+		return err
 	}
 	return nil
 }
@@ -228,7 +268,7 @@ func AdminCreateCouponTemplate(c *fiber.Ctx) error {
 		return c.Status(400).JSON(fiber.Map{"success": false, "message_code": "ERR_PARSE_PAYLOAD"})
 	}
 	if err := validateTemplate(&t); err != nil {
-		return c.Status(400).JSON(fiber.Map{"success": false, "message": err.Error(), "message_code": "ERR_INVALID_TEMPLATE"})
+		return c.Status(400).JSON(fiber.Map{"success": false, "message": err.Error(), "message_code": couponTemplateValidationMessageCode(err)})
 	}
 	if err := database.DB.Create(&t).Error; err != nil {
 		log.Printf("[COUPON-CREATE] %v", err)
@@ -252,7 +292,7 @@ func AdminUpdateCouponTemplate(c *fiber.Ctx) error {
 		return c.Status(400).JSON(fiber.Map{"success": false, "message_code": "ERR_PARSE_PAYLOAD"})
 	}
 	if err := validateTemplate(&payload); err != nil {
-		return c.Status(400).JSON(fiber.Map{"success": false, "message": err.Error(), "message_code": "ERR_INVALID_TEMPLATE"})
+		return c.Status(400).JSON(fiber.Map{"success": false, "message": err.Error(), "message_code": couponTemplateValidationMessageCode(err)})
 	}
 	updates := map[string]any{
 		"name":           payload.Name,
@@ -533,7 +573,7 @@ func AdminBulkGrantCoupon(c *fiber.Ctx) error {
 		CouponIDs []uint
 	}
 	var ops []bulkUserOp
-	var failedUserID uint  // 触发回滚的 user_id（若有）
+	var failedUserID uint   // 触发回滚的 user_id（若有）
 	var failedReason string // 触发回滚的标准化原因
 
 	txErr := database.DB.Transaction(func(tx *gorm.DB) error {

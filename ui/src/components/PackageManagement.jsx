@@ -12,7 +12,7 @@ import { useModalA11y } from '../hooks/useModalA11y';
 // CSV 列定义。导入/导出共享，保持表头稳定。
 const CSV_COLUMNS = [
   'id', 'name', 'description', 'highlight_tag',
-  'price_amount', 'price_currency', 'billing_period_seconds',
+  'price_amount', 'cost_floor_micro_usd', 'price_currency', 'billing_period_seconds',
   'stackable', 'max_active_per_user', 'purchase_when_owned',
   'public', 'sort_order', 'enabled',
   'plan_ids', 'plan_multipliers', 'extra_config',
@@ -28,6 +28,7 @@ const parseRow = (r) => ({
   badge_color: '',
   gradient: '',
   price_amount: parseFloat(r.price_amount) || 0,
+  cost_floor_micro_usd: parseInt(r.cost_floor_micro_usd) || 0,
   price_currency: r.price_currency || 'USD',
   billing_period_seconds: parseInt(r.billing_period_seconds) || 2592000,
   stackable: r.stackable === '1' || r.stackable === 'true' || r.stackable === '是',
@@ -45,7 +46,7 @@ const EMPTY_PKG = {
   product_type: 'subscription',
   name: '', description: '',
   icon_key: 'Package', badge_color: '', gradient: '', highlight_tag: '',
-  price_amount: 0, price_currency: 'USD',
+  price_amount: 0, cost_floor_micro_usd: 0, price_currency: 'USD',
   billing_period_seconds: 2592000, // 订阅默认 30 天
   stackable: true,
   max_active_per_user: 5,
@@ -56,6 +57,26 @@ const EMPTY_PKG = {
   extra_config: '{}',
   plan_ids: [],
   plan_multipliers: [],
+};
+
+const MICRO_PER_USD = 1000000;
+
+const usdToMicro = (value) => {
+  const n = parseFloat(value);
+  if (!Number.isFinite(n) || n <= 0) return 0;
+  return Math.round(n * MICRO_PER_USD);
+};
+
+const microToUSDInput = (micro) => {
+  const n = Number(micro || 0);
+  if (!Number.isFinite(n) || n <= 0) return 0;
+  return Number((n / MICRO_PER_USD).toFixed(6));
+};
+
+const formatCostFloorUSD = (micro) => {
+  const n = Number(micro || 0);
+  if (!Number.isFinite(n) || n <= 0) return '不限制';
+  return `$${(n / MICRO_PER_USD).toFixed(2)}`;
 };
 
 const PackageManagement = () => {
@@ -115,15 +136,26 @@ const PackageManagement = () => {
     if (!editing.name) { toast.error('名称必填'); return; }
     try { JSON.parse(editing.extra_config || '{}'); }
     catch { toast.error('extra_config 必须是合法 JSON'); return; }
+    const rawCostFloorMicro = Number(editing.cost_floor_micro_usd || 0);
+    const costFloorMicro = Number.isFinite(rawCostFloorMicro) ? Math.trunc(rawCostFloorMicro) : 0;
+    if (costFloorMicro < 0) {
+      toast.error('成本下限不能为负数');
+      return;
+    }
+    if (costFloorMicro > usdToMicro(editing.price_amount)) {
+      toast.error('成本下限不能高于套餐售价');
+      return;
+    }
     setSaving(true);
     const isNew = !editing.id;
     try {
+      const payload = { ...editing, cost_floor_micro_usd: costFloorMicro };
       // fix MAJOR（多模型审计第二十五轮 P2）：admin 写操作改 authFetch，统一鉴权 + 错误归一化
       const json = await authFetch(
         isNew ? '/api/admin/packages' : `/api/admin/packages/${editing.id}`,
         {
           method: isNew ? 'POST' : 'PUT',
-          body: editing,
+          body: payload,
         }
       );
       if (json.success) {
@@ -195,6 +227,7 @@ const PackageManagement = () => {
         description: p.description || '',
         highlight_tag: p.highlight_tag || '',
         price_amount: p.price_amount,
+        cost_floor_micro_usd: p.cost_floor_micro_usd || 0,
         price_currency: p.price_currency,
         billing_period_seconds: p.billing_period_seconds,
         stackable: p.stackable ? '1' : '0',
@@ -354,6 +387,7 @@ const PackageManagement = () => {
                 </div>
                 <div className="space-y-1 text-xs text-on-surface-variant">
                   <div>叠加: {p.stackable ? `允许 (上限 ${p.max_active_per_user || '∞'})` : '不允许'}</div>
+                  <div>成本下限: {formatCostFloorUSD(p.cost_floor_micro_usd)}</div>
                   <div>计划数: {p.plan_count || 0} · 活跃订阅: {p.active_subs_count || 0}</div>
                 </div>
                 <div className="mt-3 pt-3 border-t border-outline-variant/30 flex items-center justify-between text-xs">
@@ -406,6 +440,19 @@ const PackageManagement = () => {
                   <Field label="价格">
                     <input type="number" step="0.01" min="0" className={inputCls} value={editing.price_amount}
                       onChange={e => updateField('price_amount', parseFloat(e.target.value) || 0)} />
+                  </Field>
+                  <Field
+                    label="成本下限"
+                    hint="admin 估算的套餐上游真实成本下限。配置后系统会防止 admin 创建低于此值的 fixed_price 优惠券，避免亏损。0 = 不限制（仅由全局 couponMinFixedPriceMicroUSD 兜底）"
+                  >
+                    <input
+                      type="number"
+                      step="0.01"
+                      min="0"
+                      className={inputCls}
+                      value={microToUSDInput(editing.cost_floor_micro_usd)}
+                      onChange={e => updateField('cost_floor_micro_usd', usdToMicro(e.target.value))}
+                    />
                   </Field>
                   <Field label="货币">
                     <input className={inputCls} value={editing.price_currency} onChange={e => updateField('price_currency', e.target.value)} />

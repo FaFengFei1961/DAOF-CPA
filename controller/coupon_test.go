@@ -1,6 +1,9 @@
 package controller
 
 import (
+	"errors"
+	"fmt"
+	"strings"
 	"testing"
 	"time"
 
@@ -31,6 +34,7 @@ func setupCouponTestDB(t *testing.T) *gorm.DB {
 // ─── 模板校验 ─────────────────────────────────────────────────────────
 
 func TestValidateTemplate_Required(t *testing.T) {
+	setupCouponTestDB(t)
 	cases := []struct {
 		name    string
 		tpl     database.CouponTemplate
@@ -57,6 +61,118 @@ func TestValidateTemplate_Required(t *testing.T) {
 				t.Errorf("got err=%v want err=%v", err, tc.wantErr)
 			}
 		})
+	}
+}
+
+func seedCouponCostFloorPackage(t *testing.T, db *gorm.DB, name string, costFloorMicroUSD int64) database.Package {
+	t.Helper()
+	pkg := database.Package{
+		Name:                 name,
+		PriceAmount:          10 * database.MicroPerUSD,
+		CostFloorMicroUSD:    costFloorMicroUSD,
+		PriceCurrency:        "USD",
+		BillingPeriodSeconds: 30 * 24 * 3600,
+	}
+	if err := db.Create(&pkg).Error; err != nil {
+		t.Fatalf("seed package: %v", err)
+	}
+	return pkg
+}
+
+func TestValidateTemplate_FixedPriceBelowCostFloorRejected(t *testing.T) {
+	db := setupCouponTestDB(t)
+	pkg := seedCouponCostFloorPackage(t, db, "Costed", 2*database.MicroPerUSD)
+
+	err := validateTemplate(&database.CouponTemplate{
+		Name:          "below",
+		DiscountType:  "fixed_price",
+		DiscountValue: 1 * database.MicroPerUSD,
+		PackageIDs:    fmt.Sprintf("[%d]", pkg.ID),
+	})
+	if !errors.Is(err, errCouponFixedPriceBelowPackageCostFloor) {
+		t.Fatalf("expected cost floor rejection, got %v", err)
+	}
+	if !strings.Contains(err.Error(), pkg.Name) || !strings.Contains(err.Error(), database.FormatMicroUSD(pkg.CostFloorMicroUSD)) {
+		t.Fatalf("error should name package and floor, got %v", err)
+	}
+}
+
+func TestValidateTemplate_FixedPriceAboveCostFloorAccepted(t *testing.T) {
+	db := setupCouponTestDB(t)
+	pkg := seedCouponCostFloorPackage(t, db, "Costed", 2*database.MicroPerUSD)
+
+	err := validateTemplate(&database.CouponTemplate{
+		Name:          "above",
+		DiscountType:  "fixed_price",
+		DiscountValue: 3 * database.MicroPerUSD,
+		PackageIDs:    fmt.Sprintf("[%d]", pkg.ID),
+	})
+	if err != nil {
+		t.Fatalf("expected accepted, got %v", err)
+	}
+}
+
+func TestValidateTemplate_CostFloorZeroSkipsCheck(t *testing.T) {
+	db := setupCouponTestDB(t)
+	pkg := seedCouponCostFloorPackage(t, db, "Unconfigured", 0)
+
+	err := validateTemplate(&database.CouponTemplate{
+		Name:          "zero-skip",
+		DiscountType:  "fixed_price",
+		DiscountValue: couponMinFixedPriceMicroUSD,
+		PackageIDs:    fmt.Sprintf("[%d]", pkg.ID),
+	})
+	if err != nil {
+		t.Fatalf("expected cost_floor=0 to skip package cost check, got %v", err)
+	}
+}
+
+func TestValidateTemplate_MultiPackageTakesMaxCostFloor(t *testing.T) {
+	db := setupCouponTestDB(t)
+	pkg2 := seedCouponCostFloorPackage(t, db, "Floor2", 2*database.MicroPerUSD)
+	pkg5 := seedCouponCostFloorPackage(t, db, "Floor5", 5*database.MicroPerUSD)
+	packageIDs := fmt.Sprintf("[%d,%d]", pkg2.ID, pkg5.ID)
+
+	err := validateTemplate(&database.CouponTemplate{
+		Name:          "below-max",
+		DiscountType:  "fixed_price",
+		DiscountValue: 3 * database.MicroPerUSD,
+		PackageIDs:    packageIDs,
+	})
+	if !errors.Is(err, errCouponFixedPriceBelowPackageCostFloor) {
+		t.Fatalf("expected max cost floor rejection, got %v", err)
+	}
+	if !strings.Contains(err.Error(), pkg5.Name) {
+		t.Fatalf("error should report max floor package %q, got %v", pkg5.Name, err)
+	}
+
+	err = validateTemplate(&database.CouponTemplate{
+		Name:          "at-max",
+		DiscountType:  "fixed_price",
+		DiscountValue: 5 * database.MicroPerUSD,
+		PackageIDs:    packageIDs,
+	})
+	if err != nil {
+		t.Fatalf("expected fixed_price at max cost floor to pass, got %v", err)
+	}
+}
+
+func TestValidateTemplate_GlobalScopeTakesMaxCostFloor(t *testing.T) {
+	db := setupCouponTestDB(t)
+	seedCouponCostFloorPackage(t, db, "Floor2", 2*database.MicroPerUSD)
+	pkg5 := seedCouponCostFloorPackage(t, db, "Floor5", 5*database.MicroPerUSD)
+
+	err := validateTemplate(&database.CouponTemplate{
+		Name:          "global-below-max",
+		DiscountType:  "fixed_price",
+		DiscountValue: 3 * database.MicroPerUSD,
+		PackageIDs:    "",
+	})
+	if !errors.Is(err, errCouponFixedPriceBelowPackageCostFloor) {
+		t.Fatalf("expected global max cost floor rejection, got %v", err)
+	}
+	if !strings.Contains(err.Error(), pkg5.Name) {
+		t.Fatalf("error should report global max floor package %q, got %v", pkg5.Name, err)
 	}
 }
 

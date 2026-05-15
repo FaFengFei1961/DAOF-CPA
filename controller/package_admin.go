@@ -29,6 +29,9 @@ const MaxQuantityMultiplier = 100.0
 
 var errDeprecatedRequestField = errors.New("deprecated request field")
 var errInvalidProductType = errors.New("product_type only supports subscription")
+var errPackageCostFloorInvalid = errors.New("package cost_floor invalid")
+
+const MessageCodePackageCostFloorInvalid = "ERR" + "_PACKAGE_COST_FLOOR_INVALID"
 
 // validatePlanMultipliers 校验 plan_multipliers 与 plan_ids 一一对应的合法性。
 // 缺失（len 不足）视为 1.0 默认；显式传值必须 finite + 0 < v ≤ 100。
@@ -70,6 +73,12 @@ func validatePackagePayload(p *database.Package) error {
 	if p.PriceAmount < 0 {
 		return fmt.Errorf("price_amount 不能为负数")
 	}
+	if p.CostFloorMicroUSD < 0 {
+		return fmt.Errorf("%w: cost_floor_micro_usd 不能为负数", errPackageCostFloorInvalid)
+	}
+	if p.CostFloorMicroUSD > p.PriceAmount {
+		return fmt.Errorf("%w: cost_floor_micro_usd 不能高于 price_amount", errPackageCostFloorInvalid)
+	}
 	if p.BillingPeriodSeconds <= 0 {
 		return fmt.Errorf("billing_period_seconds 必须为正整数")
 	}
@@ -85,6 +94,13 @@ func validatePackagePayload(p *database.Package) error {
 		return fmt.Errorf("sort_order 不能为负数")
 	}
 	return nil
+}
+
+func packageValidationMessageCode(err error) string {
+	if errors.Is(err, errPackageCostFloorInvalid) {
+		return MessageCodePackageCostFloorInvalid
+	}
+	return "ERR_INVALID_PACKAGE"
 }
 
 func validatePackageProductType(productType string) error {
@@ -109,6 +125,29 @@ type publicPackagePlanItem struct {
 	ID        uint            `json:"id"`
 	SortOrder int             `json:"sort_order"`
 	Plan      publicPlanBrief `json:"plan"`
+}
+
+type publicPackageResponse struct {
+	ID                   uint      `json:"id"`
+	Name                 string    `json:"name"`
+	Description          string    `json:"description"`
+	ProductType          string    `json:"product_type"`
+	IconKey              string    `json:"icon_key"`
+	BadgeColor           string    `json:"badge_color"`
+	Gradient             string    `json:"gradient"`
+	HighlightTag         string    `json:"highlight_tag"`
+	PriceAmount          float64   `json:"price_amount"`
+	PriceCurrency        string    `json:"price_currency"`
+	BillingPeriodSeconds int       `json:"billing_period_seconds"`
+	Stackable            *bool     `json:"stackable"`
+	MaxActivePerUser     int       `json:"max_active_per_user"`
+	PurchaseWhenOwned    string    `json:"purchase_when_owned"`
+	Public               bool      `json:"public"`
+	SortOrder            int       `json:"sort_order"`
+	Enabled              *bool     `json:"enabled"`
+	ExtraConfig          string    `json:"extra_config"`
+	CreatedAt            time.Time `json:"created_at"`
+	UpdatedAt            time.Time `json:"updated_at"`
 }
 
 type publicPlanBrief struct {
@@ -157,6 +196,7 @@ type packageResponse struct {
 	Gradient             string    `json:"gradient"`
 	HighlightTag         string    `json:"highlight_tag"`
 	PriceAmount          float64   `json:"price_amount"`
+	CostFloorMicroUSD    int64     `json:"cost_floor_micro_usd"`
 	PriceCurrency        string    `json:"price_currency"`
 	BillingPeriodSeconds int       `json:"billing_period_seconds"`
 	Stackable            *bool     `json:"stackable"`
@@ -181,6 +221,7 @@ func packageResponseFrom(p database.Package) packageResponse {
 		Gradient:             p.Gradient,
 		HighlightTag:         p.HighlightTag,
 		PriceAmount:          database.MicroToUSD(p.PriceAmount),
+		CostFloorMicroUSD:    p.CostFloorMicroUSD,
 		PriceCurrency:        p.PriceCurrency,
 		BillingPeriodSeconds: p.BillingPeriodSeconds,
 		Stackable:            p.Stackable,
@@ -192,6 +233,32 @@ func packageResponseFrom(p database.Package) packageResponse {
 		ExtraConfig:          p.ExtraConfig,
 		CreatedAt:            p.CreatedAt,
 		UpdatedAt:            p.UpdatedAt,
+	}
+}
+
+func publicPackageResponseFrom(p database.Package) publicPackageResponse {
+	r := packageResponseFrom(p)
+	return publicPackageResponse{
+		ID:                   r.ID,
+		Name:                 r.Name,
+		Description:          r.Description,
+		ProductType:          r.ProductType,
+		IconKey:              r.IconKey,
+		BadgeColor:           r.BadgeColor,
+		Gradient:             r.Gradient,
+		HighlightTag:         r.HighlightTag,
+		PriceAmount:          r.PriceAmount,
+		PriceCurrency:        r.PriceCurrency,
+		BillingPeriodSeconds: r.BillingPeriodSeconds,
+		Stackable:            r.Stackable,
+		MaxActivePerUser:     r.MaxActivePerUser,
+		PurchaseWhenOwned:    r.PurchaseWhenOwned,
+		Public:               r.Public,
+		SortOrder:            r.SortOrder,
+		Enabled:              r.Enabled,
+		ExtraConfig:          r.ExtraConfig,
+		CreatedAt:            r.CreatedAt,
+		UpdatedAt:            r.UpdatedAt,
 	}
 }
 
@@ -337,6 +404,7 @@ type packagePayloadJSON struct {
 	Gradient             string           `json:"gradient"`
 	HighlightTag         string           `json:"highlight_tag"`
 	PriceAmount          float64          `json:"price_amount"`
+	CostFloorMicroUSD    int64            `json:"cost_floor_micro_usd"`
 	PriceCurrency        string           `json:"price_currency"`
 	BillingPeriodSeconds int              `json:"billing_period_seconds"`
 	Stackable            *bool            `json:"stackable"`
@@ -384,6 +452,7 @@ func parsePackagePayload(c *fiber.Ctx) (createPackagePayload, error) {
 			Gradient:             raw.Gradient,
 			HighlightTag:         raw.HighlightTag,
 			PriceAmount:          priceMicro,
+			CostFloorMicroUSD:    raw.CostFloorMicroUSD,
 			PriceCurrency:        raw.PriceCurrency,
 			BillingPeriodSeconds: raw.BillingPeriodSeconds,
 			Stackable:            raw.Stackable,
@@ -420,7 +489,7 @@ func CreatePackage(c *fiber.Ctx) error {
 		return c.Status(400).JSON(fiber.Map{"success": false, "message": "产品类型仅支持订阅", "message_code": MessageCodeInvalidProductType})
 	}
 	if err := validatePackagePayload(&payload.Package); err != nil {
-		return c.Status(400).JSON(fiber.Map{"success": false, "message": err.Error(), "message_code": "ERR_INVALID_PACKAGE"})
+		return c.Status(400).JSON(fiber.Map{"success": false, "message": err.Error(), "message_code": packageValidationMessageCode(err)})
 	}
 	// fix MAJOR M5（codex 第二十轮）：plan_multipliers 必须 finite + 上限校验，非法 400
 	if err := validatePlanMultipliers(payload.PlanIDs, payload.PlanMultipliers); err != nil {
@@ -492,7 +561,7 @@ func UpdatePackage(c *fiber.Ctx) error {
 		return c.Status(400).JSON(fiber.Map{"success": false, "message": "产品类型仅支持订阅", "message_code": MessageCodeInvalidProductType})
 	}
 	if err := validatePackagePayload(&payload.Package); err != nil {
-		return c.Status(400).JSON(fiber.Map{"success": false, "message": err.Error(), "message_code": "ERR_INVALID_PACKAGE"})
+		return c.Status(400).JSON(fiber.Map{"success": false, "message": err.Error(), "message_code": packageValidationMessageCode(err)})
 	}
 	// fix MAJOR M5（codex 第二十轮）：plan_multipliers 同样校验
 	if err := validatePlanMultipliers(payload.PlanIDs, payload.PlanMultipliers); err != nil {
@@ -509,6 +578,7 @@ func UpdatePackage(c *fiber.Ctx) error {
 			"icon_key":     payload.IconKey, "badge_color": payload.BadgeColor,
 			"gradient": payload.Gradient, "highlight_tag": payload.HighlightTag,
 			"price_amount":           payload.PriceAmount,
+			"cost_floor_micro_usd":   payload.CostFloorMicroUSD,
 			"price_currency":         payload.PriceCurrency,
 			"billing_period_seconds": payload.BillingPeriodSeconds,
 			"max_active_per_user":    payload.MaxActivePerUser,
@@ -622,7 +692,7 @@ func DeletePackage(c *fiber.Ctx) error {
 // fix MAJOR R23+2-B5（codex 全方面审查）：所有 DB 查询失败统一 fail-closed 返回 500。
 func ListPublicPackages(c *fiber.Ctx) error {
 	type pubItem struct {
-		packageResponse
+		publicPackageResponse
 		Plans []publicPackagePlanItem `json:"plans"`
 	}
 
@@ -684,7 +754,7 @@ func ListPublicPackages(c *fiber.Ctx) error {
 				})
 			}
 		}
-		out = append(out, pubItem{packageResponse: packageResponseFrom(p), Plans: items})
+		out = append(out, pubItem{publicPackageResponse: publicPackageResponseFrom(p), Plans: items})
 	}
 	return c.JSON(fiber.Map{"success": true, "data": out})
 }

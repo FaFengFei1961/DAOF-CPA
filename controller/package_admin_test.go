@@ -33,6 +33,7 @@ func TestValidatePackagePayload(t *testing.T) {
 	valid := database.Package{
 		Name:                 "Test",
 		PriceAmount:          9_900_000, // $9.90 micro_usd
+		CostFloorMicroUSD:    2_000_000,
 		BillingPeriodSeconds: 2592000,
 		MaxActivePerUser:     5,
 		SortOrder:            0,
@@ -48,6 +49,8 @@ func TestValidatePackagePayload(t *testing.T) {
 		mod  func(*database.Package)
 	}{
 		{"negative price", func(p *database.Package) { p.PriceAmount = -1 }},
+		{"negative cost floor", func(p *database.Package) { p.CostFloorMicroUSD = -1 }},
+		{"cost floor exceeds price", func(p *database.Package) { p.CostFloorMicroUSD = p.PriceAmount + 1 }},
 		{"zero billing period", func(p *database.Package) { p.BillingPeriodSeconds = 0 }},
 		{"negative billing period", func(p *database.Package) { p.BillingPeriodSeconds = -1 }},
 		{"negative max active", func(p *database.Package) { p.MaxActivePerUser = -1 }},
@@ -81,6 +84,7 @@ func TestCreatePackage_HappyPath(t *testing.T) {
 	code, resp := doJSON(t, app, "POST", "/admin/packages", map[string]any{
 		"name":                   "Pro Plan",
 		"price_amount":           9.9,
+		"cost_floor_micro_usd":   2_000_000,
 		"billing_period_seconds": 2592000,
 		"max_active_per_user":    5,
 	})
@@ -93,6 +97,16 @@ func TestCreatePackage_HappyPath(t *testing.T) {
 	data, _ := resp["data"].(map[string]any)
 	if data == nil || data["id"] == nil {
 		t.Fatal("expected data.id")
+	}
+	if data["cost_floor_micro_usd"] != float64(2_000_000) {
+		t.Fatalf("cost_floor_micro_usd=%v want 2000000", data["cost_floor_micro_usd"])
+	}
+	var pkg database.Package
+	if err := database.DB.First(&pkg, uint(data["id"].(float64))).Error; err != nil {
+		t.Fatalf("load created package: %v", err)
+	}
+	if pkg.CostFloorMicroUSD != 2_000_000 {
+		t.Fatalf("db cost_floor_micro_usd=%d want 2000000", pkg.CostFloorMicroUSD)
 	}
 }
 
@@ -107,6 +121,8 @@ func TestCreatePackage_ValidationRejects(t *testing.T) {
 	}{
 		{"missing name", map[string]any{"price_amount": 10, "billing_period_seconds": 86400}},
 		{"negative price", map[string]any{"name": "x", "price_amount": -1, "billing_period_seconds": 86400}},
+		{"negative cost floor", map[string]any{"name": "x", "price_amount": 10, "cost_floor_micro_usd": -1, "billing_period_seconds": 86400}},
+		{"cost floor exceeds price", map[string]any{"name": "x", "price_amount": 10, "cost_floor_micro_usd": 11_000_000, "billing_period_seconds": 86400}},
 		{"zero period", map[string]any{"name": "x", "price_amount": 10, "billing_period_seconds": 0}},
 		{"deprecated bonus field", map[string]any{"name": "x", "price_amount": 10, "billing_period_seconds": 86400, "bonus_balance_usd": 0}},
 	}
@@ -117,6 +133,25 @@ func TestCreatePackage_ValidationRejects(t *testing.T) {
 				t.Errorf("expected 400 got %d", code)
 			}
 		})
+	}
+}
+
+func TestCreatePackage_CostFloorInvalidMessageCode(t *testing.T) {
+	setupSubTestDB(t)
+	admin := seedAdminUser(t)
+	app := newPkgAdminTestApp(admin)
+
+	code, resp := doJSON(t, app, "POST", "/admin/packages", map[string]any{
+		"name":                   "Bad Floor",
+		"price_amount":           10,
+		"cost_floor_micro_usd":   10_000_001,
+		"billing_period_seconds": 86400,
+	})
+	if code != 400 {
+		t.Fatalf("expected 400 got %d body=%v", code, resp)
+	}
+	if resp["message_code"] != MessageCodePackageCostFloorInvalid {
+		t.Fatalf("message_code=%v want %s", resp["message_code"], MessageCodePackageCostFloorInvalid)
 	}
 }
 
@@ -163,6 +198,7 @@ func TestUpdatePackage_HappyPath(t *testing.T) {
 	code, resp := doJSON(t, app, "PUT", "/admin/packages/"+itoaUint(pkg.ID), map[string]any{
 		"name":                   "Renamed",
 		"price_amount":           19.9,
+		"cost_floor_micro_usd":   3_000_000,
 		"billing_period_seconds": 2592000,
 	})
 	if code != 200 {
@@ -171,6 +207,16 @@ func TestUpdatePackage_HappyPath(t *testing.T) {
 	data, _ := resp["data"].(map[string]any)
 	if data["name"] != "Renamed" {
 		t.Errorf("name not updated: %v", data["name"])
+	}
+	if data["cost_floor_micro_usd"] != float64(3_000_000) {
+		t.Errorf("cost_floor_micro_usd=%v want 3000000", data["cost_floor_micro_usd"])
+	}
+	var fresh database.Package
+	if err := database.DB.First(&fresh, pkg.ID).Error; err != nil {
+		t.Fatalf("load updated package: %v", err)
+	}
+	if fresh.CostFloorMicroUSD != 3_000_000 {
+		t.Errorf("db cost_floor_micro_usd=%d want 3000000", fresh.CostFloorMicroUSD)
 	}
 }
 
@@ -368,6 +414,33 @@ func TestListPublicPackages_FiltersCorrectly(t *testing.T) {
 	data, _ := resp["data"].([]any)
 	if len(data) != 1 {
 		t.Errorf("expected 1 public+enabled package got %d", len(data))
+	}
+}
+
+func TestListPublicPackages_HidesCostFloor(t *testing.T) {
+	setupSubTestDB(t)
+	admin := seedAdminUser(t)
+	app := newPkgAdminTestApp(admin)
+
+	enabled := true
+	if err := database.DB.Create(&database.Package{
+		Name: "Pub", PriceAmount: 10 * database.MicroPerUSD, CostFloorMicroUSD: 8 * database.MicroPerUSD,
+		BillingPeriodSeconds: 86400, Public: true, Enabled: &enabled,
+	}).Error; err != nil {
+		t.Fatalf("seed package: %v", err)
+	}
+
+	code, resp := doJSON(t, app, "GET", "/packages/public", nil)
+	if code != 200 {
+		t.Fatalf("expected 200 got %d body=%v", code, resp)
+	}
+	data, _ := resp["data"].([]any)
+	if len(data) != 1 {
+		t.Fatalf("expected 1 public package got %d", len(data))
+	}
+	row, _ := data[0].(map[string]any)
+	if _, ok := row["cost_floor_micro_usd"]; ok {
+		t.Fatalf("public package response must not expose cost_floor_micro_usd: %v", row)
 	}
 }
 

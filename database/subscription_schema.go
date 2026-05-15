@@ -91,8 +91,12 @@ type Package struct {
 	// 套餐本身的定价模型保持简单，不掺业务规则。
 	//
 	// fix MAJOR M22-A1 Phase 1：单位 micro_usd（int64），USD * 1e6。
-	PriceAmount   int64  `gorm:"not null;default:0" json:"price_amount"`
-	PriceCurrency string `gorm:"default:'USD'" json:"price_currency"`
+	PriceAmount int64 `gorm:"not null;default:0" json:"price_amount"`
+	// CostFloorMicroUSD 套餐"上游成本下限"估算（micro_usd），admin 在套餐编辑时填。
+	// 用于 coupon fixed_price 校验：fixed_price 不得低于本字段，防 admin 配低价券亏损。
+	// 0 = 未配置（fixed_price 校验跳过该套餐）。
+	CostFloorMicroUSD int64  `gorm:"default:0" json:"cost_floor_micro_usd"`
+	PriceCurrency     string `gorm:"default:'USD'" json:"price_currency"`
 
 	BillingPeriodSeconds int `gorm:"not null;default:2592000" json:"billing_period_seconds"`
 
