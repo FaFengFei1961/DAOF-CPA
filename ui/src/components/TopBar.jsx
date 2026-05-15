@@ -164,7 +164,7 @@ const TopBar = ({ isAuthenticated, onOpenAuth, isAdmin, profile }) => {
               aria-expanded={menuOpen}
               aria-label={t('TOPBAR.ACCOUNT_MENU', '账户菜单')}
             >
-              <div className="w-7 h-7 rounded-control-full bg-primary text-on-primary flex items-center justify-center shrink-0">
+              <div className="w-7 h-7 rounded-full bg-primary text-on-primary flex items-center justify-center shrink-0">
                 <User size={13} />
               </div>
               <ChevronDown size={12} className={`text-on-surface-variant transition-transform ${menuOpen ? 'rotate-180' : ''}`} />
@@ -178,7 +178,7 @@ const TopBar = ({ isAuthenticated, onOpenAuth, isAdmin, profile }) => {
                 {/* Header: 用户名 + role + 余额 */}
                 <div className="px-4 py-3 border-b border-outline-variant/40">
                   <div className="flex items-center gap-3">
-                    <div className="w-10 h-10 rounded-control-full bg-primary text-on-primary flex items-center justify-center">
+                    <div className="w-10 h-10 rounded-full bg-primary text-on-primary flex items-center justify-center">
                       <User size={18} />
                     </div>
                     <div className="min-w-0 flex-1">

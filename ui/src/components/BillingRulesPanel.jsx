@@ -74,7 +74,7 @@ const BillingRulesPanel = ({ compact = false }) => {
               <h2 className="text-base font-semibold text-on-surface">
                 {t('BILLING_RULES.TITLE', '额度怎么扣？')}
               </h2>
-              <span className="text-[11px] px-2 py-0.5 rounded-control-full bg-on-surface/[0.06] text-on-surface-variant font-mono">
+              <span className="text-[11px] px-2 py-0.5 rounded-full bg-on-surface/[0.06] text-on-surface-variant font-mono">
                 {t('BILLING_RULES.VERSION', '规则版本')} {version}
               </span>
             </div>

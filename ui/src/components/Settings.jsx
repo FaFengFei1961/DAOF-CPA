@@ -59,11 +59,12 @@ const Settings = ({ initialTab }) => {
         </select>
       </div>
 
-      {/* 桌面端：左侧菜单 */}
-      <aside className="hidden md:block fixed left-4 lg:left-5 top-20 bottom-6 z-20 w-48">
+      {/* 桌面端：sticky 左侧菜单（在 Settings 内部 flex 流内，不再 fixed —
+          原 fixed left-4 与 UserShell 的 lg:ml-60 完全重叠，造成双 nav 视觉 bug） */}
+      <aside className="hidden md:block w-48 shrink-0">
         <nav
           aria-label={t('SETTINGS.NAV_LABEL', '设置导航')}
-          className="h-full overflow-y-auto bg-surface-container/40 rounded-overlay p-2 space-y-0.5"
+          className="sticky top-20 bg-surface-container/40 rounded-overlay p-2 space-y-0.5 max-h-[calc(100vh-6rem)] overflow-y-auto"
         >
           {userTabs.map(it => {
             const Icon = it.icon;
@@ -89,7 +90,7 @@ const Settings = ({ initialTab }) => {
       </aside>
 
       {/* 主面板 */}
-      <div className="flex-1 min-w-0 pb-12 md:ml-52">
+      <div className="flex-1 min-w-0 pb-12">
         {/* ─── 外观（主题模式 + 主题色）─────────── */}
         {activeTab === 'general' && (
           <div className="w-full">
@@ -143,7 +144,7 @@ const Settings = ({ initialTab }) => {
                     <button
                       key={hex} type="button" onClick={() => changeSeedColor(hex)}
                       title={name} aria-label={`主题色: ${name}`}
-                      className={`w-7 h-7 rounded-control-full border-2 transition ${
+                      className={`w-7 h-7 rounded-full border-2 transition ${
                         seedColor.toLowerCase() === hex.toLowerCase()
                           ? 'border-on-surface scale-110'
                           : 'border-outline-variant hover:scale-110'
@@ -152,7 +153,7 @@ const Settings = ({ initialTab }) => {
                     />
                   ))}
                   <label
-                    className="w-7 h-7 rounded-control-full border-2 border-dashed border-outline-variant flex items-center justify-center cursor-pointer hover:border-primary text-[10px] text-on-surface-variant"
+                    className="w-7 h-7 rounded-full border-2 border-dashed border-outline-variant flex items-center justify-center cursor-pointer hover:border-primary text-[10px] text-on-surface-variant"
                     title="自定义"
                   >
                     <input

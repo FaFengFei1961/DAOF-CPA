@@ -264,7 +264,7 @@ const AuthModal = ({ isOpen, onClose, onLoginSuccess, initialStep = 'github', tm
                >
                  {loading ? (
                    <span className="flex items-center gap-2">
-                     <div className="w-4 h-4 border-2 border-black/30 border-t-black rounded-control-full "></div>
+                     <div className="w-4 h-4 border-2 border-black/30 border-t-black rounded-full "></div>
                      {t('AUTH.BTN_GITHUB_LOADING')}
                    </span>
                  ) : (

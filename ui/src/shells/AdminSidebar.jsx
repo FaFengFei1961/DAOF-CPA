@@ -74,7 +74,7 @@ const AdminSidebar = () => {
                           {isActive && (
                             <span
                               aria-hidden
-                              className="absolute left-0 top-1/2 -translate-y-1/2 w-[3px] h-4 bg-primary rounded-control-full"
+                              className="absolute left-0 top-1/2 -translate-y-1/2 w-[3px] h-4 bg-primary rounded-full"
                             />
                           )}
                           <Icon size={16} className={`shrink-0 ${isActive ? 'opacity-100' : 'opacity-70'}`} />

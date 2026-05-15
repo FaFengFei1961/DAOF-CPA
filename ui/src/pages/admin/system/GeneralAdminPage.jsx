@@ -99,14 +99,14 @@ const GeneralAdminPage = () => {
               <button
                 key={hex} type="button" onClick={() => changeSeedColor(hex)}
                 title={name} aria-label={`主题色: ${name}`}
-                className={`w-7 h-7 rounded-control-full border-2 transition ${
+                className={`w-7 h-7 rounded-full border-2 transition ${
                   seedColor.toLowerCase() === hex.toLowerCase()
                     ? 'border-on-surface scale-110' : 'border-outline-variant hover:scale-110'
                 }`}
                 style={{ background: hex }}
               />
             ))}
-            <label className="w-7 h-7 rounded-control-full border-2 border-dashed border-outline-variant flex items-center justify-center cursor-pointer hover:border-primary text-[10px] text-on-surface-variant" title="自定义">
+            <label className="w-7 h-7 rounded-full border-2 border-dashed border-outline-variant flex items-center justify-center cursor-pointer hover:border-primary text-[10px] text-on-surface-variant" title="自定义">
               <input type="color" value={seedColor} onChange={(e) => changeSeedColor(e.target.value)} className="w-0 h-0 opacity-0" />
               ＋
             </label>
@@ -124,7 +124,7 @@ const GeneralAdminPage = () => {
             type="button"
             onClick={saveClipProxy}
             disabled={loading || savingClip}
-            className="flex items-center gap-2 px-5 py-2 bg-primary text-on-primary rounded-control-full text-sm font-medium hover:opacity-90 disabled:opacity-50"
+            className="flex items-center gap-2 px-5 py-2 bg-primary text-on-primary rounded-full text-sm font-medium hover:opacity-90 disabled:opacity-50"
           >
             <Save size={14} />
             {savingClip ? t('SETTINGS.BTN_SAVING', '保存中…') : '保存连接配置'}

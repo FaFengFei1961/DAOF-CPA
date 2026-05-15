@@ -670,8 +670,8 @@ const ContentModerationGlobals = ({ configs, handleChange }) => {
                                         <div className="min-w-0">
                                             <div className="flex flex-wrap items-center gap-2">
                                                 <span className="font-mono text-xs text-on-surface break-all">{c.keyword}</span>
-                                                <span className="rounded-control-full bg-primary/10 px-2 py-0.5 text-[10px] uppercase text-primary">{c.category || 'jailbreak'}</span>
-                                                <span className="rounded-control-full bg-warning/10 px-2 py-0.5 text-[10px] uppercase text-warning">{c.severity || 'medium'}</span>
+                                                <span className="rounded-full bg-primary/10 px-2 py-0.5 text-[10px] uppercase text-primary">{c.category || 'jailbreak'}</span>
+                                                <span className="rounded-full bg-warning/10 px-2 py-0.5 text-[10px] uppercase text-warning">{c.severity || 'medium'}</span>
                                             </div>
                                             {c.reason && <p className="mt-1 text-[11px] text-on-surface-variant">{c.reason}</p>}
                                         </div>
@@ -894,7 +894,7 @@ const ContentModerationGlobals = ({ configs, handleChange }) => {
                                 <div key={evt.id} className="px-3 py-3 text-xs">
                                     <div className="grid grid-cols-1 gap-3 lg:grid-cols-[1.25fr,1fr,2fr]">
                                         <div className="min-w-0">
-                                            <div className={`inline-flex max-w-full items-center gap-2 rounded-control-full border px-2.5 py-1 ${actionTone(evt.action_type)}`}>
+                                            <div className={`inline-flex max-w-full items-center gap-2 rounded-full border px-2.5 py-1 ${actionTone(evt.action_type)}`}>
                                                 <Icon size={14} className="shrink-0" />
                                                 <span className="truncate font-semibold">
                                                     {actionLabels[evt.action_type] || evt.action_type}
@@ -904,7 +904,7 @@ const ContentModerationGlobals = ({ configs, handleChange }) => {
                                                 {evt.action_type}
                                             </div>
                                             {segmentScope && (
-                                                <div className={`mt-2 inline-flex max-w-full items-center gap-1 rounded-control-full border px-2 py-1 text-[11px] ${segmentScopeTone(segmentScope)}`}>
+                                                <div className={`mt-2 inline-flex max-w-full items-center gap-1 rounded-full border px-2 py-1 text-[11px] ${segmentScopeTone(segmentScope)}`}>
                                                     <span className="shrink-0 text-on-surface-variant">{t('MODERATION.RISK_SEGMENT_SCOPE', '来源')}</span>
                                                     <span className="truncate font-mono">{formatSegmentScope(segmentScope)}</span>
                                                 </div>
@@ -932,7 +932,7 @@ const ContentModerationGlobals = ({ configs, handleChange }) => {
                                         <div className="min-w-0">
                                             <div className="flex flex-wrap gap-1.5">
                                                 {badges.length > 0 ? badges.map((badge, idx) => (
-                                                    <span key={`${badge.label}-${idx}`} className={`inline-flex max-w-full items-center gap-1 rounded-control-full border px-2 py-1 text-[11px] ${badge.tone}`}>
+                                                    <span key={`${badge.label}-${idx}`} className={`inline-flex max-w-full items-center gap-1 rounded-full border px-2 py-1 text-[11px] ${badge.tone}`}>
                                                         <span className="shrink-0 text-on-surface-variant">{badge.label}</span>
                                                         <span className="truncate font-mono">{badge.value}</span>
                                                     </span>

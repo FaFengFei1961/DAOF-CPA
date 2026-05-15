@@ -281,7 +281,7 @@ const UpgradePage = ({ onPurchaseSuccess }) => {
                       视觉），改成 border-primary 高亮（推荐套餐边框由灰变主色）+
                       标题旁中性 chip 标识，避免 admin 自定义 pkg.gradient 覆盖背景 */}
                   {isRecommended && (
-                    <span className="absolute top-3 right-3 inline-flex items-center px-2 py-0.5 rounded-control-full text-[10px] font-medium bg-primary/15 text-primary border border-primary/30">
+                    <span className="absolute top-3 right-3 inline-flex items-center px-2 py-0.5 rounded-full text-[10px] font-medium bg-primary/15 text-primary border border-primary/30">
                       {pkg.highlight_tag}
                     </span>
                   )}

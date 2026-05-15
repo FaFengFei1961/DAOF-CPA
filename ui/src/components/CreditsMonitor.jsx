@@ -68,7 +68,7 @@ const QuotaBar = ({ remaining, label, resetsAt }) => {
           {safeRem.toFixed(1)}%
         </span>
       </div>
-      <div className="h-2 rounded-control-full bg-black/40 overflow-hidden border border-outline-variant/40">
+      <div className="h-2 rounded-full bg-black/40 overflow-hidden border border-outline-variant/40">
         <div
           className="h-full transition-all duration-500 ease-out"
           style={{ width: `${safeRem}%`, background: color, boxShadow: `0 0 12px ${color}80` }}

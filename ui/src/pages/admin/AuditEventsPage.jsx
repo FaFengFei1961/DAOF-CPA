@@ -162,7 +162,7 @@ const AuditEventsPage = () => {
         const isPrecheck = isPrecheckLimitEvent(e);
         return (
           <span
-            className={`inline-flex items-center gap-1 px-2 h-6 rounded-control-full text-[11px] font-medium border ${
+            className={`inline-flex items-center gap-1 px-2 h-6 rounded-full text-[11px] font-medium border ${
               isPrecheck
                 ? 'bg-warning/10 text-warning border-warning/30'
                 : 'bg-error/10 text-error border-error/30'
@@ -175,7 +175,7 @@ const AuditEventsPage = () => {
       }
       const ok = e.status >= 200 && e.status < 300;
       return (
-        <span className={`inline-flex items-center px-2 h-6 rounded-control-full text-[11px] font-medium border ${
+        <span className={`inline-flex items-center px-2 h-6 rounded-full text-[11px] font-medium border ${
           ok ? 'bg-success/10 text-success border-success/30'
              : 'bg-error/10 text-error border-error/30'
         }`}>
@@ -203,7 +203,7 @@ const AuditEventsPage = () => {
         <Filter size={12} />
         筛选
         {(userIdFilter || modelFilter || statusFilter || errorTypeFilter) && (
-          <span className="inline-block w-1.5 h-1.5 rounded-control-full bg-primary" />
+          <span className="inline-block w-1.5 h-1.5 rounded-full bg-primary" />
         )}
       </button>
       <button

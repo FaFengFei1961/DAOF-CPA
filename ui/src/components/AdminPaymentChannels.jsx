@@ -221,13 +221,13 @@ const MethodsPicker = ({ value, onChange, t }) => {
               key={m.id}
               type="button"
               onClick={() => toggle(m.id)}
-              className={`px-3 py-1.5 rounded-control-full text-xs font-semibold border transition flex items-center gap-1.5 ${
+              className={`px-3 py-1.5 rounded-full text-xs font-semibold border transition flex items-center gap-1.5 ${
                 active
                   ? `${m.color} ${m.text} border-transparent `
                   : 'bg-surface-container text-on-surface-variant border-outline-variant hover:border-primary hover:text-primary'
               }`}
             >
-              <span className={`w-1.5 h-1.5 rounded-control-full ${active ? 'bg-white/80' : 'bg-on-surface-variant/40'}`} />
+              <span className={`w-1.5 h-1.5 rounded-full ${active ? 'bg-white/80' : 'bg-on-surface-variant/40'}`} />
               {t(`TOPUP.${m.i18n}`, m.id)}
             </button>
           );

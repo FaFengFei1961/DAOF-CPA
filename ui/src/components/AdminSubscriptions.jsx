@@ -408,7 +408,7 @@ const AdminSubscriptions = () => {
                         ${sub.suggested_refund_usd?.toFixed(2) || '0.00'}
                       </td>
                       <td className="px-3 py-2">
-                        <span className={`px-2 py-0.5 rounded-control-full text-xs ${sty.bg} ${sty.text}`}>
+                        <span className={`px-2 py-0.5 rounded-full text-xs ${sty.bg} ${sty.text}`}>
                           {/* fix Minor 第二十轮（gemini）：状态枚举 i18n，避免中文环境下显示英文 */}
                           {t(`ADMIN_SUBS.STATUS_${sub.status.toUpperCase()}`, sub.status)}
                         </span>
@@ -525,7 +525,7 @@ const AdminUsageMetric = ({ icon: Icon, label, value, sub, pct }) => {
         </div>
       </div>
       {usedPct != null && (
-        <div className="mt-3 h-1.5 rounded-control-full bg-black/35 overflow-hidden">
+        <div className="mt-3 h-1.5 rounded-full bg-black/35 overflow-hidden">
           <div className="h-full" style={{ width: `${usedPct}%`, background: color }} />
         </div>
       )}
@@ -549,7 +549,7 @@ const AdminUsageDetailMeter = ({ detail }) => {
           <div className="text-lg font-bold" style={{ color }}>{usedPct.toFixed(1)}%</div>
         </div>
       </div>
-      <div className="mt-3 h-2 rounded-control-full bg-black/35 overflow-hidden">
+      <div className="mt-3 h-2 rounded-full bg-black/35 overflow-hidden">
         <div className="h-full" style={{ width: `${usedPct}%`, background: color }} />
       </div>
       <div className="mt-3 grid grid-cols-3 gap-2 text-xs">

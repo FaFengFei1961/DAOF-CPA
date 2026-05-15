@@ -66,7 +66,7 @@ const CustomTooltip = ({ active, payload, label, formatValue }) => {
             {payload.map((entry, i) => (
                 <div key={i} className="flex justify-between items-center gap-4 py-0.5">
                     <span className="flex items-center gap-1.5 min-w-[100px]">
-                        <span className="w-2 h-2 rounded-control-full" style={{ backgroundColor: entry.color }} />
+                        <span className="w-2 h-2 rounded-full" style={{ backgroundColor: entry.color }} />
                         <span className="text-on-surface-variant font-medium truncate">{entry.name}</span>
                     </span>
                     <span className="text-on-surface font-mono">{formatValue ? formatValue(entry.value) : (typeof entry.value === 'number' ? entry.value.toLocaleString() : entry.value)}</span>
@@ -484,8 +484,8 @@ const StatisticsDash = ({ isAdmin = false, isAuthenticated = true }) => {
                     metaNode={
                         <div className="flex flex-col gap-0.5 mt-2">
                            <span className="text-xs text-on-surface-variant flex items-center gap-2">
-                               <span className="w-1.5 h-1.5 rounded-control-full bg-success"></span>{t('STATS.SUCCESS_REQS') || '成功请求'}: {(summary.successReqs ?? 0).toLocaleString()}
-                               <span className="w-1.5 h-1.5 rounded-control-full bg-error ml-2"></span>失败请求: {(summary.failedReqs ?? 0).toLocaleString()}
+                               <span className="w-1.5 h-1.5 rounded-full bg-success"></span>{t('STATS.SUCCESS_REQS') || '成功请求'}: {(summary.successReqs ?? 0).toLocaleString()}
+                               <span className="w-1.5 h-1.5 rounded-full bg-error ml-2"></span>失败请求: {(summary.failedReqs ?? 0).toLocaleString()}
                                <span className="ml-2">平均延迟: {(summary.totalReqs > 0 && typeof summary.avgLatency === 'number') ? `${summary.avgLatency.toFixed(1)}秒` : '-'}</span>
                            </span>
                         </div>
@@ -497,8 +497,8 @@ const StatisticsDash = ({ isAdmin = false, isAuthenticated = true }) => {
                     value={formatTokens(summary.totalTokens)}
                     metaNode={
                         <div className="flex flex-col gap-0.5 mt-2 transition-opacity opacity-80 hover:opacity-100">
-                           <span className="text-xs text-on-surface-variant flex items-center gap-2"><span className="w-1.5 h-1.5 rounded-control-full bg-primary"></span>{t('STATS.CACHED_TOKENS') || '缓存读 Tokens'}: {formatTokens(summary.totalCached)}</span>
-                           <span className="text-xs text-on-surface-variant flex items-center gap-2"><span className="w-1.5 h-1.5 rounded-control-full bg-primary"></span>{t('STATS.REASONING_TOKENS') || '思考 Tokens'}: {formatTokens(summary.totalReasoning)}</span>
+                           <span className="text-xs text-on-surface-variant flex items-center gap-2"><span className="w-1.5 h-1.5 rounded-full bg-primary"></span>{t('STATS.CACHED_TOKENS') || '缓存读 Tokens'}: {formatTokens(summary.totalCached)}</span>
+                           <span className="text-xs text-on-surface-variant flex items-center gap-2"><span className="w-1.5 h-1.5 rounded-full bg-primary"></span>{t('STATS.REASONING_TOKENS') || '思考 Tokens'}: {formatTokens(summary.totalReasoning)}</span>
                         </div>
                     }
                     data={globalData} dataKey="tokens" color="#8b5cf6" icon={Zap} bgClass="bg-primary/5"

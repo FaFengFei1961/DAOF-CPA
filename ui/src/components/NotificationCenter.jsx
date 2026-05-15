@@ -164,7 +164,7 @@ const NotificationCenter = ({ isAuthenticated, onSignIn }) => {
       >
         <Bell size={16} />
         {unread > 0 && (
-          <span className="absolute -top-0.5 -right-0.5 min-w-[16px] h-[16px] px-1 rounded-control-full bg-error text-white text-[9px] font-bold flex items-center justify-center">
+          <span className="absolute -top-0.5 -right-0.5 min-w-[16px] h-[16px] px-1 rounded-full bg-error text-white text-[9px] font-bold flex items-center justify-center">
             {unread > 99 ? '99+' : unread}
           </span>
         )}
@@ -252,7 +252,7 @@ const NotificationCenter = ({ isAuthenticated, onSignIn }) => {
                 <article key={n.id}
                   className={`px-3 py-3 border-b border-outline-variant/20 hover:bg-surface-container-high ${!n.read_at ? 'bg-primary/5' : ''}`}>
                   <div className="flex items-start gap-2">
-                    <div className={`w-1.5 h-1.5 rounded-control-full mt-1.5 ${!n.read_at ? 'bg-primary' : 'bg-transparent'}`} />
+                    <div className={`w-1.5 h-1.5 rounded-full mt-1.5 ${!n.read_at ? 'bg-primary' : 'bg-transparent'}`} />
                     <div className="flex-1 min-w-0">
                       <button
                         type="button"

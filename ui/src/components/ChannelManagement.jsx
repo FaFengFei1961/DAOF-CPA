@@ -993,7 +993,7 @@ const ChannelManagement = () => {
                                         {c.name && <div className="text-xs text-success/80 font-normal mt-1">{c.name}</div>}
                                     </td>
                                     <td className="px-6 py-4">
-                                        <span className="bg-success/10 text-success px-2.5 py-1 rounded-control-full text-xs box-border border border-success/20">{c.type}</span>
+                                        <span className="bg-success/10 text-success px-2.5 py-1 rounded-full text-xs box-border border border-success/20">{c.type}</span>
                                     </td>
                                     <td className="px-6 py-4 font-mono text-xs opacity-80">
                                         <div className="break-all max-w-xs">{c.key}</div>

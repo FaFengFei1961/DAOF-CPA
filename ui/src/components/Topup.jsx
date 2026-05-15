@@ -356,7 +356,7 @@ const Topup = ({ isAuthenticated }) => {
         <section className="fl-card p-8 flex flex-col items-center gap-5 border-primary/40 shadow-primary/5">
           <div className="text-center">
             <div className="text-base font-semibold text-on-surface flex items-center justify-center gap-2">
-              <span className={`w-2 h-2 rounded-control-full bg-primary animate-pulse`} />
+              <span className={`w-2 h-2 rounded-full bg-primary animate-pulse`} />
               {t('TOPUP.WAITING_PAYMENT', '等待支付中…')}
             </div>
             <p className="text-xs text-on-surface-variant mt-1">

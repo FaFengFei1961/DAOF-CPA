@@ -177,7 +177,7 @@ const TokenManager = ({ isAuthenticated }) => {
     const renderTokens = () => (
         <div className="space-y-6">
             <div className="bg-surface border border-outline-variant rounded-overlay p-6 relative overflow-hidden">
-                <div className="absolute top-0 right-0 w-32 h-32 bg-primary/5 rounded-control-full blur-3xl -mr-10 -mt-10 pointer-events-none"></div>
+                <div className="absolute top-0 right-0 w-32 h-32 bg-primary/5 rounded-full blur-3xl -mr-10 -mt-10 pointer-events-none"></div>
                 <div className="relative z-10 flex flex-col md:flex-row md:items-center justify-between gap-4">
                     <div>
                         <h2 className="text-xl font-bold flex items-center gap-2">

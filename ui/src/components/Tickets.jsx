@@ -365,7 +365,7 @@ const Tickets = () => {
             <button
               type="button"
               onClick={() => scrollMessagesToBottom(true)}
-              className="absolute right-4 bottom-3 z-10 inline-flex items-center gap-1.5 h-8 px-3 rounded-control-full bg-primary text-on-primary text-xs font-semibold hover:brightness-110 active:scale-[0.97] transition animate-in fade-in slide-in-from-bottom-2"
+              className="absolute right-4 bottom-3 z-10 inline-flex items-center gap-1.5 h-8 px-3 rounded-full bg-primary text-on-primary text-xs font-semibold hover:brightness-110 active:scale-[0.97] transition animate-in fade-in slide-in-from-bottom-2"
               aria-label={t('TICKET.NEW_MSG_BELOW', '新消息')}
             >
               <ArrowDown size={12} />
@@ -529,7 +529,7 @@ const Tickets = () => {
                       {isClosed ? t('TICKET.STATUS_CLOSED', '已关闭') : t('TICKET.STATUS_OPEN', '进行中')}
                     </span>
                     {unread > 0 && (
-                      <span className="text-[10px] px-2 py-0.5 rounded-control-full bg-error text-white font-mono">
+                      <span className="text-[10px] px-2 py-0.5 rounded-full bg-error text-white font-mono">
                         {unread}
                       </span>
                     )}

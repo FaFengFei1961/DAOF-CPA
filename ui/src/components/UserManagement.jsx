@@ -392,8 +392,8 @@ const UserManagement = () => {
                                         </td>
                                         <td className="px-6 py-4 text-center">
                                             {u.status === 1
-                                                ? <div className="flex items-center gap-2 justify-center"><span className="w-2 h-2 rounded-control-full bg-success "></span> <span className="text-xs text-success">{t('USER_MGMT.STATUS_NORMAL')}</span></div>
-                                                : <div className="flex items-center gap-2 justify-center"><span className="w-2 h-2 rounded-control-full bg-error"></span> <span className="text-xs text-error">{t('USER_MGMT.STATUS_BANNED')}</span></div>
+                                                ? <div className="flex items-center gap-2 justify-center"><span className="w-2 h-2 rounded-full bg-success "></span> <span className="text-xs text-success">{t('USER_MGMT.STATUS_NORMAL')}</span></div>
+                                                : <div className="flex items-center gap-2 justify-center"><span className="w-2 h-2 rounded-full bg-error"></span> <span className="text-xs text-error">{t('USER_MGMT.STATUS_BANNED')}</span></div>
                                             }
                                         </td>
                                         <td className="px-6 py-4 text-right">
@@ -496,7 +496,7 @@ const UserManagement = () => {
                                 <div className="space-y-4 relative before:absolute before:inset-0 before:ml-5 before:-translate-x-px md:before:mx-auto md:before:translate-x-0 before:h-full before:w-0.5 before:bg-gradient-to-b before:from-transparent before:via-[#2b2b2b] before:to-transparent">
                                     {logModal.logs.map((log) => (
                                         <div key={log.id} className="relative flex items-center justify-between md:justify-normal md:odd:flex-row-reverse group is-active">
-                                            <div className="flex items-center justify-center w-6 h-6 rounded-control-full border-2 border-surface bg-surface-variant text-on-surface-variant group-hover:bg-primary group-hover:text-on-primary shadow shrink-0 md:order-1 md:group-odd:-translate-x-1/2 md:group-even:translate-x-1/2 z-10 font-mono text-xs">
+                                            <div className="flex items-center justify-center w-6 h-6 rounded-full border-2 border-surface bg-surface-variant text-on-surface-variant group-hover:bg-primary group-hover:text-on-primary shadow shrink-0 md:order-1 md:group-odd:-translate-x-1/2 md:group-even:translate-x-1/2 z-10 font-mono text-xs">
                                                 {log.id}
                                             </div>
                                             <div className="w-[calc(100%-2.5rem)] md:w-[calc(50%-2rem)] p-4 rounded-overlay border border-outline-variant bg-surface-container ">

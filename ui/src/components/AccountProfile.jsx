@@ -100,7 +100,7 @@ const AccountProfile = () => {
             <div className="space-y-6">
                 {/* 身份 */}
                 <div className="bg-surface-container-high border border-outline rounded-overlay p-6 relative overflow-hidden">
-                   <div className="absolute top-0 right-0 w-32 h-32 bg-primary/5 rounded-control-full blur-2xl -mr-10 -mt-10 pointer-events-none"></div>
+                   <div className="absolute top-0 right-0 w-32 h-32 bg-primary/5 rounded-full blur-2xl -mr-10 -mt-10 pointer-events-none"></div>
                    <div className="flex flex-col md:flex-row md:items-center justify-between gap-4 relative z-10">
                       <div>
                          <p className="text-sm text-on-surface-variant mb-1">{t('PROFILE.USERNAME_LABEL')}</p>

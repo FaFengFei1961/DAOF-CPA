@@ -72,7 +72,7 @@ const AdminSecretLogin = ({ sysParam, setupMode, onSuccess }) => {
       <div className="min-h-screen bg-surface flex items-center justify-center p-4 font-sans text-on-surface-variant">
         <div className="w-full max-w-md bg-surface-container border border-outline-variant rounded-overlay shadow-2xl shadow-black/40 p-8">
           <div className="flex flex-col items-center justify-center mb-8 gap-3">
-             <div className="w-16 h-16 rounded-control-full bg-primary/30 flex items-center justify-center">
+             <div className="w-16 h-16 rounded-full bg-primary/30 flex items-center justify-center">
                  <Lock size={32} className="text-primary" />
              </div>
              <h1 className="text-2xl font-bold tracking-tight mt-2">{t('ADMIN_LOGIN.SETUP_TITLE')}</h1>
@@ -131,7 +131,7 @@ const AdminSecretLogin = ({ sysParam, setupMode, onSuccess }) => {
     <div className="min-h-screen bg-surface flex items-center justify-center p-4 font-sans text-on-surface-variant">
       <div className="w-full max-w-sm bg-surface-container border border-outline-variant rounded-overlay shadow-2xl shadow-black/40 p-8">
         <div className="flex flex-col items-center justify-center mb-8 gap-3">
-           <div className="w-16 h-16 rounded-control-full bg-primary/20 flex items-center justify-center border border-primary/30">
+           <div className="w-16 h-16 rounded-full bg-primary/20 flex items-center justify-center border border-primary/30">
                <Shield size={32} className="text-primary" />
            </div>
            <h1 className="text-2xl font-bold tracking-tight mt-2">{t('ADMIN_LOGIN.LOGIN_TITLE')}</h1>

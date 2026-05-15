@@ -53,6 +53,7 @@ test-ip3.go
 ui/node_modules/
 ui/.vite/
 ui/dist/
+ui/scripts/visual_out/
 *.log
 
 # ─── 编辑器 ─────────────────────────────────────────

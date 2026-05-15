@@ -178,7 +178,7 @@ const NotificationPreferences = () => {
                 key={val}
                 type="button"
                 onClick={() => toggleThreshold(val)}
-                className={`px-3 py-1.5 rounded-control-full text-xs font-semibold border transition ${
+                className={`px-3 py-1.5 rounded-full text-xs font-semibold border transition ${
                   active
                     ? 'bg-primary text-on-primary border-primary'
                     : 'bg-transparent text-on-surface-variant border-outline-variant hover:border-primary hover:text-primary'

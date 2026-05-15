@@ -284,7 +284,7 @@ const BillsPage = () => {
                 type="button"
                 key={key}
                 onClick={() => toggleType(key)}
-                className={`text-xs px-3 py-1.5 rounded-control-full border transition ${
+                className={`text-xs px-3 py-1.5 rounded-full border transition ${
                   active
                     ? 'bg-primary text-white border-primary'
                     : 'bg-surface text-on-surface border-outline-variant hover:bg-on-surface/[0.04]'

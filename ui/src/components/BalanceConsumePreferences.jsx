@@ -156,9 +156,9 @@ const BalanceConsumePreferences = () => {
           aria-labelledby="balance-consume-enable-label"
           disabled={saving}
           onClick={() => update({ enabled: !data.enabled })}
-          className={`relative shrink-0 w-12 h-6 rounded-control-full transition disabled:opacity-50 ${data.enabled ? 'bg-primary' : 'bg-on-surface/20'}`}
+          className={`relative shrink-0 w-12 h-6 rounded-full transition disabled:opacity-50 ${data.enabled ? 'bg-primary' : 'bg-on-surface/20'}`}
         >
-          <span className={`absolute top-0.5 w-5 h-5 rounded-control-full bg-white transition-all ${data.enabled ? 'left-6' : 'left-0.5'}`} />
+          <span className={`absolute top-0.5 w-5 h-5 rounded-full bg-white transition-all ${data.enabled ? 'left-6' : 'left-0.5'}`} />
         </button>
       </div>
 
@@ -186,7 +186,7 @@ const BalanceConsumePreferences = () => {
         </div>
 
         {limitUSD > 0 ? (
-          <div className="h-2 rounded-control-full bg-on-surface/10 overflow-hidden">
+          <div className="h-2 rounded-full bg-on-surface/10 overflow-hidden">
             <div className={`h-full transition-all ${percent >= 90 ? 'bg-error' : percent >= 70 ? 'bg-warning' : 'bg-primary'}`}
               style={{ width: `${percent}%` }} />
           </div>
