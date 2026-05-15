@@ -119,19 +119,8 @@ func SeedDefaultSubscriptionProducts() {
 	}
 	enabled := true
 	stackable := false
+	// 仅保留 Combo 组合套餐（产品决策：不再单独售卖 Claude / Codex / Gemini 单品套餐）
 	specs := []defaultSubscriptionTier{
-		{"anthropic", "Claude", "pro", "Pro", "Claude Pro", "全部 Claude 模型可用，按 API 等值额度消耗。", 20, 10, 50, `["claude-*"]`, "provider:anthropic", 10},
-		{"anthropic", "Claude", "max_5x", "Max 5x", "Claude Max 5x", "全部 Claude 模型可用，Pro 的 5 倍爆发与周额度。", 100, 50, 250, `["claude-*"]`, "provider:anthropic", 20},
-		{"anthropic", "Claude", "max_20x", "Max 20x", "Claude Max 20x", "全部 Claude 模型可用，适合高强度 agent / coding 内测。", 200, 200, 1000, `["claude-*"]`, "provider:anthropic", 30},
-
-		{"codex", "Codex", "pro", "Pro", "Codex Pro", "全部 Codex / OpenAI 模型可用，按 API 等值额度消耗。", 20, 10, 50, `["gpt-*","o*","chatgpt-*","codex-*"]`, "provider:codex", 110},
-		{"codex", "Codex", "max_5x", "Max 5x", "Codex Max 5x", "全部 Codex / OpenAI 模型可用，Pro 的 5 倍爆发与周额度。", 100, 50, 250, `["gpt-*","o*","chatgpt-*","codex-*"]`, "provider:codex", 120},
-		{"codex", "Codex", "max_20x", "Max 20x", "Codex Max 20x", "全部 Codex / OpenAI 模型可用，适合高强度 agent / coding 内测。", 200, 200, 1000, `["gpt-*","o*","chatgpt-*","codex-*"]`, "provider:codex", 130},
-
-		{"google", "Gemini", "pro", "Pro", "Gemini Pro", "全部 Gemini 模型可用，按 API 等值额度消耗。", 20, 10, 50, `["gemini-*"]`, "provider:google", 210},
-		{"google", "Gemini", "max", "Max", "Gemini Max", "全部 Gemini 模型可用，更高爆发与周额度。", 100, 50, 250, `["gemini-*"]`, "provider:google", 220},
-		{"google", "Gemini", "ultra", "Ultra", "Gemini Ultra", "全部 Gemini 模型可用，面向重度长上下文内测。", 250, 150, 750, `["gemini-*"]`, "provider:google", 230},
-
 		{"combo", "Combo", "pro", "Pro", "Combo Pro", "Claude + Codex + Gemini 全部模型共享 API 等值额度。", 49, 25, 125, `["claude-*","gpt-*","o*","chatgpt-*","codex-*","gemini-*"]`, "combo:all", 310},
 		{"combo", "Combo", "max_5x", "Max 5x", "Combo Max 5x", "Claude + Codex + Gemini 全部模型共享更高额度。", 199, 125, 625, `["claude-*","gpt-*","o*","chatgpt-*","codex-*","gemini-*"]`, "combo:all", 320},
 		{"combo", "Combo", "max_20x", "Max 20x", "Combo Max 20x", "Claude + Codex + Gemini 全部模型共享旗舰额度。", 499, 400, 2000, `["claude-*","gpt-*","o*","chatgpt-*","codex-*","gemini-*"]`, "combo:all", 330},
