@@ -6,13 +6,8 @@ import { useAdminConfigs } from '../../../hooks/useAdminConfigs';
 import { SaveBar } from '../system/_AdminFormPrimitives';
 
 /**
- * FinanceSettingsPage — 财务工作区基础设置（Phase 4 抽出）
- *
- * 替换 Settings.jsx 内 financeTab === 'settings'。
- * 包含：
- *   1. 汇率（exchange_rate）
- *   2. 服务地址（server_address — 同时驱动 OAuth 回调 / 易付通 notify_url / return_url）
- *   3. 新用户余额消费默认值（balance_consume_default_*）
+ * Base finance settings: exchange rate, public server address, and default
+ * balance-spending behavior for newly registered users.
  */
 const FinanceSettingsPage = () => {
   const { t } = useTranslation();
@@ -21,9 +16,9 @@ const FinanceSettingsPage = () => {
 
   return (
     <>
-      <Section title={t('SETTINGS.EXCHANGE_RATE_TITLE', '汇率配置')} sub={t('SETTINGS.EXCHANGE_RATE_DESC_MICROS', '人民币 → USD 汇率（int64 定点：RMB/USD × 1e6，例 7200000 = 7.2）；杜绝 float 进入金额计算链路')}>
+      <Section title={t('ADMIN_FINANCE.SETTINGS.EXCHANGE_RATE_TITLE')} sub={t('ADMIN_FINANCE.SETTINGS.EXCHANGE_RATE_DESC')}>
         <div className="flex flex-col md:flex-row md:items-center justify-between py-2 gap-4">
-          <span className="text-sm text-on-surface">{t('SETTINGS.EXCHANGE_RATE_MICROS_LABEL', '汇率 (RMB/USD × 1e6)')}</span>
+          <span className="text-sm text-on-surface">{t('ADMIN_FINANCE.SETTINGS.EXCHANGE_RATE_LABEL')}</span>
           <div className="relative w-full md:w-auto">
             <input
               type="number" step="1" min="1000000" max="1000000000"
@@ -36,9 +31,9 @@ const FinanceSettingsPage = () => {
         </div>
       </Section>
 
-      <Section title={t('SETTINGS.SERVER_ADDR_LABEL', '服务地址')} sub={t('SETTINGS.SERVER_ADDR_DESC', '系统全局对外服务地址，驱动 OAuth 回调 + 易付通 notify_url + return_url')}>
+      <Section title={t('ADMIN_FINANCE.SETTINGS.SERVER_ADDR_TITLE')} sub={t('ADMIN_FINANCE.SETTINGS.SERVER_ADDR_DESC')}>
         <div className="flex flex-col md:flex-row md:items-center justify-between py-2 gap-4">
-          <span className="text-sm text-on-surface">{t('SETTINGS.SERVER_ADDR_LABEL', 'server_address')}</span>
+          <span className="text-sm text-on-surface">{t('ADMIN_FINANCE.SETTINGS.SERVER_ADDR_LABEL')}</span>
           <input
             type="text"
             value={configs.server_address || ''}
@@ -50,17 +45,17 @@ const FinanceSettingsPage = () => {
       </Section>
 
       <Section
-        title={t('SETTINGS.BALANCE_DEFAULT_TITLE', '新用户余额消费默认值')}
-        sub={t('SETTINGS.BALANCE_DEFAULT_DESC', '只影响之后注册的新用户。余额消费仍排在订阅之后；默认关闭可保持最小攻击面。')}
+        title={t('ADMIN_FINANCE.SETTINGS.BALANCE_DEFAULT_TITLE')}
+        sub={t('ADMIN_FINANCE.SETTINGS.BALANCE_DEFAULT_DESC')}
         icon={Wallet}
       >
         <div className="flex flex-col md:flex-row md:items-center justify-between py-3 border-b border-outline-variant/20 gap-3">
           <div className="flex flex-col gap-1 w-full md:w-2/3">
             <span id="balance-default-enabled-label" className="text-on-surface-variant font-medium text-sm">
-              {t('SETTINGS.BALANCE_DEFAULT_ENABLED', '默认允许余额消费')}
+              {t('ADMIN_FINANCE.SETTINGS.BALANCE_DEFAULT_ENABLED')}
             </span>
             <span className="text-xs text-outline">
-              {t('SETTINGS.BALANCE_DEFAULT_ENABLED_HINT', '开启后，新用户在订阅耗尽时会自动扣余额。')}
+              {t('ADMIN_FINANCE.SETTINGS.BALANCE_DEFAULT_ENABLED_HINT')}
             </span>
           </div>
           <button
@@ -78,7 +73,7 @@ const FinanceSettingsPage = () => {
         <div className="grid grid-cols-1 md:grid-cols-2 gap-4 pt-4">
           <label className="flex flex-col gap-2">
             <span className="text-xs font-medium text-on-surface-variant">
-              {t('SETTINGS.BALANCE_DEFAULT_LIMIT', '默认周期消费上限（USD）')}
+              {t('ADMIN_FINANCE.SETTINGS.BALANCE_DEFAULT_LIMIT')}
             </span>
             <div className="relative">
               <span className="absolute left-3 top-2.5 text-on-surface-variant text-sm pointer-events-none">$</span>
@@ -91,13 +86,13 @@ const FinanceSettingsPage = () => {
               />
             </div>
             <span className="text-[11px] text-on-surface-variant">
-              {t('SETTINGS.BALANCE_DEFAULT_LIMIT_HINT', '0 表示不限额。')}
+              {t('ADMIN_FINANCE.SETTINGS.BALANCE_DEFAULT_LIMIT_HINT')}
             </span>
           </label>
 
           <label className="flex flex-col gap-2">
             <span className="text-xs font-medium text-on-surface-variant">
-              {t('SETTINGS.BALANCE_DEFAULT_WINDOW', '默认统计窗口（秒）')}
+              {t('ADMIN_FINANCE.SETTINGS.BALANCE_DEFAULT_WINDOW')}
             </span>
             <input
               type="number" min="60" max={365 * 24 * 60 * 60} step="60"
@@ -107,7 +102,7 @@ const FinanceSettingsPage = () => {
               className="w-full bg-surface-container-high border border-outline rounded-control px-3 py-2 text-on-surface outline-none text-right focus:border-primary"
             />
             <span className="text-[11px] text-on-surface-variant">
-              {t('SETTINGS.BALANCE_DEFAULT_WINDOW_HINT', '60 秒到 365 天；2592000 = 30 天。')}
+              {t('ADMIN_FINANCE.SETTINGS.BALANCE_DEFAULT_WINDOW_HINT')}
             </span>
           </label>
         </div>

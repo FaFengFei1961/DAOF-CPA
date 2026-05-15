@@ -62,16 +62,16 @@ const SyncPage = () => {
 
   const validate = () => {
     const checks = [
-      ['cpa_project_id_refresh_seconds', 300, 31536000, 'Project ID 刷新周期必须是 300-31536000 秒'],
-      ['cliproxy_usage_sync_interval_seconds', 10, 3600, 'CLIProxy 同步间隔必须 是 10-3600 秒'],
-      ['cliproxy_usage_sync_batch_size', 1, 1000, 'CLIProxy 同步批次必须是 1-1000 条'],
-      ['apilog_retention_days', 0, 3650, 'API 日志保留天数必须是 0-3650 天'],   
-      ['apilog_cleanup_batch_size', 1, 100000, 'API 日志清理批次必须是 1-100000 条'],
+      ['cpa_project_id_refresh_seconds', 300, 31536000, 'ADMIN_SYS.SYNC.VALIDATION.PROJECT_REFRESH'],
+      ['cliproxy_usage_sync_interval_seconds', 10, 3600, 'ADMIN_SYS.SYNC.VALIDATION.SYNC_INTERVAL'],
+      ['cliproxy_usage_sync_batch_size', 1, 1000, 'ADMIN_SYS.SYNC.VALIDATION.SYNC_BATCH'],
+      ['apilog_retention_days', 0, 3650, 'ADMIN_SYS.SYNC.VALIDATION.LOG_RETENTION'],
+      ['apilog_cleanup_batch_size', 1, 100000, 'ADMIN_SYS.SYNC.VALIDATION.LOG_CLEANUP_BATCH'],
     ];
-    for (const [key, min, max, message] of checks) {
+    for (const [key, min, max, messageKey] of checks) {
       const n = parseInt(values[key], 10);
       if (Number.isNaN(n) || n < min || n > max) {
-        toast.error(message);
+        toast.error(t(messageKey));
         return false;
       }
     }
@@ -91,15 +91,15 @@ const SyncPage = () => {
       });
       if (data.success) {
         toast.success(
-          (data.message_code ? t('API.' + data.message_code) : null)
+          (data.message_code ? t(`API.${data.message_code}`) : null)
           || data.message
-          || t('SETTINGS.SAVE_SUCCESS', '保存成功'),
+          || t('SETTINGS.SAVE_SUCCESS'),
         );
         refetch();
       } else {
         toast.error(
-          (data.message_code ? t('API.' + data.message_code) : data.message)    
-          || t('SETTINGS.SAVE_FAILED', '保存失败'),
+          (data.message_code ? t(`API.${data.message_code}`) : data.message)
+          || t('SETTINGS.SAVE_FAILED'),
         );
       }
     } finally {
@@ -110,19 +110,19 @@ const SyncPage = () => {
   return (
     <PageContainer>
       <PageHeader
-        title={t('SETTINGS.TAB_SYNC', '号池同步')}
-        sub={t('SETTINGS.SYNC_DESC', 'CLIProxy 用量同步、鉴权和日志清理配置')}  
+        title={t('ADMIN_SYS.SYNC.TITLE')}
+        sub={t('ADMIN_SYS.SYNC.DESC')}
         icon={Activity}
       />
 
       <div className="space-y-6">
         <FormRow.Group
-          title="CLIProxy 用量同步"
-          sub="控制后台自动拉取 CLIProxyAPI usage queue 的节奏和批次。"
+          title={t('ADMIN_SYS.SYNC.USAGE_GROUP_TITLE')}
+          sub={t('ADMIN_SYS.SYNC.USAGE_GROUP_DESC')}
         >
           <FormRow
-            label="自动同步"
-            hint="SysConfig: cliproxy_usage_sync_enabled；默认 true。关闭后仅保 留手动同步。"
+            label={t('ADMIN_SYS.SYNC.AUTO_SYNC_LABEL')}
+            hint={t('ADMIN_SYS.SYNC.AUTO_SYNC_HINT')}
             htmlFor="cliproxy_usage_sync_enabled"
           >
             <BoolSwitch
@@ -132,36 +132,36 @@ const SyncPage = () => {
             />
           </FormRow>
           <FormRow
-            label="同步间隔"
-            hint="SysConfig: cliproxy_usage_sync_interval_seconds；默认 60 秒， 范围 10-3600 秒。"
+            label={t('ADMIN_SYS.SYNC.INTERVAL_LABEL')}
+            hint={t('ADMIN_SYS.SYNC.INTERVAL_HINT')}
             htmlFor="cliproxy_usage_sync_interval_seconds"
           >
             <NumberInput
               id="cliproxy_usage_sync_interval_seconds"
               min="10"
               max="3600"
-              unit="秒"
+              unit={t('ADMIN_SYS.UNIT.SECONDS')}
               value={values.cliproxy_usage_sync_interval_seconds}
               onChange={(value) => handleChange('cliproxy_usage_sync_interval_seconds', value)}
             />
           </FormRow>
           <FormRow
-            label="同步批次"
-            hint="SysConfig: cliproxy_usage_sync_batch_size；默认 100 条，最大 1000 条。"
+            label={t('ADMIN_SYS.SYNC.BATCH_LABEL')}
+            hint={t('ADMIN_SYS.SYNC.BATCH_HINT')}
             htmlFor="cliproxy_usage_sync_batch_size"
           >
             <NumberInput
               id="cliproxy_usage_sync_batch_size"
               min="1"
               max="1000"
-              unit="条"
+              unit={t('ADMIN_SYS.UNIT.ROWS')}
               value={values.cliproxy_usage_sync_batch_size}
               onChange={(value) => handleChange('cliproxy_usage_sync_batch_size', value)}
             />
           </FormRow>
           <FormRow
-            label="Project ID 刷新周期"
-            hint="SysConfig: cpa_project_id_refresh_seconds；默认 86400 秒，最小 300 秒。"
+            label={t('ADMIN_SYS.SYNC.PROJECT_REFRESH_LABEL')}
+            hint={t('ADMIN_SYS.SYNC.PROJECT_REFRESH_HINT')}
             htmlFor="cpa_project_id_refresh_seconds"
             last
           >
@@ -169,7 +169,7 @@ const SyncPage = () => {
               id="cpa_project_id_refresh_seconds"
               min="300"
               max="31536000"
-              unit="秒"
+              unit={t('ADMIN_SYS.UNIT.SECONDS')}
               value={values.cpa_project_id_refresh_seconds}
               onChange={(value) => handleChange('cpa_project_id_refresh_seconds', value)}
             />
@@ -177,12 +177,12 @@ const SyncPage = () => {
         </FormRow.Group>
 
         <FormRow.Group
-          title="安全与鉴权"
-          sub="管理审核鉴权 key 与仅本机代理可用的 TLS 跳过开关。"
+          title={t('ADMIN_SYS.SYNC.SECURITY_GROUP_TITLE')}
+          sub={t('ADMIN_SYS.SYNC.SECURITY_GROUP_DESC')}
         >
           <FormRow
-            label="内容审核 API Key"
-            hint="SysConfig: moderation_cliproxy_api_key；为空则回退到同地址 cliproxy 渠道 API key，再回退到 cliproxy_key。"
+            label={t('ADMIN_SYS.SYNC.MODERATION_KEY_LABEL')}
+            hint={t('ADMIN_SYS.SYNC.MODERATION_KEY_HINT')}
             htmlFor="moderation_cliproxy_api_key"
           >
             <div className="w-full md:w-[420px]">
@@ -191,7 +191,7 @@ const SyncPage = () => {
                 type={mask.moderation_cliproxy_api_key ? 'text' : 'password'}   
                 value={values.moderation_cliproxy_api_key}
                 onChange={(e) => handleChange('moderation_cliproxy_api_key', e.target.value)}
-                placeholder="留空则使用渠道 key"
+                placeholder={t('ADMIN_SYS.SYNC.MODERATION_KEY_PLACEHOLDER')}
                 prefix={KeyRound}
                 suffix={mask.moderation_cliproxy_api_key ? EyeOff : Eye}
                 onSuffixClick={() => toggleMask('moderation_cliproxy_api_key')}
@@ -200,8 +200,8 @@ const SyncPage = () => {
             </div>
           </FormRow>
           <FormRow
-            label="本机代理跳过 TLS 校验"
-            hint="SysConfig: proxy_tls_skip_verify；默认 false。仅对本机或内网代理生效。"
+            label={t('ADMIN_SYS.SYNC.TLS_SKIP_LABEL')}
+            hint={t('ADMIN_SYS.SYNC.TLS_SKIP_HINT')}
             htmlFor="proxy_tls_skip_verify"
             last
           >
@@ -213,24 +213,24 @@ const SyncPage = () => {
           </FormRow>
         </FormRow.Group>
 
-        <FormRow.Group title="API 日志清理" sub="控制审计日志保留周期和单次清理 规模。">
+        <FormRow.Group title={t('ADMIN_SYS.SYNC.LOG_GROUP_TITLE')} sub={t('ADMIN_SYS.SYNC.LOG_GROUP_DESC')}>
           <FormRow
-            label="保留天数"
-            hint="SysConfig: apilog_retention_days；默认 90 天，0 表示不清理。" 
+            label={t('ADMIN_SYS.SYNC.RETENTION_DAYS_LABEL')}
+            hint={t('ADMIN_SYS.SYNC.RETENTION_DAYS_HINT')}
             htmlFor="apilog_retention_days"
           >
             <NumberInput
               id="apilog_retention_days"
               min="0"
               max="3650"
-              unit="天"
+              unit={t('ADMIN_SYS.UNIT.DAYS')}
               value={values.apilog_retention_days}
               onChange={(value) => handleChange('apilog_retention_days', value)}
             />
           </FormRow>
           <FormRow
-            label="清理批次"
-            hint="SysConfig: apilog_cleanup_batch_size；默认 5000 条，单次越大锁表时间可能越长。"
+            label={t('ADMIN_SYS.SYNC.CLEANUP_BATCH_LABEL')}
+            hint={t('ADMIN_SYS.SYNC.CLEANUP_BATCH_HINT')}
             htmlFor="apilog_cleanup_batch_size"
             last
           >
@@ -238,7 +238,7 @@ const SyncPage = () => {
               id="apilog_cleanup_batch_size"
               min="1"
               max="100000"
-              unit="条"
+              unit={t('ADMIN_SYS.UNIT.ROWS')}
               value={values.apilog_cleanup_batch_size}
               onChange={(value) => handleChange('apilog_cleanup_batch_size', value)}
             />
@@ -247,8 +247,8 @@ const SyncPage = () => {
       </div>
 
       <div className="mt-6 flex items-start gap-2 text-xs text-on-surface-variant">
-        <ShieldAlert size={14} className="mt-0.5 shrink-0 text-warning" />      
-        <p>敏感 key 会按后端统一规则脱敏显示；保存掩码值时后端会跳过该字段，避免覆盖真实密钥。</p>
+        <ShieldAlert size={14} className="mt-0.5 shrink-0 text-warning" />
+        <p>{t('ADMIN_SYS.SYNC.SECRET_MASK_NOTE')}</p>
       </div>
 
       <div className="mt-8">

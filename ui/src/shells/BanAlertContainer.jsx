@@ -3,9 +3,7 @@ import { useTranslation } from 'react-i18next';
 import { useAuth } from '../context/AuthContext';
 
 /**
- * BanAlertContainer — 全局封禁拦截全屏弹窗（Phase 0）
- *
- * 从 App.jsx 抽出来。封禁触发后，所有路由都被这个全屏 modal 覆盖。
+ * Global ban alert overlay. When active, it blocks every route.
  */
 const BanAlertContainer = () => {
   const { t } = useTranslation();
@@ -25,7 +23,7 @@ const BanAlertContainer = () => {
           <div className="w-12 h-12 bg-error rounded-full flex items-center justify-center /30 text-on-surface font-bold text-3xl">!</div>
         </div>
         <h2 className="text-2xl font-bold text-on-surface tracking-tight mb-2 relative z-10">
-          {t('APP.BANNED.TITLE', '账户已被限制')}
+          {t('SHELL.BAN.TITLE')}
         </h2>
         {banAlert.reason && (
           <div className="mt-4 p-4 rounded-overlay bg-error/40 border border-error/30 text-error text-sm italic">
@@ -37,7 +35,7 @@ const BanAlertContainer = () => {
           onClick={handleAck}
           className="w-full h-12 mt-6 bg-surface-variant hover:bg-white hover:text-black font-semibold text-on-surface-variant rounded-overlay transition-all border border-outline relative z-10"
         >
-          {t('APP.BANNED.ACCEPT_BTN', '我知道了')}
+          {t('SHELL.BAN.ACCEPT_BTN')}
         </button>
         <button
           type="button"
@@ -47,7 +45,7 @@ const BanAlertContainer = () => {
           }}
           className="w-full h-12 mt-3 bg-surface-container hover:bg-surface-variant font-semibold text-on-surface rounded-overlay transition-all border border-outline relative z-10"
         >
-          联系客服
+          {t('SHELL.BAN.CONTACT_SUPPORT')}
         </button>
       </div>
     </div>

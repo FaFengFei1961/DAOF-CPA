@@ -5,10 +5,7 @@ import { MoreHorizontal, X } from 'lucide-react';
 import { mobileBottomNav, mobileMoreNav } from '../navManifest';
 
 /**
- * MobileBottomNav — 移动端底部固定 6 格 + "更多"面板
- *
- * Phase 0 重构：从 App.jsx 内移出来，菜单从 routes.jsx 读。
- * 视觉规则保持原 App.jsx 实现（高 60px、bg-surface/95 + backdrop-blur）。
+ * Mobile bottom navigation with a compact primary set and a More sheet.
  */
 const MobileBottomNav = () => {
   const { t } = useTranslation();
@@ -16,7 +13,7 @@ const MobileBottomNav = () => {
   const location = useLocation();
   const [moreOpen, setMoreOpen] = useState(false);
 
-  // ESC 关闭"更多"面板
+  // Close the More sheet with Escape.
   useEffect(() => {
     if (!moreOpen) return undefined;
     const handler = (e) => { if (e.key === 'Escape') setMoreOpen(false); };
@@ -28,12 +25,11 @@ const MobileBottomNav = () => {
 
   return (
     <>
-      {/* 更多面板 */}
       {moreOpen && (
         <div className="lg:hidden fixed inset-0 z-[95]" role="presentation">
           <button
             type="button"
-            aria-label={t('COMMON.CLOSE', '关闭')}
+            aria-label={t('COMMON.CLOSE')}
             onClick={() => setMoreOpen(false)}
             className="absolute inset-0 w-full h-full bg-black/45"
           />
@@ -45,12 +41,12 @@ const MobileBottomNav = () => {
           >
             <div className="flex items-center justify-between px-4 py-3 border-b border-outline-variant/60">
               <h2 id="mobile-more-title" className="text-sm font-semibold text-on-surface">
-                {t('MENU.MORE', '更多')}
+                {t('MENU.MORE')}
               </h2>
               <button
                 type="button"
                 onClick={() => setMoreOpen(false)}
-                aria-label={t('COMMON.CLOSE', '关闭')}
+                aria-label={t('COMMON.CLOSE')}
                 className="w-8 h-8 rounded-control flex items-center justify-center text-on-surface-variant hover:bg-on-surface/[0.06] hover:text-on-surface"
               >
                 <X size={18} />
@@ -76,7 +72,7 @@ const MobileBottomNav = () => {
                     }`}
                   >
                     <Icon size={20} className={active ? 'text-primary' : 'text-on-surface-variant'} />
-                    <span className="text-sm font-medium leading-tight">{t(item.labelKey, item.labelFallback)}</span>
+                    <span className="text-sm font-medium leading-tight">{t(item.labelKey)}</span>
                   </button>
                 );
               })}
@@ -85,9 +81,8 @@ const MobileBottomNav = () => {
         </div>
       )}
 
-      {/* 底部固定 6 格 */}
       <nav
-        aria-label={t('MOBILE_NAV.BOTTOM_LABEL', '底部导航')}
+        aria-label={t('SHELL.NAV.BOTTOM_LABEL')}
         className="lg:hidden fixed bottom-0 left-0 right-0 h-[60px] bg-surface/95 backdrop-blur-md border-t border-outline-variant flex items-center justify-around z-[100] pb-1"
       >
         {mobileBottomNav.map(item => {
@@ -98,28 +93,27 @@ const MobileBottomNav = () => {
               key={item.id}
               type="button"
               onClick={() => navigate(item.path)}
-              aria-label={t(item.labelKey, item.labelFallback)}
+              aria-label={t(item.labelKey)}
               aria-current={active ? 'page' : undefined}
               className="flex flex-col items-center gap-1 p-2 cursor-pointer transition-transform active:scale-95 bg-transparent border-0 outline-none focus-visible:ring-2 focus-visible:ring-primary rounded-control"
             >
               <Icon size={22} className={active ? 'text-primary' : 'text-on-surface-variant'} />
               <span className={`text-[10px] font-medium leading-none ${active ? 'text-primary' : 'text-on-surface-variant'}`}>
-                {t(item.labelKey, item.labelFallback)}
+                {t(item.labelKey)}
               </span>
             </button>
           );
         })}
-        {/* 第 6 格：更多 */}
         <button
           type="button"
           onClick={() => setMoreOpen(o => !o)}
-          aria-label={t('MENU.MORE', '更多')}
+          aria-label={t('MENU.MORE')}
           aria-expanded={moreOpen}
           className="flex flex-col items-center gap-1 p-2 cursor-pointer transition-transform active:scale-95 bg-transparent border-0 outline-none focus-visible:ring-2 focus-visible:ring-primary rounded-control"
         >
           <MoreHorizontal size={22} className={moreActive || moreOpen ? 'text-primary' : 'text-on-surface-variant'} />
           <span className={`text-[10px] font-medium leading-none ${moreActive || moreOpen ? 'text-primary' : 'text-on-surface-variant'}`}>
-            {t('MENU.MORE', '更多')}
+            {t('MENU.MORE')}
           </span>
         </button>
       </nav>

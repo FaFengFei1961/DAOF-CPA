@@ -8,10 +8,7 @@ import { SaveBar, SecretInputField, SectionCard } from './_AdminFormPrimitives';
 import { useMaskState } from '../../../hooks/useMaskState';
 
 /**
- * OAuthPage — admin GitHub OAuth 配置（Phase 3 抽出）
- *
- * 替换 Settings.jsx 内 activeTab === 'oauth' 区块。
- * 使用 useAdminConfigs hook 共享 fetch/save 逻辑。
+ * GitHub OAuth configuration page.
  */
 const OAuthPage = () => {
   const { t } = useTranslation();
@@ -22,12 +19,12 @@ const OAuthPage = () => {
   return (
     <PageContainer>
       <PageHeader
-        title={t('SETTINGS.OAUTH_TITLE', 'GitHub OAuth')}
-        sub={t('SETTINGS.SECURE_ZONE_DESC', '安全区 — 涉及第三方鉴权凭证')}
+        title={t('ADMIN_SYS.OAUTH.TITLE')}
+        sub={t('ADMIN_SYS.OAUTH.DESC')}
         icon={Key}
       />
 
-      <SectionCard title={t('SETTINGS.OAUTH_APP_PARAMS', 'OAuth 应用参数')}>
+      <SectionCard title={t('ADMIN_SYS.OAUTH.APP_PARAMS_TITLE')}>
         <div className="flex flex-col gap-6">
           <SecretInputField
             label="Client ID" id="github_client_id"
@@ -43,26 +40,26 @@ const OAuthPage = () => {
         </div>
       </SectionCard>
 
-      <SectionCard title={t('SETTINGS.OAUTH_CALLBACK_TITLE', 'OAuth 回调地址')}>
+      <SectionCard title={t('ADMIN_SYS.OAUTH.CALLBACK_TITLE')}>
         <div className="flex flex-col md:flex-row md:items-center justify-between py-4 gap-4">
           <div className="flex flex-col gap-1 w-full md:w-2/3">
             <span className="text-on-surface-variant font-medium text-sm">
-              {t('SETTINGS.SERVER_ADDR_LABEL', '服务地址')}
+              {t('ADMIN_SYS.OAUTH.SERVER_ADDR_LABEL')}
             </span>
             <span className="text-xs text-on-surface-variant">
               {configs.server_address ? (
                 <>
-                  当前值：<code className="font-mono text-primary">{configs.server_address}</code>
-                  {' · '}OAuth 回调地址将自动拼接 <code className="font-mono">/api/auth/github</code>
+                  {t('ADMIN_SYS.OAUTH.CALLBACK_CURRENT_PREFIX')}<code className="font-mono text-primary">{configs.server_address}</code>
+                  {' · '}{t('ADMIN_SYS.OAUTH.CALLBACK_AUTO_SUFFIX')} <code className="font-mono">/api/auth/github</code>
                 </>
               ) : (
                 <>
-                  尚未配置。请在{' '}
+                  {t('ADMIN_SYS.OAUTH.CALLBACK_EMPTY_PREFIX')}{' '}
                   <button type="button" onClick={() => navigate('/admin/finance')}
                     className="text-primary underline hover:opacity-80">
-                    财务工作区 → 基础设置
+                    {t('ADMIN_SYS.OAUTH.FINANCE_SETTINGS_LINK')}
                   </button>
-                  {' '}中填入 server_address。
+                  {' '}{t('ADMIN_SYS.OAUTH.CALLBACK_EMPTY_SUFFIX')}
                 </>
               )}
             </span>
@@ -72,7 +69,7 @@ const OAuthPage = () => {
             onClick={() => navigate('/admin/finance')}
             className="bg-surface-container-high border border-outline rounded-control px-4 py-2 text-sm text-on-surface hover:border-primary transition-colors"
           >
-            去财务工作区
+            {t('ADMIN_SYS.OAUTH.GOTO_FINANCE')}
           </button>
         </div>
       </SectionCard>

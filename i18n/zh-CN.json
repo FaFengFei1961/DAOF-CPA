@@ -1960,6 +1960,197 @@
   "SIDEBAR": {
     "TAGLINE": "AI 模型聚合"
   },
+  "SHELL": {
+    "ADMIN": {
+      "SKIP_TO_MAIN": "跳至主要内容",
+      "NAV_LABEL": "管理导航",
+      "TITLE": "管理控制台",
+      "BACK_TO_USER": "返回用户视图",
+      "GOTO_USER": "用户仪表盘"
+    },
+    "USER": {
+      "SKIP_TO_MAIN": "跳至主要内容",
+      "NAV_LABEL": "主导航",
+      "TAGLINE": "AI 模型聚合"
+    },
+    "BAN": {
+      "TITLE": "账户已被限制",
+      "ACCEPT_BTN": "我知道了",
+      "CONTACT_SUPPORT": "联系客服"
+    },
+    "NAV": {
+      "BOTTOM_LABEL": "底部导航"
+    }
+  },
+  "ADMIN_FINANCE": {
+    "TITLE": "财务工作区",
+    "DESC": "汇率、服务地址、支付通道、充值订单与订阅履约的统一运维入口。",
+    "TABS": {
+      "ARIA": "财务工作区分区",
+      "SETTINGS": "基础设置",
+      "PAYMENT": "支付通道",
+      "TOPUPS": "充值订单",
+      "SUBSCRIPTIONS": "订阅总览"
+    },
+    "SETTINGS": {
+      "EXCHANGE_RATE_TITLE": "汇率配置",
+      "EXCHANGE_RATE_DESC": "人民币 → USD 汇率（int64 定点：RMB/USD × 1e6，例 7200000 = 7.2）；杜绝 float 进入金额计算链路。",
+      "EXCHANGE_RATE_LABEL": "汇率 (RMB/USD × 1e6)",
+      "SERVER_ADDR_TITLE": "服务地址",
+      "SERVER_ADDR_DESC": "系统全局对外服务地址，驱动 OAuth 回调、易付通 notify_url 与 return_url。",
+      "SERVER_ADDR_LABEL": "server_address",
+      "BALANCE_DEFAULT_TITLE": "新用户余额消费默认值",
+      "BALANCE_DEFAULT_DESC": "只影响之后注册的新用户。余额消费仍排在订阅之后；默认关闭可保持最小攻击面。",
+      "BALANCE_DEFAULT_ENABLED": "默认允许余额消费",
+      "BALANCE_DEFAULT_ENABLED_HINT": "开启后，新用户在订阅耗尽时会自动扣余额。",
+      "BALANCE_DEFAULT_LIMIT": "默认周期消费上限（USD）",
+      "BALANCE_DEFAULT_LIMIT_HINT": "0 表示不限额。",
+      "BALANCE_DEFAULT_WINDOW": "默认统计窗口（秒）",
+      "BALANCE_DEFAULT_WINDOW_HINT": "60 秒到 365 天；2592000 = 30 天。"
+    }
+  },
+  "ADMIN_SYS": {
+    "UNIT": {
+      "SECONDS": "秒",
+      "ROWS": "条",
+      "DAYS": "天",
+      "MINUTES": "分钟",
+      "TIMES": "次",
+      "USERS": "人"
+    },
+    "GENERAL": {
+      "TITLE": "常规设置",
+      "DESC": "外观、上游连接等基础配置。",
+      "APPEARANCE_TITLE": "外观",
+      "APPEARANCE_DESC": "深色、浅色或跟随系统。",
+      "THEME_MODE_LABEL": "外观模式",
+      "THEME_LIGHT": "浅色",
+      "THEME_DARK": "深色",
+      "THEME_SYSTEM": "跟随系统",
+      "SEED_COLOR_LABEL": "主题色",
+      "SEED_COLOR_HINT": "选一个种子色，整套界面调色板自动生成。",
+      "SEED_COLOR_ARIA": "主题色：{{name}}",
+      "SEED_COLOR_CUSTOM": "自定义",
+      "SEED_COLOR_PURPLE": "紫",
+      "SEED_COLOR_BLUE": "蓝",
+      "SEED_COLOR_CYAN": "青",
+      "SEED_COLOR_ORANGE": "橙",
+      "SEED_COLOR_RED": "红",
+      "SEED_COLOR_TEAL": "湖",
+      "SEED_COLOR_GOLD": "金",
+      "SEED_COLOR_GRAY": "灰",
+      "CLIPROXY_TITLE": "CLIProxyAPI 连接配置",
+      "CLIPROXY_DESC": "配置本地 CLIProxyAPI 服务地址和 Management Key，用于统计看板读取原生数据。",
+      "CLIPROXY_SAVE": "保存连接配置",
+      "CLIPROXY_SAVE_OK": "CLIProxyAPI 连接配置已安全保存到服务端。",
+      "CLIPROXY_URL_LABEL": "服务地址",
+      "CLIPROXY_URL_HINT": "CLIProxyAPI 本地服务的 HTTP 地址。",
+      "CLIPROXY_URL_REQUIRED": "CLIProxyAPI 服务地址不能为空。",
+      "CLIPROXY_KEY_HINT": "config.yaml 中 remote-management.secret-key 或环境变量 MANAGEMENT_PASSWORD。",
+      "CLIPROXY_KEY_PLACEHOLDER": "输入 Management Key"
+    },
+    "COUPONS": {
+      "TITLE": "优惠券模板",
+      "DESC": "管理优惠券模板，配置新用户自动发券规则。",
+      "LOAD_FAIL": "加载失败",
+      "SIGNUP_TITLE": "新用户自动发券",
+      "SIGNUP_DESC": "选择一个已启用的优惠券模板。新用户完成注册时会自动获得一张该模板的券；选择“不自动发放”则关闭此流程。",
+      "SIGNUP_NONE": "不自动发放",
+      "SIGNUP_SAVE": "保存新人券",
+      "SIGNUP_SAVE_OK": "新人券配置已保存。",
+      "DISABLED_SUFFIX": "（禁用）"
+    },
+    "OAUTH": {
+      "TITLE": "GitHub OAuth",
+      "DESC": "安全区：涉及第三方鉴权凭证。",
+      "APP_PARAMS_TITLE": "OAuth 应用参数",
+      "CALLBACK_TITLE": "OAuth 回调地址",
+      "SERVER_ADDR_LABEL": "服务地址",
+      "CALLBACK_CURRENT_PREFIX": "当前值：",
+      "CALLBACK_AUTO_SUFFIX": "OAuth 回调地址将自动拼接",
+      "CALLBACK_EMPTY_PREFIX": "尚未配置。请在",
+      "FINANCE_SETTINGS_LINK": "财务工作区 → 基础设置",
+      "CALLBACK_EMPTY_SUFFIX": "中填入 server_address。",
+      "GOTO_FINANCE": "去财务工作区"
+    },
+    "SMS": {
+      "TITLE": "阿里云短信配置",
+      "DESC": "安全区：涉及阿里云 RAM 凭证。",
+      "RAM_TITLE": "RAM 子账号 AccessKey",
+      "TEMPLATE_TITLE": "签名与模板",
+      "SIGN_LABEL": "短信签名",
+      "TEMPLATE_CODE_LABEL": "短信模板 Code"
+    },
+    "MODERATION": {
+      "TITLE": "内容审核",
+      "DESC": "上游模型池审核、关键字、缓存、长 prompt 限制、多模态策略与拒绝文案的全局配置。"
+    },
+    "SYNC": {
+      "TITLE": "号池同步",
+      "DESC": "CLIProxy 用量同步、鉴权和日志清理配置。",
+      "USAGE_GROUP_TITLE": "CLIProxy 用量同步",
+      "USAGE_GROUP_DESC": "控制后台自动拉取 CLIProxyAPI usage queue 的节奏和批次。",
+      "AUTO_SYNC_LABEL": "自动同步",
+      "AUTO_SYNC_HINT": "SysConfig: cliproxy_usage_sync_enabled；默认 true。关闭后仅保留手动同步。",
+      "INTERVAL_LABEL": "同步间隔",
+      "INTERVAL_HINT": "SysConfig: cliproxy_usage_sync_interval_seconds；默认 60 秒，范围 10-3600 秒。",
+      "BATCH_LABEL": "同步批次",
+      "BATCH_HINT": "SysConfig: cliproxy_usage_sync_batch_size；默认 100 条，最大 1000 条。",
+      "PROJECT_REFRESH_LABEL": "Project ID 刷新周期",
+      "PROJECT_REFRESH_HINT": "SysConfig: cpa_project_id_refresh_seconds；默认 86400 秒，最小 300 秒。",
+      "SECURITY_GROUP_TITLE": "安全与鉴权",
+      "SECURITY_GROUP_DESC": "管理审核鉴权 key 与仅本机代理可用的 TLS 跳过开关。",
+      "MODERATION_KEY_LABEL": "内容审核 API Key",
+      "MODERATION_KEY_HINT": "SysConfig: moderation_cliproxy_api_key；为空则回退到同地址 cliproxy 渠道 API key，再回退到 cliproxy_key。",
+      "MODERATION_KEY_PLACEHOLDER": "留空则使用渠道 key",
+      "TLS_SKIP_LABEL": "本机代理跳过 TLS 校验",
+      "TLS_SKIP_HINT": "SysConfig: proxy_tls_skip_verify；默认 false。仅对本机或内网代理生效。",
+      "LOG_GROUP_TITLE": "API 日志清理",
+      "LOG_GROUP_DESC": "控制审计日志保留周期和单次清理规模。",
+      "RETENTION_DAYS_LABEL": "保留天数",
+      "RETENTION_DAYS_HINT": "SysConfig: apilog_retention_days；默认 90 天，0 表示不清理。",
+      "CLEANUP_BATCH_LABEL": "清理批次",
+      "CLEANUP_BATCH_HINT": "SysConfig: apilog_cleanup_batch_size；默认 5000 条，单次越大锁表时间可能越长。",
+      "SECRET_MASK_NOTE": "敏感 key 会按后端统一规则脱敏显示；保存掩码值时后端会跳过该字段，避免覆盖真实密钥。",
+      "VALIDATION": {
+        "PROJECT_REFRESH": "Project ID 刷新周期必须是 300-31536000 秒。",
+        "SYNC_INTERVAL": "CLIProxy 同步间隔必须是 10-3600 秒。",
+        "SYNC_BATCH": "CLIProxy 同步批次必须是 1-1000 条。",
+        "LOG_RETENTION": "API 日志保留天数必须是 0-3650 天。",
+        "LOG_CLEANUP_BATCH": "API 日志清理批次必须是 1-100000 条。"
+      }
+    },
+    "RISK": {
+      "TITLE": "注册策略与风控引擎",
+      "DESC": "控制新用户注册的风控策略、IP 上限、平台容量上限和拉新激励。",
+      "STRATEGY_SECTION_TITLE": "注册策略",
+      "STRATEGY_LABEL": "注册策略",
+      "STRATEGY_HINT": "不同策略对新用户的限制松紧不同。",
+      "STRATEGY_TRUST": "宽松（信任模式）",
+      "STRATEGY_DYNAMIC": "动态（推荐）",
+      "STRATEGY_STRICT": "严格",
+      "IP_LIMIT_LABEL": "同 IP 注册上限",
+      "IP_LIMIT_HINT": "同一 IP 24h 内最多允许注册的账号数。",
+      "MAX_USERS_LABEL": "平台用户总量上限",
+      "MAX_USERS_HINT": "达到上限后停止接受新用户注册（仅统计普通用户，不含管理员）。设为 0 表示无限制。",
+      "INCENTIVE_TITLE": "新用户奖励 / 拉新激励配置",
+      "INCENTIVE_DESC": "所有金额按 USD 计；填 0 表示该项不发放。拉新链接格式：",
+      "SIGNUP_BONUS_LABEL": "新用户初始金额（signup_bonus）",
+      "SIGNUP_BONUS_HINT": "每个新注册用户开局赠送的额度，无论是否带 ref。",
+      "REFERRER_BONUS_LABEL": "拉新者奖励（referrer_bonus）",
+      "REFERRER_BONUS_HINT": "推荐人通过 ?ref=自己用户名 的链接成功带来一个新用户后，给推荐人增加的额度。",
+      "REFEREE_BONUS_LABEL": "被拉新者奖励（referee_bonus）",
+      "REFEREE_BONUS_HINT": "通过推荐链接进来的新用户，在 signup_bonus 之外额外获得的额度，叠加且不替换。",
+      "COLLECTOR_TITLE": "号池额度采集器",
+      "COLLECTOR_DESC": "控制后台 goroutine 多久轮询一次上游账号池的剩余额度，决定号池监控看板与用户首页号池卡片的数据新鲜度。",
+      "CREDITS_REFRESH_LABEL": "全量刷新周期",
+      "CREDITS_REFRESH_HINT": "每隔多少分钟把所有上游账号的额度全量重新拉一遍。建议 10-30 分钟，过短会被上游限流。",
+      "CREDITS_RETRIES_LABEL": "失败重试次数",
+      "CREDITS_RETRIES_HINT": "单个上游账号连续失败时最多重试几次后放弃，等下一轮全量周期。0 = 无限重试，仍带指数退避（封顶 60 分钟）防止雪崩。",
+      "CREDITS_RETRY_INTERVAL_LABEL": "重试间隔（基础值）",
+      "CREDITS_RETRY_INTERVAL_HINT": "每次重试之间等待多少分钟。实际间隔会按指数退避（base × 2^retry_count），封顶 60 分钟，避免上游持续被冲击。"
+    }
+  },
   "ACCOUNT": {
     "ADMIN_UPDATE_WARN": "警告：更新后您当前的管理员身份将变更！\n您的管理入口将变为 ?sys={{username}}\n\n确定要保存配置吗？",
     "SAVE_SUCCESS": "配置保存成功！",

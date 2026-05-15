@@ -5,12 +5,7 @@ import { Settings as SettingsIcon } from 'lucide-react';
 import { userNav } from '../navManifest';
 
 /**
- * UserSidebar — 240px expanded（Phase 7.7-2 重做）
- *
- * 旧版本是 64px Win11 NavigationView Compact + 10px 极小文字，用户反馈
- * 视觉挤压、认知成本高（要"猜"图标含义）。改为 Linear / Vercel / Stripe
- * 风格的 240px 完整菜单：图标在左，label 完整可读，active 项左侧 indicator
- * + 浅 primary 背景。
+ * Expanded user sidebar with full labels and active-route affordance.
  */
 const NavItem = ({ to, label, Icon }) => {
   const end = to === '/';
@@ -47,10 +42,9 @@ const UserSidebar = () => {
 
   return (
     <nav
-      aria-label="主导航"
+      aria-label={t('SHELL.USER.NAV_LABEL')}
       className="hidden lg:flex flex-col w-60 h-screen bg-surface-container/40 border-r border-outline-variant/40 fixed top-0 left-0 z-50"
     >
-      {/* Brand: Logo + 应用名 + 副标 */}
       <Link
         to="/"
         className="flex items-center gap-2.5 px-4 h-14 border-b border-outline-variant/30 hover:bg-on-surface/[0.03] transition shrink-0"
@@ -62,28 +56,26 @@ const UserSidebar = () => {
             DAOF-CPA
           </div>
           <div className="text-[10px] text-on-surface-variant leading-tight mt-0.5">
-            {t('SIDEBAR.TAGLINE', 'AI 模型聚合')}
+            {t('SHELL.USER.TAGLINE')}
           </div>
         </div>
       </Link>
 
-      {/* 主菜单 */}
       <div className="flex-1 overflow-y-auto px-2 py-3 space-y-0.5 no-scrollbar">
         {userNav.map(item => (
           <NavItem
             key={item.id}
             to={item.path}
-            label={t(item.labelKey, item.labelFallback)}
+            label={t(item.labelKey)}
             Icon={item.icon}
           />
         ))}
       </div>
 
-      {/* 底部固定：系统设置 */}
       <div className="border-t border-outline-variant/30 px-2 py-2 shrink-0">
         <NavItem
           to="/settings"
-          label={t('MENU.SETTINGS', '系统设置')}
+          label={t('MENU.SETTINGS')}
           Icon={SettingsIcon}
         />
       </div>

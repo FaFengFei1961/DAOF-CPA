@@ -1960,6 +1960,197 @@
   "SIDEBAR": {
     "TAGLINE": "AI model aggregator"
   },
+  "SHELL": {
+    "ADMIN": {
+      "SKIP_TO_MAIN": "Skip to main content",
+      "NAV_LABEL": "Admin navigation",
+      "TITLE": "Admin Console",
+      "BACK_TO_USER": "Back to user view",
+      "GOTO_USER": "User Dashboard"
+    },
+    "USER": {
+      "SKIP_TO_MAIN": "Skip to main content",
+      "NAV_LABEL": "Main navigation",
+      "TAGLINE": "AI model aggregator"
+    },
+    "BAN": {
+      "TITLE": "Account restricted",
+      "ACCEPT_BTN": "Got it",
+      "CONTACT_SUPPORT": "Contact support"
+    },
+    "NAV": {
+      "BOTTOM_LABEL": "Bottom navigation"
+    }
+  },
+  "ADMIN_FINANCE": {
+    "TITLE": "Finance Workspace",
+    "DESC": "A unified operations entry for exchange rates, service address, payment channels, top-up orders, and subscription fulfillment.",
+    "TABS": {
+      "ARIA": "Finance workspace sections",
+      "SETTINGS": "Base Settings",
+      "PAYMENT": "Payment Channels",
+      "TOPUPS": "Top-up Orders",
+      "SUBSCRIPTIONS": "Subscriptions"
+    },
+    "SETTINGS": {
+      "EXCHANGE_RATE_TITLE": "Exchange Rate",
+      "EXCHANGE_RATE_DESC": "RMB to USD exchange rate (int64 fixed point: RMB/USD × 1e6, e.g. 7200000 = 7.2). Keeps float values out of monetary calculations.",
+      "EXCHANGE_RATE_LABEL": "Exchange rate (RMB/USD × 1e6)",
+      "SERVER_ADDR_TITLE": "Service Address",
+      "SERVER_ADDR_DESC": "Global public service address used for OAuth callbacks, EPay notify_url, and return_url.",
+      "SERVER_ADDR_LABEL": "server_address",
+      "BALANCE_DEFAULT_TITLE": "New-user Balance Spending Defaults",
+      "BALANCE_DEFAULT_DESC": "Only affects users who register later. Balance spending still comes after subscriptions; keeping it off by default minimizes exposure.",
+      "BALANCE_DEFAULT_ENABLED": "Allow balance spending by default",
+      "BALANCE_DEFAULT_ENABLED_HINT": "When enabled, new users automatically spend balance after subscriptions are depleted.",
+      "BALANCE_DEFAULT_LIMIT": "Default spending limit per window (USD)",
+      "BALANCE_DEFAULT_LIMIT_HINT": "0 means unlimited.",
+      "BALANCE_DEFAULT_WINDOW": "Default tracking window (seconds)",
+      "BALANCE_DEFAULT_WINDOW_HINT": "60 seconds to 365 days; 2592000 = 30 days."
+    }
+  },
+  "ADMIN_SYS": {
+    "UNIT": {
+      "SECONDS": "seconds",
+      "ROWS": "rows",
+      "DAYS": "days",
+      "MINUTES": "minutes",
+      "TIMES": "times",
+      "USERS": "users"
+    },
+    "GENERAL": {
+      "TITLE": "General Settings",
+      "DESC": "Base configuration for appearance and upstream connectivity.",
+      "APPEARANCE_TITLE": "Appearance",
+      "APPEARANCE_DESC": "Dark, light, or follow system.",
+      "THEME_MODE_LABEL": "Appearance mode",
+      "THEME_LIGHT": "Light",
+      "THEME_DARK": "Dark",
+      "THEME_SYSTEM": "Follow system",
+      "SEED_COLOR_LABEL": "Theme color",
+      "SEED_COLOR_HINT": "Pick a seed color and the full interface palette is generated automatically.",
+      "SEED_COLOR_ARIA": "Theme color: {{name}}",
+      "SEED_COLOR_CUSTOM": "Custom",
+      "SEED_COLOR_PURPLE": "Purple",
+      "SEED_COLOR_BLUE": "Blue",
+      "SEED_COLOR_CYAN": "Cyan",
+      "SEED_COLOR_ORANGE": "Orange",
+      "SEED_COLOR_RED": "Red",
+      "SEED_COLOR_TEAL": "Teal",
+      "SEED_COLOR_GOLD": "Gold",
+      "SEED_COLOR_GRAY": "Gray",
+      "CLIPROXY_TITLE": "CLIProxyAPI Connection",
+      "CLIPROXY_DESC": "Configure the local CLIProxyAPI service URL and Management Key used by analytics dashboards to read native data.",
+      "CLIPROXY_SAVE": "Save connection",
+      "CLIPROXY_SAVE_OK": "CLIProxyAPI connection settings were securely saved to the server.",
+      "CLIPROXY_URL_LABEL": "Service URL",
+      "CLIPROXY_URL_HINT": "HTTP address for the local CLIProxyAPI service.",
+      "CLIPROXY_URL_REQUIRED": "CLIProxyAPI service URL is required.",
+      "CLIPROXY_KEY_HINT": "remote-management.secret-key in config.yaml or the MANAGEMENT_PASSWORD environment variable.",
+      "CLIPROXY_KEY_PLACEHOLDER": "Enter Management Key"
+    },
+    "COUPONS": {
+      "TITLE": "Coupon Templates",
+      "DESC": "Manage coupon templates and configure automatic signup coupons.",
+      "LOAD_FAIL": "Failed to load",
+      "SIGNUP_TITLE": "Automatic Signup Coupon",
+      "SIGNUP_DESC": "Choose an enabled coupon template. New users receive one coupon from that template when registration completes; choose “Do not auto-grant” to disable this flow.",
+      "SIGNUP_NONE": "Do not auto-grant",
+      "SIGNUP_SAVE": "Save signup coupon",
+      "SIGNUP_SAVE_OK": "Signup coupon setting saved.",
+      "DISABLED_SUFFIX": " (disabled)"
+    },
+    "OAUTH": {
+      "TITLE": "GitHub OAuth",
+      "DESC": "Secure area: contains third-party authentication credentials.",
+      "APP_PARAMS_TITLE": "OAuth App Parameters",
+      "CALLBACK_TITLE": "OAuth Callback URL",
+      "SERVER_ADDR_LABEL": "Service address",
+      "CALLBACK_CURRENT_PREFIX": "Current value: ",
+      "CALLBACK_AUTO_SUFFIX": "OAuth callback URL appends",
+      "CALLBACK_EMPTY_PREFIX": "Not configured yet. Set server_address in",
+      "FINANCE_SETTINGS_LINK": "Finance Workspace -> Base Settings",
+      "CALLBACK_EMPTY_SUFFIX": ".",
+      "GOTO_FINANCE": "Go to Finance Workspace"
+    },
+    "SMS": {
+      "TITLE": "Aliyun SMS Settings",
+      "DESC": "Secure area: contains Aliyun RAM credentials.",
+      "RAM_TITLE": "RAM Sub-account AccessKey",
+      "TEMPLATE_TITLE": "Signature and Template",
+      "SIGN_LABEL": "SMS signature",
+      "TEMPLATE_CODE_LABEL": "SMS template code"
+    },
+    "MODERATION": {
+      "TITLE": "Content Moderation",
+      "DESC": "Global configuration for upstream model-pool review, keywords, cache, long-prompt limits, multimodal policy, and refusal copy."
+    },
+    "SYNC": {
+      "TITLE": "Pool Sync",
+      "DESC": "CLIProxy usage sync, authentication, and log cleanup settings.",
+      "USAGE_GROUP_TITLE": "CLIProxy Usage Sync",
+      "USAGE_GROUP_DESC": "Control the cadence and batch size for pulling the CLIProxyAPI usage queue in the background.",
+      "AUTO_SYNC_LABEL": "Automatic sync",
+      "AUTO_SYNC_HINT": "SysConfig: cliproxy_usage_sync_enabled; default true. When disabled, only manual sync remains.",
+      "INTERVAL_LABEL": "Sync interval",
+      "INTERVAL_HINT": "SysConfig: cliproxy_usage_sync_interval_seconds; default 60 seconds, range 10-3600 seconds.",
+      "BATCH_LABEL": "Sync batch size",
+      "BATCH_HINT": "SysConfig: cliproxy_usage_sync_batch_size; default 100 rows, maximum 1000 rows.",
+      "PROJECT_REFRESH_LABEL": "Project ID refresh interval",
+      "PROJECT_REFRESH_HINT": "SysConfig: cpa_project_id_refresh_seconds; default 86400 seconds, minimum 300 seconds.",
+      "SECURITY_GROUP_TITLE": "Security and Authentication",
+      "SECURITY_GROUP_DESC": "Manage the moderation authentication key and the TLS-skip switch available only to local proxies.",
+      "MODERATION_KEY_LABEL": "Content Moderation API Key",
+      "MODERATION_KEY_HINT": "SysConfig: moderation_cliproxy_api_key; empty falls back to the same-address cliproxy channel API key, then cliproxy_key.",
+      "MODERATION_KEY_PLACEHOLDER": "Leave empty to use channel key",
+      "TLS_SKIP_LABEL": "Skip TLS verification for local proxy",
+      "TLS_SKIP_HINT": "SysConfig: proxy_tls_skip_verify; default false. Applies only to local or intranet proxies.",
+      "LOG_GROUP_TITLE": "API Log Cleanup",
+      "LOG_GROUP_DESC": "Control audit-log retention and per-run cleanup size.",
+      "RETENTION_DAYS_LABEL": "Retention days",
+      "RETENTION_DAYS_HINT": "SysConfig: apilog_retention_days; default 90 days, 0 means no cleanup.",
+      "CLEANUP_BATCH_LABEL": "Cleanup batch size",
+      "CLEANUP_BATCH_HINT": "SysConfig: apilog_cleanup_batch_size; default 5000 rows. Larger batches may hold table locks longer.",
+      "SECRET_MASK_NOTE": "Sensitive keys are masked by the backend's shared rules. When a masked value is saved, the backend skips that field to avoid overwriting the real secret.",
+      "VALIDATION": {
+        "PROJECT_REFRESH": "Project ID refresh interval must be 300-31536000 seconds.",
+        "SYNC_INTERVAL": "CLIProxy sync interval must be 10-3600 seconds.",
+        "SYNC_BATCH": "CLIProxy sync batch size must be 1-1000 rows.",
+        "LOG_RETENTION": "API log retention must be 0-3650 days.",
+        "LOG_CLEANUP_BATCH": "API log cleanup batch size must be 1-100000 rows."
+      }
+    },
+    "RISK": {
+      "TITLE": "Registration Policy and Risk Engine",
+      "DESC": "Control registration risk policy, IP limits, platform capacity, and referral incentives.",
+      "STRATEGY_SECTION_TITLE": "Registration Policy",
+      "STRATEGY_LABEL": "Registration policy",
+      "STRATEGY_HINT": "Each policy applies a different level of restriction to new users.",
+      "STRATEGY_TRUST": "Permissive (trust mode)",
+      "STRATEGY_DYNAMIC": "Dynamic (recommended)",
+      "STRATEGY_STRICT": "Strict",
+      "IP_LIMIT_LABEL": "Same-IP signup limit",
+      "IP_LIMIT_HINT": "Maximum accounts that may register from the same IP within 24 hours.",
+      "MAX_USERS_LABEL": "Platform user capacity",
+      "MAX_USERS_HINT": "Stop accepting new user registrations after this limit is reached. Counts standard users only, excluding admins. Set to 0 for unlimited.",
+      "INCENTIVE_TITLE": "New-user Rewards / Referral Incentives",
+      "INCENTIVE_DESC": "All amounts are in USD. Use 0 to disable a reward. Referral link format:",
+      "SIGNUP_BONUS_LABEL": "New-user starting balance (signup_bonus)",
+      "SIGNUP_BONUS_HINT": "Credit granted to every newly registered user, whether or not a ref parameter is present.",
+      "REFERRER_BONUS_LABEL": "Referrer reward (referrer_bonus)",
+      "REFERRER_BONUS_HINT": "Credit granted to the referrer after a new user registers through a ?ref=their-username link.",
+      "REFEREE_BONUS_LABEL": "Referred-user reward (referee_bonus)",
+      "REFEREE_BONUS_HINT": "Extra credit for a new user who arrives through a referral link. It stacks with signup_bonus and does not replace it.",
+      "COLLECTOR_TITLE": "Credits Pool Collector",
+      "COLLECTOR_DESC": "Controls how often the background goroutine polls upstream account balances, which determines freshness for the credits monitor and user dashboard pool card.",
+      "CREDITS_REFRESH_LABEL": "Full refresh interval",
+      "CREDITS_REFRESH_HINT": "How often to refresh balances for all upstream accounts. 10-30 minutes is recommended; shorter intervals may hit upstream rate limits.",
+      "CREDITS_RETRIES_LABEL": "Failure retry count",
+      "CREDITS_RETRIES_HINT": "Maximum retries for a single upstream account before giving up until the next full cycle. 0 means unlimited retries with capped exponential backoff at 60 minutes.",
+      "CREDITS_RETRY_INTERVAL_LABEL": "Retry interval (base)",
+      "CREDITS_RETRY_INTERVAL_HINT": "Minutes to wait between retries. Actual delay uses exponential backoff (base × 2^retry_count), capped at 60 minutes, to avoid sustained upstream pressure."
+    }
+  },
   "ACCOUNT": {
     "ADMIN_UPDATE_WARN": "Warning: updating these credentials will change your current administrator identity.\nYour admin entry URL will become ?sys={{username}}.\n\nSave these changes?",
     "SAVE_SUCCESS": "Settings saved successfully.",

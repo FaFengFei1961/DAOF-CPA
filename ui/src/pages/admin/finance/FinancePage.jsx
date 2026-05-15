@@ -10,22 +10,14 @@ const AdminTopupOrders = lazy(() => import('../../../components/AdminTopupOrders
 const AdminSubscriptions = lazy(() => import('../../../components/AdminSubscriptions'));
 
 /**
- * FinancePage — 财务工作区（Phase 4 抽出）
- *
- * 替换 Settings.jsx 内 activeTab === 'finance'，并把原内部 financeTab state 改成
- * URL nested route：
- *   /admin/finance              → 基础设置（汇率 / server_address / 余额消费默认）
- *   /admin/finance/payment      → 支付通道（AdminPaymentChannels）
- *   /admin/finance/topups       → 充值订单（AdminTopupOrders）
- *   /admin/finance/subscriptions→ 订阅总览（AdminSubscriptions）
- *
- * 浏览器后退能在 finance sub-tab 间切换，比原内部 state 更可深链。
+ * Finance workspace shell. Each sub-tab is a nested URL so browser history
+ * and deep links work across finance operations.
  */
 const FINANCE_TABS = [
-  { id: 'settings',      path: '/admin/finance',               icon: ShieldAlert, label: '基础设置' },
-  { id: 'payment',       path: '/admin/finance/payment',       icon: Wallet,      label: '支付通道' },
-  { id: 'topups',        path: '/admin/finance/topups',        icon: Receipt,     label: '充值订单' },
-  { id: 'subscriptions', path: '/admin/finance/subscriptions', icon: PackageIcon, label: '订阅总览' },
+  { id: 'settings',      path: '/admin/finance',               icon: ShieldAlert, labelKey: 'ADMIN_FINANCE.TABS.SETTINGS' },
+  { id: 'payment',       path: '/admin/finance/payment',       icon: Wallet,      labelKey: 'ADMIN_FINANCE.TABS.PAYMENT' },
+  { id: 'topups',        path: '/admin/finance/topups',        icon: Receipt,     labelKey: 'ADMIN_FINANCE.TABS.TOPUPS' },
+  { id: 'subscriptions', path: '/admin/finance/subscriptions', icon: PackageIcon, labelKey: 'ADMIN_FINANCE.TABS.SUBSCRIPTIONS' },
 ];
 
 const FinanceShell = () => {
@@ -35,15 +27,14 @@ const FinanceShell = () => {
   return (
     <PageContainer>
       <PageHeader
-        title={t('SETTINGS.FINANCE_TITLE', '财务工作区')}
-        sub={t('SETTINGS.FINANCE_DESC', '汇率 / 服务地址 / 支付通道 / 充值订单 / 订阅总览，admin 全局财务运维入口')}
+        title={t('ADMIN_FINANCE.TITLE')}
+        sub={t('ADMIN_FINANCE.DESC')}
         icon={ShieldAlert}
       />
 
-      <nav role="tablist" aria-label="财务工作区分区" className="flex flex-wrap gap-2">
+      <nav role="tablist" aria-label={t('ADMIN_FINANCE.TABS.ARIA')} className="flex flex-wrap gap-2">
         {FINANCE_TABS.map(tab => {
           const Icon = tab.icon;
-          // index path '/admin/finance' 用 end 严格匹配
           const end = tab.path === '/admin/finance';
           return (
             <NavLink
@@ -60,14 +51,13 @@ const FinanceShell = () => {
               }
             >
               <Icon size={15} />
-              {tab.label}
+              {t(tab.labelKey)}
             </NavLink>
           );
         })}
       </nav>
 
-      <Suspense fallback={<div className="py-12 text-center text-sm text-on-surface-variant">{t('APP.LOADING', '加载中...')}</div>}>
-        {/* Outlet 由 child route 渲染对应 page */}
+      <Suspense fallback={<div className="py-12 text-center text-sm text-on-surface-variant">{t('COMMON.LOADING')}</div>}>
         <Outlet key={location.pathname} />
       </Suspense>
     </PageContainer>

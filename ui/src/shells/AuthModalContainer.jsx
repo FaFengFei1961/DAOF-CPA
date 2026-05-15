@@ -4,10 +4,7 @@ import { useAuth } from '../context/AuthContext';
 const AuthModal = lazy(() => import('../components/AuthModal'));
 
 /**
- * AuthModalContainer — 全局 AuthModal 渲染（Phase 0）
- *
- * 替换原 App.jsx 内分散管理 authModalConfig 的代码。
- * 现在所有 page / shell 通过 useAuth().openLogin() 触发，container 监听 context 渲染。
+ * Global AuthModal renderer backed by auth context state.
  */
 const AuthModalContainer = () => {
   const { authModal, closeLogin, onLoginSuccess, setAuthModal } = useAuth();
@@ -22,7 +19,7 @@ const AuthModalContainer = () => {
         defaultName={authModal.defaultName}
         onClose={closeLogin}
         onLoginSuccess={onLoginSuccess}
-        // 兼容原 AuthModal 内部需要切 step 的接口（旧 AuthModal 用 prev => ... 风格）
+        // Preserve the updater-style step API expected by AuthModal.
         onStepChange={(updater) => setAuthModal(prev => typeof updater === 'function' ? updater(prev) : { ...prev, ...updater })}
       />
     </Suspense>

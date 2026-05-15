@@ -7,9 +7,7 @@ import { SaveBar, SecretInputField, SectionCard } from './_AdminFormPrimitives';
 import { useMaskState } from '../../../hooks/useMaskState';
 
 /**
- * SmsPage — admin 阿里云短信配置（Phase 3 抽出）
- *
- * 替换 Settings.jsx 内 activeTab === 'sms' 区块。
+ * Aliyun SMS credential and template configuration.
  */
 const SmsPage = () => {
   const { t } = useTranslation();
@@ -19,13 +17,13 @@ const SmsPage = () => {
   return (
     <PageContainer>
       <PageHeader
-        title={t('SETTINGS.SMS_TITLE', '阿里云短信配置')}
-        sub={t('SETTINGS.SECURE_ZONE_DESC', '安全区 — 涉及阿里云 RAM 凭证')}
+        title={t('ADMIN_SYS.SMS.TITLE')}
+        sub={t('ADMIN_SYS.SMS.DESC')}
         icon={MessageSquare}
       />
 
       <SectionCard
-        title={t('SETTINGS.SMS_RAM_TITLE', 'RAM 子账号 AccessKey')}
+        title={t('ADMIN_SYS.SMS.RAM_TITLE')}
         accent="bg-warning"
       >
         <div className="flex flex-col gap-6">
@@ -44,17 +42,17 @@ const SmsPage = () => {
       </SectionCard>
 
       <SectionCard
-        title={t('SETTINGS.SMS_TPL_TITLE', '签名与模板')}
+        title={t('ADMIN_SYS.SMS.TEMPLATE_TITLE')}
         accent="bg-warning"
       >
         <div className="flex flex-col gap-6">
           <SecretInputField
-            label={t('SETTINGS.SMS_SIGN_LABEL', '短信签名')} id="aliyun_sms_sign"
+            label={t('ADMIN_SYS.SMS.SIGN_LABEL')} id="aliyun_sms_sign"
             val={configs.aliyun_sms_sign} onChange={handleChange}
             show={mask.aliyun_sms_sign} onToggle={() => toggleMask('aliyun_sms_sign')}
           />
           <SecretInputField
-            label={t('SETTINGS.SMS_TPL_LABEL', '短信模板 Code')} id="aliyun_sms_template"
+            label={t('ADMIN_SYS.SMS.TEMPLATE_CODE_LABEL')} id="aliyun_sms_template"
             val={configs.aliyun_sms_template} onChange={handleChange}
             show={mask.aliyun_sms_template} onToggle={() => toggleMask('aliyun_sms_template')}
           />
