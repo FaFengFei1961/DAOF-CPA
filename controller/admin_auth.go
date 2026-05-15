@@ -49,6 +49,9 @@ func AdminLogout(c *fiber.Ctx) error {
 		}
 		var admin database.User
 		if err := database.DB.Where("token = ? AND role = ?", token, "admin").First(&admin).Error; err == nil {
+			if err := database.RevokeSessionsForUser(admin.ID); err != nil {
+				log.Printf("[ADMIN-LOGOUT] revoke all sessions failed admin=%d: %v", admin.ID, err)
+			}
 			newToken := utils.GenerateRandomToken("sk-daof-root")
 			if err := database.DB.Model(&admin).Update("token", newToken).Error; err != nil {
 				log.Printf("[ADMIN-LOGOUT] rotate token failed admin=%d: %v", admin.ID, err)
@@ -146,28 +149,29 @@ type GodSetupRequest struct {
 // GodSetup 用于重设管理员凭证。
 //
 // 安全模型：
-//   - 首次安装态（用户名为 "root" 且密码为默认 "123456"）：允许无 OldPassword 直接 setup，
-//     用于初始引导。前端 setupMode 会走这条路径。
-//   - 已 setup 态：必须提供 OldPassword 并通过校验，否则任何外网/本机调用者都能接管账号。
-//     此前的实现没有这层校验，是定时炸弹级漏洞。
+//   - 仅首次安装态（唯一 active admin 为 root 且仍使用默认密码）允许调用。
+//   - 已 setup 态一律拒绝；后续改凭证走 UpdateAdminCredentials 的已登录 admin 路径。
 func GodSetup(c *fiber.Ctx) error {
 	var req GodSetupRequest
 	if err := c.BodyParser(&req); err != nil {
 		return c.Status(400).JSON(fiber.Map{"success": false})
 	}
+	if !isInitialSetupAllowed() {
+		return c.Status(403).JSON(fiber.Map{
+			"success":      false,
+			"message_code": "ERR_SETUP_NOT_ALLOWED",
+		})
+	}
 
 	var admin database.User
-	result := database.DB.Where("username = ? AND role = ?", req.CurrentUsername, "admin").First(&admin)
+	result := database.DB.Where("username = ? AND role = ? AND status = ?", req.CurrentUsername, "admin", 1).First(&admin)
 	if result.Error != nil {
 		return c.Status(401).JSON(fiber.Map{"success": false, "message": "权限异常", "message_code": "ERR_PERMISSION_DENIED"})
 	}
 
-	// 仅在"首次安装态"才允许免旧密码 setup。已配置过的实例必须验证旧密码。
 	isInitialSetup := admin.Username == "root" && utils.CheckHash("123456", admin.PasswordHash)
 	if !isInitialSetup {
-		if !utils.CheckHash(req.OldPassword, admin.PasswordHash) {
-			return c.Status(401).JSON(fiber.Map{"success": false, "message": "旧凭证校验失败", "message_code": "ERR_OLD_PASSWORD_INVALID"})
-		}
+		return c.Status(403).JSON(fiber.Map{"success": false, "message_code": "ERR_SETUP_NOT_ALLOWED"})
 	}
 
 	// 强制要求修改，且不能再使用 root 或者空密码
@@ -199,6 +203,31 @@ func GodSetup(c *fiber.Ctx) error {
 		"message":      "协议刷新成功，全站解除锁定。",
 		"message_code": "SUCCESS_SYSTEM_UNLOCKED",
 	})
+}
+
+func isInitialSetupAllowed() bool {
+	if database.DB == nil {
+		return false
+	}
+	var activeAdminCount int64
+	if err := database.DB.Model(&database.User{}).
+		Where("role = ? AND status = ? AND deleted_at IS NULL", "admin", 1).
+		Count(&activeAdminCount).Error; err != nil {
+		log.Printf("[ADMIN-SETUP] active admin count failed: %v", err)
+		return false
+	}
+	if activeAdminCount == 0 {
+		return true
+	}
+	if activeAdminCount != 1 {
+		return false
+	}
+	var admin database.User
+	if err := database.DB.Where("role = ? AND status = ?", "admin", 1).First(&admin).Error; err != nil {
+		log.Printf("[ADMIN-SETUP] initial admin lookup failed: %v", err)
+		return false
+	}
+	return admin.Username == "root" && utils.CheckHash("123456", admin.PasswordHash)
 }
 
 type AdminCredentialsPayload struct {

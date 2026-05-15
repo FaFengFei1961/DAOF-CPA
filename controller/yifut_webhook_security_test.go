@@ -73,23 +73,19 @@ func TestCheckYifutNotifyIPAllowed_CIDRMatch(t *testing.T) {
 	})
 }
 
-// TestCheckYifutNotifyIPAllowed_BadCIDRConfigSkipsButPlainIPMatches admin 配错时跳过错误 entry，
-// 但裸 IP 字符串作为 fallback 匹配（防御性）
-func TestCheckYifutNotifyIPAllowed_BadCIDRConfigSkipsButPlainIPMatches(t *testing.T) {
+// TestValidateYifutCIDRConfig_RejectsInvalid admin 配错时预校验失败，运行时不再接受裸 IP fallback。
+func TestValidateYifutCIDRConfig_RejectsInvalid(t *testing.T) {
 	withSysConfigOverride(t, map[string]string{
 		"yifut_notify_allowed_cidrs": "not_a_cidr,1.2.3.4,10.0.0.0/24",
 	}, func() {
-		// 裸 IP 1.2.3.4 fallback 匹配
-		if !checkYifutNotifyIPAllowed("1.2.3.4") {
-			t.Errorf("plain IP 1.2.3.4 in config should still match as fallback")
+		if err := ValidateYifutNotifyCIDRConfig(); err == nil {
+			t.Fatal("invalid CIDR config should be rejected")
 		}
-		// CIDR 仍生效
-		if !checkYifutNotifyIPAllowed("10.0.0.99") {
-			t.Errorf("10.0.0.99 should be allowed (in valid CIDR after bad entry)")
+		if checkYifutNotifyIPAllowed("1.2.3.4") {
+			t.Errorf("plain IP fallback must not be accepted")
 		}
-		// 不匹配的拒绝
-		if checkYifutNotifyIPAllowed("8.8.8.8") {
-			t.Errorf("8.8.8.8 should be rejected")
+		if checkYifutNotifyIPAllowed("10.0.0.99") {
+			t.Errorf("invalid config should fail closed at runtime")
 		}
 	})
 }

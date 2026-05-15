@@ -51,18 +51,34 @@ func setupOAuthControllerTestDB(t *testing.T) {
 	if err != nil {
 		t.Fatalf("open sqlite: %v", err)
 	}
-	if err := database.DB.AutoMigrate(&database.User{}, &database.UserSession{}, &database.OperationLog{}); err != nil {
+	if err := database.DB.AutoMigrate(
+		&database.User{},
+		&database.UserSession{},
+		&database.OperationLog{},
+		&database.Channel{},
+		&database.ChannelModel{},
+		&database.SysConfig{},
+		&database.AccessToken{},
+	); err != nil {
 		t.Fatalf("migrate: %v", err)
 	}
 	database.DB.Exec("DELETE FROM operation_logs")
 	database.DB.Exec("DELETE FROM user_sessions")
 	database.DB.Exec("DELETE FROM users")
 	resetOAuthStatesForTest()
+	resetTmpTokenConsumedForTest()
 }
 
 func resetOAuthStatesForTest() {
 	oauthStateStore.Range(func(key, value any) bool {
 		oauthStateStore.Delete(key)
+		return true
+	})
+}
+
+func resetTmpTokenConsumedForTest() {
+	tmpTokenConsumedStore.Range(func(key, value any) bool {
+		tmpTokenConsumedStore.Delete(key)
 		return true
 	})
 }
@@ -326,6 +342,63 @@ func TestCompleteProfile_UsesBalanceConsumeDefaultLimitMicroUSD(t *testing.T) {
 	}
 	if user.BalanceConsumeWindowSeconds != 86400 {
 		t.Fatalf("BalanceConsumeWindowSeconds=%d, want 86400", user.BalanceConsumeWindowSeconds)
+	}
+}
+
+func TestTmpTokenSingleConsume_RejectsReplay(t *testing.T) {
+	setupOAuthControllerTestDB(t)
+	proxy.SysConfigMutex.Lock()
+	old := proxy.SysConfigCache
+	proxy.SysConfigCache = map[string]string{"signup_bonus": "0"}
+	proxy.SysConfigMutex.Unlock()
+	t.Cleanup(func() {
+		proxy.SysConfigMutex.Lock()
+		proxy.SysConfigCache = old
+		proxy.SysConfigMutex.Unlock()
+	})
+
+	tmpToken, err := utils.Encrypt(fmt.Sprintf("clean|gh-single-consume|octo||%d", time.Now().Unix()))
+	if err != nil {
+		t.Fatalf("encrypt tmp token: %v", err)
+	}
+
+	app := fiber.New(fiber.Config{DisableStartupMessage: true})
+	app.Post("/complete-profile", CompleteProfile)
+
+	body, _ := json.Marshal(map[string]string{
+		"tmp_token": tmpToken,
+		"username":  "single_consume",
+	})
+	req := httptest.NewRequest(http.MethodPost, "/complete-profile", bytes.NewReader(body))
+	req.Header.Set("Content-Type", "application/json")
+	resp, err := app.Test(req)
+	if err != nil {
+		t.Fatalf("first request: %v", err)
+	}
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("first complete profile status=%d, want 200", resp.StatusCode)
+	}
+
+	body, _ = json.Marshal(map[string]string{
+		"tmp_token": tmpToken,
+		"username":  "single_consume_2",
+	})
+	req = httptest.NewRequest(http.MethodPost, "/complete-profile", bytes.NewReader(body))
+	req.Header.Set("Content-Type", "application/json")
+	resp, err = app.Test(req)
+	if err != nil {
+		t.Fatalf("replay request: %v", err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusForbidden {
+		t.Fatalf("replay status=%d, want 403", resp.StatusCode)
+	}
+	var got map[string]any
+	if err := json.NewDecoder(resp.Body).Decode(&got); err != nil {
+		t.Fatalf("decode replay body: %v", err)
+	}
+	if got["message_code"] != "ERR_TMP_TOKEN_ALREADY_USED" {
+		t.Fatalf("message_code=%v, want ERR_TMP_TOKEN_ALREADY_USED", got["message_code"])
 	}
 }
 

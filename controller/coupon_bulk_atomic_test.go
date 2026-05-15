@@ -222,10 +222,10 @@ func TestBulkGrantCoupon_RejectInvalidParams(t *testing.T) {
 	code, resp = doJSON(t, app, "POST", "/admin/users/bulk-grant-coupon", map[string]any{
 		"user_ids":    []uint{u1.ID},
 		"template_id": tpl.ID,
-		"quantity":    9999,
+		"quantity":    11,
 	})
 	if code != 400 || resp["message_code"] != "ERR_QUANTITY_TOO_LARGE" {
-		t.Errorf("qty=9999 should 400/ERR_QUANTITY_TOO_LARGE, got %d/%v", code, resp["message_code"])
+		t.Errorf("qty=11 should 400/ERR_QUANTITY_TOO_LARGE, got %d/%v", code, resp["message_code"])
 	}
 
 	// reason 超长
@@ -238,5 +238,25 @@ func TestBulkGrantCoupon_RejectInvalidParams(t *testing.T) {
 	})
 	if code != 400 || resp["message_code"] != "ERR_REASON_TOO_LONG" {
 		t.Errorf("reason too long should 400/ERR_REASON_TOO_LONG, got %d/%v", code, resp["message_code"])
+	}
+}
+
+func TestBulkGrantCoupon_LimitsUserCount(t *testing.T) {
+	setupSubTestDB(t)
+	admin := seedAdminUser(t)
+	app := newBulkGrantTestApp(admin)
+	tpl := seedCouponTemplate(t)
+
+	userIDs := make([]uint, 51)
+	for i := range userIDs {
+		userIDs[i] = uint(i + 1)
+	}
+	code, resp := doJSON(t, app, "POST", "/admin/users/bulk-grant-coupon", map[string]any{
+		"user_ids":    userIDs,
+		"template_id": tpl.ID,
+		"quantity":    1,
+	})
+	if code != 400 || resp["message_code"] != "ERR_BULK_LIMIT" {
+		t.Fatalf("51 users got %d/%v, want 400/ERR_BULK_LIMIT", code, resp["message_code"])
 	}
 }

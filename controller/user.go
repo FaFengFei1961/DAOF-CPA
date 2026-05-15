@@ -4,6 +4,7 @@ import (
 	"daof-ai-hub/database"
 	"daof-ai-hub/proxy"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"log"
 	"math"
@@ -23,6 +24,11 @@ import (
 const MaxAdminQuotaUSD = 1_000_000_000
 const MaxAdminQuotaMicroUSD int64 = MaxAdminQuotaUSD * database.MicroPerUSD
 const bulkQuotaPreviewUserLimit = 500
+
+var (
+	errLastActiveAdmin = errors.New("last active admin cannot be disabled or deleted")
+	errAdminStateRaced = errors.New("admin state changed concurrently")
+)
 
 // validateAdminQuotaMicroInput 校验 admin 输入的 quota / amount micro_usd 值。
 //
@@ -141,15 +147,6 @@ func UpdateUser(c *fiber.Ctx) error {
 	}
 	oldStatus := user.Status
 
-	// status: 封禁
-	if req.Status != 1 && user.Role == "admin" {
-		var adminCount int64
-		database.DB.Model(&database.User{}).Where("role = ? AND status = 1", "admin").Count(&adminCount)
-		if adminCount <= 1 {
-			return c.Status(403).JSON(fiber.Map{"success": false, "message": "操作遭拒：无法封禁唯一的系统管理员", "message_code": "ERR_SUICIDE_PROTECTION_SEAL"})
-		}
-	}
-
 	var changes []map[string]interface{}
 	if user.Username != req.Username {
 		changes = append(changes, map[string]interface{}{"type": "USERNAME", "target": req.Username, "old": user.Username, "new": req.Username})
@@ -196,16 +193,33 @@ func UpdateUser(c *fiber.Ctx) error {
 			return fmt.Errorf("lock user: %w", err)
 		}
 		var before database.User
-		if err := tx.Select("id, quota").First(&before, user.ID).Error; err != nil {
+		if err := tx.Select("id, quota, role, status").First(&before, user.ID).Error; err != nil {
 			return fmt.Errorf("read before: %w", err)
 		}
-		if err := tx.Model(&user).Updates(map[string]interface{}{
+		updateQ := tx.Model(&database.User{}).Where("id = ?", user.ID)
+		if before.Role == "admin" && before.Status == 1 && req.Status != 1 {
+			var activeAdminCount int64
+			if err := tx.Model(&database.User{}).
+				Where("role = ? AND status = ? AND deleted_at IS NULL", "admin", 1).
+				Count(&activeAdminCount).Error; err != nil {
+				return fmt.Errorf("count active admins: %w", err)
+			}
+			if activeAdminCount <= 1 {
+				return errLastActiveAdmin
+			}
+			updateQ = updateQ.Where("role = ? AND status = ?", "admin", 1)
+		}
+		res := updateQ.Updates(map[string]interface{}{
 			"username":   req.Username,
 			"quota":      reqQuotaMicro,
 			"status":     req.Status,
 			"ban_reason": req.BanReason,
-		}).Error; err != nil {
-			return fmt.Errorf("update user: %w", err)
+		})
+		if res.Error != nil {
+			return fmt.Errorf("update user: %w", res.Error)
+		}
+		if before.Role == "admin" && before.Status == 1 && req.Status != 1 && res.RowsAffected == 0 {
+			return errAdminStateRaced
 		}
 		// fix Major（codex 第十五轮）：审计入事务，并填真实 admin id（旧实现 operatorID=0 + tx 外）
 		// 这把"用户更新 + 账单 + 审计"绑成同一原子单元；任一失败一起回滚，admin 必可追溯。
@@ -234,6 +248,12 @@ func UpdateUser(c *fiber.Ctx) error {
 	})
 	if txErr != nil {
 		log.Printf("[USER-UPDATE] tx failed user=%d: %v", user.ID, txErr)
+		if errors.Is(txErr, errLastActiveAdmin) {
+			return c.Status(403).JSON(fiber.Map{"success": false, "message": "操作遭拒：无法封禁唯一的系统管理员", "message_code": "ERR_SUICIDE_PROTECTION_SEAL"})
+		}
+		if errors.Is(txErr, errAdminStateRaced) {
+			return c.Status(409).JSON(fiber.Map{"success": false, "message": "管理员状态已变化，请刷新后重试", "message_code": "ERR_UPDATE_CONFLICT"})
+		}
 		return c.Status(500).JSON(fiber.Map{"success": false, "message": "数据更新失败，存在冲突", "message_code": "ERR_UPDATE_CONFLICT"})
 	}
 	if oldStatus == 1 && req.Status != 1 {
@@ -664,14 +684,6 @@ func DeleteUser(c *fiber.Ctx) error {
 		return c.Status(404).JSON(fiber.Map{"success": false, "message": "未找到相关记录或已被删除", "message_code": "ERR_NOT_FOUND"})
 	}
 
-	if user.Role == "admin" {
-		var adminCount int64
-		database.DB.Model(&database.User{}).Where("role = ?", "admin").Count(&adminCount)
-		if adminCount <= 1 {
-			return c.Status(403).JSON(fiber.Map{"success": false, "message": "操作拦截：不可删除系统唯一的管理员", "message_code": "ERR_ADMIN_REQUIRED"})
-		}
-	}
-
 	// fix CRITICAL C-B2（codex 第二十一轮）：原实现 tx.Unscoped().Delete(&user) 物理删 user 行
 	// + 同时物理删 BillingEntry——破坏了账单事实表的 append-only 不变量（gorm:"<-:create"
 	// 只防 Update，不防 Delete）。
@@ -689,13 +701,33 @@ func DeleteUser(c *fiber.Ctx) error {
 	delData := []map[string]interface{}{{"type": "DELETE", "target": user.Username}}
 	delBytes, _ := json.Marshal(delData)
 	if err := database.DB.Transaction(func(tx *gorm.DB) error {
+		var current database.User
+		if err := tx.Select("id, role, status").First(&current, user.ID).Error; err != nil {
+			return fmt.Errorf("read current user: %w", err)
+		}
+		conditionalDeleteActiveAdmin := current.Role == "admin" && current.Status == 1
+		if conditionalDeleteActiveAdmin {
+			var activeAdminCount int64
+			if err := tx.Model(&database.User{}).
+				Where("role = ? AND status = ? AND deleted_at IS NULL", "admin", 1).
+				Count(&activeAdminCount).Error; err != nil {
+				return fmt.Errorf("count active admins: %w", err)
+			}
+			if activeAdminCount <= 1 {
+				return errLastActiveAdmin
+			}
+		}
 		if err := purgeUserDependents(tx, user.ID); err != nil {
 			return err
 		}
 		// PII 匿名化：username 加随机后缀防 unique 冲突（同名再注册时）；
 		// phone/github_id 设空，passwd/token 清零
 		anonName := fmt.Sprintf("deleted_%d_%d", user.ID, time.Now().UnixMilli())
-		if err := tx.Model(&database.User{}).Where("id = ?", user.ID).Updates(map[string]any{
+		updateQ := tx.Model(&database.User{}).Where("id = ?", user.ID)
+		if conditionalDeleteActiveAdmin {
+			updateQ = updateQ.Where("role = ? AND status = ?", "admin", 1)
+		}
+		res := updateQ.Updates(map[string]any{
 			"username":      anonName,
 			"phone":         nil,
 			"github_id":     nil,
@@ -703,8 +735,12 @@ func DeleteUser(c *fiber.Ctx) error {
 			"token":         "",
 			"status":        2, // banned 状态防重新激活
 			"ban_reason":    "deleted by admin",
-		}).Error; err != nil {
-			return fmt.Errorf("anonymize user: %w", err)
+		})
+		if res.Error != nil {
+			return fmt.Errorf("anonymize user: %w", res.Error)
+		}
+		if conditionalDeleteActiveAdmin && res.RowsAffected == 0 {
+			return errAdminStateRaced
 		}
 		// GORM 软删除：DeletedAt 字段被设置，常规 Find / First 查询自动过滤
 		if err := tx.Delete(&user).Error; err != nil {
@@ -713,6 +749,12 @@ func DeleteUser(c *fiber.Ctx) error {
 		// fix Major（codex 第十五轮）：审计入事务 + 真实 admin id
 		return LogOperationByTx(tx, adminID, user.ID, "admin", "DELETE", c.IP(), string(delBytes))
 	}); err != nil {
+		if errors.Is(err, errLastActiveAdmin) {
+			return c.Status(403).JSON(fiber.Map{"success": false, "message": "操作拦截：不可删除系统唯一的管理员", "message_code": "ERR_ADMIN_REQUIRED"})
+		}
+		if errors.Is(err, errAdminStateRaced) {
+			return c.Status(409).JSON(fiber.Map{"success": false, "message": "管理员状态已变化，请刷新后重试", "message_code": "ERR_UPDATE_CONFLICT"})
+		}
 		return c.Status(500).JSON(fiber.Map{"success": false, "message": "删除失败", "message_code": "ERR_DB_TRANSACTION"})
 	}
 

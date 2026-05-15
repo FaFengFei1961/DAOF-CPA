@@ -151,13 +151,19 @@ func InitDB() {
 		ON api_log_cost_estimates(computed_at)`)
 	mustExecIndex("idx_upusage_match_status", `CREATE INDEX IF NOT EXISTS idx_upusage_match_status
 		ON upstream_usage_records(match_status, timestamp)`)
+	mustExecIndex("idx_upusage_created_at", `CREATE INDEX IF NOT EXISTS idx_upusage_created_at
+		ON upstream_usage_records(created_at ASC)`)
 	// fix Major M7（claude perf 第十五轮）：cron 清理按 created_at < cutoff 扫描，
 	// 没有该索引会全表扫；百万行级别下 100ms+ 阻塞写事务。
 	mustExecIndex("idx_apilog_created_at", `CREATE INDEX IF NOT EXISTS idx_apilog_created_at
 		ON api_logs(created_at ASC)`)
 	// 高频查询：Notification 未读列表（部分索引）
+	if err := DB.Exec(`DROP INDEX IF EXISTS idx_notif_user_unread`).Error; err != nil {
+		log.Fatalf("索引重建失败 idx_notif_user_unread(drop): %v", err)
+	}
 	mustExecIndex("idx_notif_user_unread", `CREATE INDEX IF NOT EXISTS idx_notif_user_unread
-		ON notifications(user_id, created_at DESC) WHERE read_at IS NULL`)
+		ON notifications(user_id, created_at DESC)
+		WHERE read_at IS NULL AND revoked_at IS NULL`)
 	// 高频查询：SubscriptionUsage 已有 idx_sub_plan_bucket（GORM uniqueIndex），无需补
 	// 高频查询：admin broadcast 历史列表按状态 + 时间倒序
 	mustExecIndex("idx_bcast_status_created", `CREATE INDEX IF NOT EXISTS idx_bcast_status_created
@@ -202,6 +208,13 @@ func InitDB() {
 	// (related_type, related_id)：从原始记录反查账单条目
 	mustExecIndex("idx_billing_related", `CREATE INDEX IF NOT EXISTS idx_billing_related
 		ON billing_entries(related_type, related_id)`)
+	mustExecIndex("idx_billing_related_unique", `CREATE UNIQUE INDEX IF NOT EXISTS idx_billing_related_unique
+		ON billing_entries(related_type, related_id, entry_type)
+		WHERE related_id > 0`)
+	mustExecIndex("idx_billing_summary", `CREATE INDEX IF NOT EXISTS idx_billing_summary
+		ON billing_entries(user_id, entry_type, occurred_at, amount_usd)`)
+	mustExecIndex("idx_session_user_revoked", `CREATE INDEX IF NOT EXISTS idx_session_user_revoked
+		ON user_sessions(user_id) WHERE revoked_at IS NULL`)
 	// fix MEDIUM M19-5（codex 第十九轮）：注册路径 registerMu 临界区里要做
 	// COUNT(*) WHERE role='user' 检查注册总数上限——表大了之后 SQLite/PG 都会做全表扫描，
 	// 单次几十毫秒。新部署 schema 标签生成索引；老库的"已存在表无索引"用 IF NOT EXISTS 兜底。

@@ -529,8 +529,7 @@ type bulkGrantUserResult struct {
 // fix CRITICAL Sprint3-M5：旧实现"每用户独立事务"违反 1000 张券要么全发要么全废
 // 的硬约束——admin 中途看到失败时已无法回滚前 N-1 个成功的发券。
 //
-// 限制：max 500 users / max 100 quantity → 单 batch 上限 50,000 券。
-// SQLite 单写者 + INSERT 速率约 5k/s，最坏 10s 内完成事务；建议监控 tx 持有时间。
+// 限制：max 50 users / max 10 quantity → 单 batch 上限 500 券。
 //
 // 锁顺序：user_id 升序加锁（与其他用户级事务路径一致），避免 deadlock。
 func AdminBulkGrantCoupon(c *fiber.Ctx) error {
@@ -541,10 +540,10 @@ func AdminBulkGrantCoupon(c *fiber.Ctx) error {
 	if len(p.UserIDs) == 0 || p.TemplateID == 0 {
 		return c.Status(400).JSON(fiber.Map{"success": false, "message_code": "ERR_REQUIRED"})
 	}
-	if len(p.UserIDs) > 500 {
+	if len(p.UserIDs) > 50 {
 		return c.Status(400).JSON(fiber.Map{
 			"success":      false,
-			"message":      "批量发券最多支持 500 个用户",
+			"message":      "批量发券最多支持 50 个用户",
 			"message_code": "ERR_BULK_LIMIT",
 		})
 	}
@@ -555,9 +554,9 @@ func AdminBulkGrantCoupon(c *fiber.Ctx) error {
 		}
 		qty = *p.Quantity
 	}
-	if qty > 100 {
+	if qty > 10 {
 		return c.Status(400).JSON(fiber.Map{"success": false, "message_code": "ERR_QUANTITY_TOO_LARGE",
-			"message": "单次最多发放 100 张同款券"})
+			"message": "单次最多发放 10 张同款券"})
 	}
 	reason := strings.TrimSpace(p.Reason)
 	if runeLen := len([]rune(reason)); runeLen > grantReasonMaxLen {
@@ -605,6 +604,7 @@ func AdminBulkGrantCoupon(c *fiber.Ctx) error {
 	var failedUserID uint   // 触发回滚的 user_id（若有）
 	var failedReason string // 触发回滚的标准化原因
 
+	txStartedAt := time.Now()
 	txErr := database.DB.Transaction(func(tx *gorm.DB) error {
 		// 锁 template 一次（整 batch 共享）
 		var freshTpl database.CouponTemplate
@@ -662,6 +662,7 @@ func AdminBulkGrantCoupon(c *fiber.Ctx) error {
 		}
 		return nil
 	})
+	txDuration := time.Since(txStartedAt)
 
 	if txErr != nil {
 		switch {
@@ -672,8 +673,8 @@ func AdminBulkGrantCoupon(c *fiber.Ctx) error {
 		default:
 			failedReason = truncateLog(txErr.Error(), 300)
 		}
-		log.Printf("[COUPON-BULK-GRANT] ABORTED admin=%d tpl=%d users=%d failed_user=%d reason=%s — full rollback",
-			operatorID, tpl.ID, len(uniqueIDs), failedUserID, failedReason)
+		log.Printf("[COUPON-BULK-GRANT] ABORTED admin=%d tpl=%d users=%d failed_user=%d duration=%s reason=%s — full rollback",
+			operatorID, tpl.ID, len(uniqueIDs), failedUserID, txDuration, failedReason)
 		return c.Status(409).JSON(fiber.Map{
 			"success":        false,
 			"message":        "批量发券失败：" + failedReason + "（整批已回滚，未发出任何券）",
@@ -690,8 +691,8 @@ func AdminBulkGrantCoupon(c *fiber.Ctx) error {
 	}
 	totalGranted := len(uniqueIDs) * qty
 
-	log.Printf("[COUPON-BULK-GRANT] OK admin=%d tpl=%d users=%d granted=%d qty/user=%d (single tx)",
-		operatorID, tpl.ID, len(uniqueIDs), totalGranted, qty)
+	log.Printf("[COUPON-BULK-GRANT] OK admin=%d tpl=%d users=%d granted=%d qty/user=%d duration=%s (single tx)",
+		operatorID, tpl.ID, len(uniqueIDs), totalGranted, qty, txDuration)
 
 	return c.JSON(fiber.Map{
 		"success":      true,

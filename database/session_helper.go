@@ -4,12 +4,14 @@ import (
 	"crypto/rand"
 	"encoding/hex"
 	"fmt"
+	"log"
 	"strings"
 	"sync"
 	"time"
 )
 
 const UserSessionTTL = 7 * 24 * time.Hour
+const lastUsedAtRefreshInterval = 5 * time.Minute
 
 var userSessionSchemaMu sync.Mutex
 
@@ -127,9 +129,15 @@ func LookupUserBySession(sessionID string) (*User, bool) {
 	if err := DB.First(&user, session.UserID).Error; err != nil {
 		return nil, false
 	}
-	if err := DB.Model(&UserSession{}).Where("id = ?", session.ID).
-		Update("last_used_at", now).Error; err != nil {
-		return nil, false
+	if now.Sub(session.LastUsedAt) > lastUsedAtRefreshInterval {
+		db := DB
+		go func(sessionID string) {
+			if err := db.Model(&UserSession{}).
+				Where("session_id = ? AND revoked_at IS NULL", sessionID).
+				Update("last_used_at", time.Now()).Error; err != nil {
+				log.Printf("[SESSION] last_used_at refresh failed: %v", err)
+			}
+		}(sessionID)
 	}
 	return &user, true
 }

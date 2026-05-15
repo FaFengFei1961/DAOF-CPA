@@ -51,6 +51,42 @@ var (
 
 // tmp_token TTL：超过此时长视为过期
 const tmpTokenTTL = 15 * time.Minute
+const tmpTokenConsumeTTL = tmpTokenTTL
+
+var (
+	tmpTokenConsumedStore sync.Map // key: jti (hash of tmp_token), value: consumedAtNano
+	tmpTokenJanitorOnce   sync.Once
+)
+
+func tmpTokenJTI(tmpToken string) string {
+	sum := sha256.Sum256([]byte(tmpToken))
+	return hex.EncodeToString(sum[:])
+}
+
+func markTmpTokenConsumed(tmpToken string) bool {
+	startTmpTokenJanitor()
+	jti := tmpTokenJTI(tmpToken)
+	_, loaded := tmpTokenConsumedStore.LoadOrStore(jti, time.Now().UnixNano())
+	return !loaded
+}
+
+func startTmpTokenJanitor() {
+	tmpTokenJanitorOnce.Do(func() {
+		go func() {
+			ticker := time.NewTicker(5 * time.Minute)
+			defer ticker.Stop()
+			for range ticker.C {
+				cutoff := time.Now().Add(-tmpTokenConsumeTTL).UnixNano()
+				tmpTokenConsumedStore.Range(func(key, value any) bool {
+					if v, ok := value.(int64); ok && v < cutoff {
+						tmpTokenConsumedStore.Delete(key)
+					}
+					return true
+				})
+			}
+		}()
+	})
+}
 
 // parseTmpToken 解析并校验 OAuth 流程中的 tmp_token
 // payload 形如：(clean|sms)|ghID|ghName|ref|timestamp
@@ -723,6 +759,12 @@ func CompleteRisk(c *fiber.Ctx) error {
 	if err != nil {
 		return c.Status(403).JSON(fiber.Map{"success": false, "message": err.Error(), "message_code": "ERR_RISK_TICKET_INVALID"})
 	}
+	if !markTmpTokenConsumed(req.TmpToken) {
+		return c.Status(403).JSON(fiber.Map{
+			"success":      false,
+			"message_code": "ERR_TMP_TOKEN_ALREADY_USED",
+		})
+	}
 	if tokenType != "sms" {
 		// 防止 clean| 类型 token 被提交到 sms 路径绕过短信验证
 		return c.Status(403).JSON(fiber.Map{"success": false, "message": "票据类型错误", "message_code": "ERR_RISK_TICKET_TYPE"})
@@ -875,6 +917,12 @@ func CompleteProfile(c *fiber.Ctx) error {
 	tokenType, refUser, decryptedStr, err := parseTmpToken(req.TmpToken)
 	if err != nil {
 		return c.Status(403).JSON(fiber.Map{"success": false, "message": err.Error(), "message_code": "ERR_RISK_TICKET_INVALID"})
+	}
+	if !markTmpTokenConsumed(req.TmpToken) {
+		return c.Status(403).JSON(fiber.Map{
+			"success":      false,
+			"message_code": "ERR_TMP_TOKEN_ALREADY_USED",
+		})
 	}
 	if tokenType != "clean" {
 		return c.Status(403).JSON(fiber.Map{"success": false, "message": "票据类型错误", "message_code": "ERR_INVALID_PASS_STATE"})

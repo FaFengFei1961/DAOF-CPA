@@ -1,6 +1,7 @@
 package controller
 
 import (
+	"sync"
 	"testing"
 
 	"daof-ai-hub/database"
@@ -32,9 +33,17 @@ func setupUserControllerTestDB(t *testing.T) {
 		&database.Channel{},
 		&database.ChannelModel{},
 		&database.SysConfig{},
+		&database.ApiLog{},
 		&database.OperationLog{},
 		&database.BillingEntry{},
 		&database.Notification{},
+		&database.NotificationBroadcastTarget{},
+		&database.UserSubscription{},
+		&database.SubscriptionUsage{},
+		&database.TopupOrder{},
+		&database.NotificationPreference{},
+		&database.Ticket{},
+		&database.TicketMessage{},
 	); err != nil {
 		t.Fatalf("migrate: %v", err)
 	}
@@ -48,6 +57,7 @@ func setupUserControllerTestDB(t *testing.T) {
 func newUpdateUserTestApp() *fiber.App {
 	app := fiber.New(fiber.Config{DisableStartupMessage: true})
 	app.Put("/admin/users/:id", UpdateUser)
+	app.Delete("/admin/users/:id", DeleteUser)
 	return app
 }
 
@@ -121,5 +131,107 @@ func TestUpdateUser_BanRevokesSessions(t *testing.T) {
 	}
 	if got, ok := database.LookupUserBySession(sessionID); ok || got != nil {
 		t.Fatalf("revoked session should not resolve, got user=%v ok=%v", got, ok)
+	}
+}
+
+func seedAdminForUserMutation(t *testing.T, username string) database.User {
+	t.Helper()
+	u := database.User{
+		Username: username,
+		Role:     "admin",
+		Token:    "sk-" + username,
+		Status:   1,
+	}
+	if err := database.DB.Create(&u).Error; err != nil {
+		t.Fatalf("seed admin %s: %v", username, err)
+	}
+	return u
+}
+
+func TestLastActiveAdmin_BlocksBan(t *testing.T) {
+	setupUserControllerTestDB(t)
+	app := newUpdateUserTestApp()
+	admin := seedAdminForUserMutation(t, "admin_ban_last")
+
+	code, resp := doJSON(t, app, "PUT", "/admin/users/"+itoaUint(admin.ID), map[string]any{
+		"username":        admin.Username,
+		"quota_micro_usd": admin.Quota,
+		"status":          2,
+		"ban_reason":      "policy",
+	})
+	if code != 403 || resp["message_code"] != "ERR_SUICIDE_PROTECTION_SEAL" {
+		t.Fatalf("ban last admin got %d/%v, want 403/ERR_SUICIDE_PROTECTION_SEAL", code, resp["message_code"])
+	}
+	var fresh database.User
+	if err := database.DB.First(&fresh, admin.ID).Error; err != nil {
+		t.Fatalf("reload admin: %v", err)
+	}
+	if fresh.Status != 1 {
+		t.Fatalf("admin status=%d, want 1", fresh.Status)
+	}
+}
+
+func TestLastActiveAdmin_BlocksDelete(t *testing.T) {
+	setupUserControllerTestDB(t)
+	app := newUpdateUserTestApp()
+	admin := seedAdminForUserMutation(t, "admin_delete_last")
+
+	code, resp := doJSON(t, app, "DELETE", "/admin/users/"+itoaUint(admin.ID), nil)
+	if code != 403 || resp["message_code"] != "ERR_ADMIN_REQUIRED" {
+		t.Fatalf("delete last admin got %d/%v, want 403/ERR_ADMIN_REQUIRED", code, resp["message_code"])
+	}
+	var count int64
+	if err := database.DB.Model(&database.User{}).
+		Where("role = ? AND status = ?", "admin", 1).
+		Count(&count).Error; err != nil {
+		t.Fatalf("count active admins: %v", err)
+	}
+	if count != 1 {
+		t.Fatalf("active admin count=%d, want 1", count)
+	}
+}
+
+func TestLastActiveAdmin_ConcurrentSafe(t *testing.T) {
+	setupUserControllerTestDB(t)
+	app := newUpdateUserTestApp()
+	admin1 := seedAdminForUserMutation(t, "admin_concurrent_1")
+	admin2 := seedAdminForUserMutation(t, "admin_concurrent_2")
+
+	var wg sync.WaitGroup
+	results := make(chan int, 2)
+	for _, admin := range []database.User{admin1, admin2} {
+		admin := admin
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			code, _ := doJSON(t, app, "PUT", "/admin/users/"+itoaUint(admin.ID), map[string]any{
+				"username":        admin.Username,
+				"quota_micro_usd": admin.Quota,
+				"status":          2,
+				"ban_reason":      "policy",
+			})
+			results <- code
+		}()
+	}
+	wg.Wait()
+	close(results)
+
+	successes := 0
+	for code := range results {
+		if code == 200 {
+			successes++
+		}
+	}
+	if successes != 1 {
+		t.Fatalf("successful concurrent bans=%d, want 1", successes)
+	}
+	var active int64
+	if err := database.DB.Model(&database.User{}).
+		Where("role = ? AND status = ?", "admin", 1).
+		Count(&active).Error; err != nil {
+		t.Fatalf("count active admins: %v", err)
+	}
+	if active != 1 {
+		t.Fatalf("active admin count=%d, want 1", active)
 	}
 }

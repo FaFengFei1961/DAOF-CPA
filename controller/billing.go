@@ -99,12 +99,22 @@ func parseBillingFilters(c *fiber.Ctx, userID uint) (billingFilters, error) {
 
 // applyBillingFilters 应用过滤条件到 *gorm.DB query builder
 func applyBillingFilters(q *gorm.DB, f billingFilters) *gorm.DB {
-	q = q.Where("user_id = ?", f.UserID)
+	return applyBillingFiltersWithAlias(q, f, "")
+}
+
+func applyBillingFiltersWithAlias(q *gorm.DB, f billingFilters, alias string) *gorm.DB {
+	col := func(name string) string {
+		if alias == "" {
+			return name
+		}
+		return alias + "." + name
+	}
+	q = q.Where(col("user_id")+" = ?", f.UserID)
 	if len(f.Types) > 0 {
-		q = q.Where("entry_type IN ?", f.Types)
+		q = q.Where(col("entry_type")+" IN ?", f.Types)
 	}
 	if !f.From.IsZero() {
-		q = q.Where("occurred_at >= ?", f.From)
+		q = q.Where(col("occurred_at")+" >= ?", f.From)
 	}
 	if !f.To.IsZero() {
 		// fix Minor 第二十轮（codex）：
@@ -112,12 +122,36 @@ func applyBillingFilters(q *gorm.DB, f billingFilters) *gorm.DB {
 		//   - RFC3339 形式 → ToExclusive=false，保持 `<= to` 包含 to 时刻精确
 		// 这样既不漏 YYYY-MM-DD 当天亚秒级账单，又不破坏精确时间戳的包含语义。
 		if f.ToExclusive {
-			q = q.Where("occurred_at < ?", f.To)
+			q = q.Where(col("occurred_at")+" < ?", f.To)
 		} else {
-			q = q.Where("occurred_at <= ?", f.To)
+			q = q.Where(col("occurred_at")+" <= ?", f.To)
 		}
 	}
 	return q
+}
+
+type billingEntryWithReconcile struct {
+	database.BillingEntry
+	IsReconciled    bool   `gorm:"column:is_reconciled"`
+	ReconcileResult string `gorm:"column:reconcile_result"`
+}
+
+type adminBillingEntryDTO struct {
+	BillingEntryView
+	IsReconciled    bool   `json:"is_reconciled"`
+	ReconcileResult string `json:"reconcile_result,omitempty"`
+}
+
+func adminBillingEntryDTOsFrom(rows []billingEntryWithReconcile) []adminBillingEntryDTO {
+	out := make([]adminBillingEntryDTO, 0, len(rows))
+	for _, row := range rows {
+		out = append(out, adminBillingEntryDTO{
+			BillingEntryView: billingEntryViewFrom(row.BillingEntry),
+			IsReconciled:     row.IsReconciled,
+			ReconcileResult:  row.ReconcileResult,
+		})
+	}
+	return out
 }
 
 // ─── 用户：GET /api/billing/mine ─────────────────────────────────
@@ -157,6 +191,36 @@ func listBillingEntries(c *fiber.Ctx, userID uint, includeInternal bool) error {
 		}
 	}
 
+	if includeInternal {
+		q := applyBillingFiltersWithAlias(
+			database.DB.Table("billing_entries AS be").
+				Select("be.*, br.id IS NOT NULL AS is_reconciled, COALESCE(br.result, '') AS reconcile_result").
+				Joins("LEFT JOIN billing_reconciliations br ON br.billing_entry_id = be.id"),
+			f,
+			"be",
+		)
+		if cursor > 0 {
+			q = q.Where("be.id < ?", cursor)
+		}
+		var rows []billingEntryWithReconcile
+		if err := q.Order("be.id DESC").
+			Limit(size + 1).
+			Scan(&rows).Error; err != nil {
+			log.Printf("[BILLING-LIST] find failed user=%d: %v", userID, err)
+			return c.Status(500).JSON(fiber.Map{"success": false, "message_code": "ERR_DB_QUERY"})
+		}
+		var nextCursor int64
+		if len(rows) > size {
+			rows = rows[:size]
+			nextCursor = int64(rows[len(rows)-1].ID)
+		}
+		return c.JSON(fiber.Map{
+			"success":     true,
+			"data":        adminBillingEntryDTOsFrom(rows),
+			"next_cursor": nextCursor,
+		})
+	}
+
 	q := applyBillingFilters(database.DB.Model(&database.BillingEntry{}), f)
 	if cursor > 0 {
 		q = q.Where("id < ?", cursor)
@@ -174,14 +238,12 @@ func listBillingEntries(c *fiber.Ctx, userID uint, includeInternal bool) error {
 		rows = rows[:size]
 		nextCursor = int64(rows[len(rows)-1].ID)
 	}
-	if !includeInternal {
-		for i := range rows {
-			rows[i].UserID = 0
-			rows[i].Description = publicBillingDescription(rows[i])
-			rows[i].RelatedType = ""
-			rows[i].RelatedID = 0
-			rows[i].SourceSubscriptionID = nil
-		}
+	for i := range rows {
+		rows[i].UserID = 0
+		rows[i].Description = publicBillingDescription(rows[i])
+		rows[i].RelatedType = ""
+		rows[i].RelatedID = 0
+		rows[i].SourceSubscriptionID = nil
 	}
 
 	return c.JSON(fiber.Map{

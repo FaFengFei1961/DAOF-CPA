@@ -25,6 +25,12 @@ func newBillingTestApp(user *database.User) *fiber.App {
 	return app
 }
 
+func newAdminBillingTestApp() *fiber.App {
+	app := fiber.New(fiber.Config{DisableStartupMessage: true})
+	app.Get("/admin/users/:id/billing", AdminListUserBilling)
+	return app
+}
+
 func seedBillingEntries(t *testing.T, userID uint, n int) []database.BillingEntry {
 	t.Helper()
 	rows := make([]database.BillingEntry, 0, n)
@@ -188,5 +194,40 @@ func TestMyBillingExport_StreamsLargeDataset(t *testing.T) {
 	}
 	if got := records[0][0]; got != "发生时间" {
 		t.Fatalf("csv header[0]=%q, want 发生时间", got)
+	}
+}
+
+func TestAdminListBilling_IncludesIsReconciled(t *testing.T) {
+	setupSubTestDB(t)
+	user := seedTestUser(t, 100)
+	rows := seedBillingEntries(t, user.ID, 2)
+	if err := database.DB.Create(&database.BillingReconciliation{
+		BillingEntryID: rows[1].ID,
+		Result:         database.ReconcileResultAbsorbed,
+		OperatorID:     1,
+		OperatorRole:   "admin",
+		Note:           "absorbed in test",
+	}).Error; err != nil {
+		t.Fatalf("create reconciliation: %v", err)
+	}
+
+	app := newAdminBillingTestApp()
+	code, resp := doJSON(t, app, "GET", "/admin/users/"+itoaUint(user.ID)+"/billing?page_size=10", nil)
+	if code != 200 {
+		t.Fatalf("expected 200 got %d body=%v", code, resp)
+	}
+	data, ok := resp["data"].([]any)
+	if !ok || len(data) == 0 {
+		t.Fatalf("response data=%#v, want non-empty []any", resp["data"])
+	}
+	first, ok := data[0].(map[string]any)
+	if !ok {
+		t.Fatalf("first row type=%T", data[0])
+	}
+	if first["is_reconciled"] != true {
+		t.Fatalf("is_reconciled=%v, want true in newest reconciled row", first["is_reconciled"])
+	}
+	if first["reconcile_result"] != database.ReconcileResultAbsorbed {
+		t.Fatalf("reconcile_result=%v, want %s", first["reconcile_result"], database.ReconcileResultAbsorbed)
 	}
 }

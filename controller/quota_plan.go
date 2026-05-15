@@ -6,6 +6,7 @@ package controller
 import (
 	"encoding/json"
 	"errors"
+	"fmt"
 	"log"
 	"math"
 	"strconv"
@@ -30,6 +31,8 @@ var allowedQuotaLimitUnits = map[string]bool{
 	"total_tokens":    true,
 	"weighted_tokens": true,
 }
+
+var errQuotaPlanInUse = errors.New("quota plan in use")
 
 func validateQuotaPlanUnit(unit string) bool {
 	return allowedQuotaLimitUnits[unit]
@@ -270,16 +273,27 @@ func DeleteQuotaPlan(c *fiber.Ctx) error {
 		return c.Status(400).JSON(fiber.Map{"success": false, "message_code": "ERR_INVALID_PARAMS"})
 	}
 	var refCount int64
-	database.DB.Model(&database.PackagePlan{}).Where("quota_plan_id = ?", id).Count(&refCount)
-	if refCount > 0 {
-		return c.Status(409).JSON(fiber.Map{
-			"success":      false,
-			"message":      "该配额计划仍被套餐引用，无法删除",
-			"message_code": "ERR_PLAN_IN_USE",
-			"ref_count":    refCount,
-		})
-	}
-	if err := database.DB.Delete(&database.QuotaPlan{}, id).Error; err != nil {
+	err = database.DB.Transaction(func(tx *gorm.DB) error {
+		if err := tx.Model(&database.PackagePlan{}).
+			Where("quota_plan_id = ?", id).
+			Count(&refCount).Error; err != nil {
+			return fmt.Errorf("count refs: %w", err)
+		}
+		if refCount > 0 {
+			return errQuotaPlanInUse
+		}
+		return tx.Delete(&database.QuotaPlan{}, id).Error
+	})
+	if err != nil {
+		if errors.Is(err, errQuotaPlanInUse) {
+			return c.Status(409).JSON(fiber.Map{
+				"success":      false,
+				"message":      "该配额计划仍被套餐引用，无法删除",
+				"message_code": "ERR_PLAN_IN_USE",
+				"ref_count":    refCount,
+			})
+		}
+		log.Printf("[QUOTA-PLAN] delete id=%d failed: %v", id, err)
 		return c.Status(500).JSON(fiber.Map{"success": false, "message_code": "ERR_DB_DELETE"})
 	}
 	return c.JSON(fiber.Map{"success": true, "message_code": "SUCCESS_DELETED"})

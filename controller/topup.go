@@ -1109,18 +1109,32 @@ func checkYifutNotifyIPAllowed(remoteIP string) bool {
 		}
 		_, ipnet, err := net.ParseCIDR(cidr)
 		if err != nil {
-			// admin 配错就跳过这条；安全决策 fail-closed：直接 IP 比较看是否裸 IP
-			if cidr == remoteIP {
-				return true
-			}
 			log.Printf("[TOPUP-NOTIFY] bad CIDR config %q: %v", cidr, err)
-			continue
+			return false
 		}
 		if ipnet.Contains(ip) {
 			return true
 		}
 	}
 	return false
+}
+
+func ValidateYifutNotifyCIDRConfig() error {
+	csv := strings.TrimSpace(readStringConfig("yifut_notify_allowed_cidrs", ""))
+	if csv == "" {
+		log.Printf("[TOPUP-NOTIFY] WARN yifut_notify_allowed_cidrs is empty; webhook IP allowlist is disabled")
+		return nil
+	}
+	for _, raw := range strings.Split(csv, ",") {
+		cidr := strings.TrimSpace(raw)
+		if cidr == "" {
+			continue
+		}
+		if _, _, err := net.ParseCIDR(cidr); err != nil {
+			return fmt.Errorf("invalid CIDR %q: %w", cidr, err)
+		}
+	}
+	return nil
 }
 
 // webhookNonce 由 out_trade_no + sign 前 16 字符拼接，保证：
