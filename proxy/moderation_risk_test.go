@@ -1,6 +1,7 @@
 package proxy
 
 import (
+	"context"
 	"fmt"
 	"strings"
 	"testing"
@@ -145,6 +146,22 @@ func TestParseModerationKeywordCandidatesSanitizesAndDedupes(t *testing.T) {
 	if got[1].Keyword != "ignore developer message" || got[1].Category != "jailbreak" || got[1].Severity != "medium" {
 		t.Fatalf("unexpected second candidate: %#v", got[1])
 	}
+}
+
+func TestModerationKeywordAI_ValidatesCliproxyURL(t *testing.T) {
+	withSysConfig(t, map[string]string{
+		"moderation_provider":       "cliproxy_model",
+		"moderation_cliproxy_model": "gpt-5.4-mini",
+		"cliproxy_url":              "file:///etc/passwd",
+	}, func() {
+		_, err := GenerateModerationKeywordCandidates(context.Background(), "prompt injection", 1)
+		if err == nil {
+			t.Fatal("expected invalid cliproxy_url error")
+		}
+		if !strings.Contains(err.Error(), "cliproxy_url safety validation failed") {
+			t.Fatalf("error=%q should come from URL safety validation", err.Error())
+		}
+	})
 }
 
 func TestModerationRiskRules_RegexAndCombo(t *testing.T) {

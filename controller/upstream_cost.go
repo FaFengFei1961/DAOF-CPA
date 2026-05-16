@@ -7,6 +7,7 @@ import (
 	"math"
 	"math/big"
 	"net/http"
+	"runtime/debug"
 	"sort"
 	"strconv"
 	"strings"
@@ -20,25 +21,28 @@ import (
 )
 
 type upstreamAccountCostPayload struct {
-	ID                               uint   `json:"id"`
-	Provider                         string `json:"provider"`
-	AuthIndex                        string `json:"auth_index"`
-	AuthType                         string `json:"auth_type"`
-	Label                            string `json:"label"`
-	PlanName                         string `json:"plan_name"`
-	MonthlyCostMicroUSD              int64  `json:"monthly_cost_micro_usd"`
-	EstimatedMonthlyCapacityMicroUSD int64  `json:"estimated_monthly_capacity_micro_usd"`
-	Active                           *bool  `json:"active"`
-	Notes                            string `json:"notes"`
+	ID                          uint    `json:"id"`
+	Provider                    string  `json:"provider"`
+	AuthIndex                   string  `json:"auth_index"`
+	AuthType                    string  `json:"auth_type"`
+	Label                       string  `json:"label"`
+	PlanName                    string  `json:"plan_name"`
+	MonthlyCostUSD              float64 `json:"monthly_cost_usd"`
+	EstimatedMonthlyCapacityUSD float64 `json:"estimated_monthly_capacity_usd"`
+	Active                      *bool   `json:"active"`
+	Notes                       string  `json:"notes"`
+
+	monthlyCostMicroUSD              int64
+	estimatedMonthlyCapacityMicroUSD int64
 }
 
 type upstreamAccountCostBulkPayload struct {
-	Accounts                         []upstreamAccountCostBulkAccount `json:"accounts"`
-	PlanName                         string                           `json:"plan_name"`
-	MonthlyCostMicroUSD              int64                            `json:"monthly_cost_micro_usd"`
-	EstimatedMonthlyCapacityMicroUSD int64                            `json:"estimated_monthly_capacity_micro_usd"`
-	Active                           *bool                            `json:"active"`
-	Notes                            string                           `json:"notes"`
+	Accounts                    []upstreamAccountCostBulkAccount `json:"accounts"`
+	PlanName                    string                           `json:"plan_name"`
+	MonthlyCostUSD              float64                          `json:"monthly_cost_usd"`
+	EstimatedMonthlyCapacityUSD float64                          `json:"estimated_monthly_capacity_usd"`
+	Active                      *bool                            `json:"active"`
+	Notes                       string                           `json:"notes"`
 }
 
 type upstreamAccountCostBulkAccount struct {
@@ -150,13 +154,13 @@ func BulkUpsertUpstreamAccountCosts(c *fiber.Ctx) error {
 			"message":      "accounts 必须包含 1-500 个账号",
 		})
 	}
-	monthlyCost := payload.MonthlyCostMicroUSD
-	if monthlyCost < 0 {
-		return c.Status(http.StatusBadRequest).JSON(fiber.Map{"success": false, "message_code": "ERR_INVALID_AMOUNT", "message": "monthly_cost_micro_usd 必须是非负整数"})
+	monthlyCost, ok := database.USDToMicro(payload.MonthlyCostUSD)
+	if !ok || payload.MonthlyCostUSD < 0 {
+		return c.Status(http.StatusBadRequest).JSON(fiber.Map{"success": false, "message_code": "ERR_INVALID_AMOUNT", "message": "monthly_cost_usd 必须是非负 USD 数值"})
 	}
-	capacity := payload.EstimatedMonthlyCapacityMicroUSD
-	if capacity < 0 {
-		return c.Status(http.StatusBadRequest).JSON(fiber.Map{"success": false, "message_code": "ERR_INVALID_AMOUNT", "message": "estimated_monthly_capacity_micro_usd 必须是非负整数"})
+	capacity, ok := database.USDToMicro(payload.EstimatedMonthlyCapacityUSD)
+	if !ok || payload.EstimatedMonthlyCapacityUSD < 0 {
+		return c.Status(http.StatusBadRequest).JSON(fiber.Map{"success": false, "message_code": "ERR_INVALID_AMOUNT", "message": "estimated_monthly_capacity_usd 必须是非负 USD 数值"})
 	}
 	active := true
 	if payload.Active != nil {
@@ -209,6 +213,14 @@ func BulkUpsertUpstreamAccountCosts(c *fiber.Ctx) error {
 	}).Create(&rows).Error; err != nil {
 		log.Printf("[UPSTREAM-COST] bulk upsert failed count=%d: %v", len(rows), err)
 		return c.Status(http.StatusInternalServerError).JSON(fiber.Map{"success": false, "message_code": "ERR_DB_WRITE"})
+	}
+	for i := range rows {
+		var fresh database.UpstreamAccountCost
+		if err := database.DB.Where("provider = ? AND auth_index = ?", rows[i].Provider, rows[i].AuthIndex).First(&fresh).Error; err != nil {
+			log.Printf("[UPSTREAM-COST] bulk refetch failed provider=%s auth=%s: %v", rows[i].Provider, rows[i].AuthIndex, err)
+			continue
+		}
+		rows[i] = fresh
 	}
 	for _, row := range rows {
 		if err := refreshPlatformCostEstimateForAccount(row); err != nil {
@@ -471,14 +483,18 @@ func parseUpstreamAccountCostPayload(c *fiber.Ctx) (upstreamAccountCostPayload, 
 		_ = c.Status(http.StatusBadRequest).JSON(fiber.Map{"success": false, "message_code": "ERR_INVALID_PARAMS", "message": "provider 和 auth_index 必填"})
 		return payload, false
 	}
-	if payload.MonthlyCostMicroUSD < 0 {
-		_ = c.Status(http.StatusBadRequest).JSON(fiber.Map{"success": false, "message_code": "ERR_INVALID_AMOUNT", "message": "monthly_cost_micro_usd 必须是非负整数"})
+	monthlyCost, ok := database.USDToMicro(payload.MonthlyCostUSD)
+	if !ok || payload.MonthlyCostUSD < 0 {
+		_ = c.Status(http.StatusBadRequest).JSON(fiber.Map{"success": false, "message_code": "ERR_INVALID_AMOUNT", "message": "monthly_cost_usd 必须是非负 USD 数值"})
 		return payload, false
 	}
-	if payload.EstimatedMonthlyCapacityMicroUSD < 0 {
-		_ = c.Status(http.StatusBadRequest).JSON(fiber.Map{"success": false, "message_code": "ERR_INVALID_AMOUNT", "message": "estimated_monthly_capacity_micro_usd 必须是非负整数"})
+	capacity, ok := database.USDToMicro(payload.EstimatedMonthlyCapacityUSD)
+	if !ok || payload.EstimatedMonthlyCapacityUSD < 0 {
+		_ = c.Status(http.StatusBadRequest).JSON(fiber.Map{"success": false, "message_code": "ERR_INVALID_AMOUNT", "message": "estimated_monthly_capacity_usd 必须是非负 USD 数值"})
 		return payload, false
 	}
+	payload.monthlyCostMicroUSD = monthlyCost
+	payload.estimatedMonthlyCapacityMicroUSD = capacity
 	return payload, true
 }
 
@@ -494,8 +510,8 @@ func upstreamAccountCostFromPayload(payload upstreamAccountCostPayload, existing
 	existing.AuthType = payload.AuthType
 	existing.Label = payload.Label
 	existing.PlanName = payload.PlanName
-	existing.MonthlyCostUSD = payload.MonthlyCostMicroUSD
-	existing.EstimatedMonthlyCapacityUSD = payload.EstimatedMonthlyCapacityMicroUSD
+	existing.MonthlyCostUSD = payload.monthlyCostMicroUSD
+	existing.EstimatedMonthlyCapacityUSD = payload.estimatedMonthlyCapacityMicroUSD
 	existing.Active = active
 	existing.Notes = payload.Notes
 	return existing
@@ -558,6 +574,7 @@ func refreshPlatformCostEstimateForAccount(acct database.UpstreamAccountCost) er
 	if acct.MonthlyCostUSD <= 0 || acct.EstimatedMonthlyCapacityUSD <= 0 || !acct.Active {
 		return nil
 	}
+	start := time.Now()
 	type row struct {
 		ID   uint
 		Cost int64
@@ -575,15 +592,23 @@ func refreshPlatformCostEstimateForAccount(acct database.UpstreamAccountCost) er
 		Find(&rows).Error; err != nil {
 		return err
 	}
-	return database.DB.Transaction(func(tx *gorm.DB) error {
+	err := database.DB.Transaction(func(tx *gorm.DB) error {
+		computedAt := time.Now()
 		for _, r := range rows {
 			estimate := estimatePlatformCostFromAccount(r.Cost, acct)
-			if _, err := insertApiLogCostEstimateTx(tx, r.ID, estimate, "capacity_share", time.Now()); err != nil {
+			if _, err := insertApiLogCostEstimateTx(tx, r.ID, estimate, "capacity_share", computedAt); err != nil {
 				return err
 			}
 		}
 		return nil
 	})
+	elapsed := time.Since(start)
+	if elapsed > 5*time.Second {
+		log.Printf("[UPSTREAM-COST] refresh platform estimates slow provider=%s auth=%s rows=%d elapsed=%s stack=%s", provider, authIndex, len(rows), elapsed, debug.Stack())
+	} else {
+		log.Printf("[UPSTREAM-COST] refresh platform estimates provider=%s auth=%s rows=%d elapsed=%s", provider, authIndex, len(rows), elapsed)
+	}
+	return err
 }
 
 func insertApiLogCostEstimateTx(tx *gorm.DB, apiLogID uint, estimate int64, method string, computedAt time.Time) (bool, error) {
@@ -600,8 +625,11 @@ func insertApiLogCostEstimateTx(tx *gorm.DB, apiLogID uint, estimate int64, meth
 		row.Method = "capacity_share"
 	}
 	res := tx.Clauses(clause.OnConflict{
-		Columns:   []clause.Column{{Name: "api_log_id"}},
-		DoNothing: true,
+		Columns: []clause.Column{{Name: "api_log_id"}},
+		DoUpdates: clause.AssignmentColumns([]string{
+			"platform_cost_micro_usd",
+			"computed_at",
+		}),
 	}).Create(&row)
 	if res.Error != nil {
 		return false, res.Error

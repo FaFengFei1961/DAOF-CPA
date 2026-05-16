@@ -29,6 +29,7 @@ func setupUpstreamCostTestDB(t *testing.T) *fiber.App {
 	app.Get("/api/admin/upstream-account-cost-presets", ListUpstreamAccountCostPresets)
 	app.Post("/api/admin/upstream-accounts", CreateUpstreamAccountCost)
 	app.Post("/api/admin/upstream-accounts/bulk", BulkUpsertUpstreamAccountCosts)
+	app.Put("/api/admin/upstream-accounts/:id", UpdateUpstreamAccountCost)
 	app.Get("/api/admin/upstream-margin", GetUpstreamMarginReport)
 	return app
 }
@@ -70,6 +71,41 @@ func TestListUpstreamAccountCostPresetsFromSysConfig(t *testing.T) {
 	}
 }
 
+func TestUpstreamCost_WriteMonthlyCostUSD(t *testing.T) {
+	app := setupUpstreamCostTestDB(t)
+	payload := map[string]any{
+		"provider":                       "codex",
+		"auth_index":                     "acct-usd",
+		"auth_type":                      "oauth",
+		"label":                          "Codex USD",
+		"plan_name":                      "ChatGPT Plus",
+		"monthly_cost_usd":               20.0,
+		"estimated_monthly_capacity_usd": 200.0,
+		"active":                         true,
+	}
+	body, _ := json.Marshal(payload)
+	req := httptest.NewRequest("POST", "/api/admin/upstream-accounts", bytes.NewReader(body))
+	req.Header.Set("Content-Type", "application/json")
+	resp, err := app.Test(req)
+	if err != nil {
+		t.Fatalf("create account: %v", err)
+	}
+	if resp.StatusCode != 200 {
+		t.Fatalf("create account status=%d", resp.StatusCode)
+	}
+
+	var row database.UpstreamAccountCost
+	if err := database.DB.Where("provider = ? AND auth_index = ?", "codex", "acct-usd").First(&row).Error; err != nil {
+		t.Fatalf("read account cost: %v", err)
+	}
+	if row.MonthlyCostUSD != 20*database.MicroPerUSD {
+		t.Fatalf("monthly cost micro=%d want %d", row.MonthlyCostUSD, 20*database.MicroPerUSD)
+	}
+	if row.EstimatedMonthlyCapacityUSD != 200*database.MicroPerUSD {
+		t.Fatalf("capacity micro=%d want %d", row.EstimatedMonthlyCapacityUSD, 200*database.MicroPerUSD)
+	}
+}
+
 func replaceSysConfigCacheForUpstreamCostTest(next map[string]string) map[string]string {
 	proxy.SysConfigMutex.Lock()
 	defer proxy.SysConfigMutex.Unlock()
@@ -98,14 +134,14 @@ func TestUpstreamMarginReportUsesAccountCostCapacity(t *testing.T) {
 	}
 
 	payload := map[string]any{
-		"provider":                             "codex",
-		"auth_index":                           "acct-1",
-		"auth_type":                            "oauth",
-		"label":                                "Codex Pro 1",
-		"plan_name":                            "ChatGPT Pro",
-		"monthly_cost_micro_usd":               20 * database.MicroPerUSD,
-		"estimated_monthly_capacity_micro_usd": 200 * database.MicroPerUSD,
-		"active":                               true,
+		"provider":                       "codex",
+		"auth_index":                     "acct-1",
+		"auth_type":                      "oauth",
+		"label":                          "Codex Pro 1",
+		"plan_name":                      "ChatGPT Pro",
+		"monthly_cost_usd":               20.0,
+		"estimated_monthly_capacity_usd": 200.0,
+		"active":                         true,
 	}
 	body, _ := json.Marshal(payload)
 	req := httptest.NewRequest("POST", "/api/admin/upstream-accounts", bytes.NewReader(body))
@@ -178,10 +214,10 @@ func TestBulkUpsertUpstreamAccountCosts(t *testing.T) {
 			{"provider": "anthropic", "auth_index": "acct-a", "auth_type": "oauth", "label": "Claude A"},
 			{"provider": "anthropic", "auth_index": "acct-b", "auth_type": "oauth", "label": "Claude B"},
 		},
-		"plan_name":                            "Claude Max 5x",
-		"monthly_cost_micro_usd":               100 * database.MicroPerUSD,
-		"estimated_monthly_capacity_micro_usd": 500 * database.MicroPerUSD,
-		"active":                               true,
+		"plan_name":                      "Claude Max 5x",
+		"monthly_cost_usd":               100.0,
+		"estimated_monthly_capacity_usd": 500.0,
+		"active":                         true,
 	}
 	body, _ := json.Marshal(payload)
 	req := httptest.NewRequest("POST", "/api/admin/upstream-accounts/bulk", bytes.NewReader(body))
@@ -211,6 +247,114 @@ func TestBulkUpsertUpstreamAccountCosts(t *testing.T) {
 		if row.PlatformCostMicroUSD != 10*database.MicroPerUSD {
 			t.Fatalf("platform estimate=%d want 10 USD", row.PlatformCostMicroUSD)
 		}
+	}
+}
+
+func TestRefreshPlatformCost_UpdatesExisting(t *testing.T) {
+	setupUpstreamCostTestDB(t)
+	now := time.Now()
+	if err := database.DB.Create(&database.ApiLog{
+		UserID:            1,
+		ModelName:         "gpt-5.5",
+		UpstreamProvider:  "codex",
+		UpstreamAuthIndex: "acct-refresh",
+		Cost:              100 * database.MicroPerUSD,
+		Status:            200,
+		CreatedAt:         now,
+	}).Error; err != nil {
+		t.Fatalf("seed api log: %v", err)
+	}
+	var apiLog database.ApiLog
+	if err := database.DB.Where("upstream_auth_index = ?", "acct-refresh").First(&apiLog).Error; err != nil {
+		t.Fatalf("read api log: %v", err)
+	}
+	oldComputedAt := now.Add(-24 * time.Hour)
+	if _, err := insertApiLogCostEstimateTx(database.DB, apiLog.ID, 10*database.MicroPerUSD, "capacity_share", oldComputedAt); err != nil {
+		t.Fatalf("seed estimate: %v", err)
+	}
+
+	acct := database.UpstreamAccountCost{
+		Provider:                    "codex",
+		AuthIndex:                   "acct-refresh",
+		MonthlyCostUSD:              50 * database.MicroPerUSD,
+		EstimatedMonthlyCapacityUSD: 100 * database.MicroPerUSD,
+		Active:                      true,
+	}
+	if err := refreshPlatformCostEstimateForAccount(acct); err != nil {
+		t.Fatalf("refresh estimates: %v", err)
+	}
+	var estimate database.ApiLogCostEstimate
+	if err := database.DB.Where("api_log_id = ?", apiLog.ID).First(&estimate).Error; err != nil {
+		t.Fatalf("read estimate: %v", err)
+	}
+	if estimate.PlatformCostMicroUSD != 50*database.MicroPerUSD {
+		t.Fatalf("platform estimate=%d want %d", estimate.PlatformCostMicroUSD, 50*database.MicroPerUSD)
+	}
+	if !estimate.ComputedAt.After(oldComputedAt) {
+		t.Fatalf("computed_at=%s should be after old %s", estimate.ComputedAt, oldComputedAt)
+	}
+}
+
+func TestBulkUpsertUpstreamCost_RefetchesRows(t *testing.T) {
+	app := setupUpstreamCostTestDB(t)
+	if err := database.DB.Create(&database.ApiLog{
+		UserID:            1,
+		ModelName:         "gpt-5.5",
+		UpstreamProvider:  "codex",
+		UpstreamAuthIndex: "acct-trigger",
+		Cost:              100 * database.MicroPerUSD,
+		Status:            200,
+		CreatedAt:         time.Now(),
+	}).Error; err != nil {
+		t.Fatalf("seed api log: %v", err)
+	}
+	if err := database.DB.Create(&database.UpstreamAccountCost{
+		Provider:                    "codex",
+		AuthIndex:                   "acct-trigger",
+		MonthlyCostUSD:              1 * database.MicroPerUSD,
+		EstimatedMonthlyCapacityUSD: 100 * database.MicroPerUSD,
+		Active:                      true,
+	}).Error; err != nil {
+		t.Fatalf("seed account cost: %v", err)
+	}
+	if err := database.DB.Exec(`
+CREATE TRIGGER upstream_cost_test_adjust
+AFTER UPDATE ON upstream_account_costs
+BEGIN
+	UPDATE upstream_account_costs
+	SET monthly_cost_usd = 50000000,
+		estimated_monthly_capacity_usd = 100000000
+	WHERE id = NEW.id;
+END;`).Error; err != nil {
+		t.Fatalf("create trigger: %v", err)
+	}
+
+	payload := map[string]any{
+		"accounts": []map[string]any{
+			{"provider": "codex", "auth_index": "acct-trigger", "auth_type": "oauth", "label": "Codex Trigger"},
+		},
+		"plan_name":                      "Trigger Plan",
+		"monthly_cost_usd":               20.0,
+		"estimated_monthly_capacity_usd": 100.0,
+		"active":                         true,
+	}
+	body, _ := json.Marshal(payload)
+	req := httptest.NewRequest("POST", "/api/admin/upstream-accounts/bulk", bytes.NewReader(body))
+	req.Header.Set("Content-Type", "application/json")
+	resp, err := app.Test(req)
+	if err != nil {
+		t.Fatalf("bulk upsert: %v", err)
+	}
+	if resp.StatusCode != 200 {
+		t.Fatalf("bulk status=%d", resp.StatusCode)
+	}
+
+	var estimate database.ApiLogCostEstimate
+	if err := database.DB.First(&estimate).Error; err != nil {
+		t.Fatalf("read estimate: %v", err)
+	}
+	if estimate.PlatformCostMicroUSD != 50*database.MicroPerUSD {
+		t.Fatalf("platform estimate=%d want trigger-adjusted 50 USD", estimate.PlatformCostMicroUSD)
 	}
 }
 

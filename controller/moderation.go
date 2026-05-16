@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"net/http"
+	"net/url"
 	"strconv"
 	"strings"
 	"time"
@@ -31,7 +32,7 @@ func TestModerationConfig(c *fiber.Ctx) error {
 	base := fiber.Map{
 		"configured": cfg.IsConfigured(),
 		"provider":   cfg.Provider,
-		"endpoint":   endpoint,
+		"endpoint":   maskEndpointForDisplay(endpoint),
 		"model":      model,
 	}
 
@@ -195,11 +196,22 @@ func GenerateModerationKeywords(c *fiber.Ctx) error {
 		"message_code": "SUCCESS_MODERATION_KEYWORDS_GENERATED",
 		"data":         result.Candidates,
 		"provider":     result.Provider,
-		"endpoint":     result.Endpoint,
+		"endpoint":     maskEndpointForDisplay(result.Endpoint),
 		"model":        result.Model,
 		"auth_index":   result.AuthIndex,
 		"latency_ms":   time.Since(start).Milliseconds(),
 	})
+}
+
+func maskEndpointForDisplay(endpoint string) string {
+	if endpoint == "" {
+		return ""
+	}
+	u, err := url.Parse(endpoint)
+	if err != nil || u.Scheme == "" || u.Host == "" {
+		return ""
+	}
+	return u.Scheme + "://" + u.Host
 }
 
 type moderationEvaluateRequest struct {

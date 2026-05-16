@@ -61,7 +61,11 @@ func generateCLIProxyKeywordCandidates(ctx context.Context, cfg ModerationConfig
 		model = defaultCLIProxyModerationModel
 	}
 	out.Model = model
-	endpoint := getCliproxyURL() + "/v1/chat/completions"
+	baseURL, err := getValidatedCliproxyURL()
+	if err != nil {
+		return out, fmt.Errorf("cliproxy_url safety validation failed: %w", err)
+	}
+	endpoint := baseURL + "/v1/chat/completions"
 	out.Endpoint = endpoint
 	body, err := json.Marshal(buildCLIProxyKeywordAIRequest(focus, existing, maxCandidates, model))
 	if err != nil {
