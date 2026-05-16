@@ -1,6 +1,6 @@
 import React, { useState } from 'react';
 import { useTranslation } from 'react-i18next';
-import { Shield, Eye, EyeOff, RotateCw } from 'lucide-react';
+import { Eye, EyeOff, RotateCw } from 'lucide-react';
 import toast from 'react-hot-toast';
 import { useConfirm } from '../context/ConfirmContext';
 import TextInput from './ui/TextInput';
@@ -27,16 +27,6 @@ const ContentModerationGlobals = ({ configs, handleChange }) => {
 
     return (
         <div className="w-full">
-            <div className="mb-8 border-b border-outline-variant pb-6">
-                <h1 className="text-xl md:text-2xl font-bold tracking-tight text-on-surface flex items-center gap-3">
-                    <Shield size={24} className="text-primary" />
-                    {t('MODERATION.TITLE', '内容审核（全局配置）')}
-                </h1>
-                <p className="text-on-surface-variant mt-2 text-sm max-w-3xl leading-relaxed">
-                    {t('MODERATION.DESC', '这里配置的是"全平台共享"的审核参数。具体每条渠道每个模型走哪种风控策略请到「渠道与模型」→ 模型编辑里设置。')}
-                </p>
-            </div>
-
             <UpstreamModelPoolEditor configs={configs} handleChange={handleChange} />
             <TestPlayground />
             <KeywordRulesEditor configs={configs} handleChange={handleChange} />
