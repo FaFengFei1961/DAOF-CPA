@@ -41,4 +41,17 @@ Write-Host "  DAOF_KEY_PATH = $env:DAOF_KEY_PATH"
 Write-Host "  DAOF_DB_PATH  = $env:DAOF_DB_PATH"
 Write-Host ""
 
+# main.go uses app.Static("/", "./ui/dist") — the frontend bundle must exist
+# before launching the backend; otherwise the SPA returns 404 on every request.
+# We refuse to start instead of auto-building so build failures don't get buried.
+if (-not (Test-Path "ui/dist/index.html")) {
+    Write-Host "ERROR: ui/dist/index.html missing — backend would serve 404." -ForegroundColor Red
+    Write-Host ""
+    Write-Host "Build the frontend first:" -ForegroundColor Cyan
+    Write-Host "  cd ui; npm install; npm run build"
+    Write-Host "Or run the full reset (includes build):" -ForegroundColor Cyan
+    Write-Host "  .\reset.ps1 -NoConfirm"
+    exit 1
+}
+
 go run main.go
