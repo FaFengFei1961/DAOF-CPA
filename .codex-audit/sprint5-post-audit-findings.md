@@ -12,11 +12,34 @@
 | 严重度 | 数量 | 已修复 | 剩余 |
 |--------|------|--------|------|
 | CRITICAL | 2 | **2** (A-1, B-1) | 0 |
-| HIGH | 21 | **22** (含 B-2/3 + C-3) | 0 ✅ |
-| MEDIUM | 39 | **32** (含 G-2 + H-11/12/13 + K-2/6 + I-9) | 7（5 deferred + 1 wontfix + 1 未处理）|
-| LOW | 18 | **9** (含 C-5 + H-15/16/17 + K-3/4/5) | 9 |
-| NOTE/DESIGN | 13 | wontfix 11 (主题 I 8 + G-3/4/5) | 2（H-18 工程亮点不计 + K-7/8/9/10）|
-| **总计** | **93** | **65 done (70%) + 17 wontfix (18%) + 6 deferred = 88 处理 (95%)** | **5 未处理 (DEBT)** |
+| HIGH | 21 | **15** done + **4 reverted** (A-3/4/5/6/7→1, B-2, C-3) | 2 |
+| MEDIUM | 39 | **31** done + **1 reverted** (H-13) | 7 deferred |
+| LOW | 18 | **7** done + **2 reverted** (H-15, H-17) | 9 |
+| NOTE/DESIGN | 13 | wontfix 11 (主题 I 8 + G-3/4/5) | 2 |
+| **总计** | **93** | **55 done (59%) + 10 reverted (11%) + 17 wontfix (18%) + 6 deferred (6%) = 88 处理 (95%)** | 5 未处理 |
+
+## 一·零、Revert 战报（2026-05-15）— 复审撤销过度工程
+
+用户严肃复审发现部分 finding 是**过度工程 / 业务策略冒充 bug fix / breaking change**，必须 revert 回合理工程边界。**真正的安全/业务 BUG 修复保留**。
+
+| Finding | 撤销原因 | commit |
+|---------|---------|--------|
+| **A-3/4/5/6/7** | admin DTO float→int64 是 **breaking change 无收益**（前端没动 → 上线全 500）；用户输入 $13.89 范围内 float64 零误差；正确做法是 wire 层 float64 + handler 内 USDToMicro + 存储/运算 int64 | `6c09718` |
+| **B-2** | 删用户改"匿名化+软删除"违反 **GDPR right-to-erasure**；是业务策略冒充工程修复 | `6c09718` 改回普通软删 + 新增 PurgeUser GDPR endpoint |
+| **C-3** | `Status != 1` 锁死业务扩展（未来 status=3 paused / =4 pending 等业务态被误伤）；是产品决策冒充工程修复；正确做法是 schema NOT NULL DEFAULT 1 防零值 | `6c09718` 改回 `Status == 2`，加 schema NOT NULL |
+| **H-13** | `pending_reconcile_count` 字段前端没用 → 死字段污染 API | `6c09718` |
+| **H-15** | `CloseIdleConnections` 多余调用（transport 还没用过） | `13f745e` |
+| **H-17** | httpClientCache 过度工程（http.Client thin wrapper 不需要缓存） | `13f745e` |
+
+**新增 GDPR endpoint**：`POST /api/admin/users/:id/purge?confirm=YES_DELETE_ALL`
+- 普通 DELETE 走 GORM soft delete（保留账务源 + B-1 hook 保护 ApiLog）
+- Purge endpoint 走 raw SQL 删 api_logs 绕过 hook + Unscoped 硬删用户 + 写 USER_PURGE_GDPR 审计
+
+**复审教训**：
+1. Audit 报告是"潜在改进点清单"，不是"修复任务清单"
+2. 改 wire 协议是 breaking change，必须前后端协调；不能假设"未上线 = 可以无脑改"
+3. "全消除 float" 是代码洁癖，不是 risk-driven 决策；用户单次输入 $0-$100k 范围 float64 精确
+4. 真正会出问题的精度路径只有：累加（已 int64）+ 比例分摊（A-8 big.Int）+ 退款上限（A-1 已修）
 
 ## 一·一·五、关键架构决策（2026-05-15）
 
@@ -184,7 +207,7 @@
 - **问题**：用户额度更新、批量配额调整等多个 admin 接口接收 USD float → `USDToMicro` 转换
 - **失效**：边界值受 IEEE-754 舍入；admin 设置额度时精度漂移
 - **修复**：写接口改收 `*_micro_usd int64` 或 decimal string；服务端用 decimal/big.Rat 解析
-- **状态**：`done` (commit `ba81cd8` / P0-α)
+- **状态**：`reverted` (commit `6c09718`) — DTO 改回 float64 wire 协议；handler 内立刻 USDToMicro 转 int64 存储/运算路径不变。前端零改动，存储+运算保持金融级 0 偏差。
 
 ## A-4 `[BUG]` `[HIGH]` controller/token.go API Token 限额 float 入口
 
@@ -193,7 +216,7 @@
 - **问题**：API token 创建/更新 quota_limit 接收 USD float
 - **失效**：用户/admin 设置 token 限额时精度漂移
 - **修复**：DTO 改 int64 micro_usd
-- **状态**：`done` (commit `ba81cd8` / P0-α)
+- **状态**：`reverted` (commit `6c09718`) — 同 A-3，token DTO 改回 float64 wire
 
 ## A-5 `[BUG]` `[HIGH]` controller/balance_consume.go 余额消费限额 float 入口
 
@@ -202,7 +225,7 @@
 - **问题**：用户余额消费偏好接口接收 USD float
 - **失效**：用户自设余额消费上限精度漂移
 - **修复**：DTO 改 int64 micro_usd
-- **状态**：`done` (commit `ba81cd8` / P0-α)
+- **状态**：`reverted` (commit `6c09718`) — 同 A-3，balance_consume DTO 改回 float64
 
 ## A-6 `[BUG]` `[HIGH]` controller/coupon.go 优惠券价格 float 入口
 
@@ -211,7 +234,7 @@
 - **问题**：admin 创建优惠券模板 fixed_price 通过 USD float 输入
 - **失效**：fixed_price 精度漂移可能导致 cost_floor 校验边界值错误
 - **修复**：DTO 改 int64 micro_usd 或 decimal string
-- **状态**：`done` (commit `eb2b5a0` / P0-γ)
+- **状态**：`reverted` (commit `6c09718`) — 同 A-3，coupon discount_value 改回 float64
 
 ## A-7 `[BUG]` `[HIGH]` controller/package_admin.go 套餐价格 float 入口
 
@@ -220,7 +243,7 @@
 - **问题**：admin 创建/更新套餐价格通过 USD float 输入
 - **失效**：套餐价格精度漂移 → 套餐购买结算偏差
 - **修复**：DTO 改 int64 micro_usd
-- **状态**：`done` (commit `ba81cd8` / P0-α)
+- **状态**：`reverted` (commit `6c09718`) — 同 A-3，package price_amount 改回 float64
 
 ## A-8 `[BUG]` `[HIGH]` controller/upstream_cost.go 上游成本配置 float 入口
 
@@ -327,7 +350,7 @@
 - **问题**：BillingEntry.RelatedType 指向 `topup_orders / user_subscriptions / api_logs`；删用户时硬删 `SubscriptionUsage / UserSubscription / TopupOrder`
 - **失效**：退款/争议后 admin 硬删用户，BillingEntry 行留下但源证据消失 → 账务链断裂
 - **修复**：支付订单/订阅快照/用量事实**不要随用户删除**，仅匿名化 PII 或软删除；BillingEntry 关联源表需可追溯
-- **状态**：`done` (commit `a41b6f2` / P2-β) — 匿名化 + 软删除，保留 BillingEntry/Subscription/TopupOrder/ApiLog 等账务源
+- **状态**：`reverted` (commit `6c09718`) — 普通 DeleteUser 恢复 GORM soft delete 保留账务；新增 POST /admin/users/:id/purge?confirm=YES_DELETE_ALL GDPR endpoint 走 raw SQL 绕过 hook 真删
 
 ## B-3 `[BUG]` `[HIGH]` GORM `Updates(map[string]any)` 绕过 `<-:create` tag
 
@@ -823,7 +846,7 @@
 - **文件**：`controller/billing.go:236`
 - **问题**：billing summary 月度卡片不含 api_usage_pending_reconcile，用户对账后看到净额变化感到混乱
 - **修复**：summary 响应加 `pending_reconcile_count`，UI 提示"另有 N 笔待对账，净额可能变化"
-- **状态**：`done` (commit `a41b6f2` / P2-β) — summary 加 pending_reconcile_count
+- **状态**：`reverted` (commit `6c09718`) — 删 pending_reconcile_count 字段（前端没用的死字段）
 
 ## H-14 `[DEBT]` `[LOW]` UpstreamAccountCost.MonthlyCostUSD 字段名缺 micro 后缀
 
@@ -839,7 +862,7 @@
 - **文件**：`proxy/stream.go:107-116`
 - **问题**：Load miss 后双 goroutine 都 Store，先写入的 transport（含连接池）被丢弃
 - **修复**：用 `LoadOrStore`，loaded=true 时返回 actual
-- **状态**：`done` (commit `1e938f1` / P2-γ) — transportCache 用 LoadOrStore
+- **状态**：`reverted` (commit `13f745e`) — 删 t.CloseIdleConnections 多余调用，保留 LoadOrStore
 
 ## H-16 `[DEBT]` `[LOW]` computeRetryBackoff 用 math.Pow
 
@@ -855,7 +878,7 @@
 - **文件**：`proxy/stream.go:860-866`
 - **问题**：Transport 复用但 http.Client 实例频繁 new，GC 压力
 - **修复**：以 proxyURL+timeout key 缓存 http.Client
-- **状态**：`done` (commit `1e938f1` / P2-γ) — http.Client 缓存 by (proxyURL, timeout)
+- **状态**：`reverted` (commit `13f745e`) — 删 httpClientCache + getHTTPClient 缓存，改回 inline http.Client new
 
 ## H-18 `[DESIGN]` `[NOTE]` SyncCacheConfig 持写锁外做查询（正面发现）
 
