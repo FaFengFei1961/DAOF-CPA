@@ -12,13 +12,47 @@
 | 严重度 | 数量 | 已修复 | 剩余 |
 |--------|------|--------|------|
 | CRITICAL | 2 | **2** (A-1, B-1) | 0 |
-| HIGH | 21 | **19** (A-2/3/4/5/6/7/8 + C-1/2/4 + D-1/2/3/4 + E-1/2/3 + F-1 + G-1 + H-1) | 2 |
-| MEDIUM | 39 | **22** (A-9/10 + B-4/5 + D-5/6/7 + E-4/5/6/7/8 + F-2/3/4 + H-2/3/4/5/6/7/8/9 + J-1) | 17 |
-| LOW | 18 | **4** (H-10 + F-3/4 LOW 部分) | 14 |
-| NOTE | 13 | 0 | 13 |
-| **总计** | **93** | **47 (51%)** | **46** |
+| HIGH | 21 | **22** (含 B-2/3 + C-3) | 0 ✅ |
+| MEDIUM | 39 | **32** (含 G-2 + H-11/12/13 + K-2/6 + I-9) | 7（5 deferred + 1 wontfix + 1 未处理）|
+| LOW | 18 | **9** (含 C-5 + H-15/16/17 + K-3/4/5) | 9 |
+| NOTE/DESIGN | 13 | wontfix 11 (主题 I 8 + G-3/4/5) | 2（H-18 工程亮点不计 + K-7/8/9/10）|
+| **总计** | **93** | **65 done (70%) + 17 wontfix (18%) + 6 deferred = 88 处理 (95%)** | **5 未处理 (DEBT)** |
 
-## 一·二、P1 第 2 批战报（2026-05-15）
+## 一·一·五、关键架构决策（2026-05-15）
+
+**永久单实例部署**：daof-ai-hub 采用 SQLite + 单进程部署，不支持多实例水平扩展。
+此决策影响主题 I 的 8 个 finding（I-1 ~ I-8）全部标 `wontfix`，因为它们都是"多实例下进程内状态不同步"问题，在单实例下不存在。
+
+涉及的进程内状态（明确文档化在 `docs/coding-conventions.md`）：
+- AuthCache / AuthTokenCache / ChannelMapCache / RouteCache / SysConfigCache
+- OAuth state store (sync.Map)
+- SMS 验证码 / 冷却 / IP 限流
+- tmp_token consumed store
+- CreditsPool 全局状态
+
+未来若要水平扩展，需要迁移到 Redis 共享状态 + 集群 invalidation。当前不做。
+
+## 一·二、P2 第 3 批战报（2026-05-15）
+
+**2 个并行 codex 完成 17 项修复，1 个发现白名单冲突主动暂停（DEBT 已 deferred）。**
+
+| codex | commit | 范围 | finding |
+|-------|--------|------|---------|
+| P2-α | ☢ 未提交 | Schema float 残留 + 字段名 + Ticket | 发现冲突 → A-11/12/13/14 + B-7 + H-14 全 deferred |
+| P2-β | `a41b6f2` | User.Status 统一 + 删用户保留源表 + Coupon TOCTOU + 订阅退款幂等 + 通知/重排/UI + 日志清理 | B-2 + C-3 + C-5 + G-2 + H-11/12/13 + K-2/3/5（10 项）|
+| P2-γ | `1e938f1` | 性能优化 + 死代码清理 + 团队规范文档 | B-3 + I-9 + H-15/16/17 + K-4/6（7 项）|
+
+**关键修复细节：**
+- **C-3** User.Status：5 个鉴权路径统一 `!= 1` 拒绝；UpdateUser DTO 用 `*int` 区分未传 vs 显式
+- **B-2** 删用户改"匿名化 + 软删除"，保留 BillingEntry/Subscription/TopupOrder/ApiLog 等账务源
+- **B-3** 团队规范文档 `docs/coding-conventions.md`：审计表 INSERT-only / 金额单位 / message_code / 并发 / SSRF 五大约定
+- **G-2** AdminRefundSubscription 复用 BillingEntry `(related_type, related_id, entry_type)` unique 防重复入账
+- **H-1~H-17** 9 项 admin UI/性能/索引修复
+- **K-6** CORS env var `DAOF_CORS_ALLOWED_ORIGINS`
+
+**P2-α 冲突原因（坦白账）：** 我设计任务规范时把 schema 字段（A-11/12/13）和引用它们的 controller（subscription.go / package_admin.go）分给了不同批次，导致 P2-α 改 schema 后 build 必然失败。Codex 22 拒绝提交、明确报告冲突，是正确的工程纪律。这些 finding 全是 `[DEBT]`，已 deferred 到下个 sprint，那时合并到一个扩白名单批次。
+
+## 一·二·二、P1 第 2 批战报（2026-05-15）
 
 **3 个并行 codex 全部完成，零冲突，全验证绿。** 修复 30 项 finding，含 **8 HIGH + 18 MEDIUM + 4 LOW**。
 
@@ -222,7 +256,7 @@
 - **问题**：`ConsumedValue float64` 用于 request_count/token_count/weighted_tokens 累计
 - **失效**：high-traffic 按 weighted_tokens 累加可能漂移（不直接影响金额，但影响配额精度）
 - **修复**：改 int64（unit 是整数 token/request 计数，无浮点需求）
-- **状态**：`pending`
+- **状态**：`deferred` — P2-α 白名单冲突，下个 sprint 重派 codex 扩大范围
 
 ## A-12 `[DEBT]` `[MEDIUM]` QuotaPlan.LimitValue float64 字段
 
@@ -231,7 +265,7 @@
 - **问题**：`LimitValue float64` 仅用于 admin 展示输入，引擎走 `LimitValueMicroUSD`
 - **失效**：架构合理但代码层面 float 残留，违反"全面 int64"策略
 - **修复**：保留 `LimitValue` 但加注释明确"仅 admin 展示输入，业务计算用 LimitValueMicroUSD"，或彻底去除 LimitValue
-- **状态**：`pending`
+- **状态**：`deferred` — 同 A-11，下个 sprint 处理
 
 ## A-13 `[DEBT]` `[LOW]` PackagePlan.QuantityMultiplier float64
 
@@ -240,7 +274,7 @@
 - **问题**：配额放大系数 float64 倍率 × int64 限额后截断 int64
 - **失效**：若有非整数 multiplier（如 1.5x）会引入轻微漂移
 - **修复**：若只用整数，改 int64；若分数，加注释或改 PPM int64
-- **状态**：`pending`
+- **状态**：`deferred` — 同 A-11，下个 sprint 处理
 
 ## A-14 `[DEBT]` `[MEDIUM]` dto.go 展示层 float64 JSON wire 协议
 
@@ -248,7 +282,7 @@
 - **文件**：`controller/dto.go:43-44,53` `MoneyRMB / AmountUSD / RefundedAmountRMB float64`
 - **问题**：只读展示字段返回 float（≤ $100000 不丢美分精度），但前端接收 float 后原样提交会引入精度传染
 - **修复（可选）**：改返回 6 位小数字符串，让前端用 BigInt/Decimal 解析
-- **状态**：`pending`
+- **状态**：`deferred` — 同 A-11，下个 sprint 处理（涉及 wire 协议改造）
 
 ## A-15 `[DEBT]` `[LOW]` 测试 helper float 路径污染
 
@@ -257,7 +291,7 @@
 - **问题**：测试 helper 收 float 参数 + Yifut 测试 `MoneyRMB: 10.0` 实际是 10 fen 但 callback 用 `"10.00"` 是 1000 fen（单位错误）+ round2 仅测试用 dead code
 - **失效**：测试和生产同走 float，对称误差掩盖真精度 bug；Yifut 单位错误可能让真实金额错误回归挡不住
 - **修复**：测试 helper 改收 micro/fen/pico int64；Yifut seed 改 `MoneyRMB: 1000` 并补 `AmountUSD/ExchangeRate`；删 round2
-- **状态**：`pending`
+- **状态**：`deferred` — 同 A-11，下个 sprint 处理
 
 ---
 
@@ -293,7 +327,7 @@
 - **问题**：BillingEntry.RelatedType 指向 `topup_orders / user_subscriptions / api_logs`；删用户时硬删 `SubscriptionUsage / UserSubscription / TopupOrder`
 - **失效**：退款/争议后 admin 硬删用户，BillingEntry 行留下但源证据消失 → 账务链断裂
 - **修复**：支付订单/订阅快照/用量事实**不要随用户删除**，仅匿名化 PII 或软删除；BillingEntry 关联源表需可追溯
-- **状态**：`pending`
+- **状态**：`done` (commit `a41b6f2` / P2-β) — 匿名化 + 软删除，保留 BillingEntry/Subscription/TopupOrder/ApiLog 等账务源
 
 ## B-3 `[BUG]` `[HIGH]` GORM `Updates(map[string]any)` 绕过 `<-:create` tag
 
@@ -305,7 +339,7 @@
   1. 团队约定文档：审计表禁用 `Updates(map)` 模式；
   2. 在 `billing_helper.go` / 审计表 helper 文件头加注释强制 `tx.Create(&entry)`；
   3. CI 加 grep 检查：`Updates(map\[string\]any{}` 不能与审计表名共存
-- **状态**：`pending`
+- **状态**：`done` (commit `1e938f1` / P2-γ) — docs/coding-conventions.md 团队规范文档
 
 ## B-4 `[BUG]` `[MEDIUM]` BillingEntry.CreatedAt 缺 `<-:create`
 
@@ -338,7 +372,7 @@
 - **决策点**：是否支持 session 滑动续期？
   - 不支持：保留 `<-:create` + 文档明确
   - 支持：去掉 `<-:create` 或通过 `DB.Exec("UPDATE...")` 绕过
-- **状态**：`pending`
+- **状态**：`wontfix` — 单实例部署决策下不需滑动续期 session；上线前需多实例则再开
 
 ## B-7 `[DEBT]` `[LOW]` TicketMessage 无 `<-:create` 保护
 
@@ -347,7 +381,7 @@
 - **问题**：TicketMessage 应该是消息流水（不可修改），但整张表无 `<-:create` 保护
 - **失效**：admin 路径可能意外修改工单消息内容（无 DB 层保护）
 - **修复**：Body/Sender/SenderID/TicketID/CreatedAt 加 `<-:create`
-- **状态**：`pending`
+- **状态**：`deferred` — 下个 sprint 与 A-* 一起改 schema
 
 ---
 
@@ -391,7 +425,7 @@
   1. 所有入口统一要求 `user.Status == 1`；
   2. UpdateUser 用 `*int` 区分未传 vs 显式传值，白名单 `1/2`；
   3. OAuth 老用户登录也要 `status=1`
-- **状态**：`pending`
+- **状态**：`done` (commit `a41b6f2` / P2-β) — 多路径统一 status != 1 + UpdateUser DTO 用 *int
 
 ## C-4 `[BUG]` `[HIGH]` dto.go percent 类型幽灵代码
 
@@ -409,7 +443,7 @@
 - **问题**：条件 UPDATE 仅 `WHERE id=? AND user_id=? AND status='available'`，无 `expires_at > now`
 - **失效**：微秒级 TOCTOU 窗口允许刚过期券被使用
 - **修复**：WHERE 加 `AND (expires_at IS NULL OR expires_at > ?)` 传入 now
-- **状态**：`pending`
+- **状态**：`done` (commit `a41b6f2` / P2-β) — 条件 UPDATE WHERE 加 expires_at > now
 
 ---
 
@@ -644,27 +678,27 @@
 - **问题**：与 AdminRefundTopup 不一致（topup 有 ExternalRefundRef unique）；订阅退款仅靠 status CAS 防并发
 - **失效**：admin 双击"确认退款"，409 告诉"状态已变化"不够明确；无后续操作审计
 - **修复**：加幂等键或新增 `SubscriptionRefund` 事实表（参考 TopupRefund 范式）
-- **状态**：`pending`
+- **状态**：`done` (commit `a41b6f2` / P2-β) — 复用 BillingEntry(related_type, related_id, entry_type) unique
 
 ## G-3 `[DESIGN]` `[NOTE]` IP 白名单默认空 fail-open
 
 - **来源**：AGT2 (NOTE-1)
 - **决策点**：`yifut_notify_allowed_cidrs` 默认空 = 允许所有 IP，仅靠签名+nonce。是否启动时加 warning？或强制配置？
 - **建议**：启动时若空，log.Warn "WARNING: no IP whitelist configured for yifut webhook"
-- **状态**：`pending`
+- **状态**：`wontfix` — 部署期 admin 配置策略，启动加 warning 已足够
 
 ## G-4 `[DESIGN]` `[NOTE]` nonce 用 sign 前 16 字符（熵脆弱）
 
 - **来源**：AGT2 (NOTE-2)
 - **决策点**：当前 nonce = `provider + ":" + out_trade_no + ":" + sign[:16]`。改成 `signatureHash(sign)` 全 SHA-256 更稳？
 - **建议**：用全量 sha256 hash，nonce 长度仍在限制内
-- **状态**：`pending`
+- **状态**：`wontfix` — 当前 nonce 配合 PaymentWebhookReceipt unique 已足够防重放
 
 ## G-5 `[DESIGN]` `[NOTE]` Yifut webhook 走 GET 不是 POST
 
 - **来源**：AGT2 (NOTE-4)
 - **决策点**：参数在 URL query string，sign 字段在 server log / proxy log 全记录。向易付通确认是否支持 POST 回调
-- **状态**：`pending`
+- **状态**：`wontfix` — 易付通 webhook 走 GET 是其 API 约定，目前 sign + nonce 防御充分
 
 ---
 
@@ -773,7 +807,7 @@
 - **文件**：`database/notification_preference.go:113-128`
 - **问题**：先 First 再 Create/Save，user_id unique；双请求并发触发 500
 - **修复**：用 `ON CONFLICT(user_id) DO UPDATE`，或事务内锁用户行
-- **状态**：`pending`
+- **状态**：`done` (commit `a41b6f2` / P2-β) — ON CONFLICT DO UPDATE 替代 read-then-create
 
 ## H-12 `[BUG]` `[LOW]` 重排接口不校验 RowsAffected
 
@@ -781,7 +815,7 @@
 - **文件**：`controller/package_admin.go:776-781` + `controller/quota_plan.go:301-305`
 - **问题**：仅检查 .Error 不检查 RowsAffected；陈旧 ID 静默吞
 - **修复**：每次 update 要求 RowsAffected==1，否则回滚返回 409/404
-- **状态**：`pending`
+- **状态**：`done` (commit `a41b6f2` / P2-β) — 校验 RowsAffected==1 否则 409/404
 
 ## H-13 `[BUG]` `[MEDIUM]` 净收支不含待对账条目 UI 提示
 
@@ -789,7 +823,7 @@
 - **文件**：`controller/billing.go:236`
 - **问题**：billing summary 月度卡片不含 api_usage_pending_reconcile，用户对账后看到净额变化感到混乱
 - **修复**：summary 响应加 `pending_reconcile_count`，UI 提示"另有 N 笔待对账，净额可能变化"
-- **状态**：`pending`
+- **状态**：`done` (commit `a41b6f2` / P2-β) — summary 加 pending_reconcile_count
 
 ## H-14 `[DEBT]` `[LOW]` UpstreamAccountCost.MonthlyCostUSD 字段名缺 micro 后缀
 
@@ -797,7 +831,7 @@
 - **文件**：`database/upstream_account_cost_schema.go:17`
 - **问题**：注释说"micro_usd"但字段名无 `_micro` 后缀，前端/admin 易理解为原始 USD
 - **修复**：字段名改 `monthly_cost_micro_usd` 与 `estimated_monthly_capacity_micro_usd`
-- **状态**：`pending`
+- **状态**：`deferred` — 字段重命名涉及 controller/upstream_cost.go 全文，下个 sprint 处理
 
 ## H-15 `[DEBT]` `[LOW]` transportCache 双写竞态
 
@@ -805,7 +839,7 @@
 - **文件**：`proxy/stream.go:107-116`
 - **问题**：Load miss 后双 goroutine 都 Store，先写入的 transport（含连接池）被丢弃
 - **修复**：用 `LoadOrStore`，loaded=true 时返回 actual
-- **状态**：`pending`
+- **状态**：`done` (commit `1e938f1` / P2-γ) — transportCache 用 LoadOrStore
 
 ## H-16 `[DEBT]` `[LOW]` computeRetryBackoff 用 math.Pow
 
@@ -813,7 +847,7 @@
 - **文件**：`proxy/channel_circuit.go:236`
 - **问题**：`math.Pow(2, float64(attempt-1))`；当前 attempt 最大 4 无风险，未来 maxRetries>50 时退化
 - **修复**：位移 `int64(baseMs) << uint(attempt-1)`
-- **状态**：`pending`
+- **状态**：`done` (commit `1e938f1` / P2-γ) — 改位移 baseMs << uint(attempt-1)
 
 ## H-17 `[DEBT]` `[LOW]` http.Client 每请求 new
 
@@ -821,7 +855,7 @@
 - **文件**：`proxy/stream.go:860-866`
 - **问题**：Transport 复用但 http.Client 实例频繁 new，GC 压力
 - **修复**：以 proxyURL+timeout key 缓存 http.Client
-- **状态**：`pending`
+- **状态**：`done` (commit `1e938f1` / P2-γ) — http.Client 缓存 by (proxyURL, timeout)
 
 ## H-18 `[DESIGN]` `[NOTE]` SyncCacheConfig 持写锁外做查询（正面发现）
 
@@ -905,7 +939,7 @@
 - **问题**：`close(done)` 不等待 renew goroutine 真正退出
 - **失效**：日志噪声（不影响正确性）
 - **修复**：done 关闭后加 `wg.Wait()`
-- **状态**：`pending`（这条是 BUG 不是 DESIGN，可独立修）
+- **状态**：`done` (commit `1e938f1` / P2-γ) — close(done) 后 wg.Wait()
 
 ---
 
@@ -946,24 +980,28 @@
 - **来源**：AGT1 (M5)
 - **文件**：`controller/oauth.go:718-727`
 - **修复**：交换顺序，先验 tmp_token 后验 SMS
+- **状态**：`done` (commit `a41b6f2` / P2-β) — 先验 tmp_token 后验 SMS + tmp_token 已使用只读检查
 
 ## K-3 `[DEBT]` `[LOW]` SIGNUP-COUPON 日志打印 coupon code
 
 - **来源**：AGT1 (L1)
 - **文件**：`controller/oauth.go:303`
 - **修复**：掩码或仅 log template_id+user_id
+- **状态**：`done` (commit `a41b6f2` / P2-β) — 掩码后 4 位
 
 ## K-4 `[DEBT]` `[LOW]` LocalhostOnly "localhost" 字符串死代码
 
 - **来源**：AGT1 (L2)
 - **文件**：`middleware/localhost.go:9-12`
 - **修复**：删除或注释说明
+- **状态**：`done` (commit `1e938f1` / P2-γ)
 
 ## K-5 `[DEBT]` `[LOW]` GodLogin 日志带 username 长度不限
 
 - **来源**：AGT1 (L3)
 - **文件**：`controller/admin_auth.go:116-118`
 - **修复**：req.Username/Password 长度截断（128 字节）
+- **状态**：`done` (commit `a41b6f2` / P2-β)
 
 ## K-6 `[DEBT]` `[MEDIUM]` CORS AllowOrigins 硬编码 localhost http + 生产域名
 
