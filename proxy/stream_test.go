@@ -1139,32 +1139,6 @@ func TestTransportCache_NoDoubleWrite(t *testing.T) {
 	}
 }
 
-func TestHTTPClientCache_Reused(t *testing.T) {
-	transportCache = sync.Map{}
-	httpClientCache = sync.Map{}
-
-	c1 := getHTTPClient("http://127.0.0.1:1080", 10*time.Second)
-	c2 := getHTTPClient("http://127.0.0.1:1080", 10*time.Second)
-	if c1 == nil || c2 == nil {
-		t.Fatalf("cached clients must not be nil")
-	}
-	if c1 != c2 {
-		t.Fatalf("same proxyURL+timeout should reuse http client")
-	}
-	if c1.Timeout != 10*time.Second {
-		t.Fatalf("client timeout=%v want 10s", c1.Timeout)
-	}
-
-	c3 := getHTTPClient("http://127.0.0.1:1080", 20*time.Second)
-	if c3 == c1 {
-		t.Fatalf("different timeout should use a different client")
-	}
-	c4 := getHTTPClient("http://127.0.0.1:1081", 10*time.Second)
-	if c4 == c1 {
-		t.Fatalf("different proxyURL should use a different client")
-	}
-}
-
 func TestExtractUsageTokenCountsCacheReadWrite(t *testing.T) {
 	anthropic := extractUsageTokenCounts(gjson.Parse(`{
 		"input_tokens": 10,

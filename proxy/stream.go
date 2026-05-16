@@ -32,10 +32,7 @@ import (
 	_ "github.com/router-for-me/CLIProxyAPI/v7/sdk/translator/builtin"
 )
 
-var (
-	transportCache  sync.Map
-	httpClientCache sync.Map
-)
+var transportCache sync.Map
 
 const (
 	proxyNonStreamUpstreamTimeoutKey = "proxy_nonstream_upstream_timeout_seconds"
@@ -170,33 +167,8 @@ func getTransport(proxyURL string) *http.Transport {
 		DialContext:     safeDialContext,
 		TLSClientConfig: &tls.Config{InsecureSkipVerify: skipVerify}, //nolint:gosec // 仅 localhost 上游
 	}
-	actual, loaded := transportCache.LoadOrStore(cacheKey, t)
-	if loaded {
-		t.CloseIdleConnections()
-		return actual.(*http.Transport)
-	}
-	return t
-}
-
-type clientKey struct {
-	proxyURL string
-	timeout  time.Duration
-}
-
-func getHTTPClient(proxyURL string, timeout time.Duration) *http.Client {
-	key := clientKey{proxyURL: proxyURL, timeout: timeout}
-	if c, ok := httpClientCache.Load(key); ok {
-		return c.(*http.Client)
-	}
-	c := &http.Client{
-		Transport: getTransport(proxyURL),
-		Timeout:   timeout,
-	}
-	actual, loaded := httpClientCache.LoadOrStore(key, c)
-	if loaded {
-		return actual.(*http.Client)
-	}
-	return c
+	actual, _ := transportCache.LoadOrStore(cacheKey, t)
+	return actual.(*http.Transport)
 }
 
 // isLocalProxy 判断代理 host 是否为本机回环或 RFC1918 私有段。
@@ -964,7 +936,10 @@ func ChatCompletionProxyHandler(c *fiber.Ctx) error {
 		if isStream {
 			upstreamTimeout = 0
 		}
-		httpClient := getHTTPClient(selectedChan.ProxyURL, upstreamTimeout)
+		httpClient := &http.Client{
+			Transport: getTransport(selectedChan.ProxyURL),
+			Timeout:   upstreamTimeout,
+		}
 
 		// 5. Execute Request
 		resp, err := httpClient.Do(httpReq)
