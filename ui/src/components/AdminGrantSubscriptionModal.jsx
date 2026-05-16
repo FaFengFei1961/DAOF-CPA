@@ -1,9 +1,23 @@
 import React, { useState, useEffect, useRef, useCallback } from 'react';
 import { useTranslation } from 'react-i18next';
-import { Gift, X, Search } from 'lucide-react';
+import { ChevronDown, Gift, X, Search } from 'lucide-react';
 import toast from 'react-hot-toast';
 import { authFetch } from '../utils/authFetch';
 import { useModalA11y } from '../hooks/useModalA11y';
+import DurationInput from './DurationInput';
+
+const MAX_GRANT_VALID_SECONDS = 158112000;
+
+const adminGrantApiMessage = (code, t) => {
+  switch (code) {
+    case 'ERR_INVALID_VALID_SECONDS':
+      return t('API.ERR_INVALID_VALID_SECONDS', '自定义有效期必须大于 0 秒。');
+    case 'ERR_VALID_SECONDS_TOO_LARGE':
+      return t('API.ERR_VALID_SECONDS_TOO_LARGE', '自定义有效期不能超过 5 年（158112000 秒）。');
+    default:
+      return null;
+  }
+};
 
 /**
  * AdminGrantSubscriptionModal
@@ -13,10 +27,11 @@ import { useModalA11y } from '../hooks/useModalA11y';
  *   - user picker, searchable by username / phone / github_id
  *   - package picker from /api/admin/packages
  *   - quantity
+ *   - optional custom validity seconds for compensation grants
  *   - required grant reason for audit
  *
  * Aligned with backend POST /api/admin/subscriptions/grant:
- *   { user_id, package_id, quantity, reason }
+ *   { user_id, package_id, quantity, reason, valid_seconds? }
  *
  * Props:
  *   open        - whether the dialog is visible
@@ -41,6 +56,8 @@ const AdminGrantSubscriptionModal = ({ open, onClose, onSuccess, prefillUser = n
   // Form fields.
   const [quantity, setQuantity] = useState(1);
   const [reason, setReason] = useState('');
+  const [customValidityOpen, setCustomValidityOpen] = useState(false);
+  const [customValidSeconds, setCustomValidSeconds] = useState(0);
   const [submitting, setSubmitting] = useState(false);
 
   // a11y
@@ -58,6 +75,8 @@ const AdminGrantSubscriptionModal = ({ open, onClose, onSuccess, prefillUser = n
       setSelectedPackageId('');
       setQuantity(1);
       setReason('');
+      setCustomValidityOpen(false);
+      setCustomValidSeconds(0);
     }
   }, [open, prefillUser]);
 
@@ -119,7 +138,13 @@ const AdminGrantSubscriptionModal = ({ open, onClose, onSuccess, prefillUser = n
   if (!open) return null;
 
   // Basic form validity for disabling submit and reducing invalid clicks.
-  const isFormValid = !!selectedUser?.id && !!selectedPackageId && reason.trim().length > 0;
+  const customValidSecondsInt = Math.floor(Number(customValidSeconds) || 0);
+  const hasCustomValidSeconds = customValidSecondsInt > 0;
+  const isCustomValidityValid = !hasCustomValidSeconds || customValidSecondsInt <= MAX_GRANT_VALID_SECONDS;
+  const isFormValid = !!selectedUser?.id && !!selectedPackageId && reason.trim().length > 0 && isCustomValidityValid;
+  const submitDisabledHint = !isCustomValidityValid
+    ? t('ADMIN_GRANT.ERR_VALID_SECONDS_TOO_LARGE', '自定义有效期不能超过 5 年（158112000 秒）')
+    : t('ADMIN_GRANT.SUBMIT_DISABLED_HINT', '请先选择目标用户、套餐并填写理由');
 
   const submit = async () => {
     if (!selectedUser?.id) {
@@ -148,24 +173,32 @@ const AdminGrantSubscriptionModal = ({ open, onClose, onSuccess, prefillUser = n
       toast.error(t('ADMIN_GRANT.ERR_REASON_CTRL', '理由不能包含换行 / 制表符'));
       return;
     }
+    if (hasCustomValidSeconds && customValidSecondsInt > MAX_GRANT_VALID_SECONDS) {
+      toast.error(t('ADMIN_GRANT.ERR_VALID_SECONDS_TOO_LARGE', '自定义有效期不能超过 5 年（158112000 秒）'));
+      return;
+    }
 
     setSubmitting(true);
     try {
+      const payload = {
+        user_id: selectedUser.id,
+        package_id: parseInt(selectedPackageId, 10),
+        quantity: qty,
+        reason: trimmedReason,
+      };
+      if (hasCustomValidSeconds) {
+        payload.valid_seconds = customValidSecondsInt;
+      }
       const json = await authFetch('/api/admin/subscriptions/grant', {
         method: 'POST',
-        body: {
-          user_id: selectedUser.id,
-          package_id: parseInt(selectedPackageId, 10),
-          quantity: qty,
-          reason: trimmedReason,
-        },
+        body: payload,
       });
       if (json?.success) {
         toast.success(t('ADMIN_GRANT.SUCCESS', '已赠送 {{qty}} 份', { qty }));
         onSuccess?.();
         onClose();
       } else {
-        toast.error(json?.message || t('ADMIN_GRANT.FAIL', '赠送失败'));
+        toast.error(adminGrantApiMessage(json?.message_code, t) || json?.message || t('ADMIN_GRANT.FAIL', '赠送失败'));
       }
     } catch {
       toast.error(t('API.ERR_NETWORK', '网络异常'));
@@ -305,6 +338,59 @@ const AdminGrantSubscriptionModal = ({ open, onClose, onSuccess, prefillUser = n
             <span className="ml-3 text-xs text-on-surface-variant">{t('ADMIN_GRANT.QTY_HINT', '受套餐持有上限约束')}</span>
           </div>
 
+          {/* Optional custom validity */}
+          <div className="border border-outline-variant rounded-control bg-surface-container-high/40">
+            <button
+              type="button"
+              onClick={() => setCustomValidityOpen((v) => !v)}
+              disabled={submitting}
+              className="w-full flex items-center justify-between gap-3 px-3 py-2 text-left disabled:opacity-50"
+              aria-expanded={customValidityOpen}
+              aria-controls="grant-custom-validity-panel"
+            >
+              <span className="text-sm text-on-surface">
+                {t('ADMIN_GRANT.CUSTOM_VALIDITY', '自定义有效期（仅补偿场景）')}
+              </span>
+              <ChevronDown
+                size={16}
+                className={`text-on-surface-variant transition-transform ${customValidityOpen ? 'rotate-180' : ''}`}
+                aria-hidden="true"
+              />
+            </button>
+            {customValidityOpen && (
+              <div id="grant-custom-validity-panel" className="px-3 pb-3 space-y-2">
+                <div className="text-xs text-on-surface-variant">
+                  {t('ADMIN_GRANT.CUSTOM_VALIDITY_HELP', '留空 = 用套餐默认周期；填了 = 仅此次赠送生效')}
+                </div>
+                <DurationInput
+                  value={customValidSecondsInt}
+                  onChange={setCustomValidSeconds}
+                  allowZero
+                  className="w-full rounded-control bg-surface border border-outline-variant text-on-surface text-sm px-3 py-2 focus:outline-none focus:border-primary"
+                  selectClass="rounded-control bg-surface border border-outline-variant text-on-surface text-sm px-2 py-2 focus:outline-none focus:border-primary"
+                />
+                <div className="flex items-center justify-between gap-3 text-xs text-on-surface-variant">
+                  <span>{t('ADMIN_GRANT.CUSTOM_VALIDITY_DEFAULT_HINT', '默认按套餐周期；填了则按自定义')}</span>
+                  {hasCustomValidSeconds && (
+                    <button
+                      type="button"
+                      onClick={() => setCustomValidSeconds(0)}
+                      disabled={submitting}
+                      className="text-primary hover:text-primary/80 disabled:opacity-50"
+                    >
+                      {t('ADMIN_GRANT.CUSTOM_VALIDITY_CLEAR', '清空')}
+                    </button>
+                  )}
+                </div>
+                {!isCustomValidityValid && (
+                  <div className="text-xs text-error" role="alert">
+                    {t('ADMIN_GRANT.ERR_VALID_SECONDS_TOO_LARGE', '自定义有效期不能超过 5 年（158112000 秒）')}
+                  </div>
+                )}
+              </div>
+            )}
+          </div>
+
           {/* Reason */}
           <div>
             <label htmlFor="grant-reason" className="block text-sm text-on-surface mb-1">
@@ -348,7 +434,7 @@ const AdminGrantSubscriptionModal = ({ open, onClose, onSuccess, prefillUser = n
             onClick={submit}
             disabled={submitting || !isFormValid}
             className="px-4 py-1.5 text-sm rounded-control bg-success text-white hover:bg-success disabled:opacity-50 disabled:cursor-not-allowed flex items-center gap-1.5"
-            title={!isFormValid && !submitting ? t('ADMIN_GRANT.SUBMIT_DISABLED_HINT', '请先选择目标用户、套餐并填写理由') : undefined}
+            title={!isFormValid && !submitting ? submitDisabledHint : undefined}
           >
             <Gift size={14} />
             {submitting ? t('ADMIN_GRANT.SUBMITTING', '提交中...') : t('ADMIN_GRANT.SUBMIT', '确认赠送')}

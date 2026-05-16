@@ -42,8 +42,9 @@ type adminGrantPayload struct {
 	PackageID uint `json:"package_id"`
 	// Quantity *int：nil = 默认 1；显式 0/-N 返回 ERR_INVALID_QUANTITY。
 	// fix MAJOR（codex 第十六轮）：与 PurchasePackage 一致防御深度。
-	Quantity *int   `json:"quantity"`
-	Reason   string `json:"reason"` // 必填，进 OperationLog + BillingEntry.Description
+	Quantity     *int   `json:"quantity"`
+	Reason       string `json:"reason"`                  // 必填，进 OperationLog + BillingEntry.Description
+	ValidSeconds *int64 `json:"valid_seconds,omitempty"` // 可选：自定义有效期（秒）
 	// DeprecatedApplyBonus 显式拒绝旧协议字段，而不是静默忽略。
 	DeprecatedApplyBonus *json.RawMessage `json:"apply_bonus"`
 }
@@ -121,6 +122,22 @@ func AdminGrantSubscription(c *fiber.Ctx) error {
 			"message":      fmt.Sprintf("quantity 不能超过 %d", grantQuantityMaxCap),
 			"message_code": "ERR_QUANTITY_TOO_LARGE",
 		})
+	}
+	if req.ValidSeconds != nil {
+		if *req.ValidSeconds <= 0 {
+			return c.Status(400).JSON(fiber.Map{
+				"success":      false,
+				"message":      "valid_seconds 必须大于 0",
+				"message_code": "ERR_INVALID_VALID_SECONDS",
+			})
+		}
+		if *req.ValidSeconds > maxBillingPeriodSec {
+			return c.Status(400).JSON(fiber.Map{
+				"success":      false,
+				"message":      fmt.Sprintf("valid_seconds 不能超过 %d 秒", maxBillingPeriodSec),
+				"message_code": "ERR_VALID_SECONDS_TOO_LARGE",
+			})
+		}
 	}
 	reason := strings.TrimSpace(req.Reason)
 	if reason == "" {
@@ -203,6 +220,11 @@ func AdminGrantSubscription(c *fiber.Ctx) error {
 		log.Printf("[GRANT] BLOCKED package %d invalid billing period: %d", pkg.ID, pkg.BillingPeriodSeconds)
 		return c.Status(500).JSON(fiber.Map{"success": false, "message_code": "ERR_PACKAGE_INVALID_PERIOD"})
 	}
+	effectiveSeconds := int64(pkg.BillingPeriodSeconds)
+	if req.ValidSeconds != nil {
+		effectiveSeconds = *req.ValidSeconds
+	}
+	customValidity := req.ValidSeconds != nil
 
 	// 事务外快速预检：stack 上限快路径（真正强制在事务内）
 	effectiveMax := pkg.MaxActivePerUser
@@ -238,7 +260,7 @@ func AdminGrantSubscription(c *fiber.Ctx) error {
 	// ─── 事务：创建订阅 + 写账单 + 审计 ──────────────
 	created := []database.UserSubscription{}
 	now := time.Now()
-	endAt := now.Add(time.Duration(pkg.BillingPeriodSeconds) * time.Second)
+	endAt := now.Add(time.Duration(effectiveSeconds) * time.Second)
 
 	txErr := database.DB.Transaction(func(tx *gorm.DB) error {
 		// 锁 user 父行 → 与 purchase / token-create 串行化（避免 stack count 竞态）
@@ -270,8 +292,7 @@ func AdminGrantSubscription(c *fiber.Ctx) error {
 			return errPackageChanged
 		}
 		// fix CRITICAL C-A1（codex 第二十一轮）：tx 内必须复检 BillingPeriodSeconds 上限，
-		// 与 purchase 路径对齐。第 294 行的 time.Duration(pkg.BillingPeriodSeconds) * time.Second
-		// 对超大值（DB 直改 / admin 并发更新）会整数溢出生成异常 EndAt。
+		// 与 purchase 路径对齐，防止 DB 直改 / admin 并发更新留下损坏套餐继续被赠送。
 		if freshPkg.BillingPeriodSeconds <= 0 || int64(freshPkg.BillingPeriodSeconds) > maxBillingPeriodSec {
 			return errPackageInvalidPeriodInTx
 		}
@@ -293,7 +314,7 @@ func AdminGrantSubscription(c *fiber.Ctx) error {
 			log.Printf("[GRANT] re-build snapshot in tx pkg=%d err=%v", pkg.ID, rebuildErr)
 			return fmt.Errorf("re-build snapshot: %w", rebuildErr)
 		}
-		endAt = now.Add(time.Duration(pkg.BillingPeriodSeconds) * time.Second)
+		endAt = now.Add(time.Duration(effectiveSeconds) * time.Second)
 		// 事务内重新校验 stack（防 TOCTOU）
 		// fix MAJOR（codex 第十五轮）：与事务外预检对齐，必须排除已过期行
 		if effectiveMax > 0 {
@@ -344,6 +365,10 @@ func AdminGrantSubscription(c *fiber.Ctx) error {
 		for i, sub := range created {
 			subID := sub.ID
 			grantOccurredAt := time.UnixMicro(baseEntryMicro + int64(i))
+			description := fmt.Sprintf("管理员赠送「%s」#%d · admin#%d · %s", pkg.Name, sub.StackIndex, op.ID, reason)
+			if customValidity {
+				description += fmt.Sprintf("（自定义 %d 秒）", effectiveSeconds)
+			}
 			if err := database.WriteBillingEntry(tx, database.BillingEntryInput{
 				UserID:           req.UserID,
 				OccurredAt:       grantOccurredAt,
@@ -352,7 +377,7 @@ func AdminGrantSubscription(c *fiber.Ctx) error {
 				BalanceAfterUSD:  freshUser.Quota,
 				RelatedType:      "subscription",
 				RelatedID:        subID,
-				Description:      fmt.Sprintf("管理员赠送「%s」#%d · admin#%d · %s", pkg.Name, sub.StackIndex, op.ID, reason),
+				Description:      description,
 				CurrencyOriginal: pkg.PriceCurrency,
 				AmountOriginal:   0,
 			}); err != nil {
@@ -367,14 +392,18 @@ func AdminGrantSubscription(c *fiber.Ctx) error {
 		for _, s := range created {
 			subIDs = append(subIDs, s.ID)
 		}
-		auditDetails := []map[string]any{{
+		auditDetail := map[string]any{
 			"type":         "GRANT_SUBSCRIPTION",
 			"package_id":   pkg.ID,
 			"package_name": pkg.Name,
 			"quantity":     qty,
 			"sub_ids":      subIDs,
 			"reason":       reason,
-		}}
+		}
+		if customValidity {
+			auditDetail["valid_seconds"] = effectiveSeconds
+		}
+		auditDetails := []map[string]any{auditDetail}
 		detailsJSON, err := json.Marshal(auditDetails)
 		if err != nil {
 			return fmt.Errorf("marshal audit details: %w", err)

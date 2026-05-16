@@ -93,6 +93,122 @@ func TestGrant_Success(t *testing.T) {
 	}
 }
 
+func TestAdminGrant_DefaultValidUsesPackagePeriod(t *testing.T) {
+	setupSubTestDB(t)
+	admin := seedAdminUser(t)
+	user := seedTestUser(t, 0.0)
+	pkg := seedPackage(t, func(p *database.Package) {
+		p.BillingPeriodSeconds = 12 * 3600
+	})
+	app := newAdminGrantTestApp(admin)
+
+	code, resp := doJSON(t, app, "POST", "/admin/sub/grant", map[string]any{
+		"user_id":    user.ID,
+		"package_id": pkg.ID,
+		"reason":     "默认有效期测试",
+	})
+	if code != 200 {
+		t.Fatalf("expected 200, got %d body=%v", code, resp)
+	}
+
+	var sub database.UserSubscription
+	if err := database.DB.Where("user_id = ?", user.ID).First(&sub).Error; err != nil {
+		t.Fatalf("load granted sub: %v", err)
+	}
+	got := sub.EndAt.Sub(sub.StartAt)
+	want := time.Duration(pkg.BillingPeriodSeconds) * time.Second
+	if got != want {
+		t.Fatalf("EndAt-StartAt=%v, want %v", got, want)
+	}
+}
+
+func TestAdminGrant_CustomValidUsesProvidedSeconds(t *testing.T) {
+	setupSubTestDB(t)
+	admin := seedAdminUser(t)
+	user := seedTestUser(t, 0.0)
+	pkg := seedPackage(t)
+	app := newAdminGrantTestApp(admin)
+
+	code, resp := doJSON(t, app, "POST", "/admin/sub/grant", map[string]any{
+		"user_id":       user.ID,
+		"package_id":    pkg.ID,
+		"reason":        "补偿一天",
+		"valid_seconds": int64(86400),
+	})
+	if code != 200 {
+		t.Fatalf("expected 200, got %d body=%v", code, resp)
+	}
+
+	var sub database.UserSubscription
+	if err := database.DB.Where("user_id = ?", user.ID).First(&sub).Error; err != nil {
+		t.Fatalf("load granted sub: %v", err)
+	}
+	got := sub.EndAt.Sub(sub.StartAt)
+	if got != 24*time.Hour {
+		t.Fatalf("EndAt-StartAt=%v, want 24h", got)
+	}
+
+	var entry database.BillingEntry
+	if err := database.DB.Where("user_id = ? AND entry_type = ?",
+		user.ID, database.BillingTypeAdminGrantSub).First(&entry).Error; err != nil {
+		t.Fatalf("load billing entry: %v", err)
+	}
+	if !strings.Contains(entry.Description, "（自定义 86400 秒）") {
+		t.Fatalf("billing description missing custom marker: %q", entry.Description)
+	}
+
+	var auditRow database.OperationLog
+	if err := database.DB.Where("target_user_id = ? AND action_type = ?",
+		user.ID, "GRANT_SUBSCRIPTION").First(&auditRow).Error; err != nil {
+		t.Fatalf("load audit log: %v", err)
+	}
+	var arr []map[string]any
+	if err := json.Unmarshal([]byte(auditRow.Details), &arr); err != nil {
+		t.Fatalf("details not valid json: %v\n%s", err, auditRow.Details)
+	}
+	if len(arr) != 1 {
+		t.Fatalf("valid_seconds audit detail=%v, want one detail row", arr)
+	}
+	gotValidSeconds, ok := arr[0]["valid_seconds"].(float64)
+	if !ok || gotValidSeconds != 86400 {
+		t.Fatalf("valid_seconds audit detail=%v, want 86400", arr)
+	}
+}
+
+func TestAdminGrant_RejectsZeroValid(t *testing.T) {
+	expectAdminGrantValidSecondsReject(t, 0, "ERR_INVALID_VALID_SECONDS")
+}
+
+func TestAdminGrant_RejectsNegativeValid(t *testing.T) {
+	expectAdminGrantValidSecondsReject(t, -1, "ERR_INVALID_VALID_SECONDS")
+}
+
+func TestAdminGrant_RejectsTooLargeValid(t *testing.T) {
+	expectAdminGrantValidSecondsReject(t, maxBillingPeriodSec+1, "ERR_VALID_SECONDS_TOO_LARGE")
+}
+
+func expectAdminGrantValidSecondsReject(t *testing.T, validSeconds int64, wantCode string) {
+	t.Helper()
+	setupSubTestDB(t)
+	admin := seedAdminUser(t)
+	user := seedTestUser(t, 0.0)
+	pkg := seedPackage(t)
+	app := newAdminGrantTestApp(admin)
+
+	code, resp := doJSON(t, app, "POST", "/admin/sub/grant", map[string]any{
+		"user_id":       user.ID,
+		"package_id":    pkg.ID,
+		"reason":        "非法有效期测试",
+		"valid_seconds": validSeconds,
+	})
+	if code != 400 {
+		t.Fatalf("expected 400, got %d body=%v", code, resp)
+	}
+	if resp["message_code"] != wantCode {
+		t.Fatalf("message_code=%v, want %s", resp["message_code"], wantCode)
+	}
+}
+
 // TestGrant_QuantityDoesNotCreditBalance 多份赠送只创建订阅和 0 金额账单，不给 user.Quota 入账。
 func TestGrant_QuantityDoesNotCreditBalance(t *testing.T) {
 	setupSubTestDB(t)
