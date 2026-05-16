@@ -651,7 +651,13 @@ func ChatCompletionProxyHandler(c *fiber.Ctx) error {
 		// 否则高权重模型（Opus weight=3.5）会被低估、绕过窗口限额；低权重模型（Haiku weight=0.3）
 		// 会被错误拦截。和 P0-1a commit 路径保持一致：raw cost 仅用于日志/ApiLog.Cost；
 		// 用户侧任何"是否允许扣"的判断都必须用 charged cost。
-		if !CheckBalanceConsumeAllowed(user, precheckBilling.ChargedCostMicroUSD) {
+		//
+		// PRODUCT REVERSAL（本次决策）：经业务确认，余额预检改回 rawCost。理由：
+		//   - 订阅是"模型组合包月"产品，modelWeight 调配 Haiku/Opus 含金量是产品定义
+		//   - 余额是用户预付美元，应按上游真实成本扣，不应被 modelWeight 重定价
+		//   - 这是产品策略变更，不是 bug 回退
+		//   - 业务影响：纯余额用户 Opus 扣费下降（3.5x→1x），Haiku 扣费上升（0.3x→1x）
+		if !CheckBalanceConsumeAllowed(user, precheckBilling.RawCostMicroUSD) {
 			recordProxyApiLog(user.ID, token, modelName, 402, clientIP, startTime, path, "balance_limit_reached", "balance consume window limit reached")
 			return c.Status(402).JSON(fiber.Map{"error": fiber.Map{
 				"message":      "本周期余额消费已达上限，请提高限额或等待下次重置。",
@@ -1441,7 +1447,7 @@ retryLoopExhausted:
 				TokensTotal:          promptTokens + completionTokens, // cached/reasoning 是 prompt/completion 子集（cost 算法保持一致）
 				RequestID:            upstreamRequestID(relatedID),
 				EstimatedInputTokens: promptTokens,
-				EstimatedCostUSD:     chargedCostMicroUSD,
+				EstimatedCostUSD:     costMicroUSD,
 				RelatedType:          relatedType,
 				RelatedID:            relatedID,
 				Description: fmt.Sprintf("[DB-RETRY] %s · %d+%d tokens · %s 待对账（订阅 DB 加载失败）",
@@ -1506,6 +1512,12 @@ retryLoopExhausted:
 			// fix CRITICAL（多模型审计第二十五轮）：本路径下扣减用户余额必须使用 chargedCostMicroUSD（套餐口径）
 			// 而不是 raw costMicroUSD。否则模型权重对余额扣费失效，Haiku 多扣（weight=0.3）、Opus 少扣（weight=3.5），
 			// 违反三账分离原则（raw_cost 仅记账，charged_cost 才是用户实扣）。
+			//
+			// PRODUCT REVERSAL（本次决策）：经业务确认，余额扣费改回 rawCost。理由：
+			//   - 订阅是"模型组合包月"产品，modelWeight 调配 Haiku/Opus 含金量是产品定义
+			//   - 余额是用户预付美元，应按上游真实成本扣，不应被 modelWeight 重定价
+			//   - 这是产品策略变更，不是 bug 回退
+			//   - 业务影响：纯余额用户 Opus 扣费下降（3.5x→1x），Haiku 扣费上升（0.3x→1x）
 			// fix CRITICAL Sprint1-P0-3：余额扣减必须 CAS 原子化
 			// 旧实现：`UPDATE quota = quota - ?` 无 WHERE quota >= ? 守卫 → 并发请求可把余额打负。
 			// 新实现：`WHERE id=? AND quota >= ?` 条件 UPDATE：
@@ -1514,15 +1526,16 @@ retryLoopExhausted:
 			//     余额不足时上游服务已交付，不打负余额，改写 api_usage_pending_reconcile 待对账。
 			deductQuotaAtomic := func() {
 				var balanceAfterMicroUSD int64
+				balanceConsumeMicroUSD := costMicroUSD // rawCost：余额路径按上游真实成本扣费
 				txErr := database.DB.Transaction(func(tx *gorm.DB) error {
-					if !TryConsumeBalanceTx(tx, user.ID, chargedCostMicroUSD, true /* forceTrack */) {
-						log.Printf("[BILLING-WINDOW-TRACK-FAIL] user=%d model=%s charged_cost_micro=%d forceTrack failed (DB issue), continuing quota deduct", user.ID, modelName, chargedCostMicroUSD)
+					if !TryConsumeBalanceTx(tx, user.ID, balanceConsumeMicroUSD, true /* forceTrack */) {
+						log.Printf("[BILLING-WINDOW-TRACK-FAIL] user=%d model=%s raw_cost_micro=%d charged_cost_micro=%d forceTrack failed (DB issue), continuing quota deduct", user.ID, modelName, balanceConsumeMicroUSD, chargedCostMicroUSD)
 					}
 
 					// 原子 CAS：仅在余额 ≥ 扣费金额时执行 UPDATE
 					res := tx.Model(&database.User{}).
-						Where("id = ? AND quota >= ?", user.ID, chargedCostMicroUSD).
-						UpdateColumn("quota", gorm.Expr("quota - ?", chargedCostMicroUSD))
+						Where("id = ? AND quota >= ?", user.ID, balanceConsumeMicroUSD).
+						UpdateColumn("quota", gorm.Expr("quota - ?", balanceConsumeMicroUSD))
 					if res.Error != nil {
 						return fmt.Errorf("quota deduct: %w", res.Error)
 					}
@@ -1543,8 +1556,8 @@ retryLoopExhausted:
 						}
 						// 用户存在 → 余额不足。上游服务已交付，写 pending_reconcile，
 						// 不动 quota（保证余额永不为负），admin 人工对账或免扣。
-						log.Printf("[BILLING-INSUFFICIENT-BALANCE] user=%d model=%s charged_cost_micro=%d current_quota=%d — recording pending_reconcile (service already delivered)",
-							user.ID, modelName, chargedCostMicroUSD, u.Quota)
+						log.Printf("[BILLING-INSUFFICIENT-BALANCE] user=%d model=%s raw_cost_micro=%d charged_cost_micro=%d current_quota=%d — recording pending_reconcile (service already delivered)",
+							user.ID, modelName, balanceConsumeMicroUSD, chargedCostMicroUSD, u.Quota)
 						return database.WriteBillingEntry(tx, database.BillingEntryInput{
 							UserID:               user.ID,
 							EntryType:            database.BillingTypeApiUsagePendingReconcile,
@@ -1555,11 +1568,11 @@ retryLoopExhausted:
 							TokensTotal:          tokensTotal,
 							RequestID:            upstreamRequestID(relatedID),
 							EstimatedInputTokens: promptTokens,
-							EstimatedCostUSD:     chargedCostMicroUSD,
+							EstimatedCostUSD:     balanceConsumeMicroUSD,
 							RelatedType:          relatedType,
 							RelatedID:            relatedID,
-							Description: fmt.Sprintf("[INSUFFICIENT-BALANCE] %s · %d tokens · %s 余额不足，已交付服务待对账",
-								modelName, tokensTotal, FormatChargedCostForDescription(costMicroUSD, chargedCostMicroUSD)),
+							Description: fmt.Sprintf("[INSUFFICIENT-BALANCE] %s · %d tokens · 余额不足，已交付服务待对账（按 raw 上游成本计 $%s）",
+								modelName, tokensTotal, database.FormatMicroUSD(balanceConsumeMicroUSD)),
 						})
 					}
 
@@ -1573,7 +1586,7 @@ retryLoopExhausted:
 					if err := database.WriteBillingEntry(tx, database.BillingEntryInput{
 						UserID:          user.ID,
 						EntryType:       database.BillingTypeApiConsumeBalance,
-						AmountUSD:       -chargedCostMicroUSD,
+						AmountUSD:       -balanceConsumeMicroUSD,
 						BalanceAfterUSD: balanceAfterMicroUSD,
 						ModelName:       modelName,
 						TokensTotal:     tokensTotal,
@@ -1616,7 +1629,7 @@ retryLoopExhausted:
 					TokensTotal:          promptTokens + completionTokens, // cached/reasoning 是 prompt/completion 子集（cost 算法保持一致）
 					RequestID:            upstreamRequestID(relatedID),
 					EstimatedInputTokens: promptTokens,
-					EstimatedCostUSD:     chargedCostMicroUSD,
+					EstimatedCostUSD:     costMicroUSD,
 					RelatedType:          relatedType,
 					RelatedID:            relatedID,
 					Description: fmt.Sprintf("[UNAUTHORIZED-FALLBACK] %s · %d+%d tokens · %s 待对账（订阅 commit 期被耗尽 + 余额消费禁用）",

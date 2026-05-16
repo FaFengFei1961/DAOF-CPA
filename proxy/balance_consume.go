@@ -36,6 +36,7 @@ type BalanceConsumeStatus struct {
 }
 
 // TryConsumeBalanceTx 在调用方事务内原子检查并扣减用户余额消费窗口配额。
+// deltaMicroUSD 使用余额产品口径：rawCost（上游真实成本），不含 modelWeight / healthMultiplier。
 //
 // fix CRITICAL C-B5（codex 第二十一轮）：原 TryConsumeBalance 与 deductQuotaAtomic 不在
 // 同一事务——若窗口累加成功但扣费 / 账单写入失败（DB 故障 / panic），
@@ -111,6 +112,7 @@ func TryConsumeBalanceTx(tx *gorm.DB, userID uint, deltaMicroUSD int64, forceTra
 
 // CheckBalanceConsumeAllowed 仅做"是否允许"快速预检（用于 Decide 阶段决定路径）。
 // **不**修改任何状态。真正的扣减在 TryConsumeBalance 里以原子方式完成。
+// deltaMicroUSD 使用余额产品口径：rawCost（上游真实成本），不含 modelWeight / healthMultiplier。
 //
 // 注意：这里返回 true 不保证后续 TryConsumeBalance 一定成功——并发请求可能在你检查后扣光余额。
 // 调用方必须接受这一点：Decide 用此函数粗筛"用户允许走余额"，最终扣费用 TryConsumeBalance。
