@@ -318,6 +318,7 @@ func main() {
 
 	// 订阅总览
 	adminApi.Get("/subscriptions", controller.AdminListSubscriptions)
+	adminApi.Post("/subscriptions/reset-usage", controller.AdminResetSubscriptionUsage)
 	// 注：订阅退款 admin endpoint 在 refundLimiter 声明后（约 line 408 附近）注册
 
 	// 优惠券系统 admin（模板 CRUD + 发券 + 撤销 + 查用户券）

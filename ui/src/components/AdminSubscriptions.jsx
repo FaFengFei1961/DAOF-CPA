@@ -1,15 +1,17 @@
 import React, { useState, useEffect, useCallback, useRef } from 'react';
 import { useTranslation } from 'react-i18next';
-import { Package, RefreshCw, RotateCcw, Search, X, Gift, ChevronDown, Gauge, TimerReset, Activity, Users, Undo2 } from 'lucide-react';
+import { Package, RefreshCw, RotateCcw, Search, X, Gift, ChevronDown, Gauge, TimerReset, Activity, Users, Undo2, AlertTriangle } from 'lucide-react';
 import toast from 'react-hot-toast';
 import { useConfirm } from '../context/ConfirmContext';
 import { authFetch } from '../utils/authFetch';
 import { remainingColor, safePct, fmtRelativeFromNow, fmtAbsoluteShort } from '../utils/credits';
 import { Clock } from 'lucide-react';
 import AdminGrantSubscriptionModal from './AdminGrantSubscriptionModal';
+import { useModalA11y } from '../hooks/useModalA11y';
 
 // Aligned with backend adminSubItem fields.
 const STATUS_OPTIONS = ['', 'active', 'canceled', 'expired', 'refunded', 'paused', 'revoked'];
+const RESET_USAGE_STATUS_OPTIONS = ['active', 'canceled', 'expired'];
 
 // Status display style.
 const statusStyle = (s) => {
@@ -72,6 +74,21 @@ const readConfirmValue = (result) => {
   return result;
 };
 
+const resetUsageErrorMessage = (code, t) => {
+  switch (code) {
+    case 'ERR_RESET_CONFIRM_REQUIRED':
+      return t('API.ERR_RESET_CONFIRM_REQUIRED', 'Reset confirmation is required.');
+    case 'ERR_RESET_NOTE_REQUIRED':
+      return t('API.ERR_RESET_NOTE_REQUIRED', 'Reset note is required.');
+    case 'ERR_RESET_NOTE_TOO_LONG':
+      return t('API.ERR_RESET_NOTE_TOO_LONG', 'Reset note must be 500 characters or less.');
+    case 'ERR_RESET_SCOPE_TOO_LARGE':
+      return t('API.ERR_RESET_SCOPE_TOO_LARGE', 'Reset scope is too large; narrow the filters.');
+    default:
+      return null;
+  }
+};
+
 const summarizePageUsage = (rows) => {
   const details = rows.flatMap((row) => parseUsageDetails(row.usage_details_json));
   const active = rows.filter((row) => row.status === 'active').length;
@@ -103,6 +120,7 @@ const AdminSubscriptions = () => {
   const [revokingId, setRevokingId] = useState(null);
   const [expandedRow, setExpandedRow] = useState(null);
   const [grantModalOpen, setGrantModalOpen] = useState(false);
+  const [resetUsageModalOpen, setResetUsageModalOpen] = useState(false);
 
   // fix MAJOR M8 (gemini round 20): prevent rapid status/search changes from being overwritten by stale responses.
   const reqIdRef = useRef(0);
@@ -250,6 +268,15 @@ const AdminSubscriptions = () => {
         <div className="flex items-center gap-2">
           <button
             type="button"
+            onClick={() => setResetUsageModalOpen(true)}
+            className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-control text-sm bg-surface-container-high text-on-surface-variant hover:text-on-surface hover:bg-surface-container-highest border border-outline-variant"
+            title={t('ADMIN_SUBS.RESET_USAGE.BUTTON_TITLE', 'Reset current-cycle usage without moving refresh windows')}
+          >
+            <TimerReset size={14} />
+            {t('ADMIN_SUBS.RESET_USAGE.BUTTON', '重置已用额度')}
+          </button>
+          <button
+            type="button"
             onClick={() => setGrantModalOpen(true)}
             className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-control text-sm bg-success/10 text-success hover:bg-success/20 border border-success/30"
             title={t('ADMIN_SUBS.GRANT_BTN_TITLE', '管理员赠送订阅给指定用户')}
@@ -268,6 +295,12 @@ const AdminSubscriptions = () => {
       <AdminGrantSubscriptionModal
         open={grantModalOpen}
         onClose={() => setGrantModalOpen(false)}
+        onSuccess={() => load(meta.page)}
+      />
+
+      <ResetUsageModal
+        open={resetUsageModalOpen}
+        onClose={() => setResetUsageModalOpen(false)}
         onSuccess={() => load(meta.page)}
       />
 
@@ -515,6 +548,339 @@ const AdminSubscriptions = () => {
           <span>{meta.page} / {Math.max(1, Math.ceil(meta.total / meta.page_size))}</span>
           <button disabled={meta.page * meta.page_size >= meta.total} onClick={() => load(meta.page + 1)}
             className="px-3 py-1 rounded-control bg-surface-container-high disabled:opacity-50">→</button>
+        </div>
+      </div>
+    </div>
+  );
+};
+
+const ResetUsageModal = ({ open, onClose, onSuccess }) => {
+  const { t } = useTranslation();
+  const [packages, setPackages] = useState([]);
+  const [loadingPackages, setLoadingPackages] = useState(false);
+  const [selectedPackageIds, setSelectedPackageIds] = useState([]);
+  const [selectedUsers, setSelectedUsers] = useState([]);
+  const [userQuery, setUserQuery] = useState('');
+  const [userSuggestions, setUserSuggestions] = useState([]);
+  const [searchingUsers, setSearchingUsers] = useState(false);
+  const [selectedStatuses, setSelectedStatuses] = useState(['active']);
+  const [note, setNote] = useState('');
+  const [confirmText, setConfirmText] = useState('');
+  const [submitting, setSubmitting] = useState(false);
+  const modalRef = useRef(null);
+  const closeBtnRef = useRef(null);
+  const searchReqRef = useRef(0);
+  const { onBackdropClick } = useModalA11y(open, () => !submitting && onClose(), closeBtnRef, modalRef);
+
+  useEffect(() => {
+    if (!open) return;
+    setSelectedPackageIds([]);
+    setSelectedUsers([]);
+    setUserQuery('');
+    setUserSuggestions([]);
+    setSelectedStatuses(['active']);
+    setNote('');
+    setConfirmText('');
+  }, [open]);
+
+  useEffect(() => {
+    if (!open) return;
+    setLoadingPackages(true);
+    authFetch('/api/admin/packages')
+      .then((j) => {
+        if (j?.success) {
+          setPackages(j.data || []);
+        } else {
+          toast.error(j?.message || t('ADMIN_SUBS.RESET_USAGE.LOAD_PACKAGES_FAIL', '套餐列表加载失败'));
+        }
+      })
+      .catch(() => toast.error(t('API.ERR_NETWORK', '网络异常')))
+      .finally(() => setLoadingPackages(false));
+  }, [open, t]);
+
+  const searchUsers = useCallback(async (q) => {
+    if (!q || q.length < 2) {
+      setUserSuggestions([]);
+      return;
+    }
+    const myReqId = ++searchReqRef.current;
+    setSearchingUsers(true);
+    try {
+      const params = new URLSearchParams({ search: q, page: '1', page_size: '10' });
+      const j = await authFetch(`/api/admin/users?${params.toString()}`);
+      if (myReqId !== searchReqRef.current) return;
+      if (j?.success) {
+        const selectedIds = new Set(selectedUsers.map((u) => u.id));
+        setUserSuggestions((j.data || []).filter((u) => u.role === 'user' && !selectedIds.has(u.id)));
+      }
+    } catch {
+      // Suggestions are a convenience; the modal can continue without them.
+    } finally {
+      if (myReqId === searchReqRef.current) setSearchingUsers(false);
+    }
+  }, [selectedUsers]);
+
+  useEffect(() => {
+    if (!open) return;
+    const trimmed = userQuery.trim();
+    const handle = setTimeout(() => searchUsers(trimmed), 300);
+    return () => clearTimeout(handle);
+  }, [userQuery, open, searchUsers]);
+
+  if (!open) return null;
+
+  const togglePackage = (id) => {
+    setSelectedPackageIds((prev) => prev.includes(id) ? prev.filter((x) => x !== id) : [...prev, id]);
+  };
+  const toggleStatus = (status) => {
+    setSelectedStatuses((prev) => prev.includes(status) ? prev.filter((x) => x !== status) : [...prev, status]);
+  };
+  const addUser = (user) => {
+    setSelectedUsers((prev) => prev.some((u) => u.id === user.id) ? prev : [...prev, { id: user.id, username: user.username }]);
+    setUserQuery('');
+    setUserSuggestions([]);
+  };
+  const removeUser = (id) => {
+    setSelectedUsers((prev) => prev.filter((u) => u.id !== id));
+  };
+
+  const trimmedNote = note.trim();
+  const canSubmit = !submitting && confirmText === 'RESET' && trimmedNote.length > 0 && trimmedNote.length <= 500;
+
+  const submit = async () => {
+    if (!trimmedNote) {
+      toast.error(t('ADMIN_SUBS.RESET_USAGE.NOTE_REQUIRED', '请填写备注'));
+      return;
+    }
+    if (trimmedNote.length > 500) {
+      toast.error(t('ADMIN_SUBS.RESET_USAGE.NOTE_TOO_LONG', '备注不能超过 500 字'));
+      return;
+    }
+    if (confirmText !== 'RESET') {
+      toast.error(t('ADMIN_SUBS.RESET_USAGE.CONFIRM_REQUIRED', '请输入 RESET 解锁提交'));
+      return;
+    }
+    setSubmitting(true);
+    try {
+      const json = await authFetch('/api/admin/subscriptions/reset-usage', {
+        method: 'POST',
+        body: {
+          package_ids: selectedPackageIds,
+          user_ids: selectedUsers.map((u) => u.id),
+          statuses: selectedStatuses,
+          note: trimmedNote,
+          confirm: 'YES_RESET_USAGE',
+        },
+      });
+      if (json?.success) {
+        toast.success(t('ADMIN_SUBS.RESET_USAGE.SUCCESS', '已重置 {{count}} 个订阅', { count: json.reset_count || 0 }));
+        onSuccess?.();
+        onClose();
+      } else {
+        toast.error(resetUsageErrorMessage(json?.message_code, t) || json?.message || t('ADMIN_SUBS.RESET_USAGE.FAIL', '重置失败'));
+      }
+    } catch {
+      toast.error(t('API.ERR_NETWORK', '网络异常'));
+    } finally {
+      setSubmitting(false);
+    }
+  };
+
+  return (
+    <div
+      ref={modalRef}
+      className="fixed inset-0 z-50 flex items-center justify-center bg-black/60"
+      onClick={onBackdropClick}
+      role="dialog"
+      aria-modal="true"
+      aria-labelledby="reset-usage-modal-title"
+    >
+      <div className="bg-surface-container rounded-overlay border border-outline-variant w-full max-w-2xl m-4 max-h-[90vh] overflow-y-auto">
+        <div className="flex items-center justify-between px-5 py-4 border-b border-outline-variant">
+          <h3 id="reset-usage-modal-title" className="text-lg font-semibold text-on-surface flex items-center gap-2">
+            <TimerReset size={18} className="text-warning" />
+            {t('ADMIN_SUBS.RESET_USAGE.TITLE', '重置已用额度')}
+          </h3>
+          <button
+            ref={closeBtnRef}
+            type="button"
+            onClick={onClose}
+            disabled={submitting}
+            className="text-on-surface-variant hover:text-on-surface p-1 rounded-control disabled:opacity-50"
+            aria-label={t('COMMON.CLOSE', '关闭')}
+          >
+            <X size={18} />
+          </button>
+        </div>
+
+        <div className="px-5 py-4 space-y-5">
+          <div className="rounded-overlay border border-warning/30 bg-warning/10 p-3 text-sm text-on-surface flex gap-3">
+            <AlertTriangle size={18} className="text-warning shrink-0 mt-0.5" />
+            <div>
+              <div className="font-semibold">{t('ADMIN_SUBS.RESET_USAGE.WARNING_TITLE', '请确认操作范围')}</div>
+              <div className="text-on-surface-variant mt-1">
+                {t('ADMIN_SUBS.RESET_USAGE.WARNING_BODY', '此操作会把所选范围内订阅的当前周期已用额度归零，不会改变刷新窗口。')}
+              </div>
+            </div>
+          </div>
+
+          <div>
+            <div className="text-sm text-on-surface mb-2">{t('ADMIN_SUBS.RESET_USAGE.PACKAGES', '套餐范围')}</div>
+            <div className="rounded-control border border-outline-variant bg-surface-container-high max-h-40 overflow-y-auto p-2 space-y-1">
+              {loadingPackages ? (
+                <div className="text-sm text-on-surface-variant px-2 py-1">{t('COMMON.LOADING', '加载中…')}</div>
+              ) : packages.length === 0 ? (
+                <div className="text-sm text-on-surface-variant px-2 py-1">{t('COMMON.EMPTY', '暂无数据')}</div>
+              ) : packages.map((pkg) => (
+                <label key={pkg.id} className="flex items-center justify-between gap-3 px-2 py-1 rounded-control hover:bg-surface-container text-sm">
+                  <span className="flex items-center gap-2 min-w-0">
+                    <input
+                      type="checkbox"
+                      checked={selectedPackageIds.includes(pkg.id)}
+                      onChange={() => togglePackage(pkg.id)}
+                      disabled={submitting}
+                    />
+                    <span className="truncate">{pkg.name}</span>
+                  </span>
+                  <span className="text-xs text-on-surface-variant font-mono shrink-0">#{pkg.id}</span>
+                </label>
+              ))}
+            </div>
+            <div className="text-xs text-on-surface-variant mt-1">
+              {selectedPackageIds.length === 0
+                ? t('ADMIN_SUBS.RESET_USAGE.ALL_PACKAGES_HINT', '未选择套餐时表示不限套餐')
+                : t('ADMIN_SUBS.RESET_USAGE.SELECTED_PACKAGES', '已选择 {{count}} 个套餐', { count: selectedPackageIds.length })}
+            </div>
+          </div>
+
+          <div>
+            <label htmlFor="reset-usage-user-search" className="block text-sm text-on-surface mb-2">
+              {t('ADMIN_SUBS.RESET_USAGE.USERS', '用户范围')}
+            </label>
+            <div className="relative">
+              <Search size={14} className="absolute left-3 top-1/2 -translate-y-1/2 text-on-surface-variant" />
+              <input
+                id="reset-usage-user-search"
+                type="text"
+                value={userQuery}
+                onChange={(e) => setUserQuery(e.target.value)}
+                disabled={submitting}
+                placeholder={t('ADMIN_SUBS.RESET_USAGE.USER_SEARCH_PH', '输入用户名 / 手机号 / GitHub ID（≥2 字符）')}
+                className="w-full bg-surface-container-high border border-outline-variant rounded-control pl-9 pr-3 py-2 text-sm focus:outline-none focus:border-primary"
+                aria-autocomplete="list"
+                aria-expanded={userSuggestions.length > 0}
+                aria-controls="reset-usage-user-suggestions"
+              />
+            </div>
+            {searchingUsers && (
+              <div className="text-xs text-on-surface-variant mt-1">{t('ADMIN_GRANT.SEARCHING', '搜索中…')}</div>
+            )}
+            {userSuggestions.length > 0 && (
+              <ul id="reset-usage-user-suggestions" className="mt-1 bg-surface-container-high border border-outline-variant rounded-control max-h-40 overflow-y-auto">
+                {userSuggestions.map((u) => (
+                  <li key={u.id}>
+                    <button
+                      type="button"
+                      onClick={() => addUser(u)}
+                      className="w-full text-left px-3 py-2 hover:bg-surface-container text-sm border-b border-outline-variant/40 last:border-0"
+                    >
+                      <div className="text-on-surface">
+                        {u.username} <span className="text-on-surface-variant text-xs">#{u.id}</span>
+                      </div>
+                      {u.phone && <div className="text-xs text-on-surface-variant font-mono">{u.phone}</div>}
+                    </button>
+                  </li>
+                ))}
+              </ul>
+            )}
+            {selectedUsers.length > 0 && (
+              <div className="mt-2 flex flex-wrap gap-2">
+                {selectedUsers.map((u) => (
+                  <span key={u.id} className="inline-flex items-center gap-1 rounded-control bg-primary/10 text-primary px-2 py-1 text-xs">
+                    {u.username || t('ADMIN_SUBS.USER_FALLBACK', '用户#{{id}}', { id: u.id })} #{u.id}
+                    <button type="button" onClick={() => removeUser(u.id)} className="hover:text-on-surface" aria-label={t('COMMON.CLOSE', '关闭')}>
+                      <X size={12} />
+                    </button>
+                  </span>
+                ))}
+              </div>
+            )}
+            <div className="text-xs text-on-surface-variant mt-1">
+              {selectedUsers.length === 0
+                ? t('ADMIN_SUBS.RESET_USAGE.ALL_USERS_HINT', '未选择用户时表示全员')
+                : t('ADMIN_SUBS.RESET_USAGE.SELECTED_USERS', '已选择 {{count}} 个用户', { count: selectedUsers.length })}
+            </div>
+          </div>
+
+          <div>
+            <div className="text-sm text-on-surface mb-2">{t('ADMIN_SUBS.RESET_USAGE.STATUSES', '订阅状态')}</div>
+            <div className="flex flex-wrap gap-2">
+              {RESET_USAGE_STATUS_OPTIONS.map((status) => (
+                <label key={status} className="inline-flex items-center gap-2 rounded-control border border-outline-variant bg-surface-container-high px-3 py-1.5 text-sm">
+                  <input
+                    type="checkbox"
+                    checked={selectedStatuses.includes(status)}
+                    onChange={() => toggleStatus(status)}
+                    disabled={submitting}
+                  />
+                  {t(`ADMIN_SUBS.STATUS_${status.toUpperCase()}`, status)}
+                </label>
+              ))}
+            </div>
+          </div>
+
+          <div>
+            <label htmlFor="reset-usage-note" className="block text-sm text-on-surface mb-1">
+              {t('ADMIN_SUBS.RESET_USAGE.NOTE', '备注')} <span className="text-error">*</span>
+            </label>
+            <textarea
+              id="reset-usage-note"
+              value={note}
+              onChange={(e) => setNote(e.target.value)}
+              disabled={submitting}
+              rows={3}
+              maxLength={500}
+              placeholder={t('ADMIN_SUBS.RESET_USAGE.NOTE_PH', '填写本次重置原因，最多 500 字')}
+              className="w-full bg-surface-container-high border border-outline-variant rounded-control px-3 py-2 text-sm focus:outline-none focus:border-primary"
+            />
+            <div className="text-xs text-on-surface-variant mt-1">{note.length}/500</div>
+          </div>
+
+          <div>
+            <label htmlFor="reset-usage-confirm" className="block text-sm text-on-surface mb-1">
+              {t('ADMIN_SUBS.RESET_USAGE.CONFIRM_LABEL', '输入 RESET 确认')} <span className="text-error">*</span>
+            </label>
+            <input
+              id="reset-usage-confirm"
+              value={confirmText}
+              onChange={(e) => setConfirmText(e.target.value)}
+              disabled={submitting}
+              placeholder="RESET"
+              className="w-full bg-surface-container-high border border-outline-variant rounded-control px-3 py-2 text-sm font-mono focus:outline-none focus:border-primary"
+            />
+          </div>
+        </div>
+
+        <div className="px-5 py-4 border-t border-outline-variant flex items-center justify-end gap-2">
+          <button
+            type="button"
+            onClick={onClose}
+            disabled={submitting}
+            className="px-4 py-2 rounded-control text-sm bg-surface-container-high text-on-surface hover:bg-surface-container-highest disabled:opacity-50"
+          >
+            {t('COMMON.CANCEL', '取消')}
+          </button>
+          <button
+            type="button"
+            onClick={submit}
+            disabled={!canSubmit}
+            className="inline-flex items-center gap-2 px-4 py-2 rounded-control text-sm font-medium bg-warning text-on-primary hover:brightness-110 disabled:opacity-50 disabled:cursor-not-allowed"
+          >
+            <TimerReset size={14} />
+            {submitting
+              ? t('ADMIN_SUBS.RESET_USAGE.SUBMITTING', '提交中…')
+              : t('ADMIN_SUBS.RESET_USAGE.SUBMIT', '确认重置')}
+          </button>
         </div>
       </div>
     </div>
