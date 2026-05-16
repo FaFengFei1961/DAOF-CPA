@@ -230,7 +230,8 @@ func lockAndApplyCoupon(tx *gorm.DB, userID, couponID uint, pkg *database.Packag
 	// 条件 UPDATE：只有当前 status='available' 才能改成 'used'。
 	// 任何并发抢占（用户重复点击 / admin revoke）会让 RowsAffected == 0 → 返回 errCouponInvalid。
 	res := tx.Model(&database.UserCoupon{}).
-		Where("id = ? AND user_id = ? AND status = ?", coupon.ID, userID, "available").
+		Where("id = ? AND user_id = ? AND status = ? AND (expires_at IS NULL OR expires_at > ?)",
+			coupon.ID, userID, "available", now).
 		Updates(map[string]any{
 			"status":  "used",
 			"used_at": now,

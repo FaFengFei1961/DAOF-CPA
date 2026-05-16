@@ -451,6 +451,48 @@ func TestLockAndApplyCoupon_ConcurrentRace(t *testing.T) {
 	}
 }
 
+func TestLockAndApplyCoupon_RejectsExpired(t *testing.T) {
+	db := setupCouponTestDB(t)
+	expiresAt := time.Now().Add(time.Hour)
+	uc := database.UserCoupon{
+		UserID: 1, Code: "CP-1-1-expire-toctou",
+		Status: "available", SnapshotType: "fixed_price", SnapshotValue: 10,
+		ExpiresAt: &expiresAt,
+	}
+	if err := db.Create(&uc).Error; err != nil {
+		t.Fatalf("create coupon: %v", err)
+	}
+	pkg := &database.Package{}
+	pkg.ID = 5
+	pkg.PriceAmount = 20
+	pkg.CostFloorMicroUSD = 5
+
+	db.Callback().Update().Before("gorm:update").Register("test:expire_coupon_before_apply", func(tx *gorm.DB) {
+		if tx.Statement.Schema == nil || tx.Statement.Schema.Name != "UserCoupon" {
+			return
+		}
+		past := time.Now().Add(-time.Minute)
+		if err := tx.Exec("UPDATE user_coupons SET expires_at = ? WHERE id = ?", past, uc.ID).Error; err != nil {
+			t.Fatalf("expire coupon in callback: %v", err)
+		}
+	})
+
+	err := db.Transaction(func(tx *gorm.DB) error {
+		_, err := lockAndApplyCoupon(tx, 1, uc.ID, pkg)
+		return err
+	})
+	if !errors.Is(err, errCouponInvalid) {
+		t.Fatalf("expected errCouponInvalid after expires_at race, got %v", err)
+	}
+	var fresh database.UserCoupon
+	if err := db.First(&fresh, uc.ID).Error; err != nil {
+		t.Fatalf("load coupon: %v", err)
+	}
+	if fresh.Status != "available" || fresh.UsedAt != nil {
+		t.Fatalf("coupon should remain available/unconsumed, got status=%q used_at=%v", fresh.Status, fresh.UsedAt)
+	}
+}
+
 func TestLockAndApplyCoupon_RechecksCostFloor(t *testing.T) {
 	db := setupCouponTestDB(t)
 	uc := database.UserCoupon{

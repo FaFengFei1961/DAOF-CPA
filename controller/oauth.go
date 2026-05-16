@@ -70,6 +70,11 @@ func markTmpTokenConsumed(tmpToken string) bool {
 	return !loaded
 }
 
+func isTmpTokenConsumed(tmpToken string) bool {
+	_, loaded := tmpTokenConsumedStore.Load(tmpTokenJTI(tmpToken))
+	return loaded
+}
+
 func startTmpTokenJanitor() {
 	tmpTokenJanitorOnce.Do(func() {
 		go func() {
@@ -335,8 +340,15 @@ func autoGrantSignupCouponTx(tx *gorm.DB, userID uint, via string) error {
 	if err := tx.Create(&uc).Error; err != nil {
 		return fmt.Errorf("create signup coupon: %w", err)
 	}
-	log.Printf("[SIGNUP-COUPON] granted user=%d template=%d code=%s via=%s", userID, tplID, uc.Code, via)
+	log.Printf("[SIGNUP-COUPON] granted user=%d template=%d code=%s via=%s", userID, tplID, maskCouponCode(uc.Code), via)
 	return nil
+}
+
+func maskCouponCode(code string) string {
+	if len(code) <= 4 {
+		return "****"
+	}
+	return code[:len(code)-4] + "****"
 }
 
 // fix CRITICAL C4（codex+claude security 第十五轮）：原实现存在 3 个问题：
@@ -629,7 +641,7 @@ func GithubCallback(c *fiber.Ctx) error {
 	var existingUser database.User
 	res := database.DB.Where("github_id = ?", ghID).First(&existingUser)
 	if res.RowsAffected > 0 {
-		if existingUser.Status == 2 {
+		if existingUser.Status != 1 {
 			return c.Status(403).JSON(fiber.Map{
 				"success":      false,
 				"message_code": "ERR_BANNED",
@@ -749,25 +761,31 @@ func CompleteRisk(c *fiber.Ctx) error {
 		return c.Status(400).JSON(fiber.Map{"success": false, "message": "请求报文解析失败", "message_code": "ERR_PARSE_REQUEST"})
 	}
 
-	// 真实校验：阿里云 SMS 已通过 SendSMS endpoint 发码，verifySMSCode 一次性消费
-	if !verifySMSCode(req.Phone, req.SmsCode) {
-		return c.Status(403).JSON(fiber.Map{"success": false, "message": "短信验证码错误或已过期", "message_code": "ERR_SMS_CODE_INVALID"})
-	}
-
 	// 1. 拆解临时票据 + 校验类型 + 校验过期 + 拆 ref（C-4/M-5 修复）
 	tokenType, refUser, decryptedStr, err := parseTmpToken(req.TmpToken)
 	if err != nil {
 		return c.Status(403).JSON(fiber.Map{"success": false, "message": err.Error(), "message_code": "ERR_RISK_TICKET_INVALID"})
+	}
+	if tokenType != "sms" {
+		// 防止 clean| 类型 token 被提交到 sms 路径绕过短信验证
+		return c.Status(403).JSON(fiber.Map{"success": false, "message": "票据类型错误", "message_code": "ERR_RISK_TICKET_TYPE"})
+	}
+	if isTmpTokenConsumed(req.TmpToken) {
+		return c.Status(403).JSON(fiber.Map{
+			"success":      false,
+			"message_code": "ERR_TMP_TOKEN_ALREADY_USED",
+		})
+	}
+	// 真实校验：阿里云 SMS 已通过 SendSMS endpoint 发码，verifySMSCode 一次性消费。
+	// 必须先验 tmp_token，避免攻击者用无效 tmp_token 消耗目标手机号验证码次数。
+	if !verifySMSCode(req.Phone, req.SmsCode) {
+		return c.Status(403).JSON(fiber.Map{"success": false, "message": "短信验证码错误或已过期", "message_code": "ERR_SMS_CODE_INVALID"})
 	}
 	if !markTmpTokenConsumed(req.TmpToken) {
 		return c.Status(403).JSON(fiber.Map{
 			"success":      false,
 			"message_code": "ERR_TMP_TOKEN_ALREADY_USED",
 		})
-	}
-	if tokenType != "sms" {
-		// 防止 clean| 类型 token 被提交到 sms 路径绕过短信验证
-		return c.Status(403).JSON(fiber.Map{"success": false, "message": "票据类型错误", "message_code": "ERR_RISK_TICKET_TYPE"})
 	}
 
 	// fix CRITICAL（codex 第四轮）：从 tmp_token 解出 GitHub ID 写到 newUser，

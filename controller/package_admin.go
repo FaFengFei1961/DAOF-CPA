@@ -30,6 +30,7 @@ const MaxQuantityMultiplier = 100.0
 var errDeprecatedRequestField = errors.New("deprecated request field")
 var errInvalidProductType = errors.New("product_type only supports subscription")
 var errPackageCostFloorInvalid = errors.New("package cost_floor invalid")
+var errReorderStaleID = errors.New("reorder contains stale id")
 
 // 直接使用常量字面量，i18n 覆盖测试可通过 AST 扫描捕获，避免遗漏翻译。
 const MessageCodePackageCostFloorInvalid = "ERR_PACKAGE_COST_FLOOR_INVALID"
@@ -764,12 +765,19 @@ func ReorderPackages(c *fiber.Ctx) error {
 	}
 	if err := database.DB.Transaction(func(tx *gorm.DB) error {
 		for i, id := range req.IDs {
-			if err := tx.Model(&database.Package{}).Where("id = ?", id).Update("sort_order", (i+1)*10).Error; err != nil {
-				return fmt.Errorf("reorder package %d: %w", id, err)
+			res := tx.Model(&database.Package{}).Where("id = ?", id).Update("sort_order", (i+1)*10)
+			if res.Error != nil {
+				return fmt.Errorf("reorder package %d: %w", id, res.Error)
+			}
+			if res.RowsAffected == 0 {
+				return fmt.Errorf("%w: package id=%d", errReorderStaleID, id)
 			}
 		}
 		return nil
 	}); err != nil {
+		if errors.Is(err, errReorderStaleID) {
+			return c.Status(404).JSON(fiber.Map{"success": false, "message_code": "ERR_REORDER_STALE_ID"})
+		}
 		log.Printf("[PACKAGE-REORDER] failed: %v", err)
 		return c.Status(500).JSON(fiber.Map{"success": false, "message_code": "ERR_DB_QUERY"})
 	}

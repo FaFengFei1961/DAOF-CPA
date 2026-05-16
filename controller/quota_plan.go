@@ -314,12 +314,19 @@ func ReorderQuotaPlans(c *fiber.Ctx) error {
 	}
 	if err := database.DB.Transaction(func(tx *gorm.DB) error {
 		for i, id := range req.IDs {
-			if err := tx.Model(&database.QuotaPlan{}).Where("id = ?", id).Update("priority", (i+1)*10).Error; err != nil {
-				return err
+			res := tx.Model(&database.QuotaPlan{}).Where("id = ?", id).Update("priority", (i+1)*10)
+			if res.Error != nil {
+				return fmt.Errorf("reorder quota plan %d: %w", id, res.Error)
+			}
+			if res.RowsAffected == 0 {
+				return fmt.Errorf("%w: quota plan id=%d", errReorderStaleID, id)
 			}
 		}
 		return nil
 	}); err != nil {
+		if errors.Is(err, errReorderStaleID) {
+			return c.Status(404).JSON(fiber.Map{"success": false, "message_code": "ERR_REORDER_STALE_ID"})
+		}
 		log.Printf("[QUOTA-PLAN-REORDER] failed: %v", err)
 		return c.Status(500).JSON(fiber.Map{"success": false, "message_code": "ERR_DB_QUERY"})
 	}

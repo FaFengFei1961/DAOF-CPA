@@ -36,7 +36,7 @@ func getCurrentUser(c *fiber.Ctx) (*database.User, error) {
 	if !ok || u == nil {
 		return nil, fmt.Errorf("ERR_IDENTITY_UNTRACEABLE")
 	}
-	if u.Status == 2 {
+	if u.Status != 1 {
 		return nil, fmt.Errorf("ERR_BANNED")
 	}
 	return u, nil

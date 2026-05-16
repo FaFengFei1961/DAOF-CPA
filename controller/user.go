@@ -124,7 +124,7 @@ func GetUsers(c *fiber.Ctx) error {
 type UserPayload struct {
 	Username      string `json:"username"`
 	QuotaMicroUSD int64  `json:"quota_micro_usd"`
-	Status        int    `json:"status"`
+	Status        *int   `json:"status,omitempty"`
 	BanReason     string `json:"ban_reason"`
 }
 
@@ -146,6 +146,16 @@ func UpdateUser(c *fiber.Ctx) error {
 		return c.Status(404).JSON(fiber.Map{"success": false, "message": "未找到相关记录", "message_code": "ERR_NODE_GONE"})
 	}
 	oldStatus := user.Status
+	effectiveStatus := user.Status
+	if req.Status != nil {
+		if *req.Status != 1 && *req.Status != 2 {
+			return c.Status(400).JSON(fiber.Map{
+				"success":      false,
+				"message_code": "ERR_INVALID_USER_STATUS",
+			})
+		}
+		effectiveStatus = *req.Status
+	}
 
 	var changes []map[string]interface{}
 	if user.Username != req.Username {
@@ -163,9 +173,9 @@ func UpdateUser(c *fiber.Ctx) error {
 			"new_micro": reqQuotaMicro,
 		})
 	}
-	if user.Status != req.Status {
-		changes = append(changes, map[string]interface{}{"type": "STATUS", "target": req.Username, "old": user.Status, "new": req.Status})
-		if req.Status == 2 {
+	if req.Status != nil && user.Status != effectiveStatus {
+		changes = append(changes, map[string]interface{}{"type": "STATUS", "target": req.Username, "old": user.Status, "new": effectiveStatus})
+		if effectiveStatus == 2 {
 			changes = append(changes, map[string]interface{}{"type": "BAN_REASON", "target": req.Username, "old": "", "new": req.BanReason})
 		}
 	} else if user.BanReason != req.BanReason {
@@ -197,7 +207,7 @@ func UpdateUser(c *fiber.Ctx) error {
 			return fmt.Errorf("read before: %w", err)
 		}
 		updateQ := tx.Model(&database.User{}).Where("id = ?", user.ID)
-		if before.Role == "admin" && before.Status == 1 && req.Status != 1 {
+		if before.Role == "admin" && before.Status == 1 && effectiveStatus != 1 {
 			var activeAdminCount int64
 			if err := tx.Model(&database.User{}).
 				Where("role = ? AND status = ? AND deleted_at IS NULL", "admin", 1).
@@ -212,13 +222,13 @@ func UpdateUser(c *fiber.Ctx) error {
 		res := updateQ.Updates(map[string]interface{}{
 			"username":   req.Username,
 			"quota":      reqQuotaMicro,
-			"status":     req.Status,
+			"status":     effectiveStatus,
 			"ban_reason": req.BanReason,
 		})
 		if res.Error != nil {
 			return fmt.Errorf("update user: %w", res.Error)
 		}
-		if before.Role == "admin" && before.Status == 1 && req.Status != 1 && res.RowsAffected == 0 {
+		if before.Role == "admin" && before.Status == 1 && effectiveStatus != 1 && res.RowsAffected == 0 {
 			return errAdminStateRaced
 		}
 		// fix Major（codex 第十五轮）：审计入事务，并填真实 admin id（旧实现 operatorID=0 + tx 外）
@@ -256,7 +266,7 @@ func UpdateUser(c *fiber.Ctx) error {
 		}
 		return c.Status(500).JSON(fiber.Map{"success": false, "message": "数据更新失败，存在冲突", "message_code": "ERR_UPDATE_CONFLICT"})
 	}
-	if oldStatus == 1 && req.Status != 1 {
+	if oldStatus == 1 && effectiveStatus != 1 {
 		if err := database.RevokeSessionsForUser(user.ID); err != nil {
 			log.Printf("[USER-STATUS] revoke session failed for user=%d: %v", user.ID, err)
 		}
@@ -266,12 +276,12 @@ func UpdateUser(c *fiber.Ctx) error {
 	proxy.SyncCacheConfig()
 	// 双保险：被封禁时精准淘汰该 token，防 SyncCacheConfig 万一 DB 查询失败时
 	// AuthCache 仍保留旧 entry —— EvictUserToken 直接从 map 删除即可。
-	if req.Status == 2 && user.Token != "" {
+	if effectiveStatus == 2 && user.Token != "" {
 		proxy.EvictUserToken(user.Token)
 	}
 
 	// 封禁通知（仅在状态变成 2=banned 时触发；同日 dedup 防 admin 反复改 ban_reason 重发）
-	if req.Status == 2 && user.Status != 2 {
+	if effectiveStatus == 2 && user.Status != 2 {
 		title := readSysConfigCached("notif_security_ban_title", "您的账户已被限制")
 		bodyTpl := readSysConfigCached("notif_security_ban_body", "原因：{reason}。如有疑问请联系客服。")
 		reason := req.BanReason
@@ -297,7 +307,7 @@ func GetSelfData(c *fiber.Ctx) error {
 	if err != nil {
 		return c.Status(401).JSON(fiber.Map{"success": false, "message_code": err.Error()})
 	}
-	if user.Status == 2 {
+	if user.Status != 1 {
 		return c.Status(403).JSON(fiber.Map{"success": false, "message_code": "ERR_BANNED", "ban_reason": user.BanReason})
 	}
 	// fix CRITICAL Sprint2-M1：自身路由也不暴露 token。
@@ -632,7 +642,7 @@ func BulkDeleteUsers(c *fiber.Ctx) error {
 	deleted := 0
 	for _, u := range users {
 		// fix CRITICAL C-B2（codex 第二十一轮）：批量删除也走"软删除 + PII 匿名化"，与 DeleteUser 对齐。
-		// BillingEntry 保留以维护 append-only；token / apilog 等子表继续物理清。
+		// BillingEntry + 源事实表保留以维护 append-only；仅清理凭证/session 等衍生数据。
 		// fix Major（codex 第十五轮）：审计入事务 + 填真实 admin id，与单删路径对齐
 		change, _ := json.Marshal([]map[string]interface{}{
 			{"type": "BULK_HARD_DELETE", "target": u.Username, "user_id": u.ID, "github_id": u.GithubID},
@@ -691,8 +701,8 @@ func DeleteUser(c *fiber.Ctx) error {
 	// 改为"软删除 + PII 匿名化"：
 	//   1. user 行保留（GORM DeletedAt 标记），id 不被 autoincrement 重用 → BillingEntry 不变孤儿
 	//   2. PII 字段（Username/Phone/GithubID/PasswordHash/Token）匿名化，不再可读
-	//   3. 子表中 token / apilog / notification / topup 等继续物理删（这些不是事实表）
-	//   4. **BillingEntry 不删**——账单事实永远保留，与 append-only 不变量对齐
+	//   3. 订阅 / 充值 / 用量 / ApiLog 等源事实表保留，BillingEntry 可继续追溯
+	//   4. 仅清理凭证 / session / 通知 / 工单等非账务衍生数据
 	op := loadAdminUser(c)
 	adminID := uint(0)
 	if op != nil {
@@ -772,9 +782,14 @@ func DeleteUser(c *fiber.Ctx) error {
 //
 // 包含：
 //   - access_tokens（API 凭证）
-//   - api_logs（请求审计 — 注意：合规场景下可能需要保留，但 admin 主动删用户的语义就是"彻底"清除）
-//   - notifications（站内通知）
-//   - user_subscriptions + subscription_usages（订阅 + 用量）
+//   - user_sessions（浏览器会话）
+//   - notifications / notification_broadcast_targets（站内通知投递数据）
+//   - notification_preferences（可重建的用户偏好）
+//   - tickets / ticket_messages（用户删除后的客服衍生数据）
+//
+// 明确保留：
+//   - user_subscriptions / subscription_usages / topup_orders（BillingEntry 源事实表）
+//   - api_logs（API 用量源事实表）
 //
 // **不删除 operation_logs**（fix CRITICAL Sprint1-P0-7）：
 // 操作审计必须 append-only，即使用户被物理删除，审计链也必须可追溯。
@@ -784,7 +799,7 @@ func purgeUserDependents(tx *gorm.DB, userID uint) error {
 	if err := tx.Unscoped().Where("user_id = ?", userID).Delete(&database.AccessToken{}).Error; err != nil {
 		return err
 	}
-	if err := tx.Unscoped().Where("user_id = ?", userID).Delete(&database.ApiLog{}).Error; err != nil {
+	if err := tx.Where("user_id = ?", userID).Delete(&database.UserSession{}).Error; err != nil {
 		return err
 	}
 	// 先删 broadcast_targets（外键于 notifications），再删 notifications
@@ -797,24 +812,13 @@ func purgeUserDependents(tx *gorm.DB, userID uint) error {
 	if err := tx.Unscoped().Where("user_id = ?", userID).Delete(&database.Notification{}).Error; err != nil {
 		return err
 	}
-	// 订阅 → usage 走 subscription_id 关联，需先用子查询定位再删
-	if err := tx.Unscoped().
-		Where("subscription_id IN (SELECT id FROM user_subscriptions WHERE user_id = ?)", userID).
-		Delete(&database.SubscriptionUsage{}).Error; err != nil {
-		return err
-	}
-	if err := tx.Unscoped().Where("user_id = ?", userID).Delete(&database.UserSubscription{}).Error; err != nil {
-		return err
-	}
-	if err := tx.Unscoped().Where("user_id = ?", userID).Delete(&database.TopupOrder{}).Error; err != nil {
-		return err
-	}
 	// fix CRITICAL C-B2（codex 第二十一轮）：BillingEntry **不删**——保留账单事实表的 append-only 语义。
 	// 之前的修复物理删账单是为了防"user.id 重用导致新用户继承账单"——但现在 user 改为软删除（DeletedAt
 	// 标记），id 不会被 autoincrement 重用，所以账单孤儿风险消除。
 	//   - 任何 admin 报表 / 对账工具仍能看到该 user.ID 的历史账单
 	//   - 用户 PII 已匿名化（外层 DeleteUser 函数处理），账单关联到匿名 user 行不泄漏隐私
 	// (intentionally do not delete BillingEntry)
+	// 同理保留 BillingEntry 可跳转的源事实表：ApiLog / UserSubscription / SubscriptionUsage / TopupOrder。
 	if err := tx.Unscoped().Where("user_id = ?", userID).Delete(&database.NotificationPreference{}).Error; err != nil {
 		return err
 	}

@@ -20,6 +20,8 @@ import (
 	"strings"
 
 	"daof-ai-hub/utils"
+
+	"gorm.io/gorm/clause"
 )
 
 // PreferenceView 是 LoadPreference 返回的内存对象，已解析 JSON 字段。
@@ -110,23 +112,20 @@ func SavePreference(userID uint, enabledCategories map[string]bool, usageThresho
 		return fmt.Errorf("marshal thresholds: %w", err)
 	}
 
-	var pref NotificationPreference
-	res := DB.Where("user_id = ?", userID).First(&pref)
-	if res.RowsAffected == 0 {
-		pref = NotificationPreference{
-			UserID:            userID,
-			EnabledCategories: string(catsJSON),
-			UsageThresholds:   string(thrJSON),
-		}
-		if err := DB.Create(&pref).Error; err != nil {
-			return fmt.Errorf("create preference: %w", err)
-		}
-		return nil
+	pref := NotificationPreference{
+		UserID:            userID,
+		EnabledCategories: string(catsJSON),
+		UsageThresholds:   string(thrJSON),
 	}
-	pref.EnabledCategories = string(catsJSON)
-	pref.UsageThresholds = string(thrJSON)
-	if err := DB.Save(&pref).Error; err != nil {
-		return fmt.Errorf("save preference: %w", err)
+	if err := DB.Clauses(clause.OnConflict{
+		Columns: []clause.Column{{Name: "user_id"}},
+		DoUpdates: clause.AssignmentColumns([]string{
+			"enabled_categories",
+			"usage_thresholds",
+			"updated_at",
+		}),
+	}).Create(&pref).Error; err != nil {
+		return fmt.Errorf("upsert preference: %w", err)
 	}
 	return nil
 }

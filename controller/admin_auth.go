@@ -13,6 +13,18 @@ import (
 	"github.com/gofiber/fiber/v2"
 )
 
+const maxLogFieldLen = 128
+
+func truncateForLog(s string, max int) string {
+	if max <= 0 {
+		return ""
+	}
+	if len(s) <= max {
+		return s
+	}
+	return s[:max] + "...(truncated)"
+}
+
 // setAdminCookie 把 admin token 写入 HttpOnly Secure 同站 cookie。
 // 前端无法用 JS 读到该 cookie（防 XSS 偷 token），但浏览器会在同站请求里自动携带。
 func setAdminCookie(c *fiber.Ctx, token string) {
@@ -117,7 +129,7 @@ func GodLogin(c *fiber.Ctx) error {
 
 	if !utils.CheckHash(req.Password, admin.PasswordHash) {
 		LogOperationBy(admin.ID, admin.ID, "管理员", "ADMIN_LOGIN_FAIL", c.IP(),
-			fmt.Sprintf(`[{"type":"ADMIN_LOGIN_FAIL","username":%q}]`, req.Username))
+			fmt.Sprintf(`[{"type":"ADMIN_LOGIN_FAIL","username":%q}]`, truncateForLog(req.Username, maxLogFieldLen)))
 		return c.Status(401).JSON(fiber.Map{"success": false, "message": "凭证校验失败", "message_code": "ERR_AUTH_FAILED"})
 	}
 	// admin 浏览器凭证改为可吊销 session；同时旋到 users.token 让现有 AdminGuard 即时识别。

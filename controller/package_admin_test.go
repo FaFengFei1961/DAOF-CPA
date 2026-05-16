@@ -23,6 +23,7 @@ func newPkgAdminTestApp(admin *database.User) *fiber.App {
 	app.Post("/admin/packages", CreatePackage)
 	app.Put("/admin/packages/:id", UpdatePackage)
 	app.Delete("/admin/packages/:id", DeletePackage)
+	app.Post("/admin/packages/reorder", ReorderPackages)
 	app.Get("/packages/public", ListPublicPackages)
 	return app
 }
@@ -229,6 +230,19 @@ func TestGetPackageAdmin_Found(t *testing.T) {
 	}
 	if data["name"] != pkg.Name {
 		t.Errorf("name mismatch: got %v want %v", data["name"], pkg.Name)
+	}
+}
+
+func TestReorderPackages_StaleIDReturns404(t *testing.T) {
+	setupSubTestDB(t)
+	admin := seedAdminUser(t)
+	app := newPkgAdminTestApp(admin)
+
+	code, resp := doJSON(t, app, "POST", "/admin/packages/reorder", map[string]any{
+		"ids": []uint{99999},
+	})
+	if code != 404 || resp["message_code"] != "ERR_REORDER_STALE_ID" {
+		t.Fatalf("reorder stale id got %d/%v, want 404/ERR_REORDER_STALE_ID", code, resp["message_code"])
 	}
 }
 

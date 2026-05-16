@@ -640,6 +640,55 @@ func TestAdminRefundSubscription_AmountMicroUSD(t *testing.T) {
 	})
 }
 
+func TestAdminRefundSubscription_Idempotent(t *testing.T) {
+	setupSubTestDB(t)
+	admin := seedAdminUser(t)
+	user := seedTestUser(t, 100)
+	app := newAdminTestApp(admin)
+	sub := database.UserSubscription{
+		UserID:                user.ID,
+		PackageID:             1,
+		Status:                "active",
+		PackageSnapshot:       `{"package_id":1,"package_name":"Pro","price_amount":10000000}`,
+		PurchasedUnitPriceUSD: 10 * database.MicroPerUSD,
+	}
+	if err := database.DB.Create(&sub).Error; err != nil {
+		t.Fatalf("create sub: %v", err)
+	}
+	beforeQuota := user.Quota
+
+	body := map[string]any{
+		"amount_micro_usd": 4 * database.MicroPerUSD,
+		"reason":           "idempotent retry",
+	}
+	code, resp := doJSON(t, app, "POST", "/admin/sub/"+itoaUint(sub.ID)+"/refund", body)
+	if code != 200 {
+		t.Fatalf("first refund got %d body=%v", code, resp)
+	}
+	code, resp = doJSON(t, app, "POST", "/admin/sub/"+itoaUint(sub.ID)+"/refund", body)
+	if code != 409 {
+		t.Fatalf("second refund got %d body=%v, want 409", code, resp)
+	}
+
+	var freshUser database.User
+	if err := database.DB.First(&freshUser, user.ID).Error; err != nil {
+		t.Fatalf("load user: %v", err)
+	}
+	if freshUser.Quota != beforeQuota+4*database.MicroPerUSD {
+		t.Fatalf("quota=%d, want %d", freshUser.Quota, beforeQuota+4*database.MicroPerUSD)
+	}
+	var refundCount int64
+	if err := database.DB.Model(&database.BillingEntry{}).
+		Where("user_id = ? AND entry_type = ? AND related_type = ? AND related_id = ?",
+			user.ID, database.BillingTypeRefundSub, "subscription_refund", sub.ID).
+		Count(&refundCount).Error; err != nil {
+		t.Fatalf("count refund billing: %v", err)
+	}
+	if refundCount != 1 {
+		t.Fatalf("refund billing count=%d, want 1", refundCount)
+	}
+}
+
 func TestIntegration_AdminRefund_ExceedsPrice(t *testing.T) {
 	setupSubTestDB(t)
 	admin := seedAdminUser(t)

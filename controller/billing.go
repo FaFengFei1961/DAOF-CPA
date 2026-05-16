@@ -301,6 +301,13 @@ func billingSummary(c *fiber.Ctx, userID uint, currentBalanceMicroUSD int64) err
 		log.Printf("[BILLING-SUMMARY] failed user=%d: %v", userID, err)
 		return c.Status(500).JSON(fiber.Map{"success": false, "message_code": "ERR_DB_QUERY"})
 	}
+	var pendingReconcileCount int64
+	if err := database.DB.Model(&database.BillingEntry{}).
+		Where("user_id = ? AND billing_state = ?", userID, database.BillingStatePendingReconcile).
+		Count(&pendingReconcileCount).Error; err != nil {
+		log.Printf("[BILLING-SUMMARY] pending count failed user=%d: %v", userID, err)
+		return c.Status(500).JSON(fiber.Map{"success": false, "message_code": "ERR_DB_QUERY"})
+	}
 
 	// 计算合计（int64 micro_usd 累加，无浮点误差）
 	var totalIn, totalOut int64
@@ -317,11 +324,12 @@ func billingSummary(c *fiber.Ctx, userID uint, currentBalanceMicroUSD int64) err
 	return c.JSON(fiber.Map{
 		"success": true,
 		"data": fiber.Map{
-			"by_type":         byType,
-			"total_in_usd":    database.MicroToUSD(totalIn),
-			"total_out_usd":   database.MicroToUSD(totalOut),
-			"net_change_usd":  database.MicroToUSD(totalIn - totalOut),
-			"current_balance": database.MicroToUSD(currentBalanceMicroUSD),
+			"by_type":                 byType,
+			"total_in_usd":            database.MicroToUSD(totalIn),
+			"total_out_usd":           database.MicroToUSD(totalOut),
+			"net_change_usd":          database.MicroToUSD(totalIn - totalOut),
+			"current_balance":         database.MicroToUSD(currentBalanceMicroUSD),
+			"pending_reconcile_count": pendingReconcileCount,
 		},
 	})
 }

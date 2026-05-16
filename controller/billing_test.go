@@ -21,6 +21,7 @@ func newBillingTestApp(user *database.User) *fiber.App {
 		return c.Next()
 	})
 	app.Get("/billing/mine", MyBillingEntries)
+	app.Get("/billing/mine/summary", MyBillingSummary)
 	app.Get("/billing/mine/export", MyBillingExport)
 	return app
 }
@@ -229,5 +230,49 @@ func TestAdminListBilling_IncludesIsReconciled(t *testing.T) {
 	}
 	if first["reconcile_result"] != database.ReconcileResultAbsorbed {
 		t.Fatalf("reconcile_result=%v, want %s", first["reconcile_result"], database.ReconcileResultAbsorbed)
+	}
+}
+
+func TestBillingSummary_IncludesPendingReconcileCount(t *testing.T) {
+	setupSubTestDB(t)
+	user := seedTestUser(t, 100)
+	app := newBillingTestApp(user)
+	settled := database.BillingEntry{
+		UserID:          user.ID,
+		OccurredAt:      time.Now(),
+		EntryType:       database.BillingTypeTopup,
+		BillingState:    database.BillingStateSettled,
+		AmountUSD:       5 * database.MicroPerUSD,
+		BalanceAfterUSD: user.Quota,
+		Description:     "settled",
+	}
+	if err := database.DB.Create(&settled).Error; err != nil {
+		t.Fatalf("create settled: %v", err)
+	}
+	pending := database.BillingEntry{
+		UserID:               user.ID,
+		OccurredAt:           time.Now(),
+		EntryType:            database.BillingTypeApiUsagePendingReconcile,
+		BillingState:         database.BillingStatePendingReconcile,
+		AmountUSD:            0,
+		BalanceAfterUSD:      user.Quota,
+		EstimatedCostUSD:     database.MicroPerUSD,
+		EstimatedInputTokens: 123,
+		Description:          "pending",
+	}
+	if err := database.DB.Create(&pending).Error; err != nil {
+		t.Fatalf("create pending: %v", err)
+	}
+
+	code, resp := doJSON(t, app, "GET", "/billing/mine/summary", nil)
+	if code != 200 {
+		t.Fatalf("summary got %d body=%v", code, resp)
+	}
+	data, ok := resp["data"].(map[string]any)
+	if !ok {
+		t.Fatalf("data type=%T", resp["data"])
+	}
+	if data["pending_reconcile_count"] != float64(1) {
+		t.Fatalf("pending_reconcile_count=%v, want 1", data["pending_reconcile_count"])
 	}
 }

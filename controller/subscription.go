@@ -79,6 +79,7 @@ func lockUserForUpdate(tx *gorm.DB, userID uint) error {
 // fix Minor（自审第十三轮）：原 sentinel 名为 errSubAlreadyCanceled 仅描述 cancel 场景，
 // 但被 AdminRefundSubscription 复用于 paused/refunded 拒绝 → 名字误导后续维护者。
 var errSubStateMachineMiss = errors.New("subscription state machine guard rejected: status not in expected set")
+var errSubRefundDuplicate = errors.New("subscription refund billing already exists")
 
 var (
 	errRevokeGrantNotGranted = errors.New("subscription is not admin-granted")
@@ -851,6 +852,16 @@ func AdminRefundSubscription(c *fiber.Ctx) error {
 		if err := lockUserForUpdate(tx, sub.UserID); err != nil {
 			return fmt.Errorf("lock user: %w", err)
 		}
+		var existingRefundCount int64
+		if err := tx.Model(&database.BillingEntry{}).
+			Where("related_type IN ? AND related_id = ? AND entry_type = ?",
+				[]string{"subscription_refund", "subscription"}, sub.ID, database.BillingTypeRefundSub).
+			Count(&existingRefundCount).Error; err != nil {
+			return fmt.Errorf("check refund billing duplicate: %w", err)
+		}
+		if existingRefundCount > 0 {
+			return errSubRefundDuplicate
+		}
 		// fix Major（自审第十一轮）：原 Updates 强制写 canceled_at = now 会覆盖已 canceled 订阅的
 		// 原始取消时间，让审计日志里"用户先 cancel 再申请退款"的时序信息丢失。
 		// 改为：只更新 status；canceled_at 仅在还为 NULL 时补（直接 active→refunded 路径）。
@@ -892,11 +903,14 @@ func AdminRefundSubscription(c *fiber.Ctx) error {
 			EntryType:            database.BillingTypeRefundSub,
 			AmountUSD:            refundAmountMicro,
 			BalanceAfterUSD:      freshUser.Quota,
-			RelatedType:          "subscription",
+			RelatedType:          "subscription_refund",
 			RelatedID:            sub.ID,
 			SourceSubscriptionID: &subID,
 			Description:          desc,
 		}); err != nil {
+			if strings.Contains(strings.ToLower(err.Error()), "unique") {
+				return errSubRefundDuplicate
+			}
 			return fmt.Errorf("write billing refund_sub: %w", err)
 		}
 		// 业务规则（用户 2026-05-10 第三次反馈定稿）：取消/退款**完全不触碰**优惠券。
@@ -915,6 +929,13 @@ func AdminRefundSubscription(c *fiber.Ctx) error {
 	})
 
 	if txErr != nil {
+		if errors.Is(txErr, errSubRefundDuplicate) {
+			return c.Status(409).JSON(fiber.Map{
+				"success":      false,
+				"message":      "该订阅退款已入账，请勿重复提交",
+				"message_code": "ERR_SUB_REFUND_DUPLICATE",
+			})
+		}
 		if errors.Is(txErr, errSubStateMachineMiss) {
 			return c.Status(409).JSON(fiber.Map{
 				"success":      false,

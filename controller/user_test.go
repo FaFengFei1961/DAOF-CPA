@@ -3,6 +3,7 @@ package controller
 import (
 	"sync"
 	"testing"
+	"time"
 
 	"daof-ai-hub/database"
 
@@ -188,6 +189,112 @@ func TestLastActiveAdmin_BlocksDelete(t *testing.T) {
 	}
 	if count != 1 {
 		t.Fatalf("active admin count=%d, want 1", count)
+	}
+}
+
+func TestDeleteUser_PreservesBillingChain(t *testing.T) {
+	setupUserControllerTestDB(t)
+	app := newUpdateUserTestApp()
+	user := seedUpdateUserTarget(t, 10*database.MicroPerUSD, 1)
+	sessionID, err := database.CreateUserSession(user.ID, "ua", "127.0.0.1")
+	if err != nil {
+		t.Fatalf("create session: %v", err)
+	}
+	sub := database.UserSubscription{
+		UserID:                user.ID,
+		PackageID:             1,
+		Status:                "active",
+		PackageSnapshot:       `{"package_id":1,"package_name":"Pro"}`,
+		PurchasedUnitPriceUSD: database.MicroPerUSD,
+	}
+	if err := database.DB.Create(&sub).Error; err != nil {
+		t.Fatalf("create sub: %v", err)
+	}
+	usage := database.SubscriptionUsage{
+		SubscriptionID: sub.ID,
+		QuotaPlanID:    1,
+		ModelBucket:    "*",
+		WindowStartAt:  time.Now(),
+		WindowEndAt:    time.Now().Add(time.Hour),
+		RequestCount:   1,
+	}
+	if err := database.DB.Create(&usage).Error; err != nil {
+		t.Fatalf("create usage: %v", err)
+	}
+	order := database.TopupOrder{
+		OutTradeNo:                  "tp-delete-preserve",
+		UserID:                      user.ID,
+		PayType:                     "alipay",
+		MoneyRMB:                    7200,
+		AmountUSD:                   10 * database.MicroPerUSD,
+		ExchangeRateRmbPerUsdMicros: 7_200_000,
+		Status:                      "paid",
+	}
+	if err := database.DB.Create(&order).Error; err != nil {
+		t.Fatalf("create topup order: %v", err)
+	}
+	apiLog := database.ApiLog{
+		UserID:      user.ID,
+		TokenName:   "sk",
+		ModelName:   "gpt-test",
+		Status:      200,
+		RequestPath: "/v1/chat/completions",
+	}
+	if err := database.DB.Create(&apiLog).Error; err != nil {
+		t.Fatalf("create api log: %v", err)
+	}
+	billing := database.BillingEntry{
+		UserID:          user.ID,
+		OccurredAt:      time.Now(),
+		EntryType:       database.BillingTypeTopup,
+		BillingState:    database.BillingStateSettled,
+		AmountUSD:       order.AmountUSD,
+		BalanceAfterUSD: user.Quota,
+		RelatedType:     "topup_order",
+		RelatedID:       order.ID,
+		Description:     "topup preserve test",
+	}
+	if err := database.DB.Create(&billing).Error; err != nil {
+		t.Fatalf("create billing: %v", err)
+	}
+
+	code, resp := doJSON(t, app, "DELETE", "/admin/users/"+itoaUint(user.ID), nil)
+	if code != 200 {
+		t.Fatalf("delete got %d body=%v", code, resp)
+	}
+
+	var deleted database.User
+	if err := database.DB.Unscoped().First(&deleted, user.ID).Error; err != nil {
+		t.Fatalf("load deleted user: %v", err)
+	}
+	if !deleted.DeletedAt.Valid {
+		t.Fatal("user should be soft deleted")
+	}
+	if deleted.Username == user.Username || deleted.Phone != "" || deleted.GithubID != "" || deleted.Status != 2 {
+		t.Fatalf("user not anonymized/banned: %#v", deleted)
+	}
+	assertCount := func(name string, model any, cond string, args ...any) {
+		t.Helper()
+		var count int64
+		if err := database.DB.Unscoped().Model(model).Where(cond, args...).Count(&count).Error; err != nil {
+			t.Fatalf("count %s: %v", name, err)
+		}
+		if count != 1 {
+			t.Fatalf("%s count=%d, want 1", name, count)
+		}
+	}
+	assertCount("subscription", &database.UserSubscription{}, "id = ?", sub.ID)
+	assertCount("usage", &database.SubscriptionUsage{}, "id = ?", usage.ID)
+	assertCount("topup order", &database.TopupOrder{}, "id = ?", order.ID)
+	assertCount("api log", &database.ApiLog{}, "id = ?", apiLog.ID)
+	assertCount("billing", &database.BillingEntry{}, "id = ?", billing.ID)
+
+	var sessions int64
+	if err := database.DB.Model(&database.UserSession{}).Where("session_id = ?", sessionID).Count(&sessions).Error; err != nil {
+		t.Fatalf("count session: %v", err)
+	}
+	if sessions != 0 {
+		t.Fatalf("session count=%d, want 0", sessions)
 	}
 }
 

@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"encoding/json"
 	"fmt"
+	"log"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -399,6 +400,100 @@ func TestTmpTokenSingleConsume_RejectsReplay(t *testing.T) {
 	}
 	if got["message_code"] != "ERR_TMP_TOKEN_ALREADY_USED" {
 		t.Fatalf("message_code=%v, want ERR_TMP_TOKEN_ALREADY_USED", got["message_code"])
+	}
+}
+
+func TestCompleteRisk_ValidatesTmpTokenBeforeSMS(t *testing.T) {
+	setupOAuthControllerTestDB(t)
+	resetSMSCache()
+	phone := "13800138009"
+	code := "246810"
+	smsCodeMu.Lock()
+	smsCodeCache[phone] = &smsCodeEntry{
+		Code:      code,
+		ExpiresAt: time.Now().Add(5 * time.Minute),
+	}
+	smsCodeMu.Unlock()
+
+	app := fiber.New(fiber.Config{DisableStartupMessage: true})
+	app.Post("/complete-risk", CompleteRisk)
+	body, _ := json.Marshal(map[string]string{
+		"tmp_token": "invalid-tmp-token",
+		"phone":     phone,
+		"sms_code":  code,
+	})
+	req := httptest.NewRequest(http.MethodPost, "/complete-risk", bytes.NewReader(body))
+	req.Header.Set("Content-Type", "application/json")
+	resp, err := app.Test(req)
+	if err != nil {
+		t.Fatalf("request: %v", err)
+	}
+	if resp.StatusCode != http.StatusForbidden {
+		t.Fatalf("status=%d, want 403", resp.StatusCode)
+	}
+	var got map[string]any
+	if err := json.NewDecoder(resp.Body).Decode(&got); err != nil {
+		t.Fatalf("decode body: %v", err)
+	}
+	if got["message_code"] != "ERR_RISK_TICKET_INVALID" {
+		t.Fatalf("message_code=%v, want ERR_RISK_TICKET_INVALID", got["message_code"])
+	}
+	smsCodeMu.Lock()
+	_, stillPresent := smsCodeCache[phone]
+	smsCodeMu.Unlock()
+	if !stillPresent {
+		t.Fatal("valid SMS code was consumed before tmp_token validation")
+	}
+}
+
+func TestSignupCouponLog_MasksCode(t *testing.T) {
+	db := setupCouponTestDB(t)
+	enabled := true
+	tpl := database.CouponTemplate{
+		Name:          "signup mask",
+		DiscountType:  "fixed_price",
+		DiscountValue: 100_000,
+		Enabled:       &enabled,
+	}
+	if err := db.Create(&tpl).Error; err != nil {
+		t.Fatalf("create template: %v", err)
+	}
+
+	proxy.SysConfigMutex.Lock()
+	old := proxy.SysConfigCache
+	proxy.SysConfigCache = map[string]string{"signup_coupon_template_id": fmt.Sprintf("%d", tpl.ID)}
+	proxy.SysConfigMutex.Unlock()
+	t.Cleanup(func() {
+		proxy.SysConfigMutex.Lock()
+		proxy.SysConfigCache = old
+		proxy.SysConfigMutex.Unlock()
+	})
+
+	var buf bytes.Buffer
+	oldOutput := log.Writer()
+	oldFlags := log.Flags()
+	log.SetOutput(&buf)
+	log.SetFlags(0)
+	t.Cleanup(func() {
+		log.SetOutput(oldOutput)
+		log.SetFlags(oldFlags)
+	})
+
+	if err := db.Transaction(func(tx *gorm.DB) error {
+		return autoGrantSignupCouponTx(tx, 7, "test")
+	}); err != nil {
+		t.Fatalf("auto grant: %v", err)
+	}
+	var uc database.UserCoupon
+	if err := db.Where("user_id = ?", 7).First(&uc).Error; err != nil {
+		t.Fatalf("load coupon: %v", err)
+	}
+	logged := buf.String()
+	if strings.Contains(logged, uc.Code) {
+		t.Fatalf("log leaked full coupon code %q in %q", uc.Code, logged)
+	}
+	if !strings.Contains(logged, maskCouponCode(uc.Code)) {
+		t.Fatalf("log %q missing masked code %q", logged, maskCouponCode(uc.Code))
 	}
 }
 

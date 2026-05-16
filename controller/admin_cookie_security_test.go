@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
 
 	"daof-ai-hub/database"
@@ -135,6 +136,45 @@ func TestAdminLogout_RevokesAllSessions(t *testing.T) {
 		if session.RevokedAt == nil {
 			t.Fatalf("session %s not revoked", sid)
 		}
+	}
+}
+
+func TestGodLogin_TruncatesUsernameLog(t *testing.T) {
+	setupOAuthControllerTestDB(t)
+	longUsername := strings.Repeat("a", maxLogFieldLen+40)
+	admin := database.User{
+		Username:     longUsername,
+		Role:         "admin",
+		Token:        "sk-long-admin",
+		Status:       1,
+		PasswordHash: utils.GenerateHash("correct-password"),
+	}
+	if err := database.DB.Create(&admin).Error; err != nil {
+		t.Fatalf("create admin: %v", err)
+	}
+
+	app := fiber.New(fiber.Config{DisableStartupMessage: true})
+	app.Post("/login", GodLogin)
+	body, _ := json.Marshal(GodLoginRequest{Username: longUsername, Password: "wrong-password"})
+	req := httptest.NewRequest(http.MethodPost, "/login", bytes.NewReader(body))
+	req.Header.Set("Content-Type", "application/json")
+	resp, err := app.Test(req)
+	if err != nil {
+		t.Fatalf("request: %v", err)
+	}
+	if resp.StatusCode != http.StatusUnauthorized {
+		t.Fatalf("status=%d, want 401", resp.StatusCode)
+	}
+
+	var op database.OperationLog
+	if err := database.DB.Where("action_type = ?", "ADMIN_LOGIN_FAIL").First(&op).Error; err != nil {
+		t.Fatalf("load operation log: %v", err)
+	}
+	if strings.Contains(op.Details, longUsername) {
+		t.Fatalf("operation log leaked full username length=%d", len(longUsername))
+	}
+	if !strings.Contains(op.Details, "...(truncated)") {
+		t.Fatalf("operation log missing truncation marker: %s", op.Details)
 	}
 }
 
