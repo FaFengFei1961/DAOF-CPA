@@ -3,12 +3,14 @@
     DAOF-CPA 项目重置脚本：清理所有缓存、构建产物、本地数据库，重新编译前端。
 
 .DESCRIPTION
-    模拟"全新部署"场景的本地完整重置。流程：
+    "出厂设置"语义：只保留入库的源码 + 入库的配置模板，其他全清。流程：
       1. 检查/Kill 正在运行的 go / vite / 已构建二进制进程
-      2. 清理 Go 构建/测试缓存（go clean -cache -testcache）
-      3. 删除本地 data/*（SQLite DB + AES 主密钥）
-      4. 删除前端产物 ui/dist + vite 缓存 ui/node_modules/.vite
-      5. 删除散落的 *.exe / *.log
+      2. 删除本地 data/*（SQLite DB + AES 主密钥）
+      3. 清理 Go 构建/测试缓存（go clean -cache -testcache）
+      4. 删除散落的 *.exe / *.log / *.tmp / *.bak
+      4.5 删除项目根 + 包目录泄露的 SQLite/AES 密钥（早期默认路径 + 测试 InitCrypto 副产物）
+      4.6 删除测试覆盖率产物（cov*/coverage*/out.txt 等）
+      5. 删除前端产物 ui/dist + vite 缓存 + playwright 产物（report/results/visual_out）
       6. 重新编译前端（npm run build）
       7. 校验 Go 全包编译
 
@@ -134,11 +136,13 @@ Write-Step "清理 Go 构建 / 测试缓存..."
 & go clean -testcache 2>&1 | Out-Null
 Write-Ok "Go cache cleaned"
 
-# ─── 4. 清理散落的 *.exe / *.log ────────────────────
-Write-Step "清理散落的 *.exe / *.log..."
+# ─── 4. 清理散落的 *.exe / *.log / 临时文件 ─────────
+Write-Step "清理项目根散落的 *.exe / *.log / *.tmp / *.bak..."
 $strays = @()
 $strays += Get-ChildItem -Path . -Filter "*.exe" -File -ErrorAction SilentlyContinue
 $strays += Get-ChildItem -Path . -Filter "*.log" -File -ErrorAction SilentlyContinue
+$strays += Get-ChildItem -Path . -Filter "*.tmp" -File -ErrorAction SilentlyContinue
+$strays += Get-ChildItem -Path . -Filter "*.bak" -File -ErrorAction SilentlyContinue
 if ($strays.Count -gt 0) {
     $strays | ForEach-Object { Write-Host "    rm $($_.Name)" -ForegroundColor DarkGray }
     $strays | Remove-Item -Force -ErrorAction SilentlyContinue
@@ -147,17 +151,65 @@ if ($strays.Count -gt 0) {
     Write-Ok "无散落文件"
 }
 
-# ─── 5. 清理前端产物 ───────────────────────────────
-Write-Step "清理 ui/dist + vite cache..."
-if (Test-Path "ui/dist") {
-    Remove-Item "ui/dist" -Recurse -Force
-    Write-Ok "ui/dist 已删"
+# ─── 4.5 清理项目根泄露的 SQLite/AES 密钥文件 ───────
+# 历史问题：早期 sqlite.go 默认 dbPath="daofa-hub.db"（cwd），utils/crypto.go 默认 keyFile="daof.key"（cwd）。
+# 后来 start.ps1 加 DAOF_DB_PATH / DAOF_KEY_PATH 把数据挪到 data/，但根目录的旧文件没人清。
+# 同时部分测试调 utils.InitCrypto() 没 setenv 到 t.TempDir() → 在 controller/ 和 database/ 包目录留下 daof.key。
+# 出厂设置语义：彻底删除所有泄露的运行时文件。
+if (-not $KeepData) {
+    Write-Step "清理项目根 + 包目录泄露的 SQLite/AES 密钥文件..."
+    $leaked = @()
+    # 项目根（早期 sqlite.go 默认路径）
+    foreach ($f in @("daof.key", "daofa-hub.db", "daofa-hub.db-shm", "daofa-hub.db-wal")) {
+        if (Test-Path $f) { $leaked += Get-Item $f }
+    }
+    # 任何包目录下的 daof.key（测试 InitCrypto 没 setenv 的副产物）
+    $leaked += Get-ChildItem -Path . -Filter "daof.key" -Recurse -File -ErrorAction SilentlyContinue |
+        Where-Object { $_.DirectoryName -notmatch '\\data$' -and $_.DirectoryName -ne (Resolve-Path .).Path }
+    # 任何包目录下的 daofa-hub.db*（测试残留）
+    $leaked += Get-ChildItem -Path . -Filter "daofa-hub.db*" -Recurse -File -ErrorAction SilentlyContinue |
+        Where-Object { $_.DirectoryName -notmatch '\\data$' -and $_.DirectoryName -ne (Resolve-Path .).Path }
+    if ($leaked.Count -gt 0) {
+        $leaked | ForEach-Object {
+            $rel = $_.FullName.Substring((Resolve-Path .).Path.Length + 1)
+            Write-Host "    rm $rel" -ForegroundColor DarkGray
+        }
+        $leaked | Remove-Item -Force -ErrorAction SilentlyContinue
+        Write-Ok "已删除 $($leaked.Count) 个泄露文件"
+    } else {
+        Write-Ok "无泄露的 SQLite/AES 密钥文件"
+    }
 } else {
-    Write-Ok "ui/dist 不存在"
+    Write-Ok "保留泄露文件检查（-KeepData）"
 }
-if (Test-Path "ui/node_modules/.vite") {
-    Remove-Item "ui/node_modules/.vite" -Recurse -Force
-    Write-Ok "ui/node_modules/.vite 已删"
+
+# ─── 4.6 清理覆盖率产物 ────────────────────────────
+Write-Step "清理测试覆盖率产物..."
+$covPatterns = @("cov", "cov.out", "cov.txt", "coverage", "coverage.out", "coverage.html",
+                 "coverage_proxy", "ctrl_cov.txt", "proxy_cov.txt", "total_cov.txt",
+                 "out.txt", "*.cov.out", "*.coverage", "*.prof", "*.profout")
+$covItems = @()
+foreach ($pattern in $covPatterns) {
+    $covItems += Get-ChildItem -Path . -Filter $pattern -ErrorAction SilentlyContinue
+}
+$covItems = $covItems | Sort-Object FullName -Unique
+if ($covItems.Count -gt 0) {
+    $covItems | ForEach-Object { Write-Host "    rm $($_.Name)" -ForegroundColor DarkGray }
+    $covItems | Remove-Item -Recurse -Force -ErrorAction SilentlyContinue
+    Write-Ok "已删除 $($covItems.Count) 个覆盖率产物"
+} else {
+    Write-Ok "无覆盖率产物"
+}
+
+# ─── 5. 清理前端产物 + UI 测试产物 ────────────────
+Write-Step "清理 ui/dist + vite cache + playwright 产物..."
+foreach ($uiDir in @("ui/dist", "ui/node_modules/.vite",
+                     "ui/playwright-report", "ui/test-results",
+                     "ui/scripts/visual_out")) {
+    if (Test-Path $uiDir) {
+        Remove-Item $uiDir -Recurse -Force -ErrorAction SilentlyContinue
+        Write-Ok "$uiDir 已删"
+    }
 }
 if ($CleanNodeModules) {
     if (Test-Path "ui/node_modules") {
@@ -219,7 +271,13 @@ Write-Host ("  ✨ 重置完成（耗时 {0:N1}s）" -f $elapsed.TotalSeconds) -
 Write-Host "═══════════════════════════════════════════" -ForegroundColor DarkGray
 Write-Host ""
 Write-Host "下一步：" -ForegroundColor Cyan
-Write-Host "  .\start.ps1     # 启动后端（go run main.go）"
+if (Test-Path "start.ps1") {
+    Write-Host "  .\start.ps1     # 启动后端（go run main.go）"
+} else {
+    Write-Host "  cp start.example.ps1 start.ps1   # 首次：复制模板"
+    Write-Host "  # 然后改 start.ps1 里本地 GCC / DAOF_KEY_PATH / DAOF_DB_PATH 路径"
+    Write-Host "  .\start.ps1                       # 启动后端"
+}
 Write-Host ""
 if (-not $KeepData) {
     Write-Host "首次启动会做：" -ForegroundColor DarkGray
