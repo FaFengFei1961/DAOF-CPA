@@ -1,7 +1,7 @@
 package controller
 
 import (
-	"daof-ai-hub/proxy"
+	"daof-cpa/proxy"
 
 	"github.com/gofiber/fiber/v2"
 )

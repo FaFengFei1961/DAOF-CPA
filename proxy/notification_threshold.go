@@ -13,7 +13,7 @@ import (
 	"strings"
 	"time"
 
-	"daof-ai-hub/database"
+	"daof-cpa/database"
 )
 
 // MaybeFireUsageWarn 检查用量是否跨过阈值并发通知。

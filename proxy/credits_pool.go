@@ -39,7 +39,7 @@ import (
 	"sync/atomic"
 	"time"
 
-	"daof-ai-hub/database"
+	"daof-cpa/database"
 
 	"github.com/tidwall/gjson"
 	"gorm.io/gorm"
@@ -729,7 +729,7 @@ func fetchAuthFiles(ctx context.Context) ([]authFileLite, error) {
 //   - 已知 auth_id 且 LastDownloadedAt 较新 → 跳过 download（project_id 极少变）
 //
 // 这里只缓存 project_id 这种"静态长期不变"的字段。access_token 由 CPA 管理，
-// daof-ai-hub 走 api-call 透明代理调上游时 CPA 会自己注入最新 token。
+// daof-cpa 走 api-call 透明代理调上游时 CPA 会自己注入最新 token。
 
 // fetchAuthFileContent 从 CPA 下载某个凭证的完整 JSON 内容
 func fetchAuthFileContent(ctx context.Context, name string) ([]byte, error) {

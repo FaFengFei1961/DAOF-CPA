@@ -29,8 +29,8 @@ import (
 	"sync"
 	"time"
 
-	"daof-ai-hub/proxy"
-	"daof-ai-hub/utils"
+	"daof-cpa/proxy"
+	"daof-cpa/utils"
 
 	"github.com/gofiber/fiber/v2"
 )

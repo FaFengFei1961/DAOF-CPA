@@ -5,7 +5,7 @@ import (
 	"testing"
 	"time"
 
-	"daof-ai-hub/database"
+	"daof-cpa/database"
 
 	"gorm.io/driver/sqlite"
 	"gorm.io/gorm"

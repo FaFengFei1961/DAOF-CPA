@@ -6,7 +6,7 @@ import (
 	"net/http"
 	"testing"
 
-	"daof-ai-hub/database"
+	"daof-cpa/database"
 
 	"gorm.io/gorm"
 )

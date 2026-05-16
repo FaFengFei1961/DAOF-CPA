@@ -1,7 +1,7 @@
 package controller
 
 import (
-	"daof-ai-hub/database"
+	"daof-cpa/database"
 	"strconv"
 
 	"github.com/gofiber/fiber/v2"

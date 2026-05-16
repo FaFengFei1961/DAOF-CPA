@@ -14,7 +14,7 @@ import (
 	"sync/atomic"
 	"time"
 
-	"daof-ai-hub/database"
+	"daof-cpa/database"
 )
 
 type CachedSubscription struct {

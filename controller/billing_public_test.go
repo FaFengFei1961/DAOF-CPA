@@ -4,7 +4,7 @@ import (
 	"strings"
 	"testing"
 
-	"daof-ai-hub/database"
+	"daof-cpa/database"
 )
 
 func TestPublicBillingDescriptionHidesInternalAdminDetails(t *testing.T) {

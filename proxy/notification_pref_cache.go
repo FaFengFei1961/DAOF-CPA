@@ -16,7 +16,7 @@ import (
 	"sync"
 	"time"
 
-	"daof-ai-hub/database"
+	"daof-cpa/database"
 )
 
 type prefCacheEntry struct {

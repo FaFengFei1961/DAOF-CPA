@@ -20,7 +20,7 @@ import (
 	"sync"
 	"sync/atomic"
 
-	"daof-ai-hub/database"
+	"daof-cpa/database"
 )
 
 // fix Major（codex 第四轮）：原 Dispatch 每条通知 `go func()`，无队列、无并发上限、无背压。

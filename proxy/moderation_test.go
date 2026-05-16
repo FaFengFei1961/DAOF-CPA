@@ -16,7 +16,7 @@ import (
 	"testing"
 	"time"
 
-	"daof-ai-hub/database"
+	"daof-cpa/database"
 
 	sdktranslator "github.com/router-for-me/CLIProxyAPI/v7/sdk/translator"
 

@@ -5,7 +5,7 @@ import (
 	"net/url"
 	"strings"
 
-	"daof-ai-hub/database"
+	"daof-cpa/database"
 
 	"github.com/gofiber/fiber/v2"
 )

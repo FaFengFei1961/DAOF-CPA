@@ -4,7 +4,7 @@ import (
 	"math/big"
 	"testing"
 
-	"daof-ai-hub/database"
+	"daof-cpa/database"
 )
 
 func TestResolveBillingRulesDefaults(t *testing.T) {

@@ -8,8 +8,8 @@ import (
 	"log"
 	"math"
 
-	"daof-ai-hub/database"
-	"daof-ai-hub/proxy"
+	"daof-cpa/database"
+	"daof-cpa/proxy"
 
 	"github.com/gofiber/fiber/v2"
 )

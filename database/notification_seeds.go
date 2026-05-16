@@ -9,7 +9,7 @@ package database
 import (
 	"log"
 
-	"daof-ai-hub/utils"
+	"daof-cpa/utils"
 
 	"gorm.io/gorm"
 )

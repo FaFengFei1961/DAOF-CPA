@@ -3,7 +3,7 @@ package middleware
 import (
 	"net"
 
-	"daof-ai-hub/utils"
+	"daof-cpa/utils"
 
 	"github.com/gofiber/fiber/v2"
 )

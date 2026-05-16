@@ -11,8 +11,8 @@ import (
 	"strings"
 	"testing"
 
-	"daof-ai-hub/database"
-	"daof-ai-hub/proxy"
+	"daof-cpa/database"
+	"daof-cpa/proxy"
 )
 
 // withSysConfig 临时替换 SysConfigCache + 自动恢复。

@@ -4,7 +4,7 @@ import (
 	"fmt"
 	"strings"
 
-	"daof-ai-hub/database"
+	"daof-cpa/database"
 )
 
 func endpointPolicyAllows(policy, path string, isStream bool) bool {

@@ -1,4 +1,4 @@
-# daof-ai-hub 代码约定
+# daof-cpa 代码约定
 
 ## 1. 审计表 INSERT-only 强制规范
 

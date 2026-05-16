@@ -9,11 +9,11 @@ import (
 	"syscall"
 	"time"
 
-	"daof-ai-hub/controller"
-	"daof-ai-hub/database"
-	"daof-ai-hub/middleware"
-	"daof-ai-hub/proxy"
-	"daof-ai-hub/utils"
+	"daof-cpa/controller"
+	"daof-cpa/database"
+	"daof-cpa/middleware"
+	"daof-cpa/proxy"
+	"daof-cpa/utils"
 
 	"github.com/gofiber/fiber/v2"
 	"github.com/gofiber/fiber/v2/middleware/cors"

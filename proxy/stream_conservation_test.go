@@ -32,7 +32,7 @@ import (
 	"testing"
 	"time"
 
-	"daof-ai-hub/database"
+	"daof-cpa/database"
 
 	"github.com/gofiber/fiber/v2"
 	"gorm.io/driver/sqlite"

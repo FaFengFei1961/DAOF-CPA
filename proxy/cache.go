@@ -4,8 +4,8 @@ import (
 	"log"
 	"sync"
 
-	"daof-ai-hub/database"
-	"daof-ai-hub/utils"
+	"daof-cpa/database"
+	"daof-cpa/utils"
 )
 
 // fix CRITICAL Sprint4-M2：合并 channel/route 锁 + 合并 auth/authToken 锁

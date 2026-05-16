@@ -5,8 +5,8 @@ import (
 	"sync/atomic"
 	"time"
 
-	"daof-ai-hub/database"
-	"daof-ai-hub/utils"
+	"daof-cpa/database"
+	"daof-cpa/utils"
 
 	"github.com/gofiber/fiber/v2"
 )

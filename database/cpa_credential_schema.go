@@ -4,7 +4,7 @@
 //
 // 设计意图：
 //
-//	daof-ai-hub 通过 CPA 拿凭证清单（GET /v0/management/auth-files），
+//	daof-cpa 通过 CPA 拿凭证清单（GET /v0/management/auth-files），
 //	首次发现新凭证时下载完整 JSON 提取静态字段（最重要的是 antigravity 的
 //	project_id），写入本表持久化。后续每个刷新周期只做"清单 diff"：
 //
@@ -15,7 +15,7 @@
 //	平时查 quota 时直接从本表读 project_id，无需重复下载凭证文件。
 //
 // 注意：本表不存任何 token / refresh_token —— 只缓存"静态、长期不变"的字段。
-// access_token 由 CPA 内部管理（自动刷新），daof-ai-hub 走 api-call 透明代理时
+// access_token 由 CPA 内部管理（自动刷新），daof-cpa 走 api-call 透明代理时
 // CPA 会自己注入最新 token。
 package database
 

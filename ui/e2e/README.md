@@ -1,6 +1,6 @@
 # E2E Tests (Playwright)
 
-端到端测试覆盖 daof-ai-hub 主干用户路径。
+端到端测试覆盖 daof-cpa 主干用户路径。
 
 ## 安装
 

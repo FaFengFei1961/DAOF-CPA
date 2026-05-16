@@ -10,7 +10,7 @@ import (
 	"strings"
 	"testing"
 
-	"daof-ai-hub/database"
+	"daof-cpa/database"
 )
 
 // ─── R7 Minor: MaskSecret UTF-8 安全 ──────────────────────────────

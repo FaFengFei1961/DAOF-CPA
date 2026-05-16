@@ -1,6 +1,6 @@
 const fs = require('fs');
 
-const path = 'd:/project/one-api/daof-ai-hub/i18n/zh-CN.json';
+const path = 'd:/project/one-api/daof-cpa/i18n/zh-CN.json';
 let raw = fs.readFileSync(path, 'utf8');
 let json = JSON.parse(raw);
 

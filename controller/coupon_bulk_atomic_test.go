@@ -12,8 +12,8 @@ import (
 	"strings"
 	"testing"
 
-	"daof-ai-hub/database"
-	"daof-ai-hub/middleware"
+	"daof-cpa/database"
+	"daof-cpa/middleware"
 
 	"github.com/gofiber/fiber/v2"
 )

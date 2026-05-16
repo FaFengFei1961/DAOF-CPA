@@ -1,7 +1,7 @@
 package proxy
 
 import (
-	"daof-ai-hub/database"
+	"daof-cpa/database"
 	"testing"
 
 	"gorm.io/driver/sqlite"

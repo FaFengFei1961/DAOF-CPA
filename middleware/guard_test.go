@@ -1,8 +1,8 @@
 package middleware
 
 import (
-	"daof-ai-hub/database"
-	"daof-ai-hub/utils"
+	"daof-cpa/database"
+	"daof-cpa/utils"
 	"fmt"
 	"net/http/httptest"
 	"testing"

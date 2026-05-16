@@ -83,10 +83,10 @@ Write-Host ""
 # ─── 1. 检查正在运行的进程 ──────────────────────────
 Write-Step "检查正在运行的相关进程..."
 $running = @()
-$running += Get-Process -Name 'go','main','daof-ai-hub','engine' -ErrorAction SilentlyContinue
-# 检测 vite/node 仅匹配 daof-ai-hub 路径下的，避免误杀其它项目的 node
+$running += Get-Process -Name 'go','main','daof-cpa','engine' -ErrorAction SilentlyContinue
+# 检测 vite/node 仅匹配 daof-cpa 路径下的，避免误杀其它项目的 node
 $running += Get-Process -Name 'node' -ErrorAction SilentlyContinue | Where-Object {
-    try { $_.Path -like "*daof-ai-hub*" } catch { $false }
+    try { $_.Path -like "*daof-cpa*" } catch { $false }
 }
 if ($running) {
     Write-Warn "检测到 $($running.Count) 个相关进程仍在运行："

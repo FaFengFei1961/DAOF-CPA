@@ -18,7 +18,7 @@ import (
 	"sync"
 	"time"
 
-	"daof-ai-hub/database"
+	"daof-cpa/database"
 )
 
 // ModerationPolicy 单个 ChannelModel 维度的风控策略。

@@ -36,7 +36,7 @@ import (
 	"time"
 	"unicode/utf8"
 
-	"daof-ai-hub/database"
+	"daof-cpa/database"
 
 	"github.com/gofiber/fiber/v2"
 

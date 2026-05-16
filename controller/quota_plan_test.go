@@ -3,7 +3,7 @@ package controller
 import (
 	"testing"
 
-	"daof-ai-hub/database"
+	"daof-cpa/database"
 
 	"github.com/gofiber/fiber/v2"
 )

@@ -1,8 +1,8 @@
 package controller
 
 import (
-	"daof-ai-hub/database"
-	"daof-ai-hub/proxy"
+	"daof-cpa/database"
+	"daof-cpa/proxy"
 	"encoding/json"
 	"errors"
 	"fmt"

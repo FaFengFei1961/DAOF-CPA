@@ -10,7 +10,7 @@ import (
 	"testing"
 	"time"
 
-	"daof-ai-hub/database"
+	"daof-cpa/database"
 )
 
 // helper：列出指定用户的全部账单（按 occurred_at 升序，便于断言时间线）

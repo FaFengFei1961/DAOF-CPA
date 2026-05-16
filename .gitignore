@@ -12,7 +12,7 @@ daof.key
 *.exe
 /main.exe
 /main_only.exe
-/daof-ai-hub.exe
+/daof-cpa.exe
 /engine.exe
 /test.exe
 /test_build.exe

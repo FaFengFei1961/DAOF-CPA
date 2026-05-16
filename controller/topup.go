@@ -35,8 +35,8 @@ import (
 	"time"
 	"unicode/utf8"
 
-	"daof-ai-hub/database"
-	"daof-ai-hub/proxy"
+	"daof-cpa/database"
+	"daof-cpa/proxy"
 
 	"github.com/gofiber/fiber/v2"
 	"gorm.io/gorm"

@@ -3,7 +3,7 @@ package proxy
 import (
 	"testing"
 
-	"daof-ai-hub/database"
+	"daof-cpa/database"
 )
 
 func TestEndpointPolicyAllows(t *testing.T) {

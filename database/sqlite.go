@@ -12,7 +12,7 @@ import (
 	"gorm.io/gorm"
 	"gorm.io/gorm/logger"
 
-	"daof-ai-hub/utils"
+	"daof-cpa/utils"
 )
 
 // DB 暴露出去供全局使用的超高速单例对象

@@ -6,10 +6,10 @@ import (
 	"strconv"
 	"strings"
 
-	"daof-ai-hub/database"
-	"daof-ai-hub/middleware"
-	"daof-ai-hub/proxy"
-	"daof-ai-hub/utils"
+	"daof-cpa/database"
+	"daof-cpa/middleware"
+	"daof-cpa/proxy"
+	"daof-cpa/utils"
 
 	"github.com/gofiber/fiber/v2"
 	"gorm.io/gorm"

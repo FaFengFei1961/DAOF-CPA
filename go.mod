@@ -1,4 +1,4 @@
-module daof-ai-hub
+module daof-cpa
 
 go 1.26.2
 

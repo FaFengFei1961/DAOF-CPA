@@ -1,7 +1,7 @@
 package proxy
 
 import (
-	"daof-ai-hub/database"
+	"daof-cpa/database"
 	"net/http"
 	"net/http/httptest"
 	"testing"

@@ -1,6 +1,6 @@
 const fs = require('fs');
 
-const file = 'd:/project/one-api/daof-ai-hub/i18n/zh-CN.json';
+const file = 'd:/project/one-api/daof-cpa/i18n/zh-CN.json';
 const zh = JSON.parse(fs.readFileSync(file, 'utf8'));
 
 const mapping = {
