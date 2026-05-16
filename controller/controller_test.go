@@ -161,7 +161,7 @@ func TestGetUsersMega(t *testing.T) {
 func TestUpdateUserMega(t *testing.T) {
 	app := initializeMegaTestDB()
 	status := 2
-	payload := UserPayload{QuotaMicroUSD: 10 * database.MicroPerUSD, Status: &status}
+	payload := UserPayload{Quota: 10, Status: &status}
 	resp := sendRequest(app, "PUT", "/api/admin/users/2", payload, "")
 	if resp.StatusCode != 200 {
 		t.Errorf("expected 200, got %d", resp.StatusCode)
@@ -440,10 +440,10 @@ func TestUserScopeAndLogsMega(t *testing.T) {
 	// Admin Get Users
 	sendRequest(app, "GET", "/api/admin/users?page=1&size=10", nil, "")
 
-	// Admin Update User — 必须带 status=1 否则会变成 0 让用户被踢出 AuthCache
-	sendRequest(app, "PUT", "/api/admin/users/2", map[string]interface{}{"quota_micro_usd": int64(999 * database.MicroPerUSD), "status": 1, "username": "testUser1"}, "")
+	// Admin Update User
+	sendRequest(app, "PUT", "/api/admin/users/2", map[string]interface{}{"quota": 999.0, "status": 1, "username": "testUser1"}, "")
 	sendRequest(app, "PUT", "/api/admin/users/2", `invalid JSON`, "") // bad format
-	sendRequest(app, "PUT", "/api/admin/users/999", map[string]interface{}{"quota_micro_usd": int64(999 * database.MicroPerUSD), "status": 1}, "")
+	sendRequest(app, "PUT", "/api/admin/users/999", map[string]interface{}{"quota": 999.0, "status": 1}, "")
 
 	// Admin Delete User
 	sendRequest(app, "DELETE", "/api/admin/users/999", nil, "")

@@ -79,7 +79,6 @@ func parsePackageIDsStrict(s string) ([]uint, bool) {
 // 默认 0.01 USD = 10000 micro_usd（一分钱保底，远低于任何套餐价但绝非"免费"）。
 // 业务侧若需更严格成本下限，可通过 SysConfig `coupon_min_fixed_price_micro_usd` 调高。
 const couponMinFixedPriceMicroUSD = int64(10_000)
-const maxAdminCouponDiscountValueMicroUSD = int64(MaxAdminQuotaUSD) * database.MicroPerUSD
 
 // 直接使用常量字面量，i18n 覆盖测试可通过 AST 扫描捕获，避免遗漏翻译。
 const MessageCodeCouponFixedPriceBelowPackageCostFloor = "ERR_COUPON_FIXED_PRICE_BELOW_PACKAGE_COST_FLOOR"
@@ -260,15 +259,15 @@ func AdminListCouponTemplates(c *fiber.Ctx) error {
 	return c.JSON(fiber.Map{"success": true, "data": couponTemplateViewsFrom(list)})
 }
 
-// couponTemplateJSON admin 端 JSON 表示。金额入口使用 int64 micro_usd，禁止 USD float。
+// couponTemplateJSON admin 端 JSON 表示。金额入口使用 USD float，handler 内转 micro_usd。
 type couponTemplateJSON struct {
-	Name                  string `json:"name"`
-	Description           string `json:"description"`
-	DiscountType          string `json:"discount_type"`
-	DiscountValueMicroUSD int64  `json:"discount_value_micro_usd"`
-	PackageIDs            string `json:"package_ids"`
-	ValidDays             int    `json:"valid_days"`
-	Enabled               *bool  `json:"enabled"`
+	Name          string  `json:"name"`
+	Description   string  `json:"description"`
+	DiscountType  string  `json:"discount_type"`
+	DiscountValue float64 `json:"discount_value"`
+	PackageIDs    string  `json:"package_ids"`
+	ValidDays     int     `json:"valid_days"`
+	Enabled       *bool   `json:"enabled"`
 }
 
 func parseCouponTemplate(c *fiber.Ctx) (database.CouponTemplate, error) {
@@ -276,15 +275,18 @@ func parseCouponTemplate(c *fiber.Ctx) (database.CouponTemplate, error) {
 	if err := c.BodyParser(&raw); err != nil {
 		return database.CouponTemplate{}, err
 	}
-	if raw.DiscountValueMicroUSD > maxAdminCouponDiscountValueMicroUSD ||
-		raw.DiscountValueMicroUSD < -maxAdminCouponDiscountValueMicroUSD {
-		return database.CouponTemplate{}, fmt.Errorf("discount_value_micro_usd 超过上限")
+	if err := validateAdminQuotaInput(raw.DiscountValue); err != nil {
+		return database.CouponTemplate{}, fmt.Errorf("discount_value: %w", err)
+	}
+	micro, ok := database.USDToMicro(raw.DiscountValue)
+	if !ok {
+		return database.CouponTemplate{}, fmt.Errorf("discount_value 非法")
 	}
 	return database.CouponTemplate{
 		Name:          raw.Name,
 		Description:   raw.Description,
 		DiscountType:  raw.DiscountType,
-		DiscountValue: raw.DiscountValueMicroUSD,
+		DiscountValue: micro,
 		PackageIDs:    raw.PackageIDs,
 		ValidDays:     raw.ValidDays,
 		Enabled:       raw.Enabled,

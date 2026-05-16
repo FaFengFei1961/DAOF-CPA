@@ -84,7 +84,7 @@ func TestCreatePackage_HappyPath(t *testing.T) {
 
 	code, resp := doJSON(t, app, "POST", "/admin/packages", map[string]any{
 		"name":                   "Pro Plan",
-		"price_micro_usd":        int64(9_900_000),
+		"price_amount":           9.9,
 		"cost_floor_micro_usd":   2_000_000,
 		"billing_period_seconds": 2592000,
 		"max_active_per_user":    5,
@@ -123,12 +123,12 @@ func TestCreatePackage_ValidationRejects(t *testing.T) {
 		name string
 		body map[string]any
 	}{
-		{"missing name", map[string]any{"price_micro_usd": int64(10_000_000), "billing_period_seconds": 86400}},
-		{"negative price", map[string]any{"name": "x", "price_micro_usd": int64(-1), "billing_period_seconds": 86400}},
-		{"negative cost floor", map[string]any{"name": "x", "price_micro_usd": int64(10_000_000), "cost_floor_micro_usd": -1, "billing_period_seconds": 86400}},
-		{"cost floor exceeds price", map[string]any{"name": "x", "price_micro_usd": int64(10_000_000), "cost_floor_micro_usd": 11_000_000, "billing_period_seconds": 86400}},
-		{"zero period", map[string]any{"name": "x", "price_micro_usd": int64(10_000_000), "billing_period_seconds": 0}},
-		{"deprecated bonus field", map[string]any{"name": "x", "price_micro_usd": int64(10_000_000), "billing_period_seconds": 86400, "bonus_balance_usd": 0}},
+		{"missing name", map[string]any{"price_amount": 10.0, "billing_period_seconds": 86400}},
+		{"negative price", map[string]any{"name": "x", "price_amount": -1.0, "billing_period_seconds": 86400}},
+		{"negative cost floor", map[string]any{"name": "x", "price_amount": 10.0, "cost_floor_micro_usd": -1, "billing_period_seconds": 86400}},
+		{"cost floor exceeds price", map[string]any{"name": "x", "price_amount": 10.0, "cost_floor_micro_usd": 11_000_000, "billing_period_seconds": 86400}},
+		{"zero period", map[string]any{"name": "x", "price_amount": 10.0, "billing_period_seconds": 0}},
+		{"deprecated bonus field", map[string]any{"name": "x", "price_amount": 10.0, "billing_period_seconds": 86400, "bonus_balance_usd": 0}},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
@@ -147,7 +147,7 @@ func TestCreatePackage_CostFloorInvalidMessageCode(t *testing.T) {
 
 	code, resp := doJSON(t, app, "POST", "/admin/packages", map[string]any{
 		"name":                   "Bad Floor",
-		"price_micro_usd":        int64(10_000_000),
+		"price_amount":           10.0,
 		"cost_floor_micro_usd":   10_000_001,
 		"billing_period_seconds": 86400,
 	})
@@ -159,14 +159,14 @@ func TestCreatePackage_CostFloorInvalidMessageCode(t *testing.T) {
 	}
 }
 
-func TestPackageAdmin_PriceAndCostFloorMicroUSD(t *testing.T) {
+func TestPackageAdmin_PriceAmountUSDWireAndCostFloorMicroUSD(t *testing.T) {
 	setupSubTestDB(t)
 	admin := seedAdminUser(t)
 	app := newPkgAdminTestApp(admin)
 
 	code, resp := doJSON(t, app, "POST", "/admin/packages", map[string]any{
 		"name":                   "Micro Exact",
-		"price_micro_usd":        int64(12_345_678),
+		"price_amount":           12.345678,
 		"cost_floor_micro_usd":   int64(6_543_210),
 		"billing_period_seconds": 86400,
 	})
@@ -185,7 +185,7 @@ func TestPackageAdmin_PriceAndCostFloorMicroUSD(t *testing.T) {
 
 	code, resp = doJSON(t, app, "PUT", "/admin/packages/"+itoaUint(pkgID), map[string]any{
 		"name":                   "Micro Exact Updated",
-		"price_micro_usd":        int64(22_000_001),
+		"price_amount":           22.000001,
 		"cost_floor_micro_usd":   int64(7_000_001),
 		"billing_period_seconds": 86400,
 	})
@@ -256,7 +256,7 @@ func TestUpdatePackage_HappyPath(t *testing.T) {
 	pkg := seedPackage(t)
 	code, resp := doJSON(t, app, "PUT", "/admin/packages/"+itoaUint(pkg.ID), map[string]any{
 		"name":                   "Renamed",
-		"price_micro_usd":        int64(19_900_000),
+		"price_amount":           19.9,
 		"cost_floor_micro_usd":   3_000_000,
 		"billing_period_seconds": 2592000,
 	})
@@ -288,7 +288,7 @@ func TestUpdatePackage_NotFound(t *testing.T) {
 	app := newPkgAdminTestApp(admin)
 
 	code, _ := doJSON(t, app, "PUT", "/admin/packages/99999", map[string]any{
-		"name": "x", "price_micro_usd": int64(10_000_000), "billing_period_seconds": 86400,
+		"name": "x", "price_amount": 10.0, "billing_period_seconds": 86400,
 	})
 	if code != 404 {
 		t.Errorf("expected 404 got %d", code)

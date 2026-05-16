@@ -80,9 +80,9 @@ func TestBulkAdjustQuotaPreview_HappyPath(t *testing.T) {
 	}
 
 	code, resp := postBulkQuotaPreview(t, app, map[string]any{
-		"user_ids":         []int64{1, 2, 2, 3},
-		"action":           "subtract",
-		"amount_micro_usd": int64(3_250_000),
+		"user_ids":   []int64{1, 2, 2, 3},
+		"action":     "subtract",
+		"amount_usd": 3.25,
 	})
 	if code != 200 {
 		t.Fatalf("expected 200, got %d: %v", code, resp)
@@ -125,9 +125,9 @@ func TestBulkAdjustQuotaPreview_OverLimit(t *testing.T) {
 	}
 
 	code, resp := postBulkQuotaPreview(t, app, map[string]any{
-		"user_ids":         userIDs,
-		"action":           "add",
-		"amount_micro_usd": int64(database.MicroPerUSD),
+		"user_ids":   userIDs,
+		"action":     "add",
+		"amount_usd": 1.0,
 	})
 	if code != 400 {
 		t.Fatalf("expected 400, got %d: %v", code, resp)

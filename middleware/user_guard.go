@@ -22,7 +22,7 @@ func UserGuard(c *fiber.Ctx) error {
 		if token := strings.TrimSpace(authHeader[7:]); token != "" {
 			if database.IsSessionID(token) {
 				if u, ok := database.LookupUserBySession(token); ok && u != nil {
-					if u.Status != 1 {
+					if u.Status == 2 {
 						return c.Status(403).JSON(fiber.Map{
 							"success":      false,
 							"message":      "账户被封禁",
@@ -41,7 +41,7 @@ func UserGuard(c *fiber.Ctx) error {
 				})
 			}
 			if u := proxy.LookupUserByToken(token); u != nil {
-				if u.Status != 1 {
+				if u.Status == 2 {
 					return c.Status(403).JSON(fiber.Map{
 						"success":      false,
 						"message":      "账户被封禁",

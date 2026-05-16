@@ -122,8 +122,8 @@ func GodLogin(c *fiber.Ctx) error {
 	}
 	var admin database.User
 	// fix Major（codex 第四轮）：被封禁 admin 不能用密码重新登录获取新 token
-	result := database.DB.Where("username = ? AND role = ? AND status = ?", req.Username, "admin", 1).First(&admin)
-	if result.Error != nil {
+	result := database.DB.Where("username = ? AND role = ?", req.Username, "admin").First(&admin)
+	if result.Error != nil || admin.Status == 2 {
 		return c.Status(401).JSON(fiber.Map{"success": false, "message": "凭证校验失败", "message_code": "ERR_AUTH_FAILED"})
 	}
 
@@ -176,8 +176,8 @@ func GodSetup(c *fiber.Ctx) error {
 	}
 
 	var admin database.User
-	result := database.DB.Where("username = ? AND role = ? AND status = ?", req.CurrentUsername, "admin", 1).First(&admin)
-	if result.Error != nil {
+	result := database.DB.Where("username = ? AND role = ?", req.CurrentUsername, "admin").First(&admin)
+	if result.Error != nil || admin.Status == 2 {
 		return c.Status(401).JSON(fiber.Map{"success": false, "message": "权限异常", "message_code": "ERR_PERMISSION_DENIED"})
 	}
 
@@ -268,9 +268,8 @@ func UpdateAdminCredentials(c *fiber.Ctx) error {
 	}
 
 	var admin database.User
-	// fix Minor Mi22-5（codex 第二十二轮）：handler 自身要求 status=1，
-	// 不依赖 AdminGuard 兜底（防 direct mount / 测试 helper 误放行封禁 admin）。
-	if err := database.DB.Where("token = ? AND role = ? AND status = ?", token, "admin", 1).First(&admin).Error; err != nil {
+	// handler 自身拒绝封禁 admin，不依赖 AdminGuard 兜底。
+	if err := database.DB.Where("token = ? AND role = ?", token, "admin").First(&admin).Error; err != nil || admin.Status == 2 {
 		return c.Status(401).JSON(fiber.Map{"success": false, "message": "无可查证的高阶身份", "message_code": "ERR_NO_HIGH_LEVEL_IDENTITY"})
 	}
 

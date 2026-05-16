@@ -57,13 +57,13 @@ func newBalanceConsumeTestApp(user *database.User) *fiber.App {
 	return app
 }
 
-func TestBalanceConsume_UsesLimitMicroUSD(t *testing.T) {
+func TestBalanceConsume_UsesLimitUSDWire(t *testing.T) {
 	user := setupBalanceConsumeControllerTestDB(t)
 	app := newBalanceConsumeTestApp(user)
 
 	code, resp := doJSON(t, app, "PUT", "/balance-consume/preference", map[string]any{
-		"enabled":         true,
-		"limit_micro_usd": int64(4_200_123),
+		"enabled":   true,
+		"limit_usd": 4.200123,
 	})
 	if code != 200 {
 		t.Fatalf("expected 200 got %d body=%v", code, resp)

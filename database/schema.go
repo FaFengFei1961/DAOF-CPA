@@ -29,8 +29,8 @@ type User struct {
 	// fix MAJOR M22-A1（codex 第二十三轮）：所有金额字段统一为 int64 micro_usd（USD * 1e6）。
 	// 原因：float64 在长尾累加（千万级 API 调用 × 微小 cost）下出现累加误差，账目对不上；
 	// int64 全程整数运算杜绝浮点漂移。前端展示时除以 1e6 显示 USD。
-	Quota        int64  `gorm:"default:0" json:"quota"`  // 余额（micro_usd, USD * 1e6）
-	Status       int    `gorm:"default:1" json:"status"` // 1: 正常, 2: 封禁
+	Quota        int64  `gorm:"default:0" json:"quota"`                 // 余额（micro_usd, USD * 1e6）
+	Status       int    `gorm:"not null;default:1;index" json:"status"` // 1: 正常, 2: 封禁
 	BanReason    string `gorm:"type:text;default:null" json:"ban_reason"`
 	RegIP        string `gorm:"index" json:"reg_ip"`             // 原始探测 IP (防刷核查用)
 	RegRiskScore int    `gorm:"default:0" json:"reg_risk_score"` // 风控热度判定打分

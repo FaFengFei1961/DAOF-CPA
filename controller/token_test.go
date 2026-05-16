@@ -63,13 +63,13 @@ func newTokenTestApp(user *database.User) *fiber.App {
 	return app
 }
 
-func TestCreateToken_QuotaLimitMicroUSD(t *testing.T) {
+func TestCreateToken_QuotaLimitUSDWire(t *testing.T) {
 	user := setupTokenControllerTestDB(t)
 	app := newTokenTestApp(user)
 
 	code, resp := doJSON(t, app, "POST", "/tokens", map[string]any{
-		"name":                  "limited",
-		"quota_limit_micro_usd": int64(2_500_001),
+		"name":            "limited",
+		"quota_limit_usd": 2.500001,
 	})
 	if code != 200 {
 		t.Fatalf("expected 200 got %d body=%v", code, resp)
@@ -84,7 +84,7 @@ func TestCreateToken_QuotaLimitMicroUSD(t *testing.T) {
 	}
 }
 
-func TestUpdateTokenSettings_QuotaLimitMicroUSD(t *testing.T) {
+func TestUpdateTokenSettings_QuotaLimitUSDWire(t *testing.T) {
 	user := setupTokenControllerTestDB(t)
 	app := newTokenTestApp(user)
 	token := database.AccessToken{
@@ -99,7 +99,7 @@ func TestUpdateTokenSettings_QuotaLimitMicroUSD(t *testing.T) {
 	}
 
 	code, resp := doJSON(t, app, "PUT", "/tokens/"+itoaUint(token.ID), map[string]any{
-		"quota_limit_micro_usd": int64(7_654_321),
+		"quota_limit_usd": 7.654321,
 	})
 	if code != 200 {
 		t.Fatalf("expected 200 got %d body=%v", code, resp)

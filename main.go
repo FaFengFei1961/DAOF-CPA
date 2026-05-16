@@ -263,6 +263,7 @@ func main() {
 	adminApi.Post("/users/bulk-quota", controller.BulkAdjustQuota)
 	adminApi.Post("/users/bulk-delete", controller.BulkDeleteUsers)
 	adminApi.Put("/users/:id", controller.UpdateUser)
+	adminApi.Post("/users/:id/purge", controller.AdminPurgeUser)
 	adminApi.Delete("/users/:id", controller.DeleteUser)
 	adminApi.Get("/users/:id/operations", controller.GetUserOperations)
 

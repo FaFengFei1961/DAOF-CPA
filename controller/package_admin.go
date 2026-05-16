@@ -392,7 +392,7 @@ type createPackagePayload struct {
 	PlanMultipliers []float64 `json:"plan_multipliers"` // 与 PlanIDs 同序，缺省按 1.0
 }
 
-// packagePayloadJSON 是 admin 端 JSON 表示，金额字段直接使用 micro_usd。
+// packagePayloadJSON 是 admin 端 JSON 表示，金额字段使用 USD float，handler 内转 micro_usd。
 type packagePayloadJSON struct {
 	Name                 string           `json:"name"`
 	Description          string           `json:"description"`
@@ -401,7 +401,7 @@ type packagePayloadJSON struct {
 	BadgeColor           string           `json:"badge_color"`
 	Gradient             string           `json:"gradient"`
 	HighlightTag         string           `json:"highlight_tag"`
-	PriceMicroUSD        int64            `json:"price_micro_usd"`
+	PriceAmount          float64          `json:"price_amount"`
 	CostFloorMicroUSD    int64            `json:"cost_floor_micro_usd"`
 	PriceCurrency        string           `json:"price_currency"`
 	BillingPeriodSeconds int              `json:"billing_period_seconds"`
@@ -430,8 +430,12 @@ func parsePackagePayload(c *fiber.Ctx) (createPackagePayload, error) {
 	if productType == "" {
 		productType = "subscription"
 	}
-	if err := validateAdminQuotaMicroInput(raw.PriceMicroUSD); err != nil {
-		return createPackagePayload{}, fmt.Errorf("price_micro_usd: %w", err)
+	if err := validateAdminQuotaInput(raw.PriceAmount); err != nil {
+		return createPackagePayload{}, fmt.Errorf("price_amount: %w", err)
+	}
+	priceMicro, ok := database.USDToMicro(raw.PriceAmount)
+	if !ok {
+		return createPackagePayload{}, fmt.Errorf("price_amount overflow")
 	}
 	out := createPackagePayload{
 		Package: database.Package{
@@ -442,7 +446,7 @@ func parsePackagePayload(c *fiber.Ctx) (createPackagePayload, error) {
 			BadgeColor:           raw.BadgeColor,
 			Gradient:             raw.Gradient,
 			HighlightTag:         raw.HighlightTag,
-			PriceAmount:          raw.PriceMicroUSD,
+			PriceAmount:          priceMicro,
 			CostFloorMicroUSD:    raw.CostFloorMicroUSD,
 			PriceCurrency:        raw.PriceCurrency,
 			BillingPeriodSeconds: raw.BillingPeriodSeconds,

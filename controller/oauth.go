@@ -641,7 +641,7 @@ func GithubCallback(c *fiber.Ctx) error {
 	var existingUser database.User
 	res := database.DB.Where("github_id = ?", ghID).First(&existingUser)
 	if res.RowsAffected > 0 {
-		if existingUser.Status != 1 {
+		if existingUser.Status == 2 {
 			return c.Status(403).JSON(fiber.Map{
 				"success":      false,
 				"message_code": "ERR_BANNED",

@@ -64,10 +64,10 @@ func TestCouponTemplate_CreateAndList(t *testing.T) {
 	app := newCouponAdminTestApp(admin)
 
 	code, resp := doJSON(t, app, "POST", "/admin/coupon-templates", map[string]any{
-		"name":                     "Holiday 50% Off",
-		"discount_type":            "fixed_price",
-		"discount_value_micro_usd": 4_990_000,
-		"valid_days":               60,
+		"name":           "Holiday 50% Off",
+		"discount_type":  "fixed_price",
+		"discount_value": 4.99,
+		"valid_days":     60,
 	})
 	if code != 200 {
 		t.Fatalf("create template: expected 200 got %d body=%v", code, resp)
@@ -86,16 +86,16 @@ func TestCouponTemplate_CreateAndList(t *testing.T) {
 	}
 }
 
-func TestCouponCreate_DiscountValueMicroUSD(t *testing.T) {
+func TestCouponCreate_DiscountValueUSDWire(t *testing.T) {
 	setupSubTestDB(t)
 	admin := seedAdminUser(t)
 	app := newCouponAdminTestApp(admin)
 
 	code, resp := doJSON(t, app, "POST", "/admin/coupon-templates", map[string]any{
-		"name":                     "Micro USD Coupon",
-		"discount_type":            "fixed_price",
-		"discount_value_micro_usd": 3_250_000,
-		"valid_days":               30,
+		"name":           "Micro USD Coupon",
+		"discount_type":  "fixed_price",
+		"discount_value": 3.25,
+		"valid_days":     30,
 	})
 	if code != 200 {
 		t.Fatalf("create template: expected 200 got %d body=%v", code, resp)
@@ -117,10 +117,10 @@ func TestCouponTemplate_Update(t *testing.T) {
 	tpl := seedCouponTemplate(t)
 
 	code, resp := doJSON(t, app, "PUT", "/admin/coupon-templates/"+itoaUint(tpl.ID), map[string]any{
-		"name":                     "Updated Name",
-		"discount_type":            "fixed_price",
-		"discount_value_micro_usd": 3_000_000,
-		"valid_days":               90,
+		"name":           "Updated Name",
+		"discount_type":  "fixed_price",
+		"discount_value": 3.0,
+		"valid_days":     90,
 	})
 	if code != 200 {
 		t.Errorf("expected 200 got %d body=%v", code, resp)
