@@ -207,6 +207,8 @@ func purchaseAsInstant(c *fiber.Ctx, user *database.User, pkg *database.Package,
 	}
 
 	created := []database.UserSubscription{}
+	referralRewards := []database.ReferralPaidSpendRewardResult{}
+	referralRewardBPS, referralRewardWindowSeconds := readReferralPaidSpendRewardConfig()
 	now := time.Now()
 	var snapshot string // 在事务内重新构建（C3）
 	var endAt time.Time
@@ -380,6 +382,30 @@ func purchaseAsInstant(c *fiber.Ctx, user *database.User, pkg *database.Package,
 				return fmt.Errorf("write billing purchase: %w", err)
 			}
 		}
+		if totalPriceMicro > 0 && len(created) > 0 {
+			rewardRelatedID := created[0].ID
+			rewardLabel := fmt.Sprintf("购买「%s」", pkg.Name)
+			if qty > 1 {
+				rewardLabel = fmt.Sprintf("购买「%s」×%d", pkg.Name, qty)
+			}
+			reward, err := database.ApplyReferralPaidSpendRewardTx(
+				tx,
+				user.ID,
+				totalPriceMicro,
+				referralRewardBPS,
+				referralRewardWindowSeconds,
+				now,
+				"subscription",
+				rewardRelatedID,
+				rewardLabel,
+			)
+			if err != nil {
+				return fmt.Errorf("apply referral spend reward: %w", err)
+			}
+			if reward.RewardMicroUSD > 0 {
+				referralRewards = append(referralRewards, reward)
+			}
+		}
 		return nil
 	})
 	if err != nil {
@@ -412,6 +438,20 @@ func purchaseAsInstant(c *fiber.Ctx, user *database.User, pkg *database.Package,
 				"message_code": MessageCodeCouponSnapshotBelowCostFloor,
 			})
 		}
+		if errors.Is(err, errCouponNotApplicable) {
+			return c.Status(409).JSON(fiber.Map{
+				"success":      false,
+				"message":      "该优惠券不适用于当前套餐",
+				"message_code": "ERR_COUPON_NOT_APPLICABLE",
+			})
+		}
+		if errors.Is(err, errCouponInvalid) {
+			return c.Status(409).JSON(fiber.Map{
+				"success":      false,
+				"message":      "优惠券不可用或已失效",
+				"message_code": "ERR_COUPON_INVALID",
+			})
+		}
 		// fix CRITICAL R23+3-C3：事务内重读 package 发现状态变化 → 让前端刷新重试
 		switch {
 		case errors.Is(err, errPackageGoneInTx):
@@ -438,6 +478,15 @@ func purchaseAsInstant(c *fiber.Ctx, user *database.User, pkg *database.Package,
 	}
 	proxy.InvalidateUserSubscriptionCache(user.ID)
 	proxy.RefreshUserAuth(user.ID) // 扣 quota 后刷新缓存，否则前端余额陈旧
+	for _, reward := range referralRewards {
+		proxy.RefreshUserAuth(reward.ReferrerID)
+		LogOperationBy(0, reward.ReferrerID, "system", "REFERRAL_SPEND_REWARD", c.IP(),
+			fmt.Sprintf(`[{"type":"REFERRAL_SPEND_REWARD","referee_id":%d,"referee":%q,"related_type":%q,"related_id":%d,"eligible_spend":%g,"eligible_spend_micro":%d,"rate_bps":%d,"window_seconds":%d,"amount":%g,"amount_micro":%d}]`,
+				reward.RefereeID, reward.RefereeUsername, reward.RelatedType, reward.RelatedID,
+				database.MicroToUSD(reward.EligibleSpendMicroUSD), reward.EligibleSpendMicroUSD,
+				reward.RateBPS, reward.WindowSeconds,
+				database.MicroToUSD(reward.RewardMicroUSD), reward.RewardMicroUSD))
+	}
 	createPurchaseNotification(user.ID, pkg, len(created))
 	return c.JSON(fiber.Map{"success": true, "data": created, "message_code": "SUCCESS_PURCHASED"})
 }
@@ -568,6 +617,7 @@ func buildSubscriptionUsageSummary(snapshotJSON string, usages []database.Subscr
 	if err := json.Unmarshal([]byte(snapshotJSON), &snap); err != nil || len(snap.Plans) == 0 {
 		return []subscriptionUsageSummary{}
 	}
+	now := time.Now()
 	usageByPlanBucket := make(map[string]database.SubscriptionUsage, len(usages))
 	for _, u := range usages {
 		key := fmt.Sprintf("%d\x00%s", u.QuotaPlanID, u.ModelBucket)
@@ -609,16 +659,14 @@ func buildSubscriptionUsageSummary(snapshotJSON string, usages []database.Subscr
 		var windowStart *time.Time
 		var windowEnd *time.Time
 		if hasUsage {
-			if p.LimitUnit == "api_cost_usd" {
-				consumed = database.MicroToUSD(u.ConsumedValueMicroUSD)
-			} else {
-				consumed = u.ConsumedValue
+			if displayConsumed, displayCount, active := subscriptionUsageValueForDisplay(u, p.LimitUnit, p.WindowSeconds, now); active {
+				consumed = displayConsumed
+				requestCount = displayCount
+				ws := u.WindowStartAt
+				we := u.WindowEndAt
+				windowStart = &ws
+				windowEnd = &we
 			}
-			requestCount = u.RequestCount
-			ws := u.WindowStartAt
-			we := u.WindowEndAt
-			windowStart = &ws
-			windowEnd = &we
 		}
 		remaining := 0.0
 		pct := 0.0
@@ -652,6 +700,20 @@ func buildSubscriptionUsageSummary(snapshotJSON string, usages []database.Subscr
 		})
 	}
 	return out
+}
+
+func subscriptionUsageWindowExpiredForDisplay(u database.SubscriptionUsage, windowSeconds int, now time.Time) bool {
+	return windowSeconds > 0 && !u.WindowEndAt.IsZero() && now.After(u.WindowEndAt)
+}
+
+func subscriptionUsageValueForDisplay(u database.SubscriptionUsage, unit string, windowSeconds int, now time.Time) (float64, int64, bool) {
+	if subscriptionUsageWindowExpiredForDisplay(u, windowSeconds, now) {
+		return 0, 0, false
+	}
+	if unit == "api_cost_usd" {
+		return database.MicroToUSD(u.ConsumedValueMicroUSD), u.RequestCount, true
+	}
+	return u.ConsumedValue, u.RequestCount, true
 }
 
 func usageBucketFromPlanSnapshot(extraConfig, modelMatch string) string {
@@ -1375,23 +1437,9 @@ func AdminListSubscriptions(c *fiber.Ctx) error {
 		}
 		// 计算消费率：取所有限额 plan 中 consumed/limit 最大的那个
 		usages := usagesBySubID[sub.ID]
-		consumedByPlan := make(map[uint]float64, len(usages))
-		// 按 plan_id 索引最近一条 usage row（用于提取 window_start_at / window_end_at / request_count）
-		latestUsageByPlan := make(map[uint]*database.SubscriptionUsage, len(usages))
-		for i, u := range usages {
-			consumedByPlan[u.QuotaPlanID] += u.ConsumedValue
-			if u.ConsumedValueMicroUSD > 0 {
-				consumedByPlan[u.QuotaPlanID] += database.MicroToUSD(u.ConsumedValueMicroUSD)
-			}
-			// 多 bucket 时取 window_end_at 最近（最新）的一条作为 admin 展示参考
-			prev, ok := latestUsageByPlan[u.QuotaPlanID]
-			if !ok {
-				latestUsageByPlan[u.QuotaPlanID] = &usages[i]
-				continue
-			}
-			if !u.WindowEndAt.IsZero() && (prev.WindowEndAt.IsZero() || u.WindowEndAt.After(prev.WindowEndAt)) {
-				latestUsageByPlan[u.QuotaPlanID] = &usages[i]
-			}
+		usageRowsByPlan := make(map[uint][]database.SubscriptionUsage, len(usages))
+		for _, u := range usages {
+			usageRowsByPlan[u.QuotaPlanID] = append(usageRowsByPlan[u.QuotaPlanID], u)
 		}
 		maxPct := 0.0
 		usageDetails := make([]map[string]any, 0, len(snap.Plans))
@@ -1411,6 +1459,23 @@ func AdminListSubscriptions(c *fiber.Ctx) error {
 				}
 				effectiveLimit = database.MicroToUSD(scaleMicroByFloatForDisplay(limitMicro, mult))
 			}
+			consumed := 0.0
+			requestCount := int64(0)
+			var latestUsage *database.SubscriptionUsage
+			for i := range usageRowsByPlan[p.ID] {
+				usage := &usageRowsByPlan[p.ID][i]
+				displayConsumed, displayCount, active := subscriptionUsageValueForDisplay(*usage, p.LimitUnit, p.WindowSeconds, now)
+				if !active {
+					continue
+				}
+				consumed += displayConsumed
+				requestCount += displayCount
+				// 多 bucket 时取 window_end_at 最近（最新）的一条作为 admin 展示参考。
+				if latestUsage == nil ||
+					(!usage.WindowEndAt.IsZero() && (latestUsage.WindowEndAt.IsZero() || usage.WindowEndAt.After(latestUsage.WindowEndAt))) {
+					latestUsage = usage
+				}
+			}
 			d := map[string]any{
 				"plan_id":        p.ID,
 				"name":           p.Name,
@@ -1418,21 +1483,20 @@ func AdminListSubscriptions(c *fiber.Ctx) error {
 				"limit":          effectiveLimit,
 				"window_seconds": p.WindowSeconds,
 				"extra_config":   p.ExtraConfig,
-				"consumed":       consumedByPlan[p.ID],
+				"consumed":       consumed,
+				"request_count":  requestCount,
 			}
-			// 补 window 信息：admin UI 依赖 window_end_at 判断窗口是否过期（trigger-on-first-use
-			// 模式下窗口过期不会自动 reset，UI 需展示"已结束 · 等待下次请求"而非继续显示老百分比）
-			if usage := latestUsageByPlan[p.ID]; usage != nil {
+			// 补当前活跃窗口信息；已过期窗口在展示层视为可用新窗口，运行时仍由首次请求开窗。
+			if usage := latestUsage; usage != nil {
 				if !usage.WindowStartAt.IsZero() {
 					d["window_start_at"] = usage.WindowStartAt
 				}
 				if !usage.WindowEndAt.IsZero() {
 					d["window_end_at"] = usage.WindowEndAt
 				}
-				d["request_count"] = usage.RequestCount
 			}
 			if effectiveLimit > 0 {
-				pct := consumedByPlan[p.ID] / effectiveLimit * 100
+				pct := consumed / effectiveLimit * 100
 				if pct > maxPct {
 					maxPct = pct
 				}

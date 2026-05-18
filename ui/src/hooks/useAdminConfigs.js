@@ -35,6 +35,8 @@ const DEFAULT_CONFIGS = {
   signup_bonus: '1000000',
   referrer_bonus: '0',
   referee_bonus: '0',
+  referral_paid_spend_reward_bps: '0',
+  referral_paid_spend_reward_window_seconds: '2592000',
   signup_coupon_template_id: '0',
   server_address: '',
   exchange_rate_rmb_per_usd_micros: '',
@@ -50,7 +52,7 @@ const DEFAULT_CONFIGS = {
   moderation_cliproxy_model: 'gpt-5.4-mini',
   moderation_threshold: '0.8',
   moderation_api_timeout_seconds: '15',
-  moderation_image_policy: 'reject',
+  moderation_image_policy: 'skip',
   moderation_autoban_enabled: 'false',
   moderation_autoban_keyword_threshold: '1',
   moderation_autoban_policy_threshold: '0',
@@ -94,6 +96,18 @@ const validateConfigs = (cfg) => {
     const w = parseInt(cfg.balance_consume_default_window_secs, 10);
     if (Number.isNaN(w) || w < 60 || w > 365 * 24 * 60 * 60) {
       errors.push('新用户余额消费默认窗口必须在 60 秒到 365 天之间');
+    }
+  }
+  if (cfg.referral_paid_spend_reward_bps !== undefined) {
+    const bps = parseInt(cfg.referral_paid_spend_reward_bps, 10);
+    if (Number.isNaN(bps) || bps < 0 || bps > 10000) {
+      errors.push('拉新消费返佣比例必须在 0% 到 100% 之间');
+    }
+  }
+  if (cfg.referral_paid_spend_reward_window_seconds !== undefined) {
+    const seconds = parseInt(cfg.referral_paid_spend_reward_window_seconds, 10);
+    if (Number.isNaN(seconds) || seconds < 60 || seconds > 365 * 24 * 60 * 60) {
+      errors.push('拉新消费返佣有效期必须在 1 分钟到 365 天之间');
     }
   }
   if (cfg.moderation_autoban_enabled !== undefined) {

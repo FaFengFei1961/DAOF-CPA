@@ -3,7 +3,6 @@ import { useTranslation } from 'react-i18next';
 import { useSearchParams } from 'react-router-dom';
 import { ShoppingCart, Check, Layers, Sparkles, Cpu, Zap, Activity, Package as PackageIcon, BrainCircuit, Bot } from 'lucide-react';
 import toast from 'react-hot-toast';
-import { useConfirm } from '../context/ConfirmContext';
 import { authFetch, isLoggedIn, readAuthState } from '../utils/authFetch';
 import { clearPageCache, isPageCacheFresh, readPageCache, writePageCache } from '../utils/pageCache';
 import { useAuth } from '../context/AuthContext';
@@ -11,7 +10,7 @@ import { useCurrency } from '../context/CurrencyContext';
 import { formatDuration } from './DurationInput';
 import { StorePage } from './store/StorePrimitives';
 import Select from './ui/Select';
-import StatusBadge from './ui/StatusBadge';
+import Modal from './ui/Modal';
 import MySubscriptions from './MySubscriptions';
 
 
@@ -92,7 +91,6 @@ const UpgradePage = ({ onPurchaseSuccess, embedded = false }) => {
 
 
   const { t } = useTranslation();
-  const confirm = useConfirm();
   const { formatCurrency } = useCurrency();
   const { isAuthenticated, openLogin } = useAuth();
   const onSignIn = openLogin;
@@ -101,8 +99,7 @@ const UpgradePage = ({ onPurchaseSuccess, embedded = false }) => {
   const [coupons, setCoupons] = useState(() => (isAuthenticated ? readPageCache(couponCacheKey) : null) || []);
   const [loading, setLoading] = useState(() => !readPageCache(PACKAGE_CACHE_KEY));
   const [purchasing, setPurchasing] = useState(null);
-
-  const [selectedCouponByPkg, setSelectedCouponByPkg] = useState({});
+  const [purchaseDraft, setPurchaseDraft] = useState(null);
 
 
 
@@ -181,7 +178,7 @@ const UpgradePage = ({ onPurchaseSuccess, embedded = false }) => {
       const arr = JSON.parse(c.snapshot_package_ids || '[]');
       if (Array.isArray(arr)) allowed = arr;
     } catch { /* ignore */ }
-    return allowed.length === 0 || allowed.includes(pkgId);
+    return allowed.length === 0 || allowed.some((id) => String(id) === String(pkgId));
   });
 
 
@@ -195,22 +192,33 @@ const UpgradePage = ({ onPurchaseSuccess, embedded = false }) => {
     return pkg.price_amount;
   };
 
-  const purchase = async (pkg) => {
+  const couponLabelFor = (pkg, coupon) => {
+    const finalPrice = effectivePriceFor(pkg, coupon.id);
+    const saving = Math.max(0, Number(pkg.price_amount || 0) - Number(finalPrice || 0));
+    if (saving > 0) {
+      return t('UPGRADE.COUPON_OPTION_WITH_SAVING', '{{name}} - {{price}}，省 {{saving}}', {
+        name: coupon.snapshot_name,
+        price: formatCurrency(Number(finalPrice || 0), 2),
+        saving: formatCurrency(saving, 2),
+      });
+    }
+    return String(coupon.snapshot_name || coupon.code || coupon.id);
+  };
+
+  const openPurchaseDialog = (pkg) => {
     if (!isLoggedIn()) {
 
       if (onSignIn) onSignIn();
       else toast.error(t('UPGRADE.LOGIN_REQUIRED', '请先登录后再购买'));
       return;
     }
-    const couponId = selectedCouponByPkg[pkg.id] || 0;
-    const finalPrice = effectivePriceFor(pkg, couponId);
+    setPurchaseDraft({ pkg, couponId: 0 });
+  };
 
-    const confirmMsg = t('UPGRADE.CONFIRM_PURCHASE', {
-      name: displayPackageName(pkg),
-      price: formatCurrency(Number(finalPrice || 0), 2),
-      defaultValue: '购买「{{name}}」？\n\n实际扣款：{{price}}（从你的余额扣除）',
-    });
-    if (!(await confirm(confirmMsg))) return;
+  const purchase = async () => {
+    if (!purchaseDraft?.pkg) return;
+    const pkg = purchaseDraft.pkg;
+    const couponId = Number(purchaseDraft.couponId || 0);
 
     setPurchasing(pkg.id);
     try {
@@ -227,6 +235,7 @@ const UpgradePage = ({ onPurchaseSuccess, embedded = false }) => {
         clearPageCache('user-coupons:');
         window.dispatchEvent(new CustomEvent('user-profile-refresh'));
 
+        setPurchaseDraft(null);
         load({ force: true });
         if (onPurchaseSuccess) onPurchaseSuccess(json);
       } else {
@@ -235,6 +244,14 @@ const UpgradePage = ({ onPurchaseSuccess, embedded = false }) => {
     } catch { toast.error(t('API.ERR_NETWORK', '网络异常')); }
     finally { setPurchasing(null); }
   };
+
+  const purchasePkg = purchaseDraft?.pkg || null;
+  const purchaseUsableCoupons = purchasePkg ? usableCouponsForPkg(purchasePkg.id) : [];
+  const purchaseCouponId = Number(purchaseDraft?.couponId || 0);
+  const purchaseFinalPrice = purchasePkg ? effectivePriceFor(purchasePkg, purchaseCouponId) : 0;
+  const purchaseOriginalPrice = Number(purchasePkg?.price_amount || 0);
+  const purchaseSaving = Math.max(0, purchaseOriginalPrice - Number(purchaseFinalPrice || 0));
+  const purchaseSelectedCoupon = purchaseCouponId > 0 ? coupons.find((c) => c.id === purchaseCouponId) : null;
 
   return (
 
@@ -282,16 +299,12 @@ const UpgradePage = ({ onPurchaseSuccess, embedded = false }) => {
           }
           const sorted = sortStorePackages(filtered);
           return (
+          <>
           <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-3">
             {sorted.map(pkg => {
               const Icon = pickIcon(pkg.icon_key);
-              const usableCoupons = usableCouponsForPkg(pkg.id);
-              const selectedCouponId = selectedCouponByPkg[pkg.id] || 0;
-              const finalPrice = effectivePriceFor(pkg, selectedCouponId);
-              const hasDiscount = Boolean(selectedCouponId) && finalPrice < pkg.price_amount;
               const shownName = displayPackageName(pkg);
               const shownDescription = displayPackageDescription(pkg);
-              const finalPriceText = formatCurrency(Number(finalPrice || 0), 2);
               const originalPriceText = formatCurrency(Number(pkg.price_amount || 0), 2);
               const highlightTag = displayHighlightTag(pkg.highlight_tag);
               const isRecommended = !!highlightTag;
@@ -308,29 +321,13 @@ const UpgradePage = ({ onPurchaseSuccess, embedded = false }) => {
                   <Icon size={28} className="text-primary mb-3" style={pkg.badge_color ? { color: pkg.badge_color } : {}} />
                   <h3 className="text-lg font-bold mb-1">{shownName}</h3>
                   <div className="flex items-baseline gap-2 mb-1 flex-wrap">
-
-                    {hasDiscount && (
-                      <>
-                        <span className="sr-only">{t('UPGRADE.SR_DISCOUNT_PRICE', '折扣价')} {finalPriceText}</span>
-                        <span aria-hidden="true" className="text-2xl font-bold text-success">{finalPriceText}</span>
-                        <span className="sr-only">{t('UPGRADE.SR_ORIGINAL_PRICE_TEXT', '，原价 {{price}}', { price: originalPriceText })}</span>
-                        <span aria-hidden="true" className="text-xs text-outline line-through">{originalPriceText}</span>
-                      </>
-                    )}
-                    {!hasDiscount && (
-                      <span className="text-2xl font-bold">{originalPriceText}</span>
-                    )}
+                    <span className="text-2xl font-bold">{originalPriceText}</span>
                     <span className="text-xs text-on-surface-variant">/ {formatDuration(pkg.billing_period_seconds)}</span>
                   </div>
 
                   <div className="flex flex-wrap gap-1 mb-3 text-[10px]">
                     <span className="px-2 py-0.5 rounded-control bg-success/20 text-success">{t('UPGRADE.INSTANT', '⚡ 即时开通')}</span>
                     {Boolean(pkg.stackable) && <span className="px-2 py-0.5 rounded-control bg-primary/20 text-primary">{t('UPGRADE.STACKABLE', '可叠加')}</span>}
-                    {hasDiscount && (
-                      <span className="px-2 py-0.5 rounded-control bg-fuchsia-500/20 text-fuchsia-400 font-bold">
-                        <span aria-hidden="true">🎟️ </span>{t('UPGRADE.COUPON_APPLIED', '使用券')}
-                      </span>
-                    )}
                   </div>
 
                   {shownDescription && (
@@ -356,27 +353,7 @@ const UpgradePage = ({ onPurchaseSuccess, embedded = false }) => {
                   )}
 
 
-                  {isAuthenticated && usableCoupons.length > 0 && (
-                    <div className="mb-3">
-                      <label htmlFor={`coupon-${pkg.id}`} className="block text-[10px] font-medium text-on-surface-variant mb-1">
-                        {t('UPGRADE.USE_COUPON', '使用优惠券')}
-                      </label>
-                      <Select
-                        id={`coupon-${pkg.id}`}
-                        value={selectedCouponId}
-                        onChange={(e) => setSelectedCouponByPkg((prev) => ({ ...prev, [pkg.id]: parseInt(e.target.value, 10) || 0 }))}
-                        options={[
-                          { value: 0, label: t('UPGRADE.COUPON_NONE', '不使用券') },
-                          ...usableCoupons.map(c => ({
-                            value: c.id,
-                            label: `${c.snapshot_name}${c.snapshot_type === 'fixed_price' ? ` (${formatCurrency(Number(c.snapshot_value || 0), 2)})` : ''}`
-                          }))
-                        ]}
-                      />
-                    </div>
-                  )}
-
-                  <button type="button" onClick={() => purchase(pkg)}
+                  <button type="button" onClick={() => openPurchaseDialog(pkg)}
                     disabled={purchasing === pkg.id}
                     className="w-full h-10 bg-primary text-on-primary rounded-control font-semibold flex items-center justify-center gap-2 hover:brightness-110 active:scale-[0.98] disabled:opacity-50 transition">
                     <ShoppingCart size={14} aria-hidden="true" />
@@ -386,10 +363,101 @@ const UpgradePage = ({ onPurchaseSuccess, embedded = false }) => {
               );
             })}
           </div>
+          </>
           );
         })()}
       </>)}
       </StorePage>
+      <Modal
+        open={!!purchasePkg}
+        onClose={() => {
+          if (!purchasing) setPurchaseDraft(null);
+        }}
+        title={t('UPGRADE.PURCHASE_TITLE', '确认购买')}
+        description={purchasePkg ? displayPackageName(purchasePkg) : ''}
+        size="sm"
+        closeOnBackdrop={!purchasing}
+        footer={(
+          <>
+            <button
+              type="button"
+              onClick={() => setPurchaseDraft(null)}
+              disabled={!!purchasing}
+              className="fl-btn fl-btn-standard"
+            >
+              {t('CONFIRM.CANCEL', '取消')}
+            </button>
+            <button
+              type="button"
+              onClick={purchase}
+              disabled={!!purchasing}
+              className="fl-btn disabled:opacity-50 disabled:cursor-not-allowed"
+            >
+              {purchasing ? t('UPGRADE.PROCESSING', '处理中...') : t('UPGRADE.PURCHASE_CONFIRM', '确认购买')}
+            </button>
+          </>
+        )}
+      >
+        {purchasePkg && (
+          <div className="space-y-5">
+            <div className="space-y-2 text-sm">
+              <div className="flex items-center justify-between gap-4">
+                <span className="text-on-surface-variant">{t('UPGRADE.PRICE_ORIGINAL', '套餐原价')}</span>
+                <span className="font-semibold text-on-surface">{formatCurrency(purchaseOriginalPrice, 2)}</span>
+              </div>
+              {purchaseSaving > 0 && (
+                <div className="flex items-center justify-between gap-4">
+                  <span className="text-on-surface-variant">{t('UPGRADE.PRICE_DISCOUNT', '优惠减免')}</span>
+                  <span className="font-semibold text-success">-{formatCurrency(purchaseSaving, 2)}</span>
+                </div>
+              )}
+              <div className="flex items-center justify-between gap-4 border-t border-outline-variant pt-3">
+                <span className="text-on-surface font-semibold">{t('UPGRADE.PRICE_FINAL', '实际扣款')}</span>
+                <span className="text-xl font-bold text-on-surface">{formatCurrency(Number(purchaseFinalPrice || 0), 2)}</span>
+              </div>
+            </div>
+
+            <div className="space-y-2">
+              <label htmlFor="purchase-coupon" className="block text-xs font-semibold text-on-surface-variant">
+                {t('UPGRADE.USE_COUPON', '使用优惠券')}
+              </label>
+              {purchaseUsableCoupons.length > 0 ? (
+                <Select
+                  id="purchase-coupon"
+                  value={purchaseCouponId}
+                  onChange={(e) => setPurchaseDraft((prev) => prev ? { ...prev, couponId: parseInt(e.target.value, 10) || 0 } : prev)}
+                  options={[
+                    { value: 0, label: t('UPGRADE.COUPON_NONE', '不使用券') },
+                    ...purchaseUsableCoupons.map((c) => ({
+                      value: c.id,
+                      label: couponLabelFor(purchasePkg, c),
+                    })),
+                  ]}
+                />
+              ) : (
+                <div className="rounded-control border border-outline-variant bg-surface-container px-3 py-2 text-sm text-on-surface-variant">
+                  {t('UPGRADE.COUPON_NONE_FOR_PACKAGE', '暂无可用于此套餐的优惠券')}
+                </div>
+              )}
+              <p className="text-xs text-on-surface-variant">
+                {t('UPGRADE.COUPON_SINGLE_USE_NOTE', '每笔订单最多使用 1 张优惠券，不支持叠加使用。')}
+              </p>
+              {purchaseSelectedCoupon && purchaseSaving > 0 && (
+                <p className="text-xs text-success">
+                  {t('UPGRADE.COUPON_SELECTED_SAVING', '已选择「{{name}}」，本次节省 {{saving}}。', {
+                    name: purchaseSelectedCoupon.snapshot_name,
+                    saving: formatCurrency(purchaseSaving, 2),
+                  })}
+                </p>
+              )}
+            </div>
+
+            <p className="text-xs text-on-surface-variant">
+              {t('UPGRADE.BALANCE_DEDUCT_NOTE', '购买成功后会从你的余额扣除实际扣款金额，并立即开通套餐。')}
+            </p>
+          </div>
+        )}
+      </Modal>
     </div>
   );
 };

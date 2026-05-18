@@ -15,9 +15,11 @@ package controller
 import (
 	"strings"
 	"testing"
+	"time"
 
 	"daof-cpa/database"
 	"daof-cpa/middleware"
+	"daof-cpa/proxy"
 
 	"github.com/gofiber/fiber/v2"
 )
@@ -147,6 +149,75 @@ func TestAdminReconcileBilling_ChargedDeductsQuotaAndCreatesAdjustEntry(t *testi
 	want := 50*database.MicroPerUSD - 5_000_000
 	if u.Quota != want {
 		t.Errorf("quota: got %d want %d (-$5 charged)", u.Quota, want)
+	}
+}
+
+func TestAdminReconcileBilling_ChargedConsumesPaidQuotaAfterBonusAndRewards(t *testing.T) {
+	setupSubTestDB(t)
+	admin := seedAdminUser(t)
+	referrer := database.User{Username: "reconcile-referrer", Token: "sk-reconcile-referrer", Role: "user", Status: 1}
+	if err := database.DB.Create(&referrer).Error; err != nil {
+		t.Fatalf("seed referrer: %v", err)
+	}
+	user := seedTestUser(t, 20)
+	referredAt := time.Now().Add(-time.Hour)
+	if err := database.DB.Model(&database.User{}).Where("id = ?", user.ID).Updates(map[string]any{
+		"paid_quota":          10 * database.MicroPerUSD,
+		"referred_by_user_id": referrer.ID,
+		"referred_at":         referredAt,
+	}).Error; err != nil {
+		t.Fatalf("mark referred user: %v", err)
+	}
+	proxy.SysConfigMutex.Lock()
+	oldBPS, hadOldBPS := proxy.SysConfigCache[database.ReferralPaidSpendRewardBPSConfigKey]
+	oldWindow, hadOldWindow := proxy.SysConfigCache[database.ReferralPaidSpendRewardWindowSecondsConfigKey]
+	proxy.SysConfigCache[database.ReferralPaidSpendRewardBPSConfigKey] = "1000"
+	proxy.SysConfigCache[database.ReferralPaidSpendRewardWindowSecondsConfigKey] = "2592000"
+	proxy.SysConfigMutex.Unlock()
+	t.Cleanup(func() {
+		proxy.SysConfigMutex.Lock()
+		defer proxy.SysConfigMutex.Unlock()
+		if hadOldBPS {
+			proxy.SysConfigCache[database.ReferralPaidSpendRewardBPSConfigKey] = oldBPS
+		} else {
+			delete(proxy.SysConfigCache, database.ReferralPaidSpendRewardBPSConfigKey)
+		}
+		if hadOldWindow {
+			proxy.SysConfigCache[database.ReferralPaidSpendRewardWindowSecondsConfigKey] = oldWindow
+		} else {
+			delete(proxy.SysConfigCache, database.ReferralPaidSpendRewardWindowSecondsConfigKey)
+		}
+	})
+
+	app := newReconcileTestApp(admin)
+	entry := seedPendingBillingEntry(t, user.ID, 15*database.MicroPerUSD)
+
+	code, resp := doJSON(t, app, "POST",
+		"/admin/billing/"+itoaUint(entry.ID)+"/reconcile",
+		map[string]any{"result": "charged", "note": "补扣余额消费"})
+	if code != 200 {
+		t.Fatalf("expected 200, got %d body=%v", code, resp)
+	}
+
+	var freshUser, freshReferrer database.User
+	if err := database.DB.First(&freshUser, user.ID).Error; err != nil {
+		t.Fatalf("load user: %v", err)
+	}
+	if freshUser.Quota != 5*database.MicroPerUSD || freshUser.PaidQuota != 5*database.MicroPerUSD {
+		t.Fatalf("quota/paid_quota=%d/%d, want $5/$5 after bonus-first charged reconcile", freshUser.Quota, freshUser.PaidQuota)
+	}
+	if err := database.DB.First(&freshReferrer, referrer.ID).Error; err != nil {
+		t.Fatalf("load referrer: %v", err)
+	}
+	if freshReferrer.Quota != 500_000 {
+		t.Fatalf("referrer quota=%d, want 10%% of $5 paid spend", freshReferrer.Quota)
+	}
+	var reward database.BillingEntry
+	if err := database.DB.Where("user_id = ? AND entry_type = ?", referrer.ID, database.BillingTypeBonusCredit).First(&reward).Error; err != nil {
+		t.Fatalf("reward billing missing: %v", err)
+	}
+	if reward.AmountUSD != 500_000 || reward.RelatedType != "billing_entry" || reward.RelatedID != entry.ID {
+		t.Fatalf("unexpected reward billing: %+v", reward)
 	}
 }
 

@@ -27,6 +27,105 @@ func pricePicoForTest(price float64) int64 {
 	return int64(price * float64(database.PicoPerTokenPerUSDPerMTok))
 }
 
+func TestShouldRecordInvalidAuthApiLog_RateLimitsPerIPWindow(t *testing.T) {
+	invalidAuthLogMu.Lock()
+	invalidAuthLogBuckets = map[string]*invalidAuthLogBucket{}
+	invalidAuthLogLastCleanup = time.Time{}
+	invalidAuthLogMu.Unlock()
+	defer func() {
+		invalidAuthLogMu.Lock()
+		invalidAuthLogBuckets = map[string]*invalidAuthLogBucket{}
+		invalidAuthLogLastCleanup = time.Time{}
+		invalidAuthLogMu.Unlock()
+	}()
+
+	now := time.Date(2026, 5, 18, 10, 30, 15, 0, time.UTC)
+	for i := 0; i < invalidAuthLogLimitPerIPPerMinute; i++ {
+		if !shouldRecordInvalidAuthApiLogAt("203.0.113.10", now) {
+			t.Fatalf("request %d should be recorded", i+1)
+		}
+	}
+	if shouldRecordInvalidAuthApiLogAt("203.0.113.10", now) {
+		t.Fatalf("request over per-minute limit should be suppressed")
+	}
+	if !shouldRecordInvalidAuthApiLogAt("203.0.113.11", now) {
+		t.Fatalf("different IP should have an independent allowance")
+	}
+	if !shouldRecordInvalidAuthApiLogAt("203.0.113.10", now.Add(time.Minute)) {
+		t.Fatalf("new minute window should reset the allowance")
+	}
+}
+
+func TestEstimateTextPrecheckTokens_MixedScriptHeuristic(t *testing.T) {
+	if got := estimateTextPrecheckTokens(strings.Repeat("a", 1000)); got != 500 {
+		t.Fatalf("ASCII estimate=%d want 500", got)
+	}
+	if got := estimateTextPrecheckTokens(strings.Repeat("你", 1000)); got != 1000 {
+		t.Fatalf("CJK estimate=%d want 1000", got)
+	}
+}
+
+func TestEstimatePrecheckTokens_ResponsesInputImageDoesNotCountBase64AsText(t *testing.T) {
+	body := []byte(fmt.Sprintf(`{
+		"model":"gpt-5.5",
+		"instructions":"be brief",
+		"input":[{
+			"role":"user",
+			"content":[
+				{"type":"input_text","text":"hello"},
+				{"type":"input_image","image_url":"data:image/png;base64,%s"}
+			]
+		}]
+	}`, strings.Repeat("A", 2_000_000)))
+
+	got := estimatePrecheckTokens(body)
+	if got < 200 || got > 260 {
+		t.Fatalf("responses input_image should count as one non-text part, got %d tokens", got)
+	}
+}
+
+func TestEstimatePrecheckTokens_ResponsesArrayStringStillCountsText(t *testing.T) {
+	body := []byte(`{"model":"gpt-5.5","input":["` + strings.Repeat("a", 1000) + `"]}`)
+
+	if got := estimatePrecheckTokens(body); got != 500 {
+		t.Fatalf("responses string input estimate=%d want 500", got)
+	}
+}
+
+func TestEstimatePrecheckBalanceDelta_UsesHighTierOnlyAfterThreshold(t *testing.T) {
+	gatewayMutex.Lock()
+	oldRoutes := RouteCache
+	RouteCache = map[string][]*database.ChannelModel{
+		"gpt-tiered-precheck-test": {
+			{
+				InputPricePicoPerToken:      pricePicoForTest(5),
+				OutputPricePicoPerToken:     pricePicoForTest(30),
+				ContextPriceThreshold:       272000,
+				HighInputPricePicoPerToken:  pricePicoForTest(10),
+				HighOutputPricePicoPerToken: pricePicoForTest(45),
+			},
+		},
+	}
+	gatewayMutex.Unlock()
+	t.Cleanup(func() {
+		gatewayMutex.Lock()
+		RouteCache = oldRoutes
+		gatewayMutex.Unlock()
+	})
+
+	below := estimatePrecheckBalanceDelta("gpt-tiered-precheck-test", 200000, 4096)
+	// 200k input at $5/M + 4096 output at $30/M.
+	if below != 1_122_880 {
+		t.Fatalf("below threshold precheck=%d want 1122880", below)
+	}
+
+	above := estimatePrecheckBalanceDelta("gpt-tiered-precheck-test", 300000, 4096)
+	// 300k input at $10/M + 4096 output at $45/M.
+	if above != 3_184_320 {
+		t.Fatalf("above threshold precheck=%d want 3184320", above)
+	}
+}
+
 func TestClassifyUpstreamStatus(t *testing.T) {
 	cases := []struct {
 		status int
@@ -493,6 +592,122 @@ func TestCLIProxyChannelPreservesClaudeMessagesTools(t *testing.T) {
 	}
 }
 
+func TestCLIProxyChannelNormalizesClaudeDoubleV1CompatPath(t *testing.T) {
+	var err error
+	database.DB, err = gorm.Open(sqlite.Open("file:cliproxy-claude-double-v1?mode=memory&cache=shared"), &gorm.Config{})
+	if err != nil {
+		t.Fatalf("open in-memory db: %v", err)
+	}
+	if err := database.DB.AutoMigrate(&database.ApiLog{}, &database.UserSubscription{},
+		&database.Channel{}, &database.ChannelModel{}, &database.BillingEntry{}); err != nil {
+		t.Fatalf("migrate: %v", err)
+	}
+
+	AuthCache = map[string]*database.User{
+		"claude-double-v1-token": &database.User{ID: 92, Quota: 100000000, Status: 1, BalanceConsumeEnabled: true},
+	}
+	AuthTokenCache = map[string]*database.AccessToken{}
+	RouteCache = map[string][]*database.ChannelModel{}
+	ChannelMapCache = map[uint]*database.Channel{}
+	channelModelUnhealthyUntilNs = sync.Map{}
+
+	var gotPath string
+	backend := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		gotPath = r.URL.Path
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(200)
+		w.Write([]byte(`{"type":"message","content":[{"type":"text","text":"ok"}],"usage":{"input_tokens":12,"output_tokens":3}}`))
+	}))
+	defer backend.Close()
+
+	ChannelMapCache[1] = &database.Channel{ID: 1, Type: ChannelTypeCLIProxy, BaseURL: backend.URL, Key: "cpa-key"}
+	RouteCache["claude-sonnet-4-6"] = []*database.ChannelModel{{ChannelID: 1, Weight: 1, InputPricePicoPerToken: pricePicoForTest(1), OutputPricePicoPerToken: pricePicoForTest(1), ModerationLevel: "off"}}
+
+	app := fiber.New()
+	app.Post("/v1/v1/messages", ChatCompletionProxyHandler)
+
+	payload := `{"model":"claude-sonnet-4-6","max_tokens":64,"messages":[{"role":"user","content":"hi"}]}`
+	req := httptest.NewRequest("POST", "/v1/v1/messages", bytes.NewBufferString(payload))
+	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("Authorization", "Bearer claude-double-v1-token")
+
+	resp, err := app.Test(req, -1)
+	if err != nil {
+		t.Fatalf("request failed: %v", err)
+	}
+	if resp.StatusCode != 200 {
+		body, _ := io.ReadAll(resp.Body)
+		t.Fatalf("expected 200, got %d body=%s", resp.StatusCode, string(body))
+	}
+	if gotPath != "/v1/messages" {
+		t.Fatalf("expected upstream /v1/messages, got %q", gotPath)
+	}
+	if IsChannelModelUnhealthy(1, "claude-sonnet-4-6") {
+		t.Fatal("double /v1 compatibility path must not poison channel-model health")
+	}
+}
+
+func TestCLIProxyPlainRoute404DoesNotPoisonModelHealth(t *testing.T) {
+	var err error
+	database.DB, err = gorm.Open(sqlite.Open("file:cliproxy-route-404?mode=memory&cache=shared"), &gorm.Config{})
+	if err != nil {
+		t.Fatalf("open in-memory db: %v", err)
+	}
+	if err := database.DB.AutoMigrate(&database.ApiLog{}, &database.UserSubscription{},
+		&database.Channel{}, &database.ChannelModel{}, &database.BillingEntry{}); err != nil {
+		t.Fatalf("migrate: %v", err)
+	}
+
+	AuthCache = map[string]*database.User{
+		"claude-route-404-token": &database.User{ID: 93, Quota: 100000000, Status: 1, BalanceConsumeEnabled: true},
+	}
+	AuthTokenCache = map[string]*database.AccessToken{}
+	RouteCache = map[string][]*database.ChannelModel{}
+	ChannelMapCache = map[uint]*database.Channel{}
+	channelModelUnhealthyUntilNs = sync.Map{}
+
+	backend := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "text/plain; charset=utf-8")
+		w.WriteHeader(http.StatusNotFound)
+		w.Write([]byte("404 page not found"))
+	}))
+	defer backend.Close()
+
+	ChannelMapCache[1] = &database.Channel{ID: 1, Type: ChannelTypeCLIProxy, BaseURL: backend.URL, Key: "cpa-key"}
+	RouteCache["claude-sonnet-4-6"] = []*database.ChannelModel{{ChannelID: 1, Weight: 1, InputPricePicoPerToken: pricePicoForTest(1), OutputPricePicoPerToken: pricePicoForTest(1), ModerationLevel: "off"}}
+
+	app := fiber.New()
+	app.Post("/v1/messages", ChatCompletionProxyHandler)
+
+	payload := `{"model":"claude-sonnet-4-6","max_tokens":64,"messages":[{"role":"user","content":"hi"}]}`
+	req := httptest.NewRequest("POST", "/v1/messages", bytes.NewBufferString(payload))
+	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("Authorization", "Bearer claude-route-404-token")
+
+	resp, err := app.Test(req, -1)
+	if err != nil {
+		t.Fatalf("request failed: %v", err)
+	}
+	if resp.StatusCode != http.StatusNotFound {
+		body, _ := io.ReadAll(resp.Body)
+		t.Fatalf("expected 404, got %d body=%s", resp.StatusCode, string(body))
+	}
+	body, _ := io.ReadAll(resp.Body)
+	if !strings.Contains(string(body), "upstream_route_not_found") {
+		t.Fatalf("expected route 404 error type, got %s", string(body))
+	}
+	if IsChannelModelUnhealthy(1, "claude-sonnet-4-6") {
+		t.Fatal("plain CLIProxy route 404 must not poison channel-model health")
+	}
+	var logRow database.ApiLog
+	if err := database.DB.Where("user_id = ? AND model_name = ?", 93, "claude-sonnet-4-6").First(&logRow).Error; err != nil {
+		t.Fatalf("expected api log for route 404: %v", err)
+	}
+	if logRow.ErrorType != "upstream_route_not_found" {
+		t.Fatalf("api log error_type=%q want upstream_route_not_found", logRow.ErrorType)
+	}
+}
+
 // TestCLIProxyChatPassesClaudeOpus47Temperature 验证 cliproxy 通道现在是完全 passthrough：
 // 客户端发的 temperature 字段会直接到上游，不再被网关删除。
 //
@@ -573,7 +788,7 @@ func TestCLIProxyChannelPassesClaudeCountTokensPath(t *testing.T) {
 		t.Fatalf("migrate: %v", err)
 	}
 
-	user := &database.User{ID: 10, Username: "claude-count", Token: "claude-token", Quota: 100000000, Status: 1, BalanceConsumeEnabled: true}
+	user := &database.User{ID: 10, Username: "claude-count", Token: "claude-token", Quota: 0, Status: 1, BalanceConsumeEnabled: false}
 	if err := database.DB.Create(user).Error; err != nil {
 		t.Fatalf("seed user: %v", err)
 	}
@@ -622,22 +837,22 @@ func TestCLIProxyChannelPassesClaudeCountTokensPath(t *testing.T) {
 	if err := database.DB.Where("user_id = ? AND request_path = ?", 10, "/v1/messages/count_tokens").First(&row).Error; err != nil {
 		t.Fatalf("expected api log for count_tokens: %v", err)
 	}
-	if row.Cost != 42000 || row.PromptTokens != 42 {
-		t.Fatalf("count_tokens should bill input tokens, got cost=%d prompt=%d", row.Cost, row.PromptTokens)
+	if row.Cost != 0 || row.ChargedCost != 0 || row.PromptTokens != 42 {
+		t.Fatalf("count_tokens should be free but logged, got raw=%d charged=%d prompt=%d", row.Cost, row.ChargedCost, row.PromptTokens)
 	}
 	var fresh database.User
 	if err := database.DB.First(&fresh, 10).Error; err != nil {
 		t.Fatalf("load user: %v", err)
 	}
-	if fresh.Quota != 99958000 {
-		t.Fatalf("count_tokens should deduct quota, got %d", fresh.Quota)
+	if fresh.Quota != 0 {
+		t.Fatalf("count_tokens must not deduct quota, got %d", fresh.Quota)
 	}
-	var bill database.BillingEntry
-	if err := database.DB.Where("user_id = ? AND related_type = ?", 10, "api_log").First(&bill).Error; err != nil {
-		t.Fatalf("expected billing entry for count_tokens: %v", err)
+	var billCount int64
+	if err := database.DB.Model(&database.BillingEntry{}).Where("user_id = ?", 10).Count(&billCount).Error; err != nil {
+		t.Fatalf("count billing entries: %v", err)
 	}
-	if bill.AmountUSD != -42000 || bill.TokensTotal != 42 {
-		t.Fatalf("billing amount/tokens = %d/%d, want -42000/42", bill.AmountUSD, bill.TokensTotal)
+	if billCount != 0 {
+		t.Fatalf("count_tokens must not create billing entries, got %d", billCount)
 	}
 }
 
@@ -1002,6 +1217,56 @@ func TestStreamCostCalculationFailureWritesPendingReconcile(t *testing.T) {
 	}
 	if bill.AmountUSD != 0 || bill.EstimatedCostUSD <= 0 {
 		t.Fatalf("unexpected pending billing entry: %+v", bill)
+	}
+}
+
+func TestStreamPendingReconcileSplitsEstimatedRawAndChargedCost(t *testing.T) {
+	oldSysConfig := SysConfigCache
+	SysConfigCache = map[string]string{}
+	defer func() { SysConfigCache = oldSysConfig }()
+
+	app, cleanup := setupStreamStateTest(t, "claude-opus-4-7", "data: {\"choices\":[{\"delta\":{\"content\":\"hello thinking\"}}]}\n\ndata: [DONE]\n\n", &database.ChannelModel{
+		ChannelID:               1,
+		Weight:                  1,
+		InputPricePicoPerToken:  pricePicoForTest(1),
+		OutputPricePicoPerToken: pricePicoForTest(1),
+		ModerationLevel:         "off",
+		ModerationFailMode:      "open",
+	})
+	defer cleanup()
+
+	payload := `{"model":"claude-opus-4-7","messages":[{"role":"user","content":"hi"}],"stream":true,"thinking":{"type":"enabled","budget_tokens":1024}}`
+	req := httptest.NewRequest("POST", "/v1/chat/completions", bytes.NewBufferString(payload))
+	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("Authorization", "Bearer sk-stream-state")
+	resp, err := app.Test(req, -1)
+	if err != nil {
+		t.Fatalf("request failed: %v", err)
+	}
+	body, _ := io.ReadAll(resp.Body)
+	resp.Body.Close()
+	if resp.StatusCode != 200 {
+		t.Fatalf("stream status should remain 200 after delivery, got %d body=%s", resp.StatusCode, string(body))
+	}
+
+	var logRow database.ApiLog
+	if err := database.DB.Where("model_name = ? AND error_type = ?", "claude-opus-4-7", "upstream_unmetered").First(&logRow).Error; err != nil {
+		t.Fatalf("expected api log for pending estimate: %v", err)
+	}
+	if logRow.PrecheckRawCost <= 0 {
+		t.Fatalf("expected positive raw estimate, got %+v", logRow)
+	}
+	wantCharged := applyBillingMultiplier(logRow.PrecheckRawCost, 1.5)
+	if logRow.ModelWeight != 1.5 || logRow.PrecheckChargedCost != wantCharged {
+		t.Fatalf("pending estimate raw/charged not split: raw=%d charged=%d weight=%v want charged=%d", logRow.PrecheckRawCost, logRow.PrecheckChargedCost, logRow.ModelWeight, wantCharged)
+	}
+
+	var bill database.BillingEntry
+	if err := database.DB.Where("model_name = ? AND billing_state = ?", "claude-opus-4-7", database.BillingStatePendingReconcile).First(&bill).Error; err != nil {
+		t.Fatalf("expected pending billing entry: %v", err)
+	}
+	if !strings.Contains(bill.Description, "raw=") || !strings.Contains(bill.Description, "charged=") {
+		t.Fatalf("pending billing description should include split costs, got %q", bill.Description)
 	}
 }
 

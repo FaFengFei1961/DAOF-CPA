@@ -110,6 +110,8 @@ func TestGetPublicConfigIncludesReferralIncentives(t *testing.T) {
 		"signup_bonus":   "2500000",
 		"referrer_bonus": "750000",
 		"referee_bonus":  "125000",
+		database.ReferralPaidSpendRewardBPSConfigKey:           "888",
+		database.ReferralPaidSpendRewardWindowSecondsConfigKey: "604800",
 	}
 	proxy.SysConfigMutex.Unlock()
 	t.Cleanup(func() {
@@ -149,6 +151,12 @@ func TestGetPublicConfigIncludesReferralIncentives(t *testing.T) {
 	}
 	if got := body.ReferralIncentives["referee_bonus_micro_usd"]; got != "125000" {
 		t.Fatalf("referee_bonus_micro_usd=%q", got)
+	}
+	if got := body.ReferralIncentives["paid_spend_reward_bps"]; got != "888" {
+		t.Fatalf("paid_spend_reward_bps=%q", got)
+	}
+	if got := body.ReferralIncentives["reward_window_seconds"]; got != "604800" {
+		t.Fatalf("reward_window_seconds=%q", got)
 	}
 }
 

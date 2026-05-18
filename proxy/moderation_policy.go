@@ -58,11 +58,11 @@ func (p ModerationPolicy) LoadFailed() bool {
 
 // 策略等级排序（越大越严）：off < keyword < moderation < strict
 //
-// "moderation" vs "strict"：strict = keyword + moderation 双层，等级最高；
+// "moderation" vs "strict"：strict = keyword/risk signal + moderation 二判，等级最高；
 // "moderation" 单跑智能审核但跳过本地词库，适合需要语义识别但不想启用模板拦截的场景。
 //
-// 注意：moderation 与 strict 严格度不能简单线性比较（一个是 API 智能，一个是双层）。
-// 这里把 strict 排在最高，是因为它包含 moderation 的全部能力 + keyword 的快路径。
+// 注意：moderation 与 strict 严格度不能简单线性比较（一个是 API 智能，一个会额外记录
+// keyword/risk 信号）。这里把 strict 排在最高，是因为它包含 moderation 的全部能力。
 func levelRank(level string) int {
 	switch level {
 	case "strict":

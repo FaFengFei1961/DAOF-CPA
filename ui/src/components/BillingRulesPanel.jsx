@@ -45,6 +45,24 @@ const formatRevisionTime = (value) => {
   return d.toLocaleString();
 };
 
+const revisionStatusLabel = (status, t) => {
+  switch (status) {
+    case 'active': return t('BILLING_RULES.STATUS_ACTIVE', '当前生效');
+    case 'scheduled': return t('BILLING_RULES.STATUS_SCHEDULED', '待生效');
+    case 'canceled': return t('BILLING_RULES.STATUS_CANCELED', '已撤销');
+    default: return t('BILLING_RULES.STATUS_SUPERSEDED', '历史版本');
+  }
+};
+
+const revisionStatusClass = (status) => {
+  switch (status) {
+    case 'active': return 'bg-primary/12 text-primary border-primary/25';
+    case 'scheduled': return 'bg-warning/12 text-warning border-warning/25';
+    case 'canceled': return 'bg-error/10 text-error border-error/20';
+    default: return 'bg-on-surface/[0.05] text-on-surface-variant border-outline-variant/50';
+  }
+};
+
 const BillingRulesPanel = ({ compact = false }) => {
   const { t } = useTranslation();
   const [rules, setRules] = useState(null);
@@ -95,6 +113,8 @@ const BillingRulesPanel = ({ compact = false }) => {
   // 此处不再 destructure 占用 lint warning（no-unused-vars）。如需展示后端字段，使用 rules?.subscription 等内联访问。
   const version = rules?.version || '-';
   const effectiveSince = rules?.effective_since || '';
+  const publishedAt = rules?.published_at || '';
+  const effectiveAt = rules?.effective_at || '';
 
   const visibleWeights = useMemo(
     () => (compact ? modelWeights.slice(0, 5) : modelWeights),
@@ -124,9 +144,14 @@ const BillingRulesPanel = ({ compact = false }) => {
               {version}
             </span>
           </div>
-          {effectiveSince && (
+          {publishedAt && (
             <div className="text-[11px] text-on-surface-variant">
-              {t('BILLING_RULES.EFFECTIVE_SINCE', { defaultValue: '自 {{date}} 起生效', date: effectiveSince })}
+              {t('BILLING_RULES.HISTORY_CREATED_AT', '发布时间')}: {formatRevisionTime(publishedAt)}
+            </div>
+          )}
+          {(effectiveAt || effectiveSince) && (
+            <div className="text-[11px] text-on-surface-variant">
+              {t('BILLING_RULES.EFFECTIVE_AT', '生效时间')}: {effectiveAt ? formatRevisionTime(effectiveAt) : effectiveSince}
             </div>
           )}
           {!compact && (
@@ -201,10 +226,18 @@ const BillingRulesPanel = ({ compact = false }) => {
                       <summary className="cursor-pointer list-none px-4 py-3 hover:bg-on-surface/[0.03]">
                         <div className="flex items-center justify-between gap-3 flex-wrap">
                           <div className="min-w-0">
-                            <div className="font-mono text-xs text-on-surface truncate">{rev.version || '-'}</div>
-                            <div className="text-[11px] text-on-surface-variant mt-0.5">
-                              {t('BILLING_RULES.HISTORY_CREATED_AT', '发布时间')}: {formatRevisionTime(rev.created_at)}
-                              {rev.effective_since ? ` · ${t('BILLING_RULES.EFFECTIVE_SINCE', { defaultValue: '自 {{date}} 起生效', date: rev.effective_since })}` : ''}
+                            <div className="flex items-center gap-2 flex-wrap">
+                              <span className="font-mono text-xs text-on-surface truncate">{rev.version || '-'}</span>
+                              <span className={`inline-flex items-center h-5 px-2 rounded-full border text-[11px] ${revisionStatusClass(rev.status)}`}>
+                                {revisionStatusLabel(rev.status, t)}
+                              </span>
+                            </div>
+                            <div className="text-[11px] text-on-surface-variant mt-0.5 flex flex-wrap gap-x-3 gap-y-1">
+                              <span>{t('BILLING_RULES.HISTORY_CREATED_AT', '发布时间')}: {formatRevisionTime(rev.published_at || rev.created_at)}</span>
+                              <span>{t('BILLING_RULES.EFFECTIVE_AT', '生效时间')}: {rev.effective_at ? formatRevisionTime(rev.effective_at) : (rev.effective_since || '-')}</span>
+                              {rev.canceled_at && (
+                                <span>{t('BILLING_RULES.CANCELED_AT', '撤销时间')}: {formatRevisionTime(rev.canceled_at)}</span>
+                              )}
                             </div>
                           </div>
                           <div className="text-[11px] text-on-surface-variant">
@@ -337,7 +370,7 @@ const BillingRulesPanel = ({ compact = false }) => {
 
             <Clause title={t('BILLING_RULES.THINKING_TITLE', 'Thinking 判定')}>
               <ul className="list-disc list-inside space-y-1">
-                <li>{t('BILLING_RULES.THINKING_LINE_1', '请求显式启用 thinking / reasoning，且上游返回 reasoning_tokens > 0，才按 Thinking 倍率扣减。')}</li>
+                <li>{t('BILLING_RULES.THINKING_LINE_1', 'Claude 请求显式启用 thinking，或通过 CLIProxyAPI 支持的 reasoning_effort / reasoning.effort 转译为 thinking，即按 Thinking 倍率；普通 Claude 仍为基础倍率。')}</li>
                 <li>{t('BILLING_RULES.THINKING_LINE_2', '仅出现 disabled / none / off / 空 thinking 对象不算 Thinking 调用。')}</li>
               </ul>
             </Clause>

@@ -1,6 +1,6 @@
 import React, { useState, useEffect, useRef, useCallback } from 'react';
 import { useTranslation } from 'react-i18next';
-import { ChevronDown, Gift, X, Search } from 'lucide-react';
+import { Gift, X, Search } from 'lucide-react';
 import toast from 'react-hot-toast';
 import { authFetch } from '../utils/authFetch';
 import { useModalA11y } from '../hooks/useModalA11y';
@@ -139,11 +139,12 @@ const AdminGrantSubscriptionModal = ({ open, onClose, onSuccess, prefillUser = n
 
   // Basic form validity for disabling submit and reducing invalid clicks.
   const customValidSecondsInt = Math.floor(Number(customValidSeconds) || 0);
-  const hasCustomValidSeconds = customValidSecondsInt > 0;
-  const isCustomValidityValid = !hasCustomValidSeconds || customValidSecondsInt <= MAX_GRANT_VALID_SECONDS;
+  const hasCustomValidSeconds = customValidityOpen && customValidSecondsInt > 0;
+  const isCustomValidityValid = !customValidityOpen ||
+    (customValidSecondsInt > 0 && customValidSecondsInt <= MAX_GRANT_VALID_SECONDS);
   const isFormValid = !!selectedUser?.id && !!selectedPackageId && reason.trim().length > 0 && isCustomValidityValid;
   const submitDisabledHint = !isCustomValidityValid
-    ? t('ADMIN_GRANT.ERR_VALID_SECONDS_TOO_LARGE', '自定义有效期不能超过 5 年（158112000 秒）')
+    ? t('ADMIN_GRANT.ERR_VALID_SECONDS_INVALID', '启用自定义有效期后，请填写 1 秒到 5 年之间的时长')
     : t('ADMIN_GRANT.SUBMIT_DISABLED_HINT', '请先选择目标用户、套餐并填写理由');
 
   const submit = async () => {
@@ -173,7 +174,11 @@ const AdminGrantSubscriptionModal = ({ open, onClose, onSuccess, prefillUser = n
       toast.error(t('ADMIN_GRANT.ERR_REASON_CTRL', '理由不能包含换行 / 制表符'));
       return;
     }
-    if (hasCustomValidSeconds && customValidSecondsInt > MAX_GRANT_VALID_SECONDS) {
+    if (customValidityOpen && customValidSecondsInt <= 0) {
+      toast.error(t('ADMIN_GRANT.ERR_VALID_SECONDS_INVALID', '启用自定义有效期后，请填写 1 秒到 5 年之间的时长'));
+      return;
+    }
+    if (customValidityOpen && customValidSecondsInt > MAX_GRANT_VALID_SECONDS) {
       toast.error(t('ADMIN_GRANT.ERR_VALID_SECONDS_TOO_LARGE', '自定义有效期不能超过 5 年（158112000 秒）'));
       return;
     }
@@ -339,52 +344,72 @@ const AdminGrantSubscriptionModal = ({ open, onClose, onSuccess, prefillUser = n
           </div>
 
           {/* Optional custom validity */}
-          <div className="border border-outline-variant rounded-control bg-surface-container-high/40">
-            <button
-              type="button"
-              onClick={() => setCustomValidityOpen((v) => !v)}
-              disabled={submitting}
-              className="w-full flex items-center justify-between gap-3 px-3 py-2 text-left disabled:opacity-50"
-              aria-expanded={customValidityOpen}
-              aria-controls="grant-custom-validity-panel"
-            >
-              <span className="text-sm text-on-surface">
-                {t('ADMIN_GRANT.CUSTOM_VALIDITY', '自定义有效期（仅补偿场景）')}
-              </span>
-              <ChevronDown
-                size={16}
-                className={`text-on-surface-variant transition-transform ${customValidityOpen ? 'rotate-180' : ''}`}
-                aria-hidden="true"
-              />
-            </button>
+          <div className="border border-outline-variant rounded-control bg-surface-container-high/40 px-3 py-3 space-y-3">
+            <div>
+              <div className="text-sm text-on-surface">
+                {t('ADMIN_GRANT.VALIDITY_TITLE', '赠送有效期')}
+              </div>
+              <div className="text-xs text-on-surface-variant mt-0.5">
+                {t('ADMIN_GRANT.CUSTOM_VALIDITY_HELP', '留空 = 用套餐默认周期；填了 = 仅此次赠送生效')}
+              </div>
+            </div>
+            <div className="grid grid-cols-2 gap-2">
+              <button
+                type="button"
+                onClick={() => {
+                  setCustomValidityOpen(false);
+                  setCustomValidSeconds(0);
+                }}
+                disabled={submitting}
+                className={`h-9 rounded-control border text-sm font-medium transition ${
+                  !customValidityOpen
+                    ? 'border-primary bg-primary/15 text-primary'
+                    : 'border-outline-variant text-on-surface-variant hover:text-on-surface hover:bg-on-surface/[0.04]'
+                }`}
+              >
+                {t('ADMIN_GRANT.VALIDITY_DEFAULT', '按套餐周期')}
+              </button>
+              <button
+                type="button"
+                onClick={() => {
+                  setCustomValidityOpen(true);
+                  if (customValidSecondsInt <= 0) setCustomValidSeconds(86400);
+                }}
+                disabled={submitting}
+                className={`h-9 rounded-control border text-sm font-medium transition ${
+                  customValidityOpen
+                    ? 'border-primary bg-primary/15 text-primary'
+                    : 'border-outline-variant text-on-surface-variant hover:text-on-surface hover:bg-on-surface/[0.04]'
+                }`}
+              >
+                {t('ADMIN_GRANT.VALIDITY_CUSTOM', '自定义有效期')}
+              </button>
+            </div>
             {customValidityOpen && (
-              <div id="grant-custom-validity-panel" className="px-3 pb-3 space-y-2">
-                <div className="text-xs text-on-surface-variant">
-                  {t('ADMIN_GRANT.CUSTOM_VALIDITY_HELP', '留空 = 用套餐默认周期；填了 = 仅此次赠送生效')}
-                </div>
+              <div id="grant-custom-validity-panel" className="space-y-2">
                 <DurationInput
                   value={customValidSecondsInt}
                   onChange={setCustomValidSeconds}
-                  allowZero
                   className="w-full rounded-control bg-surface border border-outline-variant text-on-surface text-sm px-3 py-2 focus:outline-none focus:border-primary"
                   selectClass="rounded-control bg-surface border border-outline-variant text-on-surface text-sm px-2 py-2 focus:outline-none focus:border-primary"
                 />
                 <div className="flex items-center justify-between gap-3 text-xs text-on-surface-variant">
                   <span>{t('ADMIN_GRANT.CUSTOM_VALIDITY_DEFAULT_HINT', '默认按套餐周期；填了则按自定义')}</span>
-                  {hasCustomValidSeconds && (
-                    <button
-                      type="button"
-                      onClick={() => setCustomValidSeconds(0)}
-                      disabled={submitting}
-                      className="text-primary hover:text-primary/80 disabled:opacity-50"
-                    >
-                      {t('ADMIN_GRANT.CUSTOM_VALIDITY_CLEAR', '清空')}
-                    </button>
-                  )}
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setCustomValidityOpen(false);
+                      setCustomValidSeconds(0);
+                    }}
+                    disabled={submitting}
+                    className="text-primary hover:text-primary/80 disabled:opacity-50"
+                  >
+                    {t('ADMIN_GRANT.CUSTOM_VALIDITY_CLEAR', '清空')}
+                  </button>
                 </div>
                 {!isCustomValidityValid && (
                   <div className="text-xs text-error" role="alert">
-                    {t('ADMIN_GRANT.ERR_VALID_SECONDS_TOO_LARGE', '自定义有效期不能超过 5 年（158112000 秒）')}
+                    {t('ADMIN_GRANT.ERR_VALID_SECONDS_INVALID', '启用自定义有效期后，请填写 1 秒到 5 年之间的时长')}
                   </div>
                 )}
               </div>

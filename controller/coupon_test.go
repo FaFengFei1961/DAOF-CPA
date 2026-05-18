@@ -64,6 +64,21 @@ func TestValidateTemplate_Required(t *testing.T) {
 	}
 }
 
+func TestValidateTemplate_FixedPriceNonPositiveMessageCode(t *testing.T) {
+	setupCouponTestDB(t)
+	err := validateTemplate(&database.CouponTemplate{
+		Name:          "zero",
+		DiscountType:  "fixed_price",
+		DiscountValue: 0,
+	})
+	if !errors.Is(err, errCouponFixedPriceNonPositive) {
+		t.Fatalf("expected non-positive sentinel, got %v", err)
+	}
+	if got := couponTemplateValidationMessageCode(err); got != "ERR_COUPON_FIXED_PRICE_NON_POSITIVE" {
+		t.Fatalf("message code=%s, want ERR_COUPON_FIXED_PRICE_NON_POSITIVE", got)
+	}
+}
+
 func seedCouponCostFloorPackage(t *testing.T, db *gorm.DB, name string, costFloorMicroUSD int64) database.Package {
 	t.Helper()
 	pkg := database.Package{
@@ -350,6 +365,34 @@ func TestLockAndApplyCoupon_PackageNotApplicable(t *testing.T) {
 	})
 	if err == nil {
 		t.Error("expected error when package not in allowed list")
+	}
+}
+
+func TestLockAndApplyCoupon_RejectsNonPositiveSnapshot(t *testing.T) {
+	db := setupCouponTestDB(t)
+	for _, value := range []int64{0, -1} {
+		uc := database.UserCoupon{
+			UserID: 1, Code: fmt.Sprintf("CP-1-1-non-positive-%d", value),
+			Status: "available", SnapshotType: "fixed_price", SnapshotValue: value,
+		}
+		if err := db.Create(&uc).Error; err != nil {
+			t.Fatalf("create coupon: %v", err)
+		}
+		pkg := &database.Package{ID: 5, PriceAmount: 0, CostFloorMicroUSD: 0}
+		err := db.Transaction(func(tx *gorm.DB) error {
+			_, err := lockAndApplyCoupon(tx, 1, uc.ID, pkg)
+			return err
+		})
+		if !errors.Is(err, errCouponInvalid) {
+			t.Fatalf("value=%d expected errCouponInvalid, got %v", value, err)
+		}
+		var fresh database.UserCoupon
+		if err := db.First(&fresh, uc.ID).Error; err != nil {
+			t.Fatalf("load coupon: %v", err)
+		}
+		if fresh.Status != "available" || fresh.UsedAt != nil {
+			t.Fatalf("value=%d coupon should remain unused, got status=%q used_at=%v", value, fresh.Status, fresh.UsedAt)
+		}
 	}
 }
 

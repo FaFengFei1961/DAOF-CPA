@@ -41,6 +41,7 @@ var errPlanLimitExceeded = errors.New("subscription quota plan limit exceeded")
 type EngineDecision struct {
 	Allowed                bool
 	SubscriptionID         uint
+	SubscriptionIsGranted  bool
 	QuotaPlanID            uint
 	QuotaPlanIDs           []uint
 	ConsumedUnit           string
@@ -347,12 +348,13 @@ func trySharedQuota(cs *CachedSubscription, req EngineRequest) EngineDecision {
 		planIDs = append(planIDs, spec.PlanID)
 	}
 	return EngineDecision{
-		Allowed:        true,
-		SubscriptionID: sub.ID,
-		QuotaPlanID:    specs[0].PlanID,
-		QuotaPlanIDs:   planIDs,
-		ConsumedUnit:   specs[0].Unit,
-		ConsumedDelta:  specs[0].Delta,
+		Allowed:               true,
+		SubscriptionID:        sub.ID,
+		SubscriptionIsGranted: sub.IsGranted,
+		QuotaPlanID:           specs[0].PlanID,
+		QuotaPlanIDs:          planIDs,
+		ConsumedUnit:          specs[0].Unit,
+		ConsumedDelta:         specs[0].Delta,
 	}
 }
 
@@ -986,6 +988,7 @@ func uintFromAny(v any) uint {
 	}
 	return 0
 }
+
 // int64FromAny 从 map[string]any 中提取 int64。
 //
 // fix HIGH（codex money-unit）：jsonUnmarshalSafe 用 UseNumber()，数字保持为 json.Number

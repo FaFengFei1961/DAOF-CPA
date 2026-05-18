@@ -330,3 +330,51 @@ func TestPaymentWebhookReceipt_UpdatesMapIgnoredOnCreateOnlyColumns(t *testing.T
 		t.Fatalf("nonce changed to %q (must be immutable via GORM)", reloaded.Nonce)
 	}
 }
+
+// ─── BillingRuleRevision：append-only revision + cancellation facts ─────────
+
+func TestBillingRuleRevision_NoUpdateOrDelete(t *testing.T) {
+	db := openInMemoryDBWithModels(t, "file:billing_rule_revision_immutable?mode=memory&cache=shared",
+		&BillingRuleRevision{})
+
+	now := time.Now()
+	row := BillingRuleRevision{
+		Version:               "v1",
+		EffectiveSince:        "2026-05-18",
+		PublishedAt:           &now,
+		EffectiveAt:           &now,
+		ModelWeightsJSON:      `[{"pattern":"*","weight":1}]`,
+		HealthMultipliersJSON: `[{"pattern":"*","weight":1}]`,
+	}
+	if err := db.Create(&row).Error; err != nil {
+		t.Fatalf("seed billing rule revision: %v", err)
+	}
+
+	res := db.Model(&BillingRuleRevision{}).Where("id = ?", row.ID).Update("version", "tampered")
+	if !errors.Is(res.Error, ErrBillingRuleRevisionAppendOnly) {
+		t.Fatalf("update should return ErrBillingRuleRevisionAppendOnly, got %v", res.Error)
+	}
+	res = db.Where("id = ?", row.ID).Delete(&BillingRuleRevision{})
+	if !errors.Is(res.Error, ErrBillingRuleRevisionAppendOnly) {
+		t.Fatalf("delete should return ErrBillingRuleRevisionAppendOnly, got %v", res.Error)
+	}
+}
+
+func TestBillingRuleRevisionCancellation_NoUpdateOrDelete(t *testing.T) {
+	db := openInMemoryDBWithModels(t, "file:billing_rule_revision_cancel_immutable?mode=memory&cache=shared",
+		&BillingRuleRevisionCancellation{})
+
+	row := BillingRuleRevisionCancellation{RevisionID: 1, Reason: "scheduled mistake"}
+	if err := db.Create(&row).Error; err != nil {
+		t.Fatalf("seed billing rule cancellation: %v", err)
+	}
+
+	res := db.Model(&BillingRuleRevisionCancellation{}).Where("id = ?", row.ID).Update("reason", "tampered")
+	if !errors.Is(res.Error, ErrBillingRuleRevisionCancellationAppendOnly) {
+		t.Fatalf("update should return ErrBillingRuleRevisionCancellationAppendOnly, got %v", res.Error)
+	}
+	res = db.Where("id = ?", row.ID).Delete(&BillingRuleRevisionCancellation{})
+	if !errors.Is(res.Error, ErrBillingRuleRevisionCancellationAppendOnly) {
+		t.Fatalf("delete should return ErrBillingRuleRevisionCancellationAppendOnly, got %v", res.Error)
+	}
+}

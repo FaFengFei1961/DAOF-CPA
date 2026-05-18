@@ -10,6 +10,7 @@ import { authFetch, readAuthState } from '../utils/authFetch';
 import { useModalA11y } from '../hooks/useModalA11y';
 import Pagination from './common/Pagination';
 import { PAGE_SIZE_DEFAULT } from './common/constants';
+import { PendingCostBreakdown, ReconcileBillingModal } from './BillsPage';
 
 // Keep this list in sync with backend allowedBillingTypes, including admin_grant_* and pending reconcile.
 // Phase 8 removed legacy billing types.
@@ -33,6 +34,44 @@ const fmtUSD = (n) => {
   return `${sign}$${Math.abs(n).toFixed(4).replace(/0+$/, '').replace(/\.$/, '.00')}`;
 };
 
+const fmtUnsignedUSD = (n) => {
+  const value = Number(n || 0);
+  if (!Number.isFinite(value)) return '$0.00';
+  return `$${Math.abs(value).toFixed(Math.abs(value) >= 1 ? 4 : 6).replace(/0+$/, '').replace(/\.$/, '.00')}`;
+};
+
+const RECONCILABLE_BILLING_STATES = new Set(['pending_reconcile', 'upstream_unmetered']);
+
+const getBillingStateLabel = (state, t) => {
+  switch (state) {
+    case 'settled': return t('BILL.STATE_SETTLED', '已结算');
+    case 'pending_reconcile': return t('BILL.STATE_PENDING_RECONCILE', '待对账');
+    case 'upstream_unmetered': return t('BILL.STATE_UPSTREAM_UNMETERED', '上游未计量');
+    default: return state || t('BILL.STATE_SETTLED', '已结算');
+  }
+};
+
+const BillingStateBadge = ({ entry, t }) => {
+  if (entry.is_reconciled) {
+    return (
+      <span className="inline-flex items-center px-2 py-0.5 rounded-control border border-success/20 bg-success/10 text-success text-[11px]">
+        {t('BILL.RECONCILED_RESULT', '已对账')} · {entry.reconcile_result || '-'}
+      </span>
+    );
+  }
+  const state = entry.billing_state || 'settled';
+  const isPending = RECONCILABLE_BILLING_STATES.has(state);
+  return (
+    <span className={`inline-flex items-center px-2 py-0.5 rounded-control border text-[11px] ${
+      isPending
+        ? 'border-warning/20 bg-warning/10 text-warning'
+        : 'border-outline-variant bg-surface-container text-on-surface/70'
+    }`}>
+      {getBillingStateLabel(state, t)}
+    </span>
+  );
+};
+
 const AdminUserBills = ({ userId, username, onClose }) => {
   const { t } = useTranslation();
 
@@ -42,6 +81,7 @@ const AdminUserBills = ({ userId, username, onClose }) => {
   const [hideUsage, setHideUsage] = useState(true);
   const [page, setPage] = useState(1);
   const [total, setTotal] = useState(0);
+  const [reconcileEntry, setReconcileEntry] = useState(null);
   const closeBtnRef = useRef(null);
   const modalRef = useRef(null); // C5 round 20: focus trap scope.
   // Suppress races while hideUsage resets the page and triggers a new load.
@@ -201,7 +241,14 @@ const AdminUserBills = ({ userId, username, onClose }) => {
             <div className="text-center py-12 text-on-surface/60">{t('BILL.ADMIN_USER_EMPTY', '该用户暂无账单')}</div>
           ) : (
             <ul className="divide-y divide-outline-variant/30">
-              {entries.map((e) => <AdminBillRow key={e.id} entry={e} t={t} />)}
+              {entries.map((e) => (
+                <AdminBillRow
+                  key={e.id}
+                  entry={e}
+                  t={t}
+                  onReconcile={setReconcileEntry}
+                />
+              ))}
             </ul>
           )}
         </div>
@@ -216,6 +263,17 @@ const AdminUserBills = ({ userId, username, onClose }) => {
           className="px-4 py-3 border-t border-outline-variant/30 bg-surface-container/30"
         />
       </div>
+      {reconcileEntry && (
+        <ReconcileBillingModal
+          entry={reconcileEntry}
+          t={t}
+          onClose={() => setReconcileEntry(null)}
+          onSuccess={() => {
+            setReconcileEntry(null);
+            load();
+          }}
+        />
+      )}
     </div>
   );
 };
@@ -227,14 +285,34 @@ const SumCard = ({ label, value, color }) => (
   </div>
 );
 
-const AdminBillRow = ({ entry, t }) => {
+const AdminBillRow = ({ entry, t, onReconcile }) => {
   const isCredit = entry.amount_usd > 0;
   const isUsage = entry.entry_type === 'api_usage_sub';
+  const isPending = entry.entry_type === 'api_usage_pending_reconcile';
+  const reconcileCost = Number(entry.estimated_reconcile_cost_usd || entry.estimated_cost_usd || 0);
   const Icon = isUsage ? Activity : (isCredit ? ArrowDownCircle : ArrowUpCircle);
   const iconColor = isUsage
     ? 'text-on-surface-variant'
+    : isPending ? 'text-warning'
     : isCredit ? 'text-success' : 'text-error';
   const typeKey = TYPE_I18N[entry.entry_type];
+  const canReconcile = Boolean(onReconcile) &&
+    RECONCILABLE_BILLING_STATES.has(entry.billing_state) &&
+    !entry.is_reconciled;
+  let amountText = fmtUSD(entry.amount_usd);
+  if (isUsage) {
+    amountText = entry.tokens_total > 0 ? `${entry.tokens_total.toLocaleString()} tok` : '—';
+  } else if (isPending && reconcileCost > 0) {
+    amountText = fmtUnsignedUSD(reconcileCost);
+  }
+  let amountClass = 'text-error';
+  if (isPending) {
+    amountClass = 'text-warning';
+  } else if (isUsage) {
+    amountClass = 'text-on-surface/60';
+  } else if (isCredit) {
+    amountClass = 'text-success';
+  }
 
   return (
     <li className="flex items-center gap-3 px-4 py-3">
@@ -253,24 +331,32 @@ const AdminBillRow = ({ entry, t }) => {
         <div className="text-xs text-on-surface/60 truncate">
           {entry.description || '—'}
         </div>
+        <PendingCostBreakdown entry={entry} t={t} />
         <div className="text-xs text-on-surface/40">
           {entry.occurred_at && new Date(entry.occurred_at).toLocaleString()}
           {entry.related_type && ` · ${entry.related_type}#${entry.related_id}`}
         </div>
+        <div className="mt-1">
+          <BillingStateBadge entry={entry} t={t} />
+        </div>
       </div>
       <div className="text-right shrink-0">
-        <div className={`text-sm font-semibold ${
-          isUsage ? 'text-on-surface/60' :
-          isCredit ? 'text-success' : 'text-error'
-        }`}>
-          {isUsage
-            ? (entry.tokens_total > 0 ? `${entry.tokens_total.toLocaleString()} tok` : '—')
-            : fmtUSD(entry.amount_usd)}
+        <div className={`text-sm font-semibold ${amountClass}`}>
+          {amountText}
         </div>
         {!isUsage && (
           <div className="text-xs text-on-surface/50">
             {t('BILL.BALANCE_AFTER', '余额')} ${(entry.balance_after_usd || 0).toFixed(2)}
           </div>
+        )}
+        {canReconcile && (
+          <button
+            type="button"
+            onClick={() => onReconcile(entry)}
+            className="mt-2 inline-flex items-center px-2.5 py-1 rounded-control bg-warning text-white text-xs font-medium hover:opacity-90"
+          >
+            {t('BILL.RECONCILE_ACTION', '对账')}
+          </button>
         )}
       </div>
     </li>

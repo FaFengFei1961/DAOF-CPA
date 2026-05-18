@@ -155,7 +155,7 @@ func LoadModerationConfig() ModerationConfig {
 		LongContextMinTokens: getInt("moderation_long_context_min_tokens", 800000),
 		LongContextMaxChars:  getInt("moderation_long_context_max_chars", 4*1024*1024),
 		LongContextMaxChunks: getInt("moderation_long_context_max_chunks", 12),
-		ImagePolicy:          getStr("moderation_image_policy", "reject"),
+		ImagePolicy:          getStr("moderation_image_policy", "skip"),
 		BlockMessageZh:       getStr("moderation_block_message_zh", "您的请求包含违规内容，已被系统拦截。"),
 		BlockMessageEn:       getStr("moderation_block_message_en", "Your request was blocked by content moderation."),
 		UnavailZh:            getStr("moderation_unavailable_message_zh", "内容审核服务暂时不可用，请稍后重试。"),

@@ -67,6 +67,26 @@ type upstreamAccountCostOut struct {
 	UpdatedAt                        time.Time `json:"updated_at"`
 }
 
+type upstreamAccountCandidateRow struct {
+	Provider                    string     `json:"provider"`
+	AuthIndex                   string     `json:"auth_index"`
+	AuthType                    string     `json:"auth_type"`
+	FileName                    string     `json:"file_name"`
+	Email                       string     `json:"email"`
+	CredentialStatus            string     `json:"credential_status"`
+	CredentialDisabled          bool       `json:"credential_disabled"`
+	LastSeenAt                  *time.Time `json:"last_seen_at,omitempty"`
+	LastDownloadedAt            *time.Time `json:"last_downloaded_at,omitempty"`
+	AccountID                   uint       `json:"account_id"`
+	AccountConfigured           bool       `json:"account_configured"`
+	AccountActive               bool       `json:"account_active"`
+	Label                       string     `json:"label"`
+	PlanName                    string     `json:"plan_name"`
+	MonthlyCostUSD              float64    `json:"monthly_cost_usd"`
+	EstimatedMonthlyCapacityUSD float64    `json:"estimated_monthly_capacity_usd"`
+	Notes                       string     `json:"notes"`
+}
+
 type upstreamAccountCostPreset struct {
 	ID                          string  `json:"id"`
 	Label                       string  `json:"label"`
@@ -93,6 +113,83 @@ func ListUpstreamAccountCosts(c *fiber.Ctx) error {
 	out := make([]upstreamAccountCostOut, 0, len(rows))
 	for _, row := range rows {
 		out = append(out, upstreamAccountCostToOut(row))
+	}
+	return c.JSON(fiber.Map{"success": true, "data": out})
+}
+
+// ListUpstreamAccountCandidates returns all CPA credentials with their optional
+// local cost config. This is intentionally driven by cpa_credentials rather
+// than api_logs, so admins can configure account cost before the first request.
+func ListUpstreamAccountCandidates(c *fiber.Ctx) error {
+	type joinedRow struct {
+		Provider                  string
+		AuthIndex                 string
+		AuthType                  string
+		FileName                  string
+		Email                     string
+		CredentialStatus          string
+		CredentialDisabled        bool
+		LastSeenAt                time.Time
+		LastDownloadedAt          time.Time
+		AccountID                 uint
+		AccountActive             bool
+		Label                     string
+		PlanName                  string
+		MonthlyCostMicroUSD       int64
+		EstimatedCapacityMicroUSD int64
+		Notes                     string
+	}
+
+	var rows []joinedRow
+	if err := database.DB.Table("cpa_credentials AS cc").
+		Select(`LOWER(TRIM(cc.provider)) AS provider,
+			cc.auth_id AS auth_index,
+			COALESCE(uac.auth_type, '') AS auth_type,
+			cc.file_name,
+			cc.email,
+			cc.status AS credential_status,
+			cc.disabled AS credential_disabled,
+			cc.last_seen_at,
+			cc.last_downloaded_at,
+			COALESCE(uac.id, 0) AS account_id,
+			COALESCE(uac.active, false) AS account_active,
+			COALESCE(uac.label, '') AS label,
+			COALESCE(uac.plan_name, '') AS plan_name,
+			COALESCE(uac.monthly_cost_usd, 0) AS monthly_cost_micro_usd,
+			COALESCE(uac.estimated_monthly_capacity_usd, 0) AS estimated_capacity_micro_usd,
+			COALESCE(uac.notes, '') AS notes`).
+		Joins(`LEFT JOIN upstream_account_costs AS uac
+			ON uac.provider = LOWER(TRIM(cc.provider))
+			AND uac.auth_index = cc.auth_id`).
+		Order("cc.disabled ASC, LOWER(TRIM(cc.provider)) ASC, cc.email ASC, cc.file_name ASC, cc.auth_id ASC").
+		Scan(&rows).Error; err != nil {
+		log.Printf("[UPSTREAM-COST] list candidates failed: %v", err)
+		return c.Status(http.StatusInternalServerError).JSON(fiber.Map{"success": false, "message_code": "ERR_DB_QUERY"})
+	}
+
+	out := make([]upstreamAccountCandidateRow, 0, len(rows))
+	for _, r := range rows {
+		lastSeenAt := r.LastSeenAt
+		lastDownloadedAt := r.LastDownloadedAt
+		out = append(out, upstreamAccountCandidateRow{
+			Provider:                    normalizeCostProvider(r.Provider),
+			AuthIndex:                   strings.TrimSpace(r.AuthIndex),
+			AuthType:                    strings.TrimSpace(r.AuthType),
+			FileName:                    strings.TrimSpace(r.FileName),
+			Email:                       strings.TrimSpace(r.Email),
+			CredentialStatus:            strings.TrimSpace(r.CredentialStatus),
+			CredentialDisabled:          r.CredentialDisabled,
+			LastSeenAt:                  &lastSeenAt,
+			LastDownloadedAt:            &lastDownloadedAt,
+			AccountID:                   r.AccountID,
+			AccountConfigured:           r.AccountID > 0,
+			AccountActive:               r.AccountID > 0 && r.AccountActive,
+			Label:                       strings.TrimSpace(r.Label),
+			PlanName:                    strings.TrimSpace(r.PlanName),
+			MonthlyCostUSD:              database.MicroToUSD(r.MonthlyCostMicroUSD),
+			EstimatedMonthlyCapacityUSD: database.MicroToUSD(r.EstimatedCapacityMicroUSD),
+			Notes:                       strings.TrimSpace(r.Notes),
+		})
 	}
 	return c.JSON(fiber.Map{"success": true, "data": out})
 }
@@ -312,18 +409,18 @@ func DeleteUpstreamAccountCost(c *fiber.Ctx) error {
 }
 
 type upstreamMarginAggRow struct {
-	Provider             string
-	AuthIndex            string
-	AuthType             string
-	Requests             int64
-	FailedRequests       int64
-	InputTokens          int64
-	OutputTokens         int64
-	RawCost              int64
-	SubscriptionRevenue  int64 // ApiLogRevenue.effective_revenue WHERE revenue_source='subscription'
-	BalanceRevenue       int64 // ApiLogRevenue.effective_revenue WHERE revenue_source='balance'
-	TotalRevenue         int64 // = SubscriptionRevenue + BalanceRevenue
-	StoredPlatformCost   int64 // ApiLogCostEstimate.platform_cost_micro_usd
+	Provider            string
+	AuthIndex           string
+	AuthType            string
+	Requests            int64
+	FailedRequests      int64
+	InputTokens         int64
+	OutputTokens        int64
+	RawCost             int64
+	SubscriptionRevenue int64 // ApiLogRevenue.effective_revenue WHERE revenue_source='subscription'
+	BalanceRevenue      int64 // ApiLogRevenue.effective_revenue WHERE revenue_source='balance'
+	TotalRevenue        int64 // = SubscriptionRevenue + BalanceRevenue
+	StoredPlatformCost  int64 // ApiLogCostEstimate.platform_cost_micro_usd
 }
 
 type upstreamMarginRow struct {

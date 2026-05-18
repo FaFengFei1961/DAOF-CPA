@@ -20,8 +20,17 @@ import {
   PERIODS, formatTokens, formatLatency, formatTime,
   makeFormatMeterCost, makeFormatEventFailure, isPrecheckLimitEvent,
 } from './shared';
+import { formatUsageLine, formatUsageLinesSummary, usageLinesOf } from '../../utils/usageLines';
 
 const PAGE_SIZE = 50;
+
+const isAuxiliaryEvent = (event) => (
+  String(event?.request_path || '').includes('/messages/count_tokens')
+);
+
+const auxiliaryEventLabel = (event) => (
+  isAuxiliaryEvent(event) ? '辅助接口' : '生成请求'
+);
 
 const STATUS_OPTIONS = [
   { v: '',         l: '全部状态' },
@@ -112,14 +121,15 @@ const AuditEventsPage = () => {
       toast.error('当前页无数据可导出');
       return;
     }
-    const header = ['时间', '用户', '请求模型', '服务模型', '上游Provider', '上游账号索引', 'Token Source', '状态', '失败类型', '失败摘要', '预检输入', '预检输出', '预检扣减成本', '预检剩余额度', '请求路径', '延迟ms', '输入', '输出', '思考', '总Token', '原始成本', '扣减成本', '模型权重', 'Fallback授权', 'IP'];
+    const header = ['时间', '用户', '接口类型', '请求模型', '服务模型', '上游Provider', '上游账号索引', 'Token Source', '状态', '失败类型', '失败摘要', '预检输入', '预检输出', '预检扣减成本', '预检剩余额度', '请求路径', '延迟ms', '输入', '输出', '思考', '总Token', '媒体用量', '原始成本', '扣减成本', '模型权重', 'Fallback授权', 'IP'];
     const rows = events.map(e => [
-      formatTime(e.created_at), e.username || `#${e.user_id}`, e.requested_model || e.model_name, e.served_model || e.model_name,
+      formatTime(e.created_at), e.username || `#${e.user_id}`, auxiliaryEventLabel(e), e.requested_model || e.model_name, e.served_model || e.model_name,
       e.upstream_provider || '', e.upstream_auth_index || '',
       e.token_name || '', e.status, e.error_type || '', formatEventFailure(e)?.detail || e.error_message || '',
       e.precheck_input_tokens || 0, e.precheck_output_tokens || 0, e.precheck_charged_cost || 0, e.precheck_quota_remaining || 0,
       e.request_path || '', e.latency_ms || 0,
       e.prompt_tokens || 0, e.completion_tokens || 0, e.reasoning_tokens || 0, e.total_tokens || 0,
+      formatUsageLinesSummary(e, formatMeterCost),
       e.raw_cost ?? e.cost, e.charged_cost ?? e.cost, e.model_weight || 1,
       e.fallback_user_opt_in ? 'yes' : 'no', e.ip_address || '',
     ].map(v => `"${String(v ?? '').replace(/"/g, '""')}"`).join(','));
@@ -146,8 +156,18 @@ const AuditEventsPage = () => {
     ) },
     { key: 'model', header: '模型', truncate: 220, render: e => (
       <div className="min-w-0">
-        <div className="text-on-surface text-xs font-mono truncate" title={e.requested_model || e.model_name}>
-          {e.requested_model || e.model_name}
+        <div className="flex items-center gap-1.5 min-w-0">
+          <div className="text-on-surface text-xs font-mono truncate" title={e.requested_model || e.model_name}>
+            {e.requested_model || e.model_name}
+          </div>
+          {isAuxiliaryEvent(e) && (
+            <span
+              className="shrink-0 inline-flex items-center h-5 px-1.5 rounded-full text-[10px] font-medium bg-primary-container/60 text-on-primary-container border border-primary/30"
+              title="辅助接口：Token 计数，不生成回复，不扣费"
+            >
+              辅助接口
+            </span>
+          )}
         </div>
         {e.served_model && e.requested_model && e.served_model !== e.requested_model && (
           <div className="text-[10px] text-warning font-mono truncate" title={`served as ${e.served_model}`}>
@@ -183,7 +203,20 @@ const AuditEventsPage = () => {
         </span>
       );
     } },
-    { key: 'tokens', header: 'Token', align: 'right', mono: true, render: e => formatTokens(e.total_tokens || 0) },
+    { key: 'usage', header: '用量', align: 'right', render: e => {
+      const lines = usageLinesOf(e);
+      if (lines.length > 0) {
+        return (
+          <div className="text-right max-w-[220px]">
+            <div className="text-[11px] text-on-surface font-mono truncate" title={formatUsageLine(lines[0], formatMeterCost)}>
+              {formatUsageLine(lines[0], formatMeterCost)}
+            </div>
+            {lines.length > 1 && <div className="text-[10px] text-outline">+{lines.length - 1}</div>}
+          </div>
+        );
+      }
+      return <span className="font-mono">{formatTokens(e.total_tokens || 0)}</span>;
+    } },
     { key: 'cost', header: '扣减', align: 'right', mono: true, render: e => (
       <span className="text-primary">{formatMeterCost(e.charged_cost ?? e.cost)}</span>
     ) },
@@ -327,6 +360,11 @@ const EventDetail = ({ event, formatMeterCost, formatEventFailure }) => {
       {/* 三列分组 */}
       <Section flat noPadding>
         <Field label="模型 (请求 → 服务)" mono value={`${event.requested_model || event.model_name} → ${event.served_model || event.model_name}`} />
+        <Field
+          label="接口类型"
+          value={isAuxiliaryEvent(event) ? '辅助接口（Token 计数，不生成/不扣费）' : '生成请求'}
+          highlight={isAuxiliaryEvent(event)}
+        />
         <Field label="Token Source" mono value={event.token_name || '-'} />
         <Field label="路径" mono value={event.request_path || '-'} />
         <Field label="客户端 IP" mono value={event.ip_address || '-'} />
@@ -371,6 +409,28 @@ const EventDetail = ({ event, formatMeterCost, formatEventFailure }) => {
           <Field label="总 Token" mono value={(event.total_tokens || 0).toLocaleString()} highlight />
         </div>
       </Section>
+
+      {usageLinesOf(event).length > 0 && (
+        <Section title="媒体用量" flat sub="图片 / 视频等非 token 计费事实">
+          <div className="space-y-2">
+            {usageLinesOf(event).map((line) => (
+              <div key={line.id || `${line.unit}-${line.direction}-${line.quantity}`} className="rounded-control border border-outline-variant bg-surface-container/40 px-3 py-2">
+                <div className="flex items-center justify-between gap-3">
+                  <span className="text-xs text-on-surface font-mono truncate" title={formatUsageLine(line, formatMeterCost)}>
+                    {formatUsageLine(line, formatMeterCost)}
+                  </span>
+                  <span className="text-[10px] text-on-surface-variant shrink-0">{line.direction || '-'}</span>
+                </div>
+                {(line.cost_source || line.request_path) && (
+                  <div className="mt-1 text-[10px] text-on-surface-variant font-mono truncate">
+                    {line.cost_source || '-'} · {line.request_path || '-'}
+                  </div>
+                )}
+              </div>
+            ))}
+          </div>
+        </Section>
+      )}
 
       {(event.precheck_input_tokens || event.precheck_charged_cost || event.precheck_quota_limit) && (
         <Section title="预检 (precheck) 状态" flat sub="路由决策时的估算与窗口快照">

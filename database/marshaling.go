@@ -25,17 +25,19 @@ import (
 
 // MarshalJSON 把 User 的金钱字段从 int64 micro_usd 转成 USD float 输出。
 //
-// 涉及字段：Quota / BalanceConsumeLimitUSD / BalanceConsumedInWindow。
+// 涉及字段：Quota / PaidQuota / BalanceConsumeLimitUSD / BalanceConsumedInWindow。
 func (u User) MarshalJSON() ([]byte, error) {
 	type userAlias User
 	return json.Marshal(&struct {
 		*userAlias
 		Quota                   float64 `json:"quota"`
+		PaidQuota               float64 `json:"paid_quota"`
 		BalanceConsumeLimitUSD  float64 `json:"balance_consume_limit_usd"`
 		BalanceConsumedInWindow float64 `json:"balance_consumed_in_window"`
 	}{
 		userAlias:               (*userAlias)(&u),
 		Quota:                   MicroToUSD(u.Quota),
+		PaidQuota:               MicroToUSD(u.PaidQuota),
 		BalanceConsumeLimitUSD:  MicroToUSD(u.BalanceConsumeLimitUSD),
 		BalanceConsumedInWindow: MicroToUSD(u.BalanceConsumedInWindow),
 	})

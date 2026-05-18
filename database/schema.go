@@ -29,10 +29,16 @@ type User struct {
 	// 原因：float64 在长尾累加（千万级 API 调用 × 微小 cost）下出现累加误差，账目对不上；
 	// int64 全程整数运算杜绝浮点漂移。前端展示时除以 1e6 显示 USD。
 	Quota        int64  `gorm:"default:0" json:"quota"`                 // 余额（micro_usd, USD * 1e6）
+	PaidQuota    int64  `gorm:"default:0" json:"paid_quota"`            // 尚未被消费归因的充值通道余额（micro_usd，仅用于拉新消费返佣口径）
 	Status       int    `gorm:"not null;default:1;index" json:"status"` // 1: 正常, 2: 封禁
 	BanReason    string `gorm:"type:text;default:null" json:"ban_reason"`
 	RegIP        string `gorm:"index" json:"reg_ip"`             // 原始探测 IP (防刷核查用)
 	RegRiskScore int    `gorm:"default:0" json:"reg_risk_score"` // 风控热度判定打分
+
+	// ReferredByUserID 记录永久推荐关系。一次性注册奖励可以为 0，但关系仍要保存，
+	// 后续消费返佣等生命周期奖励依赖这个字段追溯推荐人。
+	ReferredByUserID uint       `gorm:"index;default:0" json:"referred_by_user_id"`
+	ReferredAt       *time.Time `gorm:"index" json:"referred_at"`
 
 	// 余额消费控制（参照 Claude Extra usage 三段消费模型）：
 	// 订阅 → 余额（user.Quota）。订阅用尽且 BalanceConsumeEnabled=true 才走余额扣费。
@@ -74,6 +80,10 @@ type ChannelModel struct {
 	ChannelID                          uint   `gorm:"index;not null" json:"channel_id"` // 所属渠道
 	ModelID                            string `gorm:"index;not null" json:"model_id"`   // e.g., "gpt-4o"
 	DisplayName                        string `json:"display_name"`
+	OfficialModelID                    string `gorm:"index;size:160;default:''" json:"official_model_id"` // 官方模型 ID；兼容层别名需指向真实官方 ID
+	ModelCategory                      string `gorm:"size:16;default:'text'" json:"model_category"`       // text / image / video
+	BillingMode                        string `gorm:"size:24;default:'token'" json:"billing_mode"`        // token / image / video_second
+	AllowedEndpoints                   string `gorm:"type:text;default:''" json:"allowed_endpoints"`      // JSON array；空时按 category 默认端点
 	InputPricePicoPerToken             int64  `gorm:"default:0" json:"input_price_pico_per_token"`
 	OutputPricePicoPerToken            int64  `gorm:"default:0" json:"output_price_pico_per_token"`
 	CachedInputPricePicoPerToken       int64  `gorm:"default:0" json:"cached_input_price_pico_per_token"`
@@ -104,7 +114,7 @@ type ChannelModel struct {
 	//   "off"        - 完全不审（适合 Claude/Gemini cloaked 路径）
 	//   "keyword"    - 仅本地关键字快扫（<1ms，拦 Kiro/DAN 模板）
 	//   "moderation" - 仅智能审核服务（CPA 模型池）
-	//   "strict"     - 关键字 + 智能审核双层（推荐官方高风险模型）
+	//   "strict"     - 关键字/风险规则先做信号，智能审核二判后再决定是否拦截
 	ModerationLevel string `gorm:"size:16;default:'off'" json:"moderation_level"`
 
 	// ModerationFailMode 智能审核服务不可达时的策略
@@ -191,10 +201,10 @@ type ApiLog struct {
 	CacheWrite5mTokens     int        `gorm:"column:cache_write_5m_tokens;<-:create" json:"cache_write_5m_tokens"`
 	CacheWrite1hTokens     int        `gorm:"column:cache_write_1h_tokens;<-:create" json:"cache_write_1h_tokens"`
 	ReasoningTokens        int        `gorm:"<-:create" json:"reasoning_tokens"`
-	Cost                   int64      `gorm:"<-:create" json:"cost"`                   // 原始 API 等值成本（micro_usd, USD * 1e6），= rawCost
-	ChargedCost            int64      `gorm:"default:0;<-:create" json:"charged_cost"` // 订阅扣减口径（rawCost × modelWeight × healthMultiplier），实际营收去 ApiLogRevenue
-	ModelWeight            float64    `gorm:"default:1;<-:create" json:"model_weight"` // 公开模型权重
-	HealthMultiplier       float64    `gorm:"default:1;<-:create" json:"health_multiplier"`      // 公开高峰/健康系数
+	Cost                   int64      `gorm:"<-:create" json:"cost"`                        // 原始 API 等值成本（micro_usd, USD * 1e6），= rawCost
+	ChargedCost            int64      `gorm:"default:0;<-:create" json:"charged_cost"`      // 订阅扣减口径（rawCost × modelWeight × healthMultiplier），实际营收去 ApiLogRevenue
+	ModelWeight            float64    `gorm:"default:1;<-:create" json:"model_weight"`      // 公开模型权重
+	HealthMultiplier       float64    `gorm:"default:1;<-:create" json:"health_multiplier"` // 公开高峰/健康系数
 	BillingRulesVersion    string     `gorm:"size:64;default:'';<-:create" json:"billing_rules_version"`
 	PrecheckInputTokens    int        `gorm:"default:0;<-:create" json:"precheck_input_tokens"`    // 预检估算输入 tokens（失败请求不计入用量）
 	PrecheckOutputTokens   int        `gorm:"default:0;<-:create" json:"precheck_output_tokens"`   // 预检预留输出 tokens
@@ -266,6 +276,7 @@ type UpstreamUsageRecord struct {
 	Failed              bool      `gorm:"default:false" json:"failed"`
 	Status              int       `gorm:"default:0" json:"status"`
 	FailBody            string    `gorm:"size:512;default:''" json:"fail_body"`
+	ResponseHeadersJSON string    `gorm:"type:text;default:''" json:"response_headers_json"`
 	MatchedApiLogID     uint      `gorm:"index;default:0" json:"matched_api_log_id"`
 	MatchStatus         string    `gorm:"index;size:64;default:'pending'" json:"match_status"`
 	MatchReason         string    `gorm:"size:255;default:''" json:"match_reason"`

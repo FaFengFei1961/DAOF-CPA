@@ -2,22 +2,30 @@ package proxy
 
 import (
 	"encoding/json"
+	"fmt"
 	"log"
 	"math"
 	"math/big"
 	"path"
+	"strconv"
 	"strings"
+	"sync"
 	"time"
 
 	"daof-cpa/database"
+	"daof-cpa/utils"
 
 	"github.com/tidwall/gjson"
+	"gorm.io/gorm"
 )
 
 const (
 	BillingModelWeightsConfigKey      = "billing_model_weights_json"
 	BillingHealthMultipliersConfigKey = "billing_health_multipliers_json"
 	BillingRulesVersionConfigKey      = "billing_rules_version"
+	BillingRulesPublishedAtConfigKey  = "billing_rules_published_at"
+	BillingRulesEffectiveAtConfigKey  = "billing_rules_effective_at"
+	BillingRulesRevisionIDConfigKey   = "billing_rules_revision_id"
 )
 
 type BillingWeightRule struct {
@@ -58,8 +66,11 @@ type BillingBalanceStrategy struct {
 
 // PublicBillingRules is the auditable contract returned by /api/billing/rules.
 type PublicBillingRules struct {
+	RevisionID        uint                   `json:"revision_id"`
 	Version           string                 `json:"version"`
 	EffectiveSince    string                 `json:"effective_since"`
+	PublishedAt       string                 `json:"published_at"`
+	EffectiveAt       string                 `json:"effective_at"`
 	ModelWeights      []BillingWeightRule    `json:"model_weights"` // 仅对订阅扣减生效
 	HealthMultipliers []BillingWeightRule    `json:"health_multipliers"`
 	Subscription      map[string]string      `json:"subscription"`
@@ -69,15 +80,15 @@ type PublicBillingRules struct {
 }
 
 var defaultBillingModelWeights = []BillingWeightRule{
-	{Pattern: "claude-haiku-*", Weight: 0.3, Label: "Claude Haiku", Reason: "当前启用的 Claude 轻量系列"},
-	{Pattern: "claude-sonnet-*", Weight: 1.0, ThinkingWeight: 1.5, Label: "Claude Sonnet", Reason: "当前启用的 Claude 基准系列；thinking 启用时加权"},
-	{Pattern: "claude-opus-*", Weight: 3.5, ThinkingWeight: 5.0, Label: "Claude Opus", Reason: "当前启用的 Claude 高消耗系列"},
-	{Pattern: "gemini-*-flash-lite*", Weight: 0.2, Label: "Gemini Flash Lite", Reason: "当前启用的 Gemini 超轻量系列"},
-	{Pattern: "gemini-*-flash*", Weight: 0.4, Label: "Gemini Flash", Reason: "当前启用的 Gemini 快速系列"},
-	{Pattern: "gemini-*-pro*", Weight: 0.9, Label: "Gemini Pro", Reason: "当前启用的 Gemini 主力系列"},
-	{Pattern: "gpt-*-mini*", Weight: 0.5, Label: "GPT mini", Reason: "当前启用的 GPT 轻量系列"},
+	{Pattern: "claude-haiku-*", Weight: 1.0, Label: "Claude Haiku", Reason: "当前启用的 Claude 轻量系列"},
+	{Pattern: "claude-sonnet-*", Weight: 1.0, ThinkingWeight: 1.25, Label: "Claude Sonnet", Reason: "当前启用的 Claude 基准系列；thinking 启用时加权"},
+	{Pattern: "claude-opus-*", Weight: 1.0, ThinkingWeight: 1.5, Label: "Claude Opus", Reason: "当前启用的 Claude 高消耗系列"},
+	{Pattern: "gemini-*-flash-lite*", Weight: 1.0, Label: "Gemini Flash Lite", Reason: "当前启用的 Gemini 超轻量系列"},
+	{Pattern: "gemini-*-flash*", Weight: 1.0, Label: "Gemini Flash", Reason: "当前启用的 Gemini 快速系列"},
+	{Pattern: "gemini-*-pro*", Weight: 1.0, Label: "Gemini Pro", Reason: "当前启用的 Gemini 主力系列"},
+	{Pattern: "gpt-*-mini*", Weight: 0.9, Label: "GPT mini", Reason: "当前启用的 GPT 轻量系列"},
 	{Pattern: "gpt-*", Weight: 1.0, Label: "GPT", Reason: "当前启用的 GPT 主力系列"},
-	{Pattern: "grok-*", Weight: 1.0, Label: "Grok", Reason: "当前启用的 xAI Grok 系列"},
+	{Pattern: "grok-*", Weight: 0.8, Label: "Grok", Reason: "当前启用的 xAI Grok 系列"},
 }
 
 var defaultBillingHealthMultipliers = []BillingWeightRule{
@@ -85,19 +96,19 @@ var defaultBillingHealthMultipliers = []BillingWeightRule{
 }
 
 func ResolveBillingRules(modelName string, body []byte, reasoningTokens int, channelType string, fallbackOptIn bool) BillingRuleResolution {
+	maybeActivateDueBillingRuleRevisions()
 	modelName = strings.TrimSpace(modelName)
 	if modelName == "" {
 		modelName = "unknown"
 	}
-	// Thinking 倍率严格判定：必须同时满足
-	//   1) 用户在请求中显式启用 thinking/reasoning（requestIndicatesThinking）
-	//   2) 上游真实消耗了 reasoning tokens（reasoningTokens > 0）
-	// 两个条件都满足才走 Thinking 倍率（×5）。这样避免两类不公平：
-	//   - 用户没启用 thinking，但模型自己 reason 了（rare）→ 不能加价
-	//   - 用户启用了 thinking，但模型 reasoning_tokens=0（没真思考）→ 不能加价
-	// 注意：precheck 时 reasoningTokens=0，所以 precheck 永远不会按 ×5 估算；
-	// 实际扣费在 commit 时按真实 usage 计算，对用户更公平（不会因 thinking 字段被预先拦截）。
-	thinking := reasoningTokens > 0 && requestIndicatesThinking(body)
+	// Thinking 倍率判定：
+	//   - Claude extended/adaptive thinking 不稳定返回独立 reasoning_tokens；官方语义是
+	//     thinking blocks 作为 output tokens 计费。因此 Claude 只要请求显式启用官方
+	//     thinking 参数、通过 CLIProxyAPI 支持的 OpenAI reasoning 字段转译到 Claude
+	//     thinking，或使用 thinking 模型别名/后缀，就按 thinking_weight 做订阅扣减。
+	//   - 其他模型仍要求请求显式启用 thinking/reasoning 且上游返回 reasoning_tokens > 0，
+	//     避免模型自行少量内部推理时被额外加价。
+	thinking := shouldApplyThinkingWeight(modelName, body, reasoningTokens, channelType)
 	modelWeight := matchBillingWeight(modelName, thinking, loadBillingWeightRules(BillingModelWeightsConfigKey, defaultBillingModelWeights))
 	healthMultiplier := matchBillingWeight(modelName, false, loadBillingWeightRules(BillingHealthMultipliersConfigKey, defaultBillingHealthMultipliers))
 	_ = channelType // reserved for future per-channel adjustments
@@ -119,10 +130,19 @@ func (r BillingRuleResolution) WithCosts(rawCostMicroUSD int64) BillingRuleResol
 }
 
 func GetPublicBillingRules() PublicBillingRules {
+	maybeActivateDueBillingRuleRevisions()
 	version := billingRulesVersion()
+	effectiveAt := strings.TrimSpace(sysConfigValue(BillingRulesEffectiveAtConfigKey))
+	effectiveSince := extractEffectiveSinceFromRFC3339(effectiveAt)
+	if effectiveSince == "" {
+		effectiveSince = extractEffectiveSinceFromVersion(version)
+	}
 	return PublicBillingRules{
+		RevisionID:        billingRulesRevisionID(),
 		Version:           version,
-		EffectiveSince:    extractEffectiveSinceFromVersion(version),
+		EffectiveSince:    effectiveSince,
+		PublishedAt:       strings.TrimSpace(sysConfigValue(BillingRulesPublishedAtConfigKey)),
+		EffectiveAt:       effectiveAt,
 		ModelWeights:      loadBillingWeightRules(BillingModelWeightsConfigKey, defaultBillingModelWeights),
 		HealthMultipliers: loadBillingWeightRules(BillingHealthMultipliersConfigKey, defaultBillingHealthMultipliers),
 		Subscription: map[string]string{
@@ -148,7 +168,163 @@ func GetPublicBillingRules() PublicBillingRules {
 	}
 }
 
-// RecordApiLogRevenue 把一次请求真实从用户那里拿到的钱（订阅扣 charged / 余额扣 raw）
+var (
+	billingRuleActivationMu        sync.Mutex
+	lastBillingRuleActivationCheck time.Time
+)
+
+func maybeActivateDueBillingRuleRevisions() {
+	if database.DB == nil {
+		return
+	}
+	now := time.Now()
+	billingRuleActivationMu.Lock()
+	defer billingRuleActivationMu.Unlock()
+	if !lastBillingRuleActivationCheck.IsZero() && now.Sub(lastBillingRuleActivationCheck) < 15*time.Second {
+		return
+	}
+	lastBillingRuleActivationCheck = now
+	activateDueBillingRuleRevisions(now)
+}
+
+// ActivateDueBillingRuleRevisions publishes the latest non-canceled scheduled
+// billing-rule revision whose effective_at has arrived. It is safe to call from
+// cron and from request-path throttled checks; repeated calls are idempotent.
+func ActivateDueBillingRuleRevisions() {
+	if database.DB == nil {
+		return
+	}
+	billingRuleActivationMu.Lock()
+	defer billingRuleActivationMu.Unlock()
+	lastBillingRuleActivationCheck = time.Now()
+	activateDueBillingRuleRevisions(lastBillingRuleActivationCheck)
+}
+
+func activateDueBillingRuleRevisions(now time.Time) {
+	if !database.DB.Migrator().HasTable(&database.BillingRuleRevision{}) ||
+		!database.DB.Migrator().HasTable(&database.BillingRuleRevisionCancellation{}) {
+		return
+	}
+
+	var rev database.BillingRuleRevision
+	err := database.DB.Table("billing_rule_revisions AS r").
+		Where("r.effective_at IS NOT NULL AND r.effective_at <= ?", now).
+		Where(`NOT EXISTS (
+			SELECT 1 FROM billing_rule_revision_cancellations c
+			WHERE c.revision_id = r.id
+		)`).
+		Order("r.effective_at DESC, r.id DESC").
+		Limit(1).
+		Find(&rev).Error
+	if err != nil {
+		log.Printf("[BILLING-RULES-SCHEDULE] load due revision failed: %v", err)
+		return
+	}
+	if rev.ID == 0 {
+		return
+	}
+
+	applied, err := applyBillingRuleRevision(rev)
+	if err != nil {
+		log.Printf("[BILLING-RULES-SCHEDULE] activate revision id=%d version=%q failed: %v", rev.ID, rev.Version, err)
+		return
+	}
+	if applied {
+		SyncCacheConfig()
+		log.Printf("[BILLING-RULES-SCHEDULE] activated revision id=%d version=%q effective_at=%s",
+			rev.ID, rev.Version, billingRuleTimeString(rev.EffectiveAt, now))
+	}
+}
+
+func applyBillingRuleRevision(rev database.BillingRuleRevision) (bool, error) {
+	if rev.ID == 0 {
+		return false, nil
+	}
+	now := time.Now().UTC()
+	returnedApplied := false
+	err := database.DB.Transaction(func(tx *gorm.DB) error {
+		var canceledCount int64
+		if err := tx.Model(&database.BillingRuleRevisionCancellation{}).
+			Where("revision_id = ?", rev.ID).
+			Count(&canceledCount).Error; err != nil {
+			return fmt.Errorf("check canceled revision %d: %w", rev.ID, err)
+		}
+		if canceledCount > 0 {
+			return nil
+		}
+		currentRevisionID := strings.TrimSpace(readPlainSysConfigInTx(tx, BillingRulesRevisionIDConfigKey))
+		if currentRevisionID == strconv.Itoa(int(rev.ID)) {
+			return nil
+		}
+		values := map[string]string{
+			BillingModelWeightsConfigKey:      rev.ModelWeightsJSON,
+			BillingHealthMultipliersConfigKey: rev.HealthMultipliersJSON,
+			BillingRulesVersionConfigKey:      rev.Version,
+			BillingRulesPublishedAtConfigKey:  billingRuleTimeString(rev.PublishedAt, rev.CreatedAt),
+			BillingRulesEffectiveAtConfigKey:  billingRuleTimeString(rev.EffectiveAt, now),
+			BillingRulesRevisionIDConfigKey:   strconv.Itoa(int(rev.ID)),
+		}
+		for key, value := range values {
+			if err := upsertEncryptedSysConfigInTx(tx, key, value); err != nil {
+				return err
+			}
+		}
+		returnedApplied = true
+		return nil
+	})
+	return returnedApplied, err
+}
+
+func upsertEncryptedSysConfigInTx(tx *gorm.DB, key, value string) error {
+	enc, err := utils.Encrypt(value)
+	if err != nil {
+		return fmt.Errorf("encrypt %s: %w", key, err)
+	}
+	var existing database.SysConfig
+	res := tx.Where("key = ?", key).First(&existing)
+	if res.RowsAffected > 0 {
+		existing.Value = enc
+		if err := tx.Save(&existing).Error; err != nil {
+			return fmt.Errorf("save %s: %w", key, err)
+		}
+		return nil
+	}
+	if err := tx.Create(&database.SysConfig{Key: key, Value: enc}).Error; err != nil {
+		return fmt.Errorf("create %s: %w", key, err)
+	}
+	return nil
+}
+
+func readPlainSysConfigInTx(tx *gorm.DB, key string) string {
+	var row database.SysConfig
+	if err := tx.Where("key = ?", key).First(&row).Error; err != nil {
+		return ""
+	}
+	plain, err := utils.Decrypt(row.Value)
+	if err != nil {
+		return ""
+	}
+	return plain
+}
+
+func billingRuleTimeString(t *time.Time, fallback time.Time) string {
+	if t != nil && !t.IsZero() {
+		return t.UTC().Format(time.RFC3339)
+	}
+	if !fallback.IsZero() {
+		return fallback.UTC().Format(time.RFC3339)
+	}
+	return ""
+}
+
+func subscriptionRevenueMicroUSD(chargedCostMicroUSD int64, isGranted bool) int64 {
+	if isGranted || chargedCostMicroUSD <= 0 {
+		return 0
+	}
+	return chargedCostMicroUSD
+}
+
+// RecordApiLogRevenue 把一次请求真实从用户那里拿到的钱（付费订阅扣 charged / 赠送订阅 0 / 余额扣 raw）
 // 写入 ApiLogRevenue side table，供毛利报表和审计还原真实营收。
 //
 // fix HIGH（codex audit-integrity）：原实现失败仅 log.Printf，无重试无 reconcile，
@@ -202,6 +378,75 @@ func requestIndicatesThinking(body []byte) bool {
 	}
 	reasoningEffort := strings.ToLower(strings.TrimSpace(gjson.GetBytes(body, "reasoning_effort").String()))
 	return reasoningEffort != "" && reasoningEffort != "none" && reasoningEffort != "off" && reasoningEffort != "disabled"
+}
+
+func requestIndicatesClaudeThinking(body []byte) bool {
+	if len(body) == 0 {
+		return false
+	}
+	if indicatesEnabledThinking(gjson.GetBytes(body, "thinking")) {
+		return true
+	}
+	if indicatesEnabledThinking(gjson.GetBytes(body, "extra_body.thinking")) {
+		return true
+	}
+	if reasoningEffort := strings.ToLower(strings.TrimSpace(gjson.GetBytes(body, "reasoning_effort").String())); reasoningEffort != "" {
+		return isEnabledThinkingValue(reasoningEffort)
+	}
+	return indicatesEnabledThinking(gjson.GetBytes(body, "reasoning"))
+}
+
+func shouldApplyThinkingWeight(modelName string, body []byte, reasoningTokens int, channelType string) bool {
+	isClaude := isClaudeBillingModel(modelName) || NormalizeChannelType(channelType) == ChannelTypeAnthropic
+	explicitThinking := requestIndicatesThinking(body)
+	if isClaude {
+		explicitThinking = requestIndicatesClaudeThinking(body) || modelNameIndicatesThinking(modelName)
+	}
+	if !explicitThinking {
+		return false
+	}
+	if reasoningTokens > 0 {
+		return true
+	}
+	if isClaude {
+		return true
+	}
+	return false
+}
+
+func isClaudeBillingModel(modelName string) bool {
+	return strings.HasPrefix(strings.ToLower(strings.TrimSpace(modelName)), "claude-")
+}
+
+func modelNameIndicatesThinking(modelName string) bool {
+	lower := strings.ToLower(strings.TrimSpace(modelName))
+	if strings.HasSuffix(lower, "-thinking") ||
+		strings.Contains(lower, "-thinking-") ||
+		strings.HasSuffix(lower, "_thinking") ||
+		strings.Contains(lower, "_thinking_") ||
+		strings.HasSuffix(lower, ":thinking") {
+		return true
+	}
+	open := strings.LastIndex(lower, "(")
+	if open < 0 || !strings.HasSuffix(lower, ")") {
+		return false
+	}
+	suffix := strings.TrimSpace(lower[open+1 : len(lower)-1])
+	if suffix == "" || !isEnabledThinkingValue(suffix) {
+		return false
+	}
+	if suffix == "-1" || suffix == "auto" {
+		return true
+	}
+	if v, err := strconv.Atoi(suffix); err == nil {
+		return v > 0
+	}
+	switch suffix {
+	case "minimal", "low", "medium", "high", "xhigh", "max":
+		return true
+	default:
+		return false
+	}
 }
 
 func indicatesEnabledThinking(v gjson.Result) bool {
@@ -295,9 +540,10 @@ func matchBillingWeight(modelName string, thinking bool, rules []BillingWeightRu
 // 出口移动到这里）。
 //
 // 举例：
-//   cost=2 micro × multiplier=0.3 → 2 × 300000 / 1e6 = 0.6
-//   旧 floor: 0 micro  → 免费消耗 ❌
-//   新 ceil:  1 micro  → 平台至少收 1 micro ✓
+//
+//	cost=2 micro × multiplier=0.3 → 2 × 300000 / 1e6 = 0.6
+//	旧 floor: 0 micro  → 免费消耗 ❌
+//	新 ceil:  1 micro  → 平台至少收 1 micro ✓
 //
 // 修复：对**正数结果**使用 ceil-div：(a + b - 1) / b（a, b > 0 时等价 ⌈a/b⌉）。
 // 与 checkedCostMicroUSD 的 ceil 策略一致，保证全链路平台永不少收。
@@ -358,6 +604,32 @@ func billingRulesVersion() string {
 		return v
 	}
 	return "default-active-series-2026-05-17"
+}
+
+func billingRulesRevisionID() uint {
+	v := strings.TrimSpace(sysConfigValue(BillingRulesRevisionIDConfigKey))
+	if v == "" {
+		return 0
+	}
+	n, err := strconv.ParseUint(v, 10, 32)
+	if err != nil {
+		return 0
+	}
+	return uint(n)
+}
+
+func extractEffectiveSinceFromRFC3339(value string) string {
+	v := strings.TrimSpace(value)
+	if v == "" {
+		return ""
+	}
+	if parsed, err := time.Parse(time.RFC3339, v); err == nil {
+		return parsed.UTC().Format("2006-01-02")
+	}
+	if len(v) >= 10 {
+		return extractEffectiveSinceFromVersion(v[:10])
+	}
+	return ""
 }
 
 // extractEffectiveSinceFromVersion 从 "default-2026-05-13" / "v1-2026-05-13" 这类

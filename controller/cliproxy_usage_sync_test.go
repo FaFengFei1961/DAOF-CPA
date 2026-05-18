@@ -3,6 +3,7 @@ package controller
 import (
 	"context"
 	"errors"
+	"strings"
 	"testing"
 	"time"
 
@@ -52,6 +53,11 @@ func TestApiLog_AttributionViaSideTable(t *testing.T) {
 		RequestID: "req-1",
 		Timestamp: start,
 		LatencyMs: 1500,
+		ResponseHeaders: map[string][]string{
+			"X-Request-Id":  {"upstream-req-1"},
+			"Set-Cookie":    {"secret-cookie"},
+			"Authorization": {"Bearer should-not-persist"},
+		},
 		Tokens: cpaUsageTokens{
 			InputTokens:     100,
 			OutputTokens:    20,
@@ -81,6 +87,12 @@ func TestApiLog_AttributionViaSideTable(t *testing.T) {
 	}
 	if usage.MatchedApiLogID != apiLog.ID || usage.MatchStatus != "matched" {
 		t.Fatalf("usage match = id:%d status:%q", usage.MatchedApiLogID, usage.MatchStatus)
+	}
+	if !strings.Contains(usage.ResponseHeadersJSON, "upstream-req-1") {
+		t.Fatalf("response headers evidence missing: %s", usage.ResponseHeadersJSON)
+	}
+	if strings.Contains(strings.ToLower(usage.ResponseHeadersJSON), "cookie") || strings.Contains(strings.ToLower(usage.ResponseHeadersJSON), "bearer") {
+		t.Fatalf("sensitive response headers persisted: %s", usage.ResponseHeadersJSON)
 	}
 }
 

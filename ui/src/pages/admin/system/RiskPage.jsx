@@ -1,4 +1,4 @@
-import React from 'react';
+import React, { useEffect, useState } from 'react';
 import { useTranslation } from 'react-i18next';
 import { ShieldCheck, Info } from 'lucide-react';
 import { PageContainer, PageHeader, Section } from '../../../components/ui';
@@ -12,6 +12,90 @@ const STRATEGY_DETAIL_TONE = {
   trust:   { tone: 'warning', icon: '⚠' },
   dynamic: { tone: 'primary', icon: '✓' },
   strict:  { tone: 'error',   icon: '🛡' },
+};
+
+const bpsToPercentDisplay = (bpsValue) => {
+  const bps = parseInt(bpsValue || '0', 10);
+  if (!Number.isFinite(bps) || bps <= 0) return '0';
+  const whole = Math.floor(bps / 100);
+  const frac = String(bps % 100).padStart(2, '0').replace(/0+$/, '');
+  return frac ? `${whole}.${frac}` : `${whole}`;
+};
+
+const percentDisplayToBPS = (raw) => {
+  const s = String(raw ?? '').trim();
+  if (s === '') return '0';
+  if (!/^\d+(\.\d{0,2})?$/.test(s)) return '';
+  const [wholeRaw, fracRaw = ''] = s.split('.');
+  const whole = parseInt(wholeRaw, 10);
+  if (!Number.isFinite(whole)) return '';
+  const frac = parseInt(fracRaw.padEnd(2, '0').slice(0, 2) || '0', 10);
+  const bps = whole * 100 + frac;
+  if (bps < 0 || bps > 10000) return '';
+  return String(bps);
+};
+
+const PercentBPSInput = ({ value, onChange }) => {
+  const [local, setLocal] = useState(() => bpsToPercentDisplay(value));
+  useEffect(() => {
+    setLocal(bpsToPercentDisplay(value));
+  }, [value]);
+  return (
+    <div className="relative w-full md:w-32">
+      <TextInput
+        type="number"
+        min="0"
+        max="100"
+        step="0.01"
+        value={local}
+        onChange={(e) => setLocal(e.target.value)}
+        onBlur={(e) => {
+          const bps = percentDisplayToBPS(e.target.value);
+          onChange(bps || '0');
+          setLocal(bpsToPercentDisplay(bps || '0'));
+        }}
+        className="text-right"
+        style={{ paddingRight: '2rem' }}
+      />
+      <span className="absolute right-4 top-2.5 text-on-surface-variant text-sm pointer-events-none">%</span>
+    </div>
+  );
+};
+
+const secondsToDaysDisplay = (secondsValue) => {
+  const seconds = parseInt(secondsValue || '2592000', 10);
+  if (!Number.isFinite(seconds) || seconds <= 0) return '30';
+  return String(Math.max(1, Math.round(seconds / 86400)));
+};
+
+const DaysSecondsInput = ({ value, onChange }) => {
+  const { t } = useTranslation();
+  const [local, setLocal] = useState(() => secondsToDaysDisplay(value));
+  useEffect(() => {
+    setLocal(secondsToDaysDisplay(value));
+  }, [value]);
+  return (
+    <div className="relative w-full md:w-32">
+      <TextInput
+        type="number"
+        min="1"
+        max="365"
+        step="1"
+        value={local}
+        onChange={(e) => setLocal(e.target.value)}
+        onBlur={(e) => {
+          const days = Math.min(365, Math.max(1, parseInt(e.target.value || '30', 10) || 30));
+          onChange(String(days * 86400));
+          setLocal(String(days));
+        }}
+        className="text-right"
+        style={{ paddingRight: '2.5rem' }}
+      />
+      <span className="absolute right-4 top-2.5 text-on-surface-variant text-sm pointer-events-none">
+        {t('ADMIN_SYS.UNIT.DAYS')}
+      </span>
+    </div>
+  );
 };
 
 const StrategyDetail = ({ strategy, ipLimit, t }) => {
@@ -165,6 +249,34 @@ const RiskPage = () => {
             />
           </div>
         ))}
+        <div className="flex flex-col md:flex-row md:items-center justify-between py-3 border-t border-outline-variant/20 gap-3">
+          <div className="flex flex-col gap-1 w-full md:w-2/3">
+            <span className="text-on-surface-variant font-medium text-sm">
+              {t('ADMIN_SYS.RISK.REFERRAL_PAID_SPEND_REWARD_LABEL')}
+            </span>
+            <span className="text-xs text-outline">
+              {t('ADMIN_SYS.RISK.REFERRAL_PAID_SPEND_REWARD_HINT')}
+            </span>
+          </div>
+          <PercentBPSInput
+            value={configs.referral_paid_spend_reward_bps || '0'}
+            onChange={(bps) => handleChange('referral_paid_spend_reward_bps', bps)}
+          />
+        </div>
+        <div className="flex flex-col md:flex-row md:items-center justify-between py-3 border-t border-outline-variant/20 gap-3">
+          <div className="flex flex-col gap-1 w-full md:w-2/3">
+            <span className="text-on-surface-variant font-medium text-sm">
+              {t('ADMIN_SYS.RISK.REFERRAL_REWARD_WINDOW_LABEL')}
+            </span>
+            <span className="text-xs text-outline">
+              {t('ADMIN_SYS.RISK.REFERRAL_REWARD_WINDOW_HINT')}
+            </span>
+          </div>
+          <DaysSecondsInput
+            value={configs.referral_paid_spend_reward_window_seconds || '2592000'}
+            onChange={(seconds) => handleChange('referral_paid_spend_reward_window_seconds', seconds)}
+          />
+        </div>
       </Section>
 
       <SaveBar loading={loading} onSave={handleSave} />

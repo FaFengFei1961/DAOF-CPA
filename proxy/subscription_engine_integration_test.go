@@ -129,6 +129,33 @@ func TestEngineIntegration_FIFOConsumption(t *testing.T) {
 	}
 }
 
+func TestEngineDecisionCarriesGrantedSubscriptionFlag(t *testing.T) {
+	setupEngineTestDB(t)
+	userID := uint(1)
+	snap := makeSnapshot([]map[string]any{{
+		"id": 1, "model_match": `["*"]`, "limit_unit": "request_count", "limit_value": 10.0,
+		"window_seconds": 0, "priority": 1,
+	}})
+	sub := seedSub(t, userID, snap, 100)
+	if err := database.DB.Model(&database.UserSubscription{}).
+		Where("id = ?", sub.ID).
+		Update("is_granted", true).Error; err != nil {
+		t.Fatalf("mark granted: %v", err)
+	}
+	FlushAllSubscriptionCache()
+
+	d := Decide(EngineRequest{UserID: userID, ModelName: "gpt-4o", InputTokens: 1, OutputTokens: 1})
+	if !d.Allowed {
+		t.Fatalf("expected allowed, got reason=%s", d.BlockReason)
+	}
+	if d.SubscriptionID != sub.ID {
+		t.Fatalf("subscription id = %d, want %d", d.SubscriptionID, sub.ID)
+	}
+	if !d.SubscriptionIsGranted {
+		t.Fatalf("SubscriptionIsGranted=false, want true")
+	}
+}
+
 func TestEngineIntegration_QuantityMultiplierExpandsLimit(t *testing.T) {
 	setupEngineTestDB(t)
 	userID := uint(10)

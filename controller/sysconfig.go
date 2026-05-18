@@ -3,6 +3,7 @@ package controller
 import (
 	"fmt"
 	"log"
+	"net"
 	"strconv"
 	"strings"
 
@@ -139,6 +140,18 @@ func validateSysConfigPayload(payload map[string]string) (string, string, bool) 
 			return "ERR_WINDOW_INVALID", "balance_consume_default_window_secs 必须在 60 秒到 365 天之间", false
 		}
 	}
+	if raw, ok := payload[database.ReferralPaidSpendRewardBPSConfigKey]; ok {
+		bps, err := strconv.ParseInt(strings.TrimSpace(raw), 10, 64)
+		if err != nil || bps < 0 || bps > 10_000 {
+			return "ERR_INVALID_PARAMS", "referral_paid_spend_reward_bps 必须是 0-10000 之间的整数（100 = 1%）", false
+		}
+	}
+	if raw, ok := payload[database.ReferralPaidSpendRewardWindowSecondsConfigKey]; ok {
+		window, err := strconv.ParseInt(strings.TrimSpace(raw), 10, 64)
+		if err != nil || window < 60 || window > balanceConsumeDefaultMaxWindowSeconds {
+			return "ERR_INVALID_PARAMS", "referral_paid_spend_reward_window_seconds 必须在 60 秒到 365 天之间", false
+		}
+	}
 
 	if raw, ok := payload["moderation_autoban_enabled"]; ok {
 		if !isBoolSysConfigValue(strings.TrimSpace(raw)) {
@@ -214,6 +227,17 @@ func validateSysConfigPayload(payload map[string]string) (string, string, bool) 
 	if raw, ok := payload["upstream_account_cost_presets_json"]; ok {
 		if _, err := parseUpstreamAccountCostPresets(raw); err != nil {
 			return "ERR_INVALID_JSON", "upstream_account_cost_presets_json JSON 或规则格式不合法: " + err.Error(), false
+		}
+	}
+	if raw, ok := payload["yifut_notify_allowed_cidrs"]; ok {
+		for _, part := range strings.Split(raw, ",") {
+			cidr := strings.TrimSpace(part)
+			if cidr == "" {
+				continue
+			}
+			if _, _, err := net.ParseCIDR(cidr); err != nil {
+				return "ERR_INVALID_CIDR", "yifut_notify_allowed_cidrs 必须是 CIDR 列表，例如 1.2.3.4/32 或 1.2.3.0/24", false
+			}
 		}
 	}
 

@@ -46,7 +46,7 @@ func GetLogs(c *fiber.Ctx) error {
 	return c.JSON(fiber.Map{
 		"success": true,
 		"data": map[string]interface{}{
-			"logs":  database.ApiLogsToPublic(logs),
+			"logs":  database.ApiLogsToPublicWithUsageLines(logs),
 			"total": total,
 			"page":  page,
 			"limit": limit,

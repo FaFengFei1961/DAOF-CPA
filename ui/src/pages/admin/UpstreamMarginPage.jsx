@@ -51,6 +51,8 @@ const UpstreamMarginPage = () => {
   const [period, setPeriod] = useState('7d');
   const [data, setData] = useState(null);
   const [loading, setLoading] = useState(true);
+  const [accountRows, setAccountRows] = useState([]);
+  const [accountsLoading, setAccountsLoading] = useState(true);
   const [presets, setPresets] = useState([]);
   const [drawerRow, setDrawerRow] = useState(null);
   const [bulkMode, setBulkMode] = useState(false);
@@ -84,6 +86,20 @@ const UpstreamMarginPage = () => {
     }
   };
 
+  const fetchAccountCandidates = async () => {
+    setAccountsLoading(true);
+    try {
+      const res = await fetch('/api/admin/upstream-accounts/candidates', { credentials: 'include' });
+      const json = await res.json();
+      if (json.success) setAccountRows(json.data || []);
+      else toast.error(json.message || '加载上游凭证失败');
+    } catch {
+      toast.error('网络异常，无法加载上游凭证');
+    } finally {
+      setAccountsLoading(false);
+    }
+  };
+
   const fetchStale = async () => {
     try {
       const res = await fetch('/api/admin/upstream-accounts/stale', { credentials: 'include' });
@@ -106,6 +122,7 @@ const UpstreamMarginPage = () => {
       if (json.success) {
         toast.success('配置已删除');
         fetchStale();
+        fetchAccountCandidates();
         fetchData();
       } else {
         toast.error(json.message || '删除失败');
@@ -116,13 +133,24 @@ const UpstreamMarginPage = () => {
   };
 
   useEffect(() => { fetchData(); }, [period]);
-  useEffect(() => { fetchPresets(); fetchStale(); }, []);
+  useEffect(() => { fetchPresets(); fetchStale(); fetchAccountCandidates(); }, []);
 
   const summary = data?.summary || {};
   const rows = data?.rows || [];
-  const configurableRows = useMemo(() => rows.filter(r => r.auth_index), [rows]);
+  const accountSelectableKeys = useMemo(
+    () => accountRows.filter(r => r.auth_index).map(r => `${r.provider}::${r.auth_index}`),
+    [accountRows],
+  );
+  const configuredAccountCount = useMemo(
+    () => accountRows.filter(r => r.account_configured).length,
+    [accountRows],
+  );
 
   const openSingle = (row) => {
+    if (!row.auth_index) {
+      toast.error('这组请求还没有归因到具体上游账号，不能配置账号成本');
+      return;
+    }
     setBulkMode(false);
     setSelectedKeys([]);
     setDrawerRow(row);
@@ -130,12 +158,12 @@ const UpstreamMarginPage = () => {
       provider: row.provider || '',
       auth_index: row.auth_index || '',
       auth_type: row.auth_type || '',
-      label: row.label || '',
+      label: row.label || row.email || row.file_name || '',
       plan_name: row.plan_name || '',
       monthly_cost_usd: row.monthly_cost_usd ? String(row.monthly_cost_usd) : '',
       estimated_monthly_capacity_usd: row.estimated_monthly_capacity_usd ? String(row.estimated_monthly_capacity_usd) : '',
-      active: row.account_configured ? !!row.account_active : true,
-      notes: '',
+      active: row.account_configured ? !!row.account_active : !row.credential_disabled,
+      notes: row.notes || '',
     });
     setSelectedPreset('');
   };
@@ -162,7 +190,6 @@ const UpstreamMarginPage = () => {
     if (!p) return;
     setForm(prev => ({
       ...prev,
-      provider: bulkMode ? prev.provider : (p.provider || prev.provider),
       plan_name: p.plan_name || prev.plan_name,
       monthly_cost_usd: p.monthly_cost_usd > 0 ? String(p.monthly_cost_usd) : '',
       estimated_monthly_capacity_usd: p.estimated_monthly_capacity_usd > 0 ? String(p.estimated_monthly_capacity_usd) : '',
@@ -189,11 +216,12 @@ const UpstreamMarginPage = () => {
             ...common,
             accounts: selectedKeys.map(key => {
               const [provider, auth_index] = key.split('::');
-              const row = rows.find(r => r.provider === provider && r.auth_index === auth_index);
+              const row = accountRows.find(r => r.provider === provider && r.auth_index === auth_index)
+                || rows.find(r => r.provider === provider && r.auth_index === auth_index);
               return {
                 provider, auth_index,
                 auth_type: row?.auth_type || form.auth_type,
-                label: row?.label || `${provider}:${auth_index}`,
+                label: row?.label || row?.email || row?.file_name || `${provider}:${auth_index}`,
               };
             }),
           }
@@ -209,6 +237,8 @@ const UpstreamMarginPage = () => {
       toast.success(bulkMode ? `已批量配置 ${selectedKeys.length} 个账号` : '账号成本配置已保存');
       setSelectedKeys([]);
       closeDrawer();
+      fetchAccountCandidates();
+      fetchStale();
       fetchData();
     } catch {
       toast.error('保存账号成本网络异常');
@@ -217,10 +247,10 @@ const UpstreamMarginPage = () => {
     }
   };
 
-  const allSelected = configurableRows.length > 0 && selectedKeys.length === configurableRows.length;
+  const allSelected = accountSelectableKeys.length > 0 && accountSelectableKeys.every(k => selectedKeys.includes(k));
   const toggleAll = () => {
-    if (allSelected) setSelectedKeys([]);
-    else setSelectedKeys(configurableRows.map(r => `${r.provider}::${r.auth_index}`));
+    if (allSelected) setSelectedKeys(prev => prev.filter(k => !accountSelectableKeys.includes(k)));
+    else setSelectedKeys(prev => Array.from(new Set([...prev, ...accountSelectableKeys])));
   };
   const toggleRow = (row) => {
     if (!row.auth_index) return;
@@ -228,7 +258,7 @@ const UpstreamMarginPage = () => {
     setSelectedKeys(prev => prev.includes(key) ? prev.filter(x => x !== key) : [...prev, key]);
   };
 
-  const columns = [
+  const accountColumns = [
     {
       key: 'sel', header: (
         <input type="checkbox" checked={allSelected} onChange={toggleAll} className="accent-primary" />
@@ -242,6 +272,69 @@ const UpstreamMarginPage = () => {
         />
       ) : <span className="text-outline-variant">-</span>,
     },
+    {
+      key: 'credential', header: '凭证账号', render: r => (
+        <div className="min-w-0">
+          <div className="flex items-center gap-2">
+            <span className="font-medium text-on-surface">{r.provider || 'unknown'}</span>
+            <span className={`text-[10px] px-1.5 py-0.5 rounded-control border ${
+              r.credential_disabled
+                ? 'bg-error/10 text-error border-error/20'
+                : 'bg-success/10 text-success border-success/20'
+            }`}>
+              {r.credential_disabled ? '已禁用' : (r.credential_status || '可用')}
+            </span>
+          </div>
+          <div className="text-[11px] text-on-surface-variant truncate" title={r.email || r.file_name || r.auth_index}>
+            {r.email || r.file_name || '未命名凭证'}
+          </div>
+          <div className="text-[10px] text-outline font-mono truncate" title={r.auth_index}>
+            {r.auth_index}
+          </div>
+        </div>
+      ),
+    },
+    { key: 'configured', header: '成本配置', render: r => (
+      <div className="min-w-0">
+        <div className="text-xs font-medium text-on-surface">{r.label || r.plan_name || (r.account_configured ? '已配置' : '未配置')}</div>
+        <div className="text-[10px] text-on-surface-variant truncate">
+          月费 {formatMeterCost(r.monthly_cost_usd || 0)} · 容量 {formatMeterCost(r.estimated_monthly_capacity_usd || 0)}
+        </div>
+      </div>
+    ) },
+    { key: 'active', header: '毛利核算', render: r => (
+      <span className={`inline-block text-[10px] px-2 py-0.5 rounded-control border ${
+        r.account_configured && r.account_active
+          ? 'bg-primary/10 text-primary border-primary/20'
+          : 'bg-surface-container-high text-on-surface-variant border-outline-variant'
+      }`}>
+        {r.account_configured ? (r.account_active ? '纳入' : '暂停') : '待配置'}
+      </span>
+    ) },
+    { key: 'seen', header: 'CPA 最后见', mono: true, render: r => (
+      <span className="text-[10px] text-on-surface-variant">
+        {r.last_seen_at ? new Date(r.last_seen_at).toLocaleString() : '—'}
+      </span>
+    ) },
+    {
+      key: 'actions', header: '', width: 50, render: r => r.account_configured ? (
+        <button
+          type="button"
+          onClick={(e) => {
+            e.stopPropagation();
+            deleteAccount(r.account_id || 0, r.label || r.email || `${r.provider}:${r.auth_index}`);
+          }}
+          className="p-1.5 rounded-control text-on-surface-variant hover:text-error hover:bg-error/[0.08] transition"
+          aria-label="删除配置"
+          title="删除此账号的成本配置"
+        >
+          <Trash2 size={14} />
+        </button>
+      ) : null,
+    },
+  ];
+
+  const columns = [
     {
       key: 'account', header: '上游账号', render: r => (
         <div className="min-w-0">
@@ -327,9 +420,40 @@ const UpstreamMarginPage = () => {
     <PageContainer>
       <PageHeader
         title="上游账号成本与毛利"
-        sub="以上游用量记录的 provider/auth_index 归因，按账号月费 ÷ 估算月容量分摊平台成本。点击行配置成本。"
+        sub="先按 CPA 凭证账号配置月成本与估算月容量；毛利报表再按 provider/auth_index 归因分摊平台成本。"
         actions={headerActions}
       />
+
+      <section className="space-y-3">
+        <div className="flex flex-wrap items-center justify-between gap-3">
+          <div className="flex items-center gap-2">
+            <div className="w-8 h-8 rounded-control bg-primary/10 text-primary grid place-items-center">
+              <SettingsIcon size={16} />
+            </div>
+            <div>
+              <h2 className="text-sm font-semibold text-on-surface">上游凭证成本配置</h2>
+              <p className="text-xs text-on-surface-variant">
+                来自 CPA 凭证清单，未产生请求的账号也可以先配置成本。
+              </p>
+            </div>
+          </div>
+          <div className="text-xs text-on-surface-variant">
+            已配置 <span className="font-mono text-on-surface">{configuredAccountCount}</span>
+            <span className="mx-1">/</span>
+            <span className="font-mono text-on-surface">{accountRows.length}</span>
+          </div>
+        </div>
+        <DataTable
+          columns={accountColumns}
+          rows={accountRows}
+          rowKey={r => `${r.provider}-${r.auth_index}`}
+          loading={accountsLoading}
+          emptyTitle="尚未同步到 CPA 凭证"
+          emptySub="先在号池监控触发刷新，或等待后台自动同步凭证清单。"
+          emptyIcon={SettingsIcon}
+          onRowClick={openSingle}
+        />
+      </section>
 
       {stale.length > 0 && (
         <div className="rounded-overlay border border-warning/40 bg-warning/[0.06] overflow-hidden">
@@ -461,6 +585,7 @@ const UpstreamMarginPage = () => {
         rowKey={r => `${r.provider}-${r.auth_index || 'none'}`}
         loading={loading}
         emptyTitle="当前时间窗内暂无可核算请求"
+        emptySub="这不影响提前配置账号成本；上方凭证表仍可维护月费和估算容量。"
         emptyIcon={Coins}
         onRowClick={openSingle}
       />

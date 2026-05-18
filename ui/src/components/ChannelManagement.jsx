@@ -82,6 +82,42 @@ const normalizeModerationFailMode = (model = {}) => String(model.moderation_fail
 const modelHasAnyModeration = (model = {}) => normalizeModerationLevel(model) !== 'off';
 const modelHasSmartModeration = (model = {}) => ['moderation', 'strict'].includes(normalizeModerationLevel(model));
 const modelIsFailClosed = (model = {}) => normalizeModerationFailMode(model) === 'closed';
+const normalizeModelCategory = (category, modelId = '') => {
+    const c = String(category || '').toLowerCase();
+    if (['text', 'image', 'video'].includes(c)) return c;
+    const id = String(modelId || '').toLowerCase();
+    if (id.includes('video')) return 'video';
+    if (id.includes('image') || id.includes('imagine') || id.includes('imagen')) return 'image';
+    return 'text';
+};
+const normalizeBillingMode = (mode, category = 'text') => {
+    const m = String(mode || '').toLowerCase();
+    if (['token', 'image', 'video_second'].includes(m)) return m;
+    const c = normalizeModelCategory(category);
+    if (c === 'image') return 'image';
+    if (c === 'video') return 'video_second';
+    return 'token';
+};
+const defaultAllowedEndpointsForCategory = (category) => {
+    switch (normalizeModelCategory(category)) {
+        case 'image':
+            return '["/v1/images/generations"]';
+        case 'video':
+            return '["/v1/videos/generations"]';
+        default:
+            return '';
+    }
+};
+const categoryLabel = (category, t) => ({
+    text: t('CHANNEL_MGMT.RUNTIME.CATEGORY_TEXT', '文本'),
+    image: t('CHANNEL_MGMT.RUNTIME.CATEGORY_IMAGE', '图片'),
+    video: t('CHANNEL_MGMT.RUNTIME.CATEGORY_VIDEO', '视频'),
+}[normalizeModelCategory(category)] || t('CHANNEL_MGMT.RUNTIME.CATEGORY_TEXT', '文本'));
+const billingModeLabel = (mode, t) => ({
+    token: t('CHANNEL_MGMT.RUNTIME.BILLING_TOKEN', '按 token'),
+    image: t('CHANNEL_MGMT.RUNTIME.BILLING_IMAGE', '按图片'),
+    video_second: t('CHANNEL_MGMT.RUNTIME.BILLING_VIDEO_SECOND', '按视频秒'),
+}[normalizeBillingMode(mode)] || t('CHANNEL_MGMT.RUNTIME.BILLING_TOKEN', '按 token'));
 
 const ChannelManagement = () => {
     const confirm = useConfirm();
@@ -176,6 +212,9 @@ const ChannelManagement = () => {
         cached_input_price: 0, cache_write_input_price: 0, cache_write_1h_input_price: 0,
         context_price_threshold: 0, high_input_price: 0, high_cached_input_price: 0, high_output_price: 0,
         weight: 1, max_context_length: 0, status: 1,
+        model_category: 'text',
+        billing_mode: 'token',
+        allowed_endpoints: '',
         endpoint_policy: 'all',
         // fix CRITICAL R23: content moderation fields per channel model.
         moderation_level: 'off',          // off / keyword / moderation / strict
@@ -193,10 +232,14 @@ const ChannelManagement = () => {
 
     const withEndpointPolicyDefaults = (form) => {
         const id = String(form.model_id || '').trim().toLowerCase();
-        if (id === 'gpt-5.5' && (!form.endpoint_policy || form.endpoint_policy === 'all')) {
-            return { ...form, endpoint_policy: 'no_chat_non_stream' };
+        const category = normalizeModelCategory(form.model_category, id);
+        const billingMode = normalizeBillingMode(form.billing_mode, category);
+        const allowed = form.allowed_endpoints ?? defaultAllowedEndpointsForCategory(category);
+        const next = { ...form, model_category: category, billing_mode: billingMode, allowed_endpoints: allowed };
+        if (id === 'gpt-5.5' && (!next.endpoint_policy || next.endpoint_policy === 'all')) {
+            return { ...next, endpoint_policy: 'no_chat_non_stream' };
         }
-        return { ...form, endpoint_policy: form.endpoint_policy || 'all' };
+        return { ...next, endpoint_policy: next.endpoint_policy || 'all' };
     };
 
     // Detect whether the selected channel points to an official upstream.
@@ -222,6 +265,16 @@ const ChannelManagement = () => {
         } else {
             setModelForm(prev => ({ ...prev, moderation_level: 'off', moderation_fail_mode: 'open', confirm_official_no_moderation: false }));
         }
+    };
+
+    const applyModelCategory = (category) => {
+        const nextCategory = normalizeModelCategory(category);
+        setModelForm(prev => ({
+            ...prev,
+            model_category: nextCategory,
+            billing_mode: normalizeBillingMode('', nextCategory),
+            allowed_endpoints: defaultAllowedEndpointsForCategory(nextCategory),
+        }));
     };
 
     // Small list badges for moderation levels, matching gemini R23 feedback.
@@ -321,6 +374,32 @@ const ChannelManagement = () => {
             >
                 {meta.txt}
             </span>
+        );
+    };
+
+    const RuntimePolicyCell = ({ model }) => {
+        const category = normalizeModelCategory(model.model_category, model.model_id);
+        const billing = normalizeBillingMode(model.billing_mode, category);
+        const endpointText = String(model.allowed_endpoints || defaultAllowedEndpointsForCategory(category) || '').replace(/[[\]"]/g, '') || '-';
+        const categoryClass = {
+            text: 'bg-primary/10 border-primary/30 text-primary',
+            image: 'bg-success/10 border-success/30 text-success',
+            video: 'bg-warning/10 border-warning/30 text-warning',
+        }[category] || 'bg-surface-variant/10 border-outline-variant/30 text-on-surface-variant';
+        return (
+            <div className="flex flex-col gap-1.5 min-w-[120px]">
+                <div className="flex flex-wrap gap-1">
+                    <span className={`inline-flex items-center px-2 py-0.5 rounded-control border text-[11px] font-medium ${categoryClass}`}>
+                        {categoryLabel(category, t)}
+                    </span>
+                    <span className="inline-flex items-center px-2 py-0.5 rounded-control border border-outline-variant/50 bg-surface-container-high text-[11px] text-on-surface-variant">
+                        {billingModeLabel(billing, t)}
+                    </span>
+                </div>
+                <span className="font-mono text-[10px] text-on-surface-variant truncate max-w-[180px]" title={endpointText}>
+                    {endpointText}
+                </span>
+            </div>
         );
     };
 
@@ -510,6 +589,9 @@ const ChannelManagement = () => {
                 weight: parseInt(modelForm.weight) || 1,
                 status: parseInt(modelForm.status) === 2 ? 2 : 1,
                 max_context_length: parseInt(modelForm.max_context_length) || 0,
+                model_category: normalizeModelCategory(modelForm.model_category, modelForm.model_id),
+                billing_mode: normalizeBillingMode(modelForm.billing_mode, modelForm.model_category),
+                allowed_endpoints: modelForm.allowed_endpoints ?? defaultAllowedEndpointsForCategory(modelForm.model_category),
                 endpoint_policy: modelForm.endpoint_policy || 'all',
                 // fix CRITICAL R23: pass moderation fields through; backend validates enums.
                 moderation_level: modelForm.moderation_level || 'off',
@@ -549,6 +631,9 @@ const ChannelManagement = () => {
         max_context_length: Number(model.max_context_length) || 0,
         weight: Number(model.weight) || 1,
         status: model.status === 2 ? 2 : 1,
+        model_category: normalizeModelCategory(model.model_category, model.model_id),
+        billing_mode: normalizeBillingMode(model.billing_mode, model.model_category),
+        allowed_endpoints: model.allowed_endpoints ?? defaultAllowedEndpointsForCategory(model.model_category),
         endpoint_policy: model.endpoint_policy || 'all',
         moderation_level: model.moderation_level || 'off',
         moderation_fail_mode: model.moderation_fail_mode || 'open',
@@ -558,18 +643,31 @@ const ChannelManagement = () => {
     const handleToggleModelStatus = async (model) => {
         const nextStatus = model.status === 1 ? 2 : 1;
         if (nextStatus === 1) {
-            if (!hasTokenPrice(model)) {
+            const category = normalizeModelCategory(model.model_category, model.model_id);
+            const billingMode = normalizeBillingMode(model.billing_mode, category);
+            if (billingMode === 'token' && !hasTokenPrice(model)) {
                 const ok = await confirm(t(
                     'CHANNEL_MGMT.MODEL.ZERO_PRICE_ENABLE_CONFIRM',
                     '该模型当前价格为 $0。启用后可能免费放量或计费异常，仍要启用吗？'
                 ));
                 if (!ok) return;
-            } else if (looksLikeMediaModel(model.model_id)) {
+            } else if (category === 'image') {
                 const ok = await confirm(t(
-                    'CHANNEL_MGMT.MODEL.MEDIA_ENABLE_CONFIRM',
-                    '该模型看起来是图像/视频模型，当前平台仍按 token 公式计费。确认启用吗？'
+                    'CHANNEL_MGMT.MODEL.IMAGE_ENABLE_CONFIRM',
+                    billingMode === 'token'
+                        ? '该图片模型将只开放 /v1/images/generations，并按上游返回的 token usage 计费。确认启用吗？'
+                        : '该图片模型将只开放 /v1/images/generations，并按官方图片张数矩阵计费。确认启用吗？'
                 ));
                 if (!ok) return;
+            } else if (category === 'video') {
+                const ok = await confirm(t(
+                    'CHANNEL_MGMT.MODEL.VIDEO_ENABLE_CONFIRM',
+                    '该视频模型将只开放 /v1/videos/generations，并按官方输出视频秒数矩阵计费。确认启用吗？'
+                ));
+                if (!ok) return;
+            } else if (looksLikeMediaModel(model.model_id)) {
+                toast.error(t('CHANNEL_MGMT.MODEL.MEDIA_METADATA_MISMATCH', '模型名称像媒体模型，但能力分类不是图片/视频，请先编辑模型能力后再启用。'));
+                return;
             }
         }
         setIsSubmitting(true);
@@ -914,6 +1012,10 @@ const ChannelManagement = () => {
                                         </span>
                                     ) : <span className="text-outline-variant">-</span>
                                 );}},
+                                { key: 'runtime', header: t('CHANNEL_MGMT.MODEL.TABLE.RUNTIME', '能力 / 计费'), width: '12%', render: row => {
+                                    if (row.isProviderGroup || row.isFamilyGroup) return null;
+                                    return <RuntimePolicyCell model={row.model} />;
+                                }},
                                 { key: 'status', header: t('CHANNEL_MGMT.MODEL.TABLE.STATUS'), width: '9%', render: row => {
                                     if (row.isProviderGroup || row.isFamilyGroup) {
                                         return (
@@ -953,6 +1055,25 @@ const ChannelManagement = () => {
                                 { key: 'base_pricing', header: t('CHANNEL_MGMT.MODEL.TABLE.BASE_PRICING'), width: '14%', render: row => {
                                     if (row.isProviderGroup || row.isFamilyGroup) return null;
                                     const m = row.model;
+                                    const category = normalizeModelCategory(m.model_category, m.model_id);
+                                    if (category === 'image') {
+                                        const price = Number(m.min_image_price) || 0;
+                                        return (
+                                            <div className="flex flex-col text-xs font-mono space-y-1 text-on-surface-variant">
+                                                <span>{t('CHANNEL_MGMT.MODEL.IMAGE_OUTPUT', '图片')}: {price > 0 ? `${formatCurrency(price, 4)}/张` : '-'}</span>
+                                                <span className="text-[11px] font-sans text-on-surface-variant">{t('CHANNEL_MGMT.MODEL.IMAGE_MATRIX_NOTE', '官方矩阵')}</span>
+                                            </div>
+                                        );
+                                    }
+                                    if (category === 'video') {
+                                        const price = Number(m.min_video_second_price) || 0;
+                                        return (
+                                            <div className="flex flex-col text-xs font-mono space-y-1 text-on-surface-variant">
+                                                <span>{t('CHANNEL_MGMT.MODEL.VIDEO_OUTPUT', '视频')}: {price > 0 ? `${formatCurrency(price, 4)}/秒` : '-'}</span>
+                                                <span className="text-[11px] font-sans text-warning">{t('CHANNEL_MGMT.MODEL.VIDEO_PRESEEDED', '按秒计费')}</span>
+                                            </div>
+                                        );
+                                    }
                                     // 后端只返回 *_pico_per_token；UI 展示 USD/1M tokens。
                                     const inUsd = picoPerTokenToUsdPerMillion(m.input_price_pico_per_token);
                                     const outUsd = picoPerTokenToUsdPerMillion(m.output_price_pico_per_token);
@@ -1058,6 +1179,62 @@ const ChannelManagement = () => {
                                     <label htmlFor="channel-model-display-name" className="block text-xs font-medium text-on-surface-variant mb-1">{t('CHANNEL_MGMT.MODEL.MODAL.DISPLAY_NAME')}</label>
                                     <input id="channel-model-display-name" type="text" value={modelForm.display_name || ''} onChange={e=>setModelForm({...modelForm, display_name: e.target.value})} className="w-full bg-surface-container-high border border-outline-variant rounded-overlay px-4 py-2.5 text-on-surface" />
                                 </div>
+                                <fieldset className="border border-outline-variant rounded-overlay p-4">
+                                    <legend className="px-2 text-xs font-semibold text-on-surface flex items-center gap-2">
+                                        <Box size={13} className="text-on-surface-variant" />
+                                        {t('CHANNEL_MGMT.RUNTIME.LEGEND', '运行能力与计费单元')}
+                                    </legend>
+                                    <div className="grid grid-cols-1 sm:grid-cols-3 gap-4 mt-2">
+                                        <div>
+                                            <label htmlFor="channel-model-category" className="block text-xs font-medium text-on-surface-variant mb-1">
+                                                {t('CHANNEL_MGMT.RUNTIME.CATEGORY', '能力分类')}
+                                            </label>
+                                            <select
+                                                id="channel-model-category"
+                                                value={normalizeModelCategory(modelForm.model_category, modelForm.model_id)}
+                                                onChange={e => applyModelCategory(e.target.value)}
+                                                className="w-full bg-surface-container-high border border-outline-variant rounded-overlay px-4 py-2.5 text-on-surface"
+                                            >
+                                                <option value="text">{t('CHANNEL_MGMT.RUNTIME.CATEGORY_TEXT', '文本')}</option>
+                                                <option value="image">{t('CHANNEL_MGMT.RUNTIME.CATEGORY_IMAGE', '图片')}</option>
+                                                <option value="video">{t('CHANNEL_MGMT.RUNTIME.CATEGORY_VIDEO', '视频')}</option>
+                                            </select>
+                                        </div>
+                                        <div>
+                                            <label htmlFor="channel-model-billing-mode" className="block text-xs font-medium text-on-surface-variant mb-1">
+                                                {t('CHANNEL_MGMT.RUNTIME.BILLING_MODE', '计费单元')}
+                                            </label>
+                                            <select
+                                                id="channel-model-billing-mode"
+                                                value={normalizeBillingMode(modelForm.billing_mode, modelForm.model_category)}
+                                                onChange={e => setModelForm({...modelForm, billing_mode: e.target.value})}
+                                                className="w-full bg-surface-container-high border border-outline-variant rounded-overlay px-4 py-2.5 text-on-surface"
+                                            >
+                                                <option value="token">{t('CHANNEL_MGMT.RUNTIME.BILLING_TOKEN', '按 token')}</option>
+                                                <option value="image">{t('CHANNEL_MGMT.RUNTIME.BILLING_IMAGE', '按图片')}</option>
+                                                <option value="video_second">{t('CHANNEL_MGMT.RUNTIME.BILLING_VIDEO_SECOND', '按视频秒')}</option>
+                                            </select>
+                                        </div>
+                                        <div>
+                                            <label htmlFor="channel-model-allowed-endpoints" className="block text-xs font-medium text-on-surface-variant mb-1">
+                                                {t('CHANNEL_MGMT.RUNTIME.ALLOWED_ENDPOINTS', '允许端点 JSON')}
+                                            </label>
+                                            <input
+                                                id="channel-model-allowed-endpoints"
+                                                type="text"
+                                                value={modelForm.allowed_endpoints ?? ''}
+                                                onChange={e => setModelForm({...modelForm, allowed_endpoints: e.target.value})}
+                                                placeholder={defaultAllowedEndpointsForCategory(modelForm.model_category) || t('CHANNEL_MGMT.RUNTIME.TEXT_ENDPOINTS_PLACEHOLDER', '空 = 文本默认端点')}
+                                                className="w-full bg-surface-container-high border border-outline-variant rounded-overlay px-4 py-2.5 text-on-surface font-mono text-xs"
+                                            />
+                                        </div>
+                                    </div>
+                                    {normalizeModelCategory(modelForm.model_category, modelForm.model_id) !== 'text' && (
+                                        <p className="mt-3 text-[11px] leading-relaxed text-on-surface-variant">
+                                            {t('CHANNEL_MGMT.RUNTIME.MEDIA_HINT', '媒体模型价格来自默认官方计费矩阵；当前只支持 xAI 文本生成图片，视频和 token 计费图片模型会被后端拒绝启用。')}
+                                        </p>
+                                    )}
+                                </fieldset>
                                 <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
                                     <div>
                                         <label htmlFor="channel-model-max-context" className="block text-xs font-medium text-on-surface-variant mb-1">{t('CHANNEL_MGMT.MODEL.MODAL.MAX_CONTEXT_LENGTH')} <span className="ml-1 text-on-surface-variant/70">(Tokens)</span></label>
@@ -1085,6 +1262,7 @@ const ChannelManagement = () => {
                                         </select>
                                     </div>
                                 </div>
+                                {normalizeBillingMode(modelForm.billing_mode, modelForm.model_category) === 'token' ? (
                                 <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
                                     <div>
                                         <label htmlFor="channel-model-input-price" className="block text-xs font-medium text-on-surface-variant mb-1">
@@ -1122,6 +1300,14 @@ const ChannelManagement = () => {
                                         <input id="channel-model-cache-write-1h-price" type="number" step="0.000001" min="0" value={modelForm.cache_write_1h_input_price} onChange={e=>setModelForm({...modelForm, cache_write_1h_input_price: e.target.value})} className="w-full bg-surface border border-warning/30 rounded-control px-3 py-2 text-on-surface" />
                                     </div>
                                 </div>
+                                ) : (
+                                    <div className="p-4 bg-surface-container-high border border-outline-variant rounded-overlay text-xs text-on-surface-variant leading-relaxed">
+                                        {normalizeModelCategory(modelForm.model_category, modelForm.model_id) === 'image'
+                                            ? t('CHANNEL_MGMT.RUNTIME.IMAGE_PRICING_HINT', '固定图片单价模型按 model_pricing_rules 的官方图片价格矩阵扣费；token 计费图片模型在渠道绑定里配置 token 单价，并只允许 /v1/images/generations。')
+                                            : t('CHANNEL_MGMT.RUNTIME.VIDEO_PRICING_HINT', '视频模型不在渠道绑定里手填 token 单价。启用后按 model_pricing_rules 的官方输出视频秒数矩阵扣费，并只允许 /v1/videos/generations。')}
+                                    </div>
+                                )}
+                                {normalizeBillingMode(modelForm.billing_mode, modelForm.model_category) === 'token' && (
                                 <div className="p-4 bg-warning/5 border border-warning/20 rounded-overlay space-y-4">
                                     <div>
                                         <label htmlFor="channel-model-threshold" className="block text-xs font-medium text-on-surface-variant mb-1">{t('CHANNEL_MGMT.MODEL.MODAL.THRESHOLD')}</label>
@@ -1158,6 +1344,7 @@ const ChannelManagement = () => {
                                         </div>
                                     )}
                                 </div>
+                                )}
 
                                 <fieldset className="border border-outline-variant rounded-overlay p-4 mt-2">
                                     <legend className="px-2 text-xs font-semibold text-on-surface flex items-center gap-2">
@@ -1202,7 +1389,7 @@ const ChannelManagement = () => {
                                                 <option value="off">{t('CHANNEL_MGMT.MOD.LEVEL_OFF', 'OFF — 不审核')}</option>
                                                 <option value="keyword">{t('CHANNEL_MGMT.MOD.LEVEL_KEYWORD', 'KW — 仅关键字快扫')}</option>
                                                 <option value="moderation">{t('CHANNEL_MGMT.MOD.LEVEL_MODERATION', 'MOD — 仅智能审核服务')}</option>
-                                                <option value="strict">{t('CHANNEL_MGMT.MOD.LEVEL_STRICT', 'STRICT — 关键字 + 智能审核双层（推荐官方高风险模型）')}</option>
+                                                <option value="strict">{t('CHANNEL_MGMT.MOD.LEVEL_STRICT', 'STRICT — 关键词预警 + 智能二审（高风险模型）')}</option>
                                             </select>
                                         </div>
                                         <div>

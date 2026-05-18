@@ -243,6 +243,14 @@ func resolveBonusConfig() (signupMicro, referrerMicro, refereeMicro int64) {
 		readMicroUSDConfig("referee_bonus", 0)
 }
 
+func readReferralPaidSpendRewardConfig() (int64, int64) {
+	bps := database.NormalizeReferralRewardBPS(readInt64Config(database.ReferralPaidSpendRewardBPSConfigKey, 0))
+	windowSeconds := database.NormalizeReferralRewardWindowSeconds(
+		readInt64Config(database.ReferralPaidSpendRewardWindowSecondsConfigKey, database.DefaultReferralPaidSpendRewardWindowSeconds),
+	)
+	return bps, windowSeconds
+}
+
 // fix MEDIUM（codex money-unit）：统一所有金额 SysConfig 读路径走 readMicroUSDConfig，
 // 与 signup_bonus/referrer_bonus/referee_bonus 一致。readMicroUSDConfig 内部包含非负 +
 // 有限数校验，旧 readInt64Config 没有"micro_usd 语义"标注容易让维护者误以为是普通整数。
@@ -353,9 +361,6 @@ func applyReferralBonuses(c *fiber.Ctx, newUserID uint, newUsername, refUsername
 	if refUsername == "" || refUsername == newUsername {
 		return
 	}
-	if referrerBonusMicro <= 0 && refereeBonusMicro <= 0 {
-		return
-	}
 	var referrer database.User
 	if err := database.DB.Where("username = ? AND role = ? AND status = 1", refUsername, "user").First(&referrer).Error; err != nil {
 		return // 推荐人不存在或被封禁
@@ -365,6 +370,15 @@ func applyReferralBonuses(c *fiber.Ctx, newUserID uint, newUsername, refUsername
 	}
 
 	txErr := database.DB.Transaction(func(tx *gorm.DB) error {
+		referredAt := time.Now()
+		if err := tx.Model(&database.User{}).
+			Where("id = ? AND referred_by_user_id = 0", newUserID).
+			Updates(map[string]any{
+				"referred_by_user_id": referrer.ID,
+				"referred_at":         referredAt,
+			}).Error; err != nil {
+			return fmt.Errorf("persist referral relation: %w", err)
+		}
 		if referrerBonusMicro > 0 {
 			if err := tx.Model(&database.User{}).Where("id = ?", referrer.ID).
 				UpdateColumn("quota", gorm.Expr("quota + ?", referrerBonusMicro)).Error; err != nil {
@@ -435,9 +449,7 @@ func applyReferralBonuses(c *fiber.Ctx, newUserID uint, newUsername, refUsername
 	if referrerBonusMicro > 0 {
 		proxy.RefreshUserAuth(referrer.ID)
 	}
-	if refereeBonusMicro > 0 {
-		proxy.RefreshUserAuth(newUserID)
-	}
+	proxy.RefreshUserAuth(newUserID)
 }
 
 // SmsBindRequest 承接需要补充实名的短信验证码
@@ -747,6 +759,7 @@ func GetPublicConfig(c *fiber.Ctx) error {
 	rateStr := proxy.SysConfigCache["exchange_rate_rmb_per_usd_micros"]
 	proxy.SysConfigMutex.RUnlock()
 	signupBonus, referrerBonus, refereeBonus := resolveBonusConfig()
+	paidSpendRewardBPS, paidSpendRewardWindowSeconds := readReferralPaidSpendRewardConfig()
 
 	return c.JSON(fiber.Map{
 		"success":                          true,
@@ -757,6 +770,8 @@ func GetPublicConfig(c *fiber.Ctx) error {
 			"signup_bonus_micro_usd":   fmt.Sprintf("%d", signupBonus),
 			"referrer_bonus_micro_usd": fmt.Sprintf("%d", referrerBonus),
 			"referee_bonus_micro_usd":  fmt.Sprintf("%d", refereeBonus),
+			"paid_spend_reward_bps":    fmt.Sprintf("%d", paidSpendRewardBPS),
+			"reward_window_seconds":    fmt.Sprintf("%d", paidSpendRewardWindowSeconds),
 		},
 	})
 }

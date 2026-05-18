@@ -333,3 +333,35 @@ func TestAddChannelModelsBatch_DuplicateConflict(t *testing.T) {
 		t.Fatalf("channel model count=%d want 2", count)
 	}
 }
+
+func TestAddChannelModelsBatch_DefaultsGPTTextModelsToSmartModeration(t *testing.T) {
+	app := initializeMegaTestDB()
+	if err := database.DB.Create(&database.Channel{ID: 23, Name: "cliproxy", Key: "x", Type: "cliproxy", Status: 1}).Error; err != nil {
+		t.Fatalf("seed channel: %v", err)
+	}
+
+	resp := sendRequest(app, http.MethodPost, "/api/admin/channels/23/batch_models", map[string]any{
+		"models": []string{"gpt-5.5", "gpt-image-2", "claude-sonnet-4-6"},
+	}, "")
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("status=%d want %d", resp.StatusCode, http.StatusOK)
+	}
+
+	var rows []database.ChannelModel
+	if err := database.DB.Where("channel_id = ?", 23).Order("model_id").Find(&rows).Error; err != nil {
+		t.Fatalf("read models: %v", err)
+	}
+	got := map[string]database.ChannelModel{}
+	for _, row := range rows {
+		got[row.ModelID] = row
+	}
+	if got["gpt-5.5"].ModerationLevel != "moderation" || got["gpt-5.5"].ModerationFailMode != "closed" {
+		t.Fatalf("gpt-5.5 moderation=%s/%s want moderation/closed", got["gpt-5.5"].ModerationLevel, got["gpt-5.5"].ModerationFailMode)
+	}
+	if got["gpt-image-2"].ModerationLevel != "off" || got["gpt-image-2"].ModerationFailMode != "open" {
+		t.Fatalf("gpt-image-2 moderation=%s/%s want off/open", got["gpt-image-2"].ModerationLevel, got["gpt-image-2"].ModerationFailMode)
+	}
+	if got["claude-sonnet-4-6"].ModerationLevel != "off" || got["claude-sonnet-4-6"].ModerationFailMode != "open" {
+		t.Fatalf("claude moderation=%s/%s want off/open", got["claude-sonnet-4-6"].ModerationLevel, got["claude-sonnet-4-6"].ModerationFailMode)
+	}
+}

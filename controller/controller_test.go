@@ -29,7 +29,8 @@ func initializeMegaTestDB() *fiber.App {
 	}
 	database.DB.AutoMigrate(
 		&database.User{}, &database.Channel{}, &database.ChannelModel{},
-		&database.ApiLog{}, &database.AccessToken{}, &database.SysConfig{},
+		&database.ModelCatalog{}, &database.ModelPricingRule{},
+		&database.ApiLog{}, &database.ApiLogUsageLine{}, &database.AccessToken{}, &database.SysConfig{},
 		&database.OperationLog{},
 		// purgeUserDependents 也清这些表，需要建 schema 否则 DeleteUser 测试 500
 		&database.Notification{},
@@ -46,6 +47,7 @@ func initializeMegaTestDB() *fiber.App {
 	database.DB.Exec("DELETE FROM channels")
 	database.DB.Exec("DELETE FROM channel_models")
 	database.DB.Exec("DELETE FROM api_logs")
+	database.DB.Exec("DELETE FROM api_log_usage_lines")
 	database.DB.Exec("DELETE FROM access_tokens")
 	database.DB.Exec("DELETE FROM sys_configs")
 	database.DB.Exec("DELETE FROM operation_logs")
@@ -361,6 +363,195 @@ func TestGetPublicPricingScansCacheWrite1hAndIgnoresZeroPrices(t *testing.T) {
 	if row.MinInputPrice != 5 || row.MinCachePrice != 0.5 || row.MinCacheWritePrice != 6.25 || row.MinCacheWrite1hPrice != 10 {
 		t.Fatalf("unexpected pricing row: %#v", row)
 	}
+}
+
+func TestGetPublicPricingIncludesImageBillingMode(t *testing.T) {
+	app := initializeMegaTestDB()
+	if err := database.DB.Create(&database.Channel{ID: 31, Name: "xai", Key: "x", Type: "cliproxy", Status: 1}).Error; err != nil {
+		t.Fatalf("seed channel: %v", err)
+	}
+	if err := database.DB.Create(&database.ChannelModel{
+		ChannelID:        31,
+		ModelID:          "grok-imagine-image",
+		ModelCategory:    database.ModelCategoryImage,
+		BillingMode:      database.BillingModeImage,
+		AllowedEndpoints: database.DefaultAllowedEndpointsForCategory(database.ModelCategoryImage),
+		Status:           1,
+	}).Error; err != nil {
+		t.Fatalf("seed image model: %v", err)
+	}
+	if err := database.DB.Create(&database.ModelPricingRule{
+		RuleKey:         "test|grok-imagine-image|image|output|1K",
+		PricingVersion:  "test",
+		ProviderKey:     "xai",
+		ModelID:         "grok-imagine-image",
+		OfficialModelID: "grok-imagine-image",
+		BillingMode:     database.BillingModeImage,
+		Unit:            "image",
+		Direction:       "output",
+		Resolution:      "1K",
+		PriceMicroUSD:   20_000,
+	}).Error; err != nil {
+		t.Fatalf("seed image price: %v", err)
+	}
+
+	resp := sendRequest(app, "GET", "/api/public/pricing", nil, "")
+	if resp.StatusCode != 200 {
+		t.Fatalf("expected 200, got %d", resp.StatusCode)
+	}
+	var payload struct {
+		Success bool `json:"success"`
+		Data    []struct {
+			ModelID       string  `json:"model_id"`
+			ModelCategory string  `json:"model_category"`
+			BillingMode   string  `json:"billing_mode"`
+			MinImagePrice float64 `json:"min_image_price"`
+		} `json:"data"`
+	}
+	if err := json.NewDecoder(resp.Body).Decode(&payload); err != nil {
+		t.Fatalf("decode pricing response: %v", err)
+	}
+	for _, row := range payload.Data {
+		if row.ModelID == "grok-imagine-image" {
+			if row.ModelCategory != database.ModelCategoryImage || row.BillingMode != database.BillingModeImage || row.MinImagePrice != 0.02 {
+				t.Fatalf("unexpected image pricing row: %#v", row)
+			}
+			return
+		}
+	}
+	t.Fatalf("grok-imagine-image missing from public pricing: %#v", payload.Data)
+}
+
+func TestGetPublicPricingIncludesTokenBilledImagePrices(t *testing.T) {
+	app := initializeMegaTestDB()
+	if err := database.DB.Create(&database.Channel{ID: 32, Name: "openai-image", Key: "x", Type: "cliproxy", Status: 1}).Error; err != nil {
+		t.Fatalf("seed channel: %v", err)
+	}
+	if err := database.DB.Create(&database.ChannelModel{
+		ChannelID:                        32,
+		ModelID:                          "gpt-image-2",
+		ModelCategory:                    database.ModelCategoryImage,
+		BillingMode:                      database.BillingModeToken,
+		AllowedEndpoints:                 database.DefaultAllowedEndpointsForCategory(database.ModelCategoryImage),
+		InputPricePicoPerToken:           5 * database.PicoPerTokenPerUSDPerMTok,
+		OutputPricePicoPerToken:          30 * database.PicoPerTokenPerUSDPerMTok,
+		CachedInputPricePicoPerToken:     5 * database.PicoPerTokenPerUSDPerMTok / 4,
+		CacheWriteInputPricePicoPerToken: 5 * database.PicoPerTokenPerUSDPerMTok,
+		Status:                           1,
+	}).Error; err != nil {
+		t.Fatalf("seed token image model: %v", err)
+	}
+
+	resp := sendRequest(app, "GET", "/api/public/pricing", nil, "")
+	if resp.StatusCode != 200 {
+		t.Fatalf("expected 200, got %d", resp.StatusCode)
+	}
+	var payload struct {
+		Success bool `json:"success"`
+		Data    []struct {
+			ModelID        string  `json:"model_id"`
+			ModelCategory  string  `json:"model_category"`
+			BillingMode    string  `json:"billing_mode"`
+			MinInputPrice  float64 `json:"min_input_price"`
+			MinOutputPrice float64 `json:"min_output_price"`
+			MinCachePrice  float64 `json:"min_cache_price"`
+			MinImagePrice  float64 `json:"min_image_price"`
+		} `json:"data"`
+	}
+	if err := json.NewDecoder(resp.Body).Decode(&payload); err != nil {
+		t.Fatalf("decode pricing response: %v", err)
+	}
+	for _, row := range payload.Data {
+		if row.ModelID == "gpt-image-2" {
+			if row.ModelCategory != database.ModelCategoryImage ||
+				row.BillingMode != database.BillingModeToken ||
+				row.MinInputPrice != 5 ||
+				row.MinOutputPrice != 30 ||
+				row.MinCachePrice != 1.25 ||
+				row.MinImagePrice != 0 {
+				t.Fatalf("unexpected token image pricing row: %#v", row)
+			}
+			return
+		}
+	}
+	t.Fatalf("gpt-image-2 missing from public pricing: %#v", payload.Data)
+}
+
+func TestGetLogsIncludesImageUsageLines(t *testing.T) {
+	app := initializeMegaTestDB()
+	logRow := database.ApiLog{
+		UserID:      2,
+		TokenName:   "test-token",
+		ModelName:   "grok-imagine-image",
+		Cost:        40_000,
+		ChargedCost: 40_000,
+		Status:      200,
+		RequestPath: database.EndpointImagesGenerations,
+		CreatedAt:   time.Now(),
+	}
+	if err := database.DB.Create(&logRow).Error; err != nil {
+		t.Fatalf("seed image api log: %v", err)
+	}
+	if err := database.DB.Create(&database.ApiLogUsageLine{
+		ApiLogID:       logRow.ID,
+		ModelName:      "grok-imagine-image",
+		RequestPath:    database.EndpointImagesGenerations,
+		Unit:           "image",
+		Direction:      "output",
+		Quantity:       2,
+		UnitPriceMicro: 20_000,
+		AmountMicroUSD: 40_000,
+		Resolution:     "1K",
+		AspectRatio:    "1:1",
+		CostSource:     "official_matrix",
+		MetadataJSON:   `{"billed_quantity":2,"response_images":2}`,
+		CreatedAt:      time.Now(),
+	}).Error; err != nil {
+		t.Fatalf("seed usage line: %v", err)
+	}
+
+	resp := sendRequest(app, "GET", "/api/logs?limit=10", nil, "sk-user-111")
+	if resp.StatusCode != 200 {
+		t.Fatalf("expected 200, got %d", resp.StatusCode)
+	}
+	var payload struct {
+		Success bool `json:"success"`
+		Data    struct {
+			Logs []struct {
+				ID         uint `json:"id"`
+				UsageLines []struct {
+					Unit       string         `json:"unit"`
+					Direction  string         `json:"direction"`
+					Quantity   int64          `json:"quantity"`
+					UnitPrice  float64        `json:"unit_price"`
+					Amount     float64        `json:"amount"`
+					Resolution string         `json:"resolution"`
+					CostSource string         `json:"cost_source"`
+					Metadata   map[string]any `json:"metadata"`
+				} `json:"usage_lines"`
+			} `json:"logs"`
+		} `json:"data"`
+	}
+	if err := json.NewDecoder(resp.Body).Decode(&payload); err != nil {
+		t.Fatalf("decode logs: %v", err)
+	}
+	for _, row := range payload.Data.Logs {
+		if row.ID != logRow.ID {
+			continue
+		}
+		if len(row.UsageLines) != 1 {
+			t.Fatalf("usage lines len=%d want 1: %#v", len(row.UsageLines), row)
+		}
+		line := row.UsageLines[0]
+		if line.Unit != "image" || line.Direction != "output" || line.Quantity != 2 || line.UnitPrice != 0.02 || line.Amount != 0.04 || line.Resolution != "1K" || line.CostSource != "official_matrix" {
+			t.Fatalf("unexpected usage line: %#v", line)
+		}
+		if line.Metadata["billed_quantity"] != float64(2) {
+			t.Fatalf("metadata missing billed quantity: %#v", line.Metadata)
+		}
+		return
+	}
+	t.Fatalf("image log missing from /api/logs payload: %#v", payload.Data.Logs)
 }
 
 // ----------------------

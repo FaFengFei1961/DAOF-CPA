@@ -9,7 +9,7 @@ import (
 // Revenue source enums for ApiLogRevenue.RevenueSource.
 // 与 docs/coding-conventions.md §1 一致：审计型 side table，INSERT-only。
 const (
-	RevenueSourceSubscription = "subscription" // 命中订阅，effective = chargedCost
+	RevenueSourceSubscription = "subscription" // 命中订阅，付费 effective = chargedCost；赠送订阅 effective = 0
 	RevenueSourceBalance      = "balance"      // 走余额扣费，effective = rawCost
 )
 
@@ -20,7 +20,7 @@ const (
 //   - 顺 ApiLogAttribution / ApiLogCostEstimate 范式：一个 ApiLog 最多一条 revenue 行
 //
 // 报表口径：
-//   - revenue_source = subscription → effective_revenue_micro_usd = ApiLog.ChargedCost
+//   - revenue_source = subscription → 付费订阅 effective_revenue_micro_usd = ApiLog.ChargedCost；管理员赠送订阅 = 0
 //   - revenue_source = balance      → effective_revenue_micro_usd = ApiLog.Cost (= rawCost)
 //
 // 余额不足挂 pending_reconcile 的请求**不写**这张表（没真实收到钱）。

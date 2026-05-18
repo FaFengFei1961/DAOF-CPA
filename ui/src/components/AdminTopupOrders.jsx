@@ -1,6 +1,6 @@
 import React, { useState, useEffect, useCallback, useRef } from 'react';
 import { useTranslation } from 'react-i18next';
-import { Receipt, RefreshCw, RotateCcw, ExternalLink, AlertCircle, X } from 'lucide-react';
+import { Receipt, RefreshCw, RotateCcw, ExternalLink, AlertCircle, X, CheckCircle2 } from 'lucide-react';
 import toast from 'react-hot-toast';
 import { authFetch } from '../utils/authFetch';
 import { useModalA11y } from '../hooks/useModalA11y';
@@ -13,6 +13,7 @@ const AdminTopupOrders = () => {
   const [loading, setLoading] = useState(true);
   const [statusFilter, setStatusFilter] = useState('');
   const [refundingId, setRefundingId] = useState(null);
+  const [markingPaidId, setMarkingPaidId] = useState(null);
   // fix Major Codex UX review round 25: pagination state is required so admins can see beyond 100 orders.
   const [page, setPage] = useState(1);
   const [pageSize, setPageSize] = useState(20);
@@ -38,6 +39,21 @@ const AdminTopupOrders = () => {
   const refundModalRef = useRef(null); // C5 round 20: focus trap scope.
   const initialFocusRef = refundModal.step === 1 ? refundCheckboxRef : refundAmountRef;
   const { onBackdropClick: onRefundBackdropClick } = useModalA11y(refundModal.open, closeRefundModal, initialFocusRef, refundModalRef);
+
+  // Manual paid workflow: admin confirms the payment in Yifut first, then marks the local order paid.
+  const [markPaidModal, setMarkPaidModal] = useState({
+    open: false,
+    order: null,
+    confirmedExternal: false,
+    externalRef: '',
+    reason: '',
+  });
+  const closeMarkPaidModal = () => setMarkPaidModal({
+    open: false, order: null, confirmedExternal: false, externalRef: '', reason: '',
+  });
+  const markPaidModalRef = useRef(null);
+  const markPaidRefInputRef = useRef(null);
+  const { onBackdropClick: onMarkPaidBackdropClick } = useModalA11y(markPaidModal.open, closeMarkPaidModal, markPaidRefInputRef, markPaidModalRef);
 
   const load = useCallback(async () => {
     setLoading(true);
@@ -117,6 +133,47 @@ const AdminTopupOrders = () => {
     }
   };
 
+  const openMarkPaidModal = (order) => {
+    setMarkPaidModal({
+      open: true,
+      order,
+      confirmedExternal: false,
+      externalRef: '',
+      reason: '',
+    });
+  };
+
+  const submitMarkPaid = async () => {
+    const { order, externalRef, reason, confirmedExternal } = markPaidModal;
+    if (!order || !confirmedExternal) return;
+    const cleanedRef = externalRef.trim();
+    if (!cleanedRef) {
+      toast.error(t('PAY_ADMIN.MANUAL_PAID_REF_REQUIRED', '请填入支付通道后台的付款凭证号'));
+      return;
+    }
+    setMarkingPaidId(order.id);
+    try {
+      const json = await authFetch(`/api/admin/topup/orders/${order.id}/mark-paid`, {
+        method: 'POST',
+        body: {
+          external_trade_ref: cleanedRef,
+          reason: reason.trim(),
+        },
+      });
+      if (json.success) {
+        toast.success(t('PAY_ADMIN.MANUAL_PAID_OK', '已补登到账'));
+        closeMarkPaidModal();
+        load();
+      } else {
+        toast.error(json.message || (json.message_code ? t('API.' + json.message_code) : '') || t('PAY_ADMIN.MANUAL_PAID_FAIL', '补登到账失败'));
+      }
+    } catch {
+      toast.error(t('PAY_ADMIN.MANUAL_PAID_FAIL', '补登到账失败'));
+    } finally {
+      setMarkingPaidId(null);
+    }
+  };
+
   return (
     <div className="space-y-4">
       <header className="flex items-center justify-between">
@@ -193,6 +250,17 @@ const AdminTopupOrders = () => {
                       {o.out_trade_no}
                     </td>
                     <td className="px-3 py-2 text-right">
+                      {o.status === 'created' && (
+                        <button
+                          type="button"
+                          disabled={markingPaidId === o.id}
+                          onClick={() => openMarkPaidModal(o)}
+                          className="mr-3 text-xs text-success hover:text-success inline-flex items-center gap-1 disabled:opacity-50"
+                        >
+                          <CheckCircle2 size={12} />
+                          {markingPaidId === o.id ? '...' : t('PAY_ADMIN.MANUAL_PAID_BTN', '确认到账')}
+                        </button>
+                      )}
                       {o.status === 'paid' && (
                         <button
                           type="button"
@@ -379,6 +447,82 @@ const AdminTopupOrders = () => {
                   </div>
                 </>
               )}
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Manual paid modal: verify in Yifut first, then mark created order as paid locally. */}
+      {markPaidModal.open && markPaidModal.order && (
+        <div
+          ref={markPaidModalRef}
+          role="dialog"
+          aria-modal="true"
+          aria-labelledby="mark-paid-modal-title"
+          onClick={onMarkPaidBackdropClick}
+          className="fixed inset-0 z-[60] flex items-center justify-center p-4 bg-black/70 backdrop-blur-md"
+        >
+          <div className="bg-surface w-full max-w-md rounded-overlay shadow-2xl shadow-black/40 overflow-hidden">
+            <div className="flex items-center justify-between px-5 py-4 border-b border-outline-variant/40">
+              <h2 id="mark-paid-modal-title" className="text-base font-semibold text-on-surface">
+                {t('PAY_ADMIN.MANUAL_PAID_TITLE', '手动确认到账')} · #{markPaidModal.order.id}
+              </h2>
+              <button onClick={closeMarkPaidModal} className="p-1.5 rounded-control hover:bg-on-surface/[0.04]" aria-label={t('COMMON.CLOSE', '关闭')}>
+                <X className="w-4 h-4" />
+              </button>
+            </div>
+            <div className="p-5 space-y-4">
+              <div className="rounded-control bg-success/10 border border-success/30 p-3 text-sm text-success leading-relaxed">
+                {t('PAY_ADMIN.MANUAL_PAID_HINT', '仅在你已经登录支付通道后台，确认这笔订单真实付款成功但回调未到账时使用。补登后会同时增加用户余额和自充余额。')}
+              </div>
+              <div className="text-sm space-y-1.5 text-on-surface/80">
+                <div>{t('PAY_ADMIN.REFUND_ORDER_NO', '订单号')}: <code className="px-1 bg-on-surface/[0.06] rounded-control">{markPaidModal.order.out_trade_no}</code></div>
+                <div>{t('PAY_ADMIN.REFUND_ORDER_AMOUNT', '订单金额')}: ¥{markPaidModal.order.money_rmb.toFixed(2)} / ${markPaidModal.order.amount_usd.toFixed(2)}</div>
+              </div>
+              <label className="flex items-start gap-2 text-sm cursor-pointer">
+                <input
+                  type="checkbox"
+                  checked={markPaidModal.confirmedExternal}
+                  onChange={(e) => setMarkPaidModal(prev => ({ ...prev, confirmedExternal: e.target.checked }))}
+                  className="mt-0.5"
+                />
+                <span>{t('PAY_ADMIN.MANUAL_PAID_CONFIRM', '我已在支付通道后台确认这笔订单已真实付款')}</span>
+              </label>
+              <label className="block">
+                <span className="text-xs font-medium text-on-surface/80">{t('PAY_ADMIN.MANUAL_PAID_REF_LABEL', '支付通道付款凭证号')}</span>
+                <input
+                  ref={markPaidRefInputRef}
+                  type="text"
+                  maxLength={64}
+                  placeholder={t('PAY_ADMIN.MANUAL_PAID_REF_PLACEHOLDER', '易付通订单号 / 支付宝或微信流水号')}
+                  value={markPaidModal.externalRef}
+                  onChange={(e) => setMarkPaidModal(prev => ({ ...prev, externalRef: e.target.value }))}
+                  className="mt-1 w-full px-3 py-2 rounded-control border border-outline-variant bg-surface text-sm font-mono"
+                />
+              </label>
+              <label className="block">
+                <span className="text-xs font-medium text-on-surface/80">{t('PAY_ADMIN.MANUAL_PAID_REASON_LABEL', '备注')}</span>
+                <input
+                  type="text"
+                  maxLength={500}
+                  placeholder={t('PAY_ADMIN.MANUAL_PAID_REASON_PLACEHOLDER', '例如：回调未送达，后台核验已支付')}
+                  value={markPaidModal.reason}
+                  onChange={(e) => setMarkPaidModal(prev => ({ ...prev, reason: e.target.value }))}
+                  className="mt-1 w-full px-3 py-2 rounded-control border border-outline-variant bg-surface text-sm"
+                />
+              </label>
+              <div className="flex gap-2 justify-end pt-2">
+                <button onClick={closeMarkPaidModal} className="px-4 py-2 rounded-control border border-outline-variant text-sm hover:bg-on-surface/[0.04]">
+                  {t('CONFIRM.CANCEL', '取消')}
+                </button>
+                <button
+                  disabled={markingPaidId === markPaidModal.order.id || !markPaidModal.confirmedExternal || !markPaidModal.externalRef.trim()}
+                  onClick={submitMarkPaid}
+                  className="px-4 py-2 rounded-control bg-primary text-white text-sm hover:opacity-90 disabled:opacity-40"
+                >
+                  {markingPaidId === markPaidModal.order.id ? '...' : t('PAY_ADMIN.MANUAL_PAID_SUBMIT', '确认补登')}
+                </button>
+              </div>
             </div>
           </div>
         </div>

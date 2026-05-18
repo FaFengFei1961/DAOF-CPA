@@ -27,6 +27,19 @@ const formatMicroUSD = (microValue) => {
     }).format(micro / MICRO_PER_USD);
 };
 
+const formatBpsPercent = (bpsValue) => {
+    const bps = Number.parseInt(bpsValue || '0', 10);
+    if (!Number.isFinite(bps) || bps <= 0) return '0%';
+    const pct = bps / 100;
+    return `${Number.isInteger(pct) ? pct.toFixed(0) : pct.toFixed(2).replace(/0+$/, '').replace(/\.$/, '')}%`;
+};
+
+const formatWindowDays = (secondsValue) => {
+    const seconds = Number.parseInt(secondsValue || '0', 10);
+    if (!Number.isFinite(seconds) || seconds <= 0) return 0;
+    return Math.max(1, Math.round(seconds / 86400));
+};
+
 const AccountProfile = () => {
     const confirm = useConfirm();
     const { t } = useTranslation();
@@ -115,6 +128,7 @@ const AccountProfile = () => {
     if (loading) return <div className="text-on-surface-variant p-8 text-center ">{t('ACCOUNT.LOADING')}</div>;
     if (!profile) return <div className="bg-error/10 border border-error/30 text-error p-6 rounded-overlay text-center">{t('ACCOUNT.LOAD_FAILED')}</div>;
     const referralIncentives = publicConfig?.referral_incentives || {};
+    const referralRewardWindowDays = formatWindowDays(referralIncentives.reward_window_seconds);
     const referralBaseUrl = String(publicConfig?.server_address || window.location.origin).trim().replace(/\/+$/, '') || window.location.origin;
     const referralUrl = `${referralBaseUrl}/?ref=${encodeURIComponent(profile.username)}`;
 
@@ -165,7 +179,7 @@ const AccountProfile = () => {
                                 </p>
                             </div>
                         </div>
-                        <div className="grid grid-cols-1 md:grid-cols-2 gap-2 mb-3">
+                        <div className="grid grid-cols-1 md:grid-cols-3 gap-2 mb-3">
                             <div className="rounded-control border border-outline-variant/60 bg-black/20 px-3 py-2 flex items-center justify-between gap-3">
                                 <div className="min-w-0">
                                     <div className="text-xs text-on-surface-variant">{t('ACCOUNT.REFERRER_REWARD_LABEL', '你获得')}</div>
@@ -184,6 +198,20 @@ const AccountProfile = () => {
                                 </div>
                                 <div className="text-sm font-semibold font-mono text-primary shrink-0">
                                     {formatMicroUSD(referralIncentives.referee_bonus_micro_usd)}
+                                </div>
+                            </div>
+                            <div className="rounded-control border border-outline-variant/60 bg-black/20 px-3 py-2 flex items-center justify-between gap-3">
+                                <div className="min-w-0">
+                                    <div className="text-xs text-on-surface-variant">{t('ACCOUNT.REFERRAL_SPEND_REWARD_LABEL', '好友消费返佣')}</div>
+                                    <div className="text-[11px] text-outline mt-0.5 truncate">
+                                        {t('ACCOUNT.REFERRAL_SPEND_REWARD_HINT', {
+                                            days: referralRewardWindowDays,
+                                            defaultValue: '注册后 {{days}} 天内的自充消费',
+                                        })}
+                                    </div>
+                                </div>
+                                <div className="text-sm font-semibold font-mono text-primary shrink-0">
+                                    {formatBpsPercent(referralIncentives.paid_spend_reward_bps)}
                                 </div>
                             </div>
                         </div>

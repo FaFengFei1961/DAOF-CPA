@@ -114,34 +114,68 @@ func (g *ModerationGate) Run() (bool, error) {
 		return g.rejectImagePolicy(cfg, len(review.ImageURLs))
 	}
 
-	// 5. 关键字快扫（毫秒级；strict 和 keyword 级别都过）
+	// 5. 关键字快扫（毫秒级）。
+	//
+	// keyword 档：命中后直接拦截，适合少量高置信词条。
+	// strict 档：关键字/规则只作为风险信号，最终交给智能审核二判，减少正常安全研究、
+	// API key 配置咨询等场景被词库误杀。
 	imageURLs := []string(nil)
 	if len(review.ImageURLs) > 0 && cfg.ImagePolicy == "submit" {
 		imageURLs = review.ImageURLs
 	}
-	reviewedByRiskRule := false
-	var riskReviewResult ModerationResult
+	needsSmartReviewFromSignal := false
+	smartReviewRan := false
+	var smartReviewResult ModerationResult
+	runSmartReviewOnce := func() (ModerationResult, bool, error) {
+		if smartReviewRan {
+			return smartReviewResult, false, nil
+		}
+		result, rejected, err := g.runSmartModeration(primaryReview.Text, imageURLs, cfg)
+		if rejected || err != nil {
+			return result, rejected, err
+		}
+		smartReviewRan = true
+		smartReviewResult = result
+		return result, false, nil
+	}
+	applySmartReview := func() (bool, error) {
+		result, rejected, err := runSmartReviewOnce()
+		if rejected || err != nil {
+			return rejected, err
+		}
+		if result.Flagged {
+			if shouldAllowCodingAgentWorkflowPromptInjection(primaryReview.Text, result) {
+				g.audit("MODERATION_POLICY_ALLOW_CODING_AGENT_WORKFLOW", "policy_allow", "prompt_injection_coding_agent_workflow", result.HighestScore, g.policyAllowDetails(result, "coding_agent_workflow"))
+				return false, nil
+			}
+			return g.rejectPolicy(result, cfg)
+		}
+		return false, nil
+	}
 	if g.Policy.NeedsKeyword() && primaryReview.Text != "" {
 		if kw := MatchKeyword(primaryReview.Text); kw != "" {
-			return g.rejectKeyword(kw, cfg)
+			if g.Policy.NeedsModeration() {
+				needsSmartReviewFromSignal = true
+				g.auditKeywordSignal(kw, "keyword_model_review")
+			} else {
+				return g.rejectKeyword(kw, cfg)
+			}
 		}
 		riskResult := EvaluateModerationRiskRules(primaryReview.Text)
 		if riskResult.HasMatches() {
 			if riskResult.ShouldBlock() {
-				return g.rejectRiskRule(riskResult, cfg)
+				if g.Policy.NeedsModeration() {
+					needsSmartReviewFromSignal = true
+					g.auditRiskScoreForSource(riskResult, "block_model_review", "user_message")
+				} else {
+					return g.rejectRiskRule(riskResult, cfg)
+				}
 			}
 			if riskResult.NeedsModelReview() {
+				needsSmartReviewFromSignal = true
 				g.auditRiskScoreForSource(riskResult, "model_review", "user_message")
-				result, rejected, err := g.runSmartModeration(primaryReview.Text, imageURLs, cfg)
-				if rejected || err != nil {
-					return rejected, err
-				}
-				reviewedByRiskRule = true
-				riskReviewResult = result
-				if result.Flagged {
-					return g.rejectPolicy(result, cfg)
-				}
-			} else {
+			}
+			if !riskResult.ShouldBlock() && !riskResult.NeedsModelReview() {
 				g.auditRiskScoreForSource(riskResult, "score", "user_message")
 			}
 		}
@@ -161,21 +195,16 @@ func (g *ModerationGate) Run() (bool, error) {
 	// 6. 图片策略 submit/skip 决定是否把 image_url 也送智能审核服务
 	// "skip" 或未知值 → 不送图（imageURLs 保持 nil）
 
+	if needsSmartReviewFromSignal && !g.Policy.NeedsModeration() && primaryReview.HasContent {
+		if rejected, err := applySmartReview(); rejected || err != nil {
+			return rejected, err
+		}
+	}
+
 	// 7. 智能审核（仅 moderation/strict 级别）
 	if g.Policy.NeedsModeration() && primaryReview.HasContent {
-		var result ModerationResult
-		if reviewedByRiskRule {
-			result = riskReviewResult
-		} else {
-			var rejected bool
-			var err error
-			result, rejected, err = g.runSmartModeration(primaryReview.Text, imageURLs, cfg)
-			if rejected || err != nil {
-				return rejected, err
-			}
-		}
-		if result.Flagged {
-			return g.rejectPolicy(result, cfg)
+		if rejected, err := applySmartReview(); rejected || err != nil {
+			return rejected, err
 		}
 	}
 
@@ -254,6 +283,72 @@ func isCodexAmbientSuggestionsPrompt(text string) bool {
 	return hits >= len(markers)
 }
 
+func shouldAllowCodingAgentWorkflowPromptInjection(text string, result ModerationResult) bool {
+	if !result.Flagged || result.HighestCat != "prompt_injection" {
+		return false
+	}
+	normalized := strings.ToLower(strings.TrimSpace(strings.Join(strings.Fields(text), " ")))
+	if normalized == "" {
+		return false
+	}
+	if containsAny(normalized, []string{
+		"ignore previous instructions",
+		"ignore all previous",
+		"disregard previous instructions",
+		"reveal system prompt",
+		"show system prompt",
+		"print system prompt",
+		"developer message",
+		"steal api key",
+		"exfiltrate",
+		"bypass safety",
+		"jailbreak",
+	}) {
+		return false
+	}
+	hasAgentMarker := containsAny(normalized, []string{
+		".codex",
+		"skill.md",
+		"harness",
+		"another language model started",
+		"<environment_context>",
+		"codex",
+		"claude code",
+	})
+	hasWorkspaceMarker := containsAny(normalized, []string{
+		"workspace",
+		"repo",
+		"cwd",
+		"powershell",
+		"本地",
+		"项目",
+		"浏览器",
+		"browser",
+	})
+	hasTaskMarker := containsAny(normalized, []string{
+		"接手",
+		"优化",
+		"升级",
+		"继续",
+		"创建",
+		"修复",
+		"build on",
+		"upgrade",
+		"continue",
+		"implement",
+	})
+	return hasAgentMarker && hasWorkspaceMarker && hasTaskMarker
+}
+
+func containsAny(s string, needles []string) bool {
+	for _, needle := range needles {
+		if strings.Contains(s, needle) {
+			return true
+		}
+	}
+	return false
+}
+
 // ─── 拒绝路径：写 ApiLog + 审计队列 + 协议感知响应 ───────────────────────────
 
 func moderationTimeoutForConfig(cfg ModerationConfig) time.Duration {
@@ -299,6 +394,17 @@ func (g *ModerationGate) rejectKeyword(keyword string, cfg ModerationConfig) (bo
 	g.audit("MODERATION_BLOCK_KEYWORD", "keyword_match", keyword, 0, string(details))
 	msg := PickLocalizedMessage(g.Ctx.Get("Accept-Language"), "moderation_block_message_zh", "moderation_block_message_en")
 	return true, rejectBySourceFormat(g.Ctx, g.SrcFormat, ModerationReasonKeyword, msg, 403)
+}
+
+func (g *ModerationGate) auditKeywordSignal(keyword, mode string) {
+	details, _ := json.Marshal(map[string]any{
+		"mode":            mode,
+		"trigger_keyword": keyword,
+		"model":           g.ModelName,
+		"src_format":      string(g.SrcFormat),
+		"segment_scope":   "user_message",
+	})
+	g.audit(ActionModerationRiskScore, "keyword_signal", keyword, 0, string(details))
 }
 
 func (g *ModerationGate) rejectRiskRule(result ModerationRiskResult, cfg ModerationConfig) (bool, error) {
@@ -365,6 +471,18 @@ func (g *ModerationGate) rejectPolicy(r ModerationResult, cfg ModerationConfig) 
 	g.audit("MODERATION_BLOCK_POLICY", "policy_violation", "", r.HighestScore, string(details))
 	msg := PickLocalizedMessage(g.Ctx.Get("Accept-Language"), "moderation_block_message_zh", "moderation_block_message_en")
 	return true, rejectBySourceFormat(g.Ctx, g.SrcFormat, ModerationReasonPolicy, msg, 403)
+}
+
+func (g *ModerationGate) policyAllowDetails(r ModerationResult, reason string) string {
+	details, _ := json.Marshal(map[string]any{
+		"highest_cat":   r.HighestCat,
+		"highest_score": r.HighestScore,
+		"from_cache":    r.FromCache,
+		"model":         g.ModelName,
+		"segment_scope": "user_message",
+		"allow_reason":  reason,
+	})
+	return string(details)
 }
 
 func (g *ModerationGate) rejectUnavailable(cfg ModerationConfig) (bool, error) {

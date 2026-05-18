@@ -33,6 +33,7 @@ import (
 	"strconv"
 	"strings"
 	"time"
+	"unicode"
 	"unicode/utf8"
 
 	"daof-cpa/database"
@@ -219,8 +220,13 @@ func CreateTopup(c *fiber.Ctx) error {
 // errTopupDuplicate 哨兵：当 status 条件 UPDATE 命中 0 行时（已 paid/refunded/failed）
 var errTopupDuplicate = errors.New("topup notify duplicate")
 
-// errAdminMarkRaced 哨兵：admin 手动标记退款时订单状态已被并发修改（如另一 admin 同时操作）
-var errAdminMarkRaced = errors.New("topup order state changed during manual refund mark")
+// errAdminMarkRaced 哨兵：admin 手动标记充值订单时状态已被并发修改（如另一 admin 同时操作）
+var errAdminMarkRaced = errors.New("topup order state changed during manual mark")
+
+// errManualPaidRefDuplicate 哨兵：同一外部支付凭证已经被用于一次手动到账补登。
+var errManualPaidRefDuplicate = errors.New("manual paid reference already used")
+
+const manualPaidReceiptProvider = "manual_paid"
 
 // errRefundAmountInvalid 哨兵：tx 内基于 freshOrder 重新计算后发现金额非法
 // （0=全额时已无可退、显式值越界、汇率快照损坏等）。配合 errAdminMarkRaced 一同回 4xx 而非 500。
@@ -410,10 +416,14 @@ func YifutNotify(c *fiber.Ctx) error {
 			// 已被另一个回调处理过（或订单状态非 created）
 			return errTopupDuplicate
 		}
-		// 加额度（不限制 quota>=0；充值只会增加，永远成立）
+		// 加额度（不限制 quota>=0；充值只会增加，永远成立）。
+		// paid_quota 单独记录"充值通道来源的尚未消费余额"，用于拉新消费返佣归因。
 		if err := tx.Model(&database.User{}).
 			Where("id = ?", order.UserID).
-			Update("quota", gorm.Expr("quota + ?", order.AmountUSD)).Error; err != nil {
+			Updates(map[string]any{
+				"quota":      gorm.Expr("quota + ?", order.AmountUSD),
+				"paid_quota": gorm.Expr("paid_quota + ?", order.AmountUSD),
+			}).Error; err != nil {
 			return fmt.Errorf("add quota: %w", err)
 		}
 		// 账单流水：充值入账（与 quota+= 同事务，原子）
@@ -669,6 +679,176 @@ func AdminListTopupOrders(c *fiber.Ctx) error {
 	})
 }
 
+// adminMarkTopupPaidRequest admin 手动确认充值到账请求体。
+//
+// 该入口只用于"用户已在支付通道真实付款，但 notify_url 未送达 / 未入账"的补登。
+// 它和普通用户余额调额不同：必须同时增加 quota 与 paid_quota。
+type adminMarkTopupPaidRequest struct {
+	ExternalTradeRef string `json:"external_trade_ref"` // 支付通道订单号 / 后台付款凭证，必填且全局幂等
+	Reason           string `json:"reason"`             // 可选备注，写入审计
+}
+
+const topupManualPaidReasonMaxLen = 500
+
+// AdminMarkTopupPaid POST /api/admin/topup/orders/:id/mark-paid
+//
+// 手动补登充值到账。状态机：created → paid。
+// 真实资金已由 admin 在支付通道后台确认；本接口只负责把本地订单补推进到账状态。
+func AdminMarkTopupPaid(c *fiber.Ctx) error {
+	op := loadAdminUser(c)
+	if op == nil {
+		return c.Status(401).JSON(fiber.Map{"success": false, "message_code": "ERR_NO_AUTH"})
+	}
+	id, parseErr := strconv.Atoi(c.Params("id"))
+	if parseErr != nil || id <= 0 {
+		return c.Status(400).JSON(fiber.Map{"success": false, "message_code": "ERR_INVALID_PARAMS"})
+	}
+	var req adminMarkTopupPaidRequest
+	if err := c.BodyParser(&req); err != nil {
+		return c.Status(400).JSON(fiber.Map{"success": false, "message_code": "ERR_BAD_REQUEST"})
+	}
+	externalRef := sanitizeExternalRef(strings.TrimSpace(req.ExternalTradeRef))
+	if externalRef == "" {
+		return c.Status(400).JSON(fiber.Map{"success": false, "message_code": "ERR_EXTERNAL_REF_REQUIRED"})
+	}
+	reason := strings.TrimSpace(req.Reason)
+	if runeLen := len([]rune(reason)); runeLen > topupManualPaidReasonMaxLen {
+		return c.Status(400).JSON(fiber.Map{
+			"success":      false,
+			"message":      fmt.Sprintf("reason 长度不能超过 %d 字符（当前 %d）", topupManualPaidReasonMaxLen, runeLen),
+			"message_code": "ERR_REASON_TOO_LONG",
+		})
+	}
+	for _, r := range reason {
+		if unicode.IsControl(r) {
+			return c.Status(400).JSON(fiber.Map{"success": false, "message_code": "ERR_REASON_CTRL_CHAR"})
+		}
+	}
+
+	var order database.TopupOrder
+	if err := database.DB.First(&order, id).Error; err != nil {
+		return c.Status(404).JSON(fiber.Map{"success": false, "message_code": "ERR_NOT_FOUND"})
+	}
+	if order.Status != "created" {
+		return c.Status(409).JSON(fiber.Map{"success": false, "message_code": "ERR_TOPUP_NOT_PENDING"})
+	}
+
+	now := time.Now()
+	txErr := database.DB.Transaction(func(tx *gorm.DB) error {
+		if err := lockUserForUpdate(tx, order.UserID); err != nil {
+			return fmt.Errorf("lock user: %w", err)
+		}
+
+		var freshOrder database.TopupOrder
+		if err := tx.First(&freshOrder, order.ID).Error; err != nil {
+			return fmt.Errorf("read order: %w", err)
+		}
+		if freshOrder.Status != "created" {
+			return errAdminMarkRaced
+		}
+
+		receipt := database.PaymentWebhookReceipt{
+			Provider:      manualPaidReceiptProvider,
+			Nonce:         externalRef,
+			SignatureHash: signatureHash("manual-paid:" + freshOrder.OutTradeNo + ":" + externalRef),
+			OutTradeNo:    freshOrder.OutTradeNo,
+			RemoteIP:      c.IP(),
+			Status:        "accepted_manual",
+			Reason:        reason,
+			ReceivedAt:    now,
+		}
+		if err := tx.Create(&receipt).Error; err != nil {
+			if strings.Contains(strings.ToLower(err.Error()), "unique") {
+				return errManualPaidRefDuplicate
+			}
+			return fmt.Errorf("insert manual paid receipt: %w", err)
+		}
+
+		res := tx.Model(&database.TopupOrder{}).
+			Where("id = ? AND status = ?", freshOrder.ID, "created").
+			Updates(map[string]any{
+				"status":       "paid",
+				"trade_no":     externalRef,
+				"api_trade_no": externalRef,
+				"paid_at":      now,
+			})
+		if res.Error != nil {
+			return fmt.Errorf("mark order paid: %w", res.Error)
+		}
+		if res.RowsAffected == 0 {
+			return errAdminMarkRaced
+		}
+
+		if err := tx.Model(&database.User{}).
+			Where("id = ?", freshOrder.UserID).
+			Updates(map[string]any{
+				"quota":      gorm.Expr("quota + ?", freshOrder.AmountUSD),
+				"paid_quota": gorm.Expr("paid_quota + ?", freshOrder.AmountUSD),
+			}).Error; err != nil {
+			return fmt.Errorf("add quota: %w", err)
+		}
+
+		var freshUser database.User
+		if err := tx.Select("id, quota").First(&freshUser, freshOrder.UserID).Error; err != nil {
+			return fmt.Errorf("fetch fresh quota: %w", err)
+		}
+		desc := fmt.Sprintf("充值补登 ¥%s（%s，凭证 %s）", database.FormatFen(freshOrder.MoneyRMB), freshOrder.PayType, externalRef)
+		if reason != "" {
+			desc += " · " + reason
+		}
+		if err := database.WriteBillingEntry(tx, database.BillingEntryInput{
+			UserID:           freshOrder.UserID,
+			OccurredAt:       now,
+			EntryType:        database.BillingTypeTopup,
+			AmountUSD:        freshOrder.AmountUSD,
+			BalanceAfterUSD:  freshUser.Quota,
+			RelatedType:      "topup_order",
+			RelatedID:        freshOrder.ID,
+			Description:      desc,
+			CurrencyOriginal: "CNY",
+			AmountOriginal:   freshOrder.MoneyRMB,
+		}); err != nil {
+			return fmt.Errorf("write billing entry: %w", err)
+		}
+
+		auditDetails, _ := json.Marshal(map[string]any{
+			"type":               "TOPUP_MANUAL_MARK_PAID",
+			"topup_order_id":     freshOrder.ID,
+			"out_trade_no":       freshOrder.OutTradeNo,
+			"external_trade_ref": externalRef,
+			"amount_micro_usd":   freshOrder.AmountUSD,
+			"money_fen":          freshOrder.MoneyRMB,
+			"reason":             reason,
+		})
+		return LogOperationByTx(tx, op.ID, freshOrder.UserID, "admin", "TOPUP_MANUAL_MARK_PAID", c.IP(), string(auditDetails))
+	})
+	if errors.Is(txErr, errAdminMarkRaced) {
+		return c.Status(409).JSON(fiber.Map{"success": false, "message_code": "ERR_TOPUP_NOT_PENDING"})
+	}
+	if errors.Is(txErr, errManualPaidRefDuplicate) {
+		return c.Status(409).JSON(fiber.Map{"success": false, "message_code": "ERR_TOPUP_MANUAL_REF_DUPLICATE"})
+	}
+	if txErr != nil {
+		log.Printf("[TOPUP-MANUAL-PAID] tx failed order=%s admin=%d err=%v", order.OutTradeNo, op.ID, txErr)
+		return c.Status(500).JSON(fiber.Map{"success": false, "message_code": "ERR_DB_TRANSACTION"})
+	}
+
+	proxy.InvalidateUserSubscriptionCache(order.UserID)
+	proxy.RefreshUserAuth(order.UserID)
+
+	title := readSysConfigCached("notif_topup_title", "充值成功")
+	bodyTpl := readSysConfigCached("notif_topup_body", "您充值的 ¥{amount_rmb} 已到账，等额 {amount_usd} USD 已加入余额。")
+	body := strings.ReplaceAll(bodyTpl, "{amount_rmb}", database.FormatFen(order.MoneyRMB))
+	body = strings.ReplaceAll(body, "{amount_usd}", database.FormatMicroUSD(order.AmountUSD))
+	dedupKey := fmt.Sprintf("topup_manual_paid:%s", order.OutTradeNo)
+	proxy.Dispatch(order.UserID, "topup", "success", title, body,
+		proxy.LinkBills("topup"), "查看账单", "topup_order", order.ID, &dedupKey)
+
+	log.Printf("[TOPUP-MANUAL-PAID] OK order=%s admin=%d ref=%q usd_micro=%d",
+		order.OutTradeNo, op.ID, externalRef, order.AmountUSD)
+	return c.JSON(fiber.Map{"success": true, "message_code": "SUCCESS_TOPUP_MANUAL_PAID"})
+}
+
 // adminRefundRequest admin 退款请求体。fix CRITICAL Sprint4-M3：从 float64 RMB 改为
 // fen int64，杜绝 float 进入金额计算。0 = 全额退款。
 type adminRefundRequest struct {
@@ -871,12 +1051,19 @@ func AdminRefundTopup(c *fiber.Ctx) error {
 		responseOrder.RefundNo = req.ExternalRefundRef
 		responseOrder.OutRefundNo = req.ExternalRefundRef
 
+		userUpdates := map[string]any{
+			"paid_quota": gorm.Expr(
+				"CASE WHEN paid_quota >= ? THEN paid_quota - ? ELSE 0 END",
+				usdToReclaimMicro, usdToReclaimMicro,
+			),
+		}
 		if req.ReclaimQuota {
-			if err := tx.Model(&database.User{}).
-				Where("id = ?", order.UserID).
-				Update("quota", gorm.Expr("quota - ?", usdToReclaimMicro)).Error; err != nil {
-				return fmt.Errorf("reclaim quota: %w", err)
-			}
+			userUpdates["quota"] = gorm.Expr("quota - ?", usdToReclaimMicro)
+		}
+		if err := tx.Model(&database.User{}).
+			Where("id = ?", order.UserID).
+			Updates(userUpdates).Error; err != nil {
+			return fmt.Errorf("reclassify refunded paid quota: %w", err)
 		}
 
 		// 账单流水

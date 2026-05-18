@@ -71,6 +71,9 @@ func setupStreamConservationDB(t *testing.T) {
 	AuthTokenCache = map[string]*database.AccessToken{}
 	RouteCache = map[string][]*database.ChannelModel{}
 	ChannelMapCache = map[uint]*database.Channel{}
+	SysConfigMutex.Lock()
+	SysConfigCache = map[string]string{}
+	SysConfigMutex.Unlock()
 }
 
 // fakeChatBackend 返回一个固定 token 数 + 内容的 OpenAI-style 后端
@@ -156,16 +159,34 @@ func assertStreamConservation(t *testing.T, userID uint, quotaBeforeMicro int64,
 func TestStreamConservation_BalanceFallback(t *testing.T) {
 	setupStreamConservationDB(t)
 
+	referredAt := time.Now().Add(-time.Hour)
+	referrer := database.User{
+		ID: 99, Username: "balance-referrer", Token: "sk-balance-referrer",
+		Quota:  0,
+		Status: 1,
+		Role:   "user",
+	}
+	if err := database.DB.Create(&referrer).Error; err != nil {
+		t.Fatalf("create referrer: %v", err)
+	}
+
 	// 用户启用余额消费 + 余额 $1（足够付 cost）
 	user := database.User{
 		ID: 1, Username: "bal-fallback-tester", Token: "sk-bal-test",
 		Quota:                 1 * database.MicroPerUSD,
+		PaidQuota:             1 * database.MicroPerUSD,
 		Status:                1,
+		ReferredByUserID:      referrer.ID,
+		ReferredAt:            &referredAt,
 		BalanceConsumeEnabled: true,
 		Role:                  "user",
 	}
 	database.DB.Create(&user)
 	AuthCache[user.Token] = &user
+	SysConfigMutex.Lock()
+	SysConfigCache[database.ReferralPaidSpendRewardBPSConfigKey] = "1000" // 10%
+	SysConfigCache[database.ReferralPaidSpendRewardWindowSecondsConfigKey] = "2592000"
+	SysConfigMutex.Unlock()
 
 	backend := fakeChatBackend(t, 10, 20)
 	defer backend.Close()
@@ -202,6 +223,26 @@ func TestStreamConservation_BalanceFallback(t *testing.T) {
 	}
 	if entry.AmountUSD != -30 {
 		t.Errorf("entry.AmountUSD=%d, want -30", entry.AmountUSD)
+	}
+	var freshUser, freshReferrer database.User
+	if err := database.DB.First(&freshUser, user.ID).Error; err != nil {
+		t.Fatalf("load fresh user: %v", err)
+	}
+	if freshUser.PaidQuota != database.MicroPerUSD-30 {
+		t.Errorf("paid_quota=%d, want %d", freshUser.PaidQuota, database.MicroPerUSD-30)
+	}
+	if err := database.DB.First(&freshReferrer, referrer.ID).Error; err != nil {
+		t.Fatalf("load fresh referrer: %v", err)
+	}
+	if freshReferrer.Quota != 3 {
+		t.Errorf("referrer quota=%d, want 3", freshReferrer.Quota)
+	}
+	var reward database.BillingEntry
+	if err := database.DB.Where("user_id = ? AND entry_type = ?", referrer.ID, database.BillingTypeBonusCredit).First(&reward).Error; err != nil {
+		t.Fatalf("referral spend reward billing missing: %v", err)
+	}
+	if reward.AmountUSD != 3 || reward.RelatedType != "api_log" || reward.RelatedID == 0 {
+		t.Errorf("unexpected reward billing: %+v", reward)
 	}
 }
 

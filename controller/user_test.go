@@ -1,6 +1,7 @@
 package controller
 
 import (
+	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -46,6 +47,7 @@ func setupUserControllerTestDB(t *testing.T) {
 		&database.SubscriptionUsage{},
 		&database.TopupOrder{},
 		&database.TopupRefund{},
+		&database.PaymentWebhookReceipt{},
 		&database.UserCoupon{},
 		&database.NotificationPreference{},
 		&database.Ticket{},
@@ -63,8 +65,19 @@ func setupUserControllerTestDB(t *testing.T) {
 func newUpdateUserTestApp() *fiber.App {
 	app := fiber.New(fiber.Config{DisableStartupMessage: true})
 	app.Put("/admin/users/:id", UpdateUser)
+	app.Post("/admin/users/bulk-quota", BulkAdjustQuota)
 	app.Post("/admin/users/:id/purge", AdminPurgeUser)
 	app.Delete("/admin/users/:id", DeleteUser)
+	return app
+}
+
+func newOfflineTopupTestApp(admin *database.User) *fiber.App {
+	app := fiber.New(fiber.Config{DisableStartupMessage: true})
+	app.Use(func(c *fiber.Ctx) error {
+		c.Request().Header.SetCookie("daof_admin_token", admin.Token)
+		return c.Next()
+	})
+	app.Post("/admin/users/:id/offline-topup", AdminCreateOfflineTopup)
 	return app
 }
 
@@ -104,6 +117,211 @@ func TestUpdateUser_UsesQuotaUSDWire(t *testing.T) {
 	}
 	if fresh.Quota != 12_345_678 {
 		t.Fatalf("quota=%d want 12345678", fresh.Quota)
+	}
+}
+
+func TestUpdateUser_RejectsQuotaBelowPaidQuota(t *testing.T) {
+	setupUserControllerTestDB(t)
+	app := newUpdateUserTestApp()
+	user := seedUpdateUserTarget(t, 100*database.MicroPerUSD, 1)
+	if err := database.DB.Model(&database.User{}).Where("id = ?", user.ID).
+		Update("paid_quota", 60*database.MicroPerUSD).Error; err != nil {
+		t.Fatalf("mark paid quota: %v", err)
+	}
+
+	code, resp := doJSON(t, app, "PUT", "/admin/users/"+itoaUint(user.ID), map[string]any{
+		"username":   user.Username,
+		"quota":      59.99,
+		"status":     1,
+		"ban_reason": "",
+	})
+	if code != 400 {
+		t.Fatalf("expected 400 got %d body=%v", code, resp)
+	}
+	if resp["message_code"] != "ERR_QUOTA_BELOW_PAID_BALANCE" {
+		t.Fatalf("message_code=%v", resp["message_code"])
+	}
+
+	var fresh database.User
+	if err := database.DB.First(&fresh, user.ID).Error; err != nil {
+		t.Fatalf("reload user: %v", err)
+	}
+	if fresh.Quota != 100*database.MicroPerUSD || fresh.PaidQuota != 60*database.MicroPerUSD {
+		t.Fatalf("unexpected balances after rejection: quota=%d paid=%d", fresh.Quota, fresh.PaidQuota)
+	}
+}
+
+func TestUpdateUser_AllowsQuotaAtPaidQuotaFloor(t *testing.T) {
+	setupUserControllerTestDB(t)
+	app := newUpdateUserTestApp()
+	user := seedUpdateUserTarget(t, 100*database.MicroPerUSD, 1)
+	if err := database.DB.Model(&database.User{}).Where("id = ?", user.ID).
+		Update("paid_quota", 60*database.MicroPerUSD).Error; err != nil {
+		t.Fatalf("mark paid quota: %v", err)
+	}
+
+	code, resp := doJSON(t, app, "PUT", "/admin/users/"+itoaUint(user.ID), map[string]any{
+		"username":   user.Username,
+		"quota":      60.0,
+		"status":     1,
+		"ban_reason": "",
+	})
+	if code != 200 {
+		t.Fatalf("expected 200 got %d body=%v", code, resp)
+	}
+
+	var fresh database.User
+	if err := database.DB.First(&fresh, user.ID).Error; err != nil {
+		t.Fatalf("reload user: %v", err)
+	}
+	if fresh.Quota != 60*database.MicroPerUSD || fresh.PaidQuota != 60*database.MicroPerUSD {
+		t.Fatalf("unexpected balances: quota=%d paid=%d", fresh.Quota, fresh.PaidQuota)
+	}
+}
+
+func TestBulkAdjustQuota_SubClampsAtPaidQuota(t *testing.T) {
+	setupUserControllerTestDB(t)
+	app := newUpdateUserTestApp()
+	user := seedUpdateUserTarget(t, 10*database.MicroPerUSD, 1)
+	if err := database.DB.Model(&database.User{}).Where("id = ?", user.ID).
+		Update("paid_quota", 6*database.MicroPerUSD).Error; err != nil {
+		t.Fatalf("mark paid quota: %v", err)
+	}
+
+	code, resp := doJSON(t, app, "POST", "/admin/users/bulk-quota", map[string]any{
+		"user_ids": []uint{user.ID},
+		"mode":     "sub",
+		"amount":   5.0,
+	})
+	if code != 200 {
+		t.Fatalf("expected 200 got %d body=%v", code, resp)
+	}
+
+	var fresh database.User
+	if err := database.DB.First(&fresh, user.ID).Error; err != nil {
+		t.Fatalf("reload user: %v", err)
+	}
+	if fresh.Quota != 6*database.MicroPerUSD || fresh.PaidQuota != 6*database.MicroPerUSD {
+		t.Fatalf("unexpected balances: quota=%d paid=%d", fresh.Quota, fresh.PaidQuota)
+	}
+}
+
+func TestBulkAdjustQuota_SetBelowPaidQuotaRejected(t *testing.T) {
+	setupUserControllerTestDB(t)
+	app := newUpdateUserTestApp()
+	user := seedUpdateUserTarget(t, 10*database.MicroPerUSD, 1)
+	if err := database.DB.Model(&database.User{}).Where("id = ?", user.ID).
+		Update("paid_quota", 6*database.MicroPerUSD).Error; err != nil {
+		t.Fatalf("mark paid quota: %v", err)
+	}
+
+	code, resp := doJSON(t, app, "POST", "/admin/users/bulk-quota", map[string]any{
+		"user_ids": []uint{user.ID},
+		"mode":     "set",
+		"amount":   5.99,
+	})
+	if code != 400 {
+		t.Fatalf("expected 400 got %d body=%v", code, resp)
+	}
+	if resp["message_code"] != "ERR_QUOTA_BELOW_PAID_BALANCE" {
+		t.Fatalf("message_code=%v", resp["message_code"])
+	}
+
+	var fresh database.User
+	if err := database.DB.First(&fresh, user.ID).Error; err != nil {
+		t.Fatalf("reload user: %v", err)
+	}
+	if fresh.Quota != 10*database.MicroPerUSD {
+		t.Fatalf("quota changed after rejection: got %d", fresh.Quota)
+	}
+}
+
+func TestAdminCreateOfflineTopup_CreditsQuotaPaidQuotaAndBilling(t *testing.T) {
+	setupUserControllerTestDB(t)
+	admin := seedAdminUser(t)
+	app := newOfflineTopupTestApp(admin)
+	user := seedUpdateUserTarget(t, 2*database.MicroPerUSD, 1)
+	if err := database.DB.Model(&database.User{}).Where("id = ?", user.ID).
+		Update("paid_quota", database.MicroPerUSD).Error; err != nil {
+		t.Fatalf("seed paid quota: %v", err)
+	}
+
+	code, resp := doJSON(t, app, "POST", "/admin/users/"+itoaUint(user.ID)+"/offline-topup", map[string]any{
+		"amount_usd":         10.0,
+		"money_fen":          7200,
+		"currency_original":  "CNY",
+		"payment_method":     "wechat",
+		"external_trade_ref": "wx-transfer-001",
+		"reason":             "微信好友转账",
+	})
+	if code != 200 {
+		t.Fatalf("expected 200 got %d body=%v", code, resp)
+	}
+
+	var fresh database.User
+	if err := database.DB.First(&fresh, user.ID).Error; err != nil {
+		t.Fatalf("reload user: %v", err)
+	}
+	if fresh.Quota != 12*database.MicroPerUSD || fresh.PaidQuota != 11*database.MicroPerUSD {
+		t.Fatalf("quota/paid_quota=%d/%d, want 12/11 USD", fresh.Quota, fresh.PaidQuota)
+	}
+
+	var bill database.BillingEntry
+	if err := database.DB.Where("user_id = ? AND entry_type = ?", user.ID, database.BillingTypeTopup).First(&bill).Error; err != nil {
+		t.Fatalf("topup billing missing: %v", err)
+	}
+	if bill.AmountUSD != 10*database.MicroPerUSD || bill.BalanceAfterUSD != 12*database.MicroPerUSD {
+		t.Fatalf("unexpected billing amount/balance: %+v", bill)
+	}
+	if bill.RelatedType != "operation_log" || bill.RelatedID == 0 || bill.CurrencyOriginal != "CNY" || bill.AmountOriginal != 7200 {
+		t.Fatalf("unexpected billing audit fields: %+v", bill)
+	}
+
+	var op database.OperationLog
+	if err := database.DB.First(&op, bill.RelatedID).Error; err != nil {
+		t.Fatalf("operation log missing: %v", err)
+	}
+	if op.ActionType != "OFFLINE_TOPUP" || op.OperatorID != admin.ID {
+		t.Fatalf("unexpected operation log: %+v", op)
+	}
+
+	var receipt database.PaymentWebhookReceipt
+	if err := database.DB.Where("provider = ? AND nonce = ?", manualPaidReceiptProvider, "wx-transfer-001").First(&receipt).Error; err != nil {
+		t.Fatalf("manual payment receipt missing: %v", err)
+	}
+	if !strings.HasPrefix(receipt.OutTradeNo, "off:u"+itoaUint(user.ID)+":") {
+		t.Fatalf("unexpected receipt out_trade_no=%q", receipt.OutTradeNo)
+	}
+}
+
+func TestAdminCreateOfflineTopup_DuplicateExternalRefRejected(t *testing.T) {
+	setupUserControllerTestDB(t)
+	admin := seedAdminUser(t)
+	app := newOfflineTopupTestApp(admin)
+	user := seedUpdateUserTarget(t, 0, 1)
+
+	body := map[string]any{
+		"amount_usd":         5.0,
+		"money_fen":          3600,
+		"currency_original":  "CNY",
+		"payment_method":     "wechat",
+		"external_trade_ref": "wx-duplicate",
+	}
+	code, resp := doJSON(t, app, "POST", "/admin/users/"+itoaUint(user.ID)+"/offline-topup", body)
+	if code != 200 {
+		t.Fatalf("first offline topup expected 200 got %d body=%v", code, resp)
+	}
+	code, resp = doJSON(t, app, "POST", "/admin/users/"+itoaUint(user.ID)+"/offline-topup", body)
+	if code != 409 || resp["message_code"] != "ERR_OFFLINE_TOPUP_REF_DUPLICATE" {
+		t.Fatalf("duplicate expected 409/ERR_OFFLINE_TOPUP_REF_DUPLICATE got %d body=%v", code, resp)
+	}
+
+	var fresh database.User
+	if err := database.DB.First(&fresh, user.ID).Error; err != nil {
+		t.Fatalf("reload user: %v", err)
+	}
+	if fresh.Quota != 5*database.MicroPerUSD || fresh.PaidQuota != 5*database.MicroPerUSD {
+		t.Fatalf("duplicate changed balances: quota=%d paid=%d", fresh.Quota, fresh.PaidQuota)
 	}
 }
 
@@ -359,6 +577,16 @@ func TestAdminPurgeUser_RequiresConfirmAndPurgesDependents(t *testing.T) {
 	}).Error; err != nil {
 		t.Fatalf("create refund: %v", err)
 	}
+	if err := database.DB.Create(&database.PaymentWebhookReceipt{
+		Provider:      manualPaidReceiptProvider,
+		Nonce:         "offline-purge-ref",
+		SignatureHash: "abc",
+		OutTradeNo:    "off:u" + itoaUint(user.ID) + ":1",
+		Status:        "accepted_manual",
+		ReceivedAt:    time.Now(),
+	}).Error; err != nil {
+		t.Fatalf("create offline receipt: %v", err)
+	}
 	apiLog := database.ApiLog{UserID: user.ID, TokenName: "sk", ModelName: "gpt-test", Status: 200}
 	if err := database.DB.Create(&apiLog).Error; err != nil {
 		t.Fatalf("create api log: %v", err)
@@ -437,6 +665,7 @@ func TestAdminPurgeUser_RequiresConfirmAndPurgesDependents(t *testing.T) {
 	assertZero("usage", &database.SubscriptionUsage{}, "subscription_id = ?", sub.ID)
 	assertZero("topup order", &database.TopupOrder{}, "id = ?", order.ID)
 	assertZero("topup refund", &database.TopupRefund{}, "topup_order_id = ?", order.ID)
+	assertZero("offline payment receipt", &database.PaymentWebhookReceipt{}, "provider = ? AND nonce = ?", manualPaidReceiptProvider, "offline-purge-ref")
 	assertZero("api log", &database.ApiLog{}, "id = ?", apiLog.ID)
 	assertZero("api attribution", &database.ApiLogAttribution{}, "api_log_id = ?", apiLog.ID)
 	assertZero("api estimate", &database.ApiLogCostEstimate{}, "api_log_id = ?", apiLog.ID)

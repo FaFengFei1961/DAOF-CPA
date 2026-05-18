@@ -31,6 +31,10 @@ type UserUsageRow struct {
 	CacheWriteTokens int64            `json:"cache_write_tokens"`
 	TotalTokens      int64            `json:"total_tokens"`
 	Cost             float64          `json:"cost"`
+	RawCost          float64          `json:"raw_cost"`
+	ChargedCost      float64          `json:"charged_cost"`
+	TotalCost        float64          `json:"total_cost"`
+	TotalChargedCost float64          `json:"total_charged_cost"`
 	AvgLatencyMs     float64          `json:"avg_latency_ms"`
 	LastActiveAt     *time.Time       `json:"last_active_at,omitempty"`
 	CreatedAt        time.Time        `json:"created_at"`
@@ -43,10 +47,12 @@ type UserUsageRow struct {
 // fix MAJOR M22-A1 Phase 4-fix（自审）：原 Cost float64 直接 scan SUM(int64 micro)
 // → 50_000_000 micro_usd 被序列化成 $50M。改为 int64 + 显式转换。
 type ModelBreakdown struct {
-	ModelName string  `json:"model_name"`
-	Requests  int64   `json:"requests"`
-	Tokens    int64   `json:"tokens"`
-	Cost      float64 `json:"cost"` // USD float（输出值已通过 MicroToUSD 转换）
+	ModelName   string  `json:"model_name"`
+	Requests    int64   `json:"requests"`
+	Tokens      int64   `json:"tokens"`
+	Cost        float64 `json:"cost"` // USD float（输出值已通过 MicroToUSD 转换）
+	RawCost     float64 `json:"raw_cost"`
+	ChargedCost float64 `json:"charged_cost"`
 }
 
 // GetUsersUsage 管理员视角：按用户聚合 ApiLog，返回所有用户的使用量统计。
@@ -80,6 +86,7 @@ func GetUsersUsage(c *fiber.Ctx) error {
 		CachedTokens     int64
 		CacheWriteTokens int64
 		Cost             int64 // sum(api_logs.cost) 单位 micro_usd
+		ChargedCost      int64 // sum(api_logs charged_cost fallback cost) 单位 micro_usd
 		TotalLatency     int64
 		LastActiveAt     string
 	}
@@ -94,6 +101,7 @@ func GetUsersUsage(c *fiber.Ctx) error {
 			COALESCE(SUM(cached_tokens), 0) AS cached_tokens,
 			COALESCE(SUM(cache_write_tokens), 0) AS cache_write_tokens,
 			COALESCE(SUM(cost), 0) AS cost,
+			COALESCE(SUM(CASE WHEN charged_cost > 0 THEN charged_cost ELSE cost END), 0) AS charged_cost,
 			COALESCE(SUM(latency), 0) AS total_latency,
 			MAX(created_at) AS last_active_at`).
 		Group("user_id")
@@ -122,10 +130,11 @@ func GetUsersUsage(c *fiber.Ctx) error {
 	// 4. 组装输出 + 总览
 	rows := make([]UserUsageRow, 0, len(users))
 	var (
-		totalRequests  int64
-		totalTokens    int64
-		totalCostMicro int64
-		activeUsers    int
+		totalRequests         int64
+		totalTokens           int64
+		totalCostMicro        int64
+		totalChargedCostMicro int64
+		activeUsers           int
 	)
 
 	for _, u := range users {
@@ -143,6 +152,9 @@ func GetUsersUsage(c *fiber.Ctx) error {
 		// 总 Token 不重复计 cached/cache_write/reasoning；它们分别是 input/output 子集。
 		totalTokens += agg.InputTokens + agg.OutputTokens
 		totalCostMicro += agg.Cost
+		totalChargedCostMicro += effectiveAggregateChargedCost(agg.ChargedCost, agg.Cost)
+		rowRawCost := database.MicroToUSD(agg.Cost)
+		rowChargedCost := database.MicroToUSD(effectiveAggregateChargedCost(agg.ChargedCost, agg.Cost))
 
 		rows = append(rows, UserUsageRow{
 			UserID:   u.ID,
@@ -162,7 +174,11 @@ func GetUsersUsage(c *fiber.Ctx) error {
 			CachedTokens:     agg.CachedTokens,
 			CacheWriteTokens: agg.CacheWriteTokens,
 			TotalTokens:      agg.InputTokens + agg.OutputTokens,
-			Cost:             database.MicroToUSD(agg.Cost),
+			Cost:             rowRawCost,
+			RawCost:          rowRawCost,
+			ChargedCost:      rowChargedCost,
+			TotalCost:        rowRawCost,
+			TotalChargedCost: rowChargedCost,
 			AvgLatencyMs:     avgLatency,
 			LastActiveAt:     lastActive,
 			CreatedAt:        u.CreatedAt,
@@ -178,11 +194,12 @@ func GetUsersUsage(c *fiber.Ctx) error {
 		"data": fiber.Map{
 			"period": period,
 			"summary": fiber.Map{
-				"total_users":    len(users),
-				"active_users":   activeUsers,
-				"total_requests": totalRequests,
-				"total_tokens":   totalTokens,
-				"total_cost":     database.MicroToUSD(totalCostMicro),
+				"total_users":        len(users),
+				"active_users":       activeUsers,
+				"total_requests":     totalRequests,
+				"total_tokens":       totalTokens,
+				"total_cost":         database.MicroToUSD(totalCostMicro),
+				"total_charged_cost": database.MicroToUSD(totalChargedCostMicro),
 			},
 			"users": rows,
 		},
@@ -229,11 +246,12 @@ func resolvePeriodCutoff(period string) time.Time {
 func loadUserModelBreakdown(cutoff time.Time) map[uint][]ModelBreakdown {
 	// fix MAJOR Phase 4-fix：row.Cost 用 int64 接 SUM(cost) 的 micro_usd 累加值
 	type row struct {
-		UserID    uint
-		ModelName string
-		Requests  int64
-		Tokens    int64
-		Cost      int64 // micro_usd
+		UserID      uint
+		ModelName   string
+		Requests    int64
+		Tokens      int64
+		Cost        int64 // micro_usd
+		ChargedCost int64 // micro_usd
 	}
 
 	q := database.DB.Model(&database.ApiLog{}).
@@ -241,7 +259,8 @@ func loadUserModelBreakdown(cutoff time.Time) map[uint][]ModelBreakdown {
 			model_name,
 			COUNT(*) AS requests,
 			COALESCE(SUM(prompt_tokens + completion_tokens), 0) AS tokens,
-			COALESCE(SUM(cost), 0) AS cost`).
+			COALESCE(SUM(cost), 0) AS cost,
+			COALESCE(SUM(CASE WHEN charged_cost > 0 THEN charged_cost ELSE cost END), 0) AS charged_cost`).
 		Group("user_id, model_name")
 	if !cutoff.IsZero() {
 		q = q.Where("created_at >= ?", cutoff)
@@ -256,16 +275,22 @@ func loadUserModelBreakdown(cutoff time.Time) map[uint][]ModelBreakdown {
 
 	result := make(map[uint][]ModelBreakdown)
 	for _, r := range rows {
+		rawCost := database.MicroToUSD(r.Cost)
+		chargedCost := database.MicroToUSD(effectiveAggregateChargedCost(r.ChargedCost, r.Cost))
 		result[r.UserID] = append(result[r.UserID], ModelBreakdown{
-			ModelName: r.ModelName,
-			Requests:  r.Requests,
-			Tokens:    r.Tokens,
-			Cost:      database.MicroToUSD(r.Cost), // micro → USD float（输出端转换）
+			ModelName:   r.ModelName,
+			Requests:    r.Requests,
+			Tokens:      r.Tokens,
+			Cost:        rawCost,
+			RawCost:     rawCost,
+			ChargedCost: chargedCost,
 		})
 	}
 	// 每个用户只保留 top 5 (按 cost desc)
 	for uid, list := range result {
-		sort.Slice(list, func(i, j int) bool { return list[i].Cost > list[j].Cost })
+		sort.Slice(list, func(i, j int) bool {
+			return usageRowCostForSort(list[i].ChargedCost, list[i].Cost) > usageRowCostForSort(list[j].ChargedCost, list[j].Cost)
+		})
 		if len(list) > 5 {
 			list = list[:5]
 		}
@@ -309,16 +334,17 @@ func GetUsersUsageTimeseries(c *fiber.Ctx) error {
 
 	// fix MAJOR Phase 4-fix：bucketRow.Cost 接 SUM(int64 micro_usd) 必须用 int64
 	type bucketRow struct {
-		UserID     uint
-		Bucket     string
-		Requests   int64
-		Tokens     int64
-		Cost       int64 // micro_usd
-		Prompt     int64
-		Completion int64
-		Reasoning  int64
-		Cached     int64
-		CacheWrite int64
+		UserID      uint
+		Bucket      string
+		Requests    int64
+		Tokens      int64
+		Cost        int64 // micro_usd
+		ChargedCost int64 // micro_usd
+		Prompt      int64
+		Completion  int64
+		Reasoning   int64
+		Cached      int64
+		CacheWrite  int64
 	}
 	q := database.DB.Model(&database.ApiLog{}).
 		Select(`user_id,
@@ -326,6 +352,7 @@ func GetUsersUsageTimeseries(c *fiber.Ctx) error {
 			COUNT(*) AS requests,
 			COALESCE(SUM(prompt_tokens + completion_tokens), 0) AS tokens,
 			COALESCE(SUM(cost), 0) AS cost,
+			COALESCE(SUM(CASE WHEN charged_cost > 0 THEN charged_cost ELSE cost END), 0) AS charged_cost,
 			COALESCE(SUM(prompt_tokens), 0) AS prompt,
 			COALESCE(SUM(completion_tokens), 0) AS completion,
 			COALESCE(SUM(reasoning_tokens), 0) AS reasoning,
@@ -365,7 +392,7 @@ func GetUsersUsageTimeseries(c *fiber.Ctx) error {
 	}
 	totals := map[uint]int64{}
 	for _, r := range rows {
-		totals[r.UserID] += r.Cost
+		totals[r.UserID] += effectiveAggregateChargedCost(r.ChargedCost, r.Cost)
 	}
 	uts := make([]userTotal, 0, len(totals))
 	for uid, c := range totals {
@@ -416,16 +443,19 @@ func GetUsersUsageTimeseries(c *fiber.Ctx) error {
 
 	// point 内部 Cost 仍累加 int64 micro_usd 避浮点漂移；JSON 输出经 MarshalJSON 转 USD float
 	type point struct {
-		Requests   int64 `json:"requests"`
-		Tokens     int64 `json:"tokens"`
-		Cost       int64 `json:"-"` // micro_usd; 由本地 helper 转 USD 输出
-		Prompt     int64 `json:"prompt_tokens"`
-		Completion int64 `json:"completion_tokens"`
-		Reasoning  int64 `json:"reasoning_tokens"`
-		Cached     int64 `json:"cached_tokens"`
-		CacheWrite int64 `json:"cache_write_tokens"`
+		Requests    int64 `json:"requests"`
+		Tokens      int64 `json:"tokens"`
+		Cost        int64 `json:"-"` // raw micro_usd; 由本地 helper 转 USD 输出
+		ChargedCost int64 `json:"-"` // charged micro_usd; 由本地 helper 转 USD 输出
+		Prompt      int64 `json:"prompt_tokens"`
+		Completion  int64 `json:"completion_tokens"`
+		Reasoning   int64 `json:"reasoning_tokens"`
+		Cached      int64 `json:"cached_tokens"`
+		CacheWrite  int64 `json:"cache_write_tokens"`
 		// CostUSD 是 JSON 输出字段（USD float），由 finalize 阶段填充
-		CostUSD float64 `json:"cost"`
+		CostUSD        float64 `json:"cost"`
+		RawCostUSD     float64 `json:"raw_cost"`
+		ChargedCostUSD float64 `json:"charged_cost"`
 	}
 	type series struct {
 		UserID   uint    `json:"user_id"`
@@ -462,6 +492,7 @@ func GetUsersUsageTimeseries(c *fiber.Ctx) error {
 		p.Requests += r.Requests
 		p.Tokens += r.Tokens
 		p.Cost += r.Cost
+		p.ChargedCost += effectiveAggregateChargedCost(r.ChargedCost, r.Cost)
 		p.Prompt += r.Prompt
 		p.Completion += r.Completion
 		p.Reasoning += r.Reasoning
@@ -480,18 +511,22 @@ func GetUsersUsageTimeseries(c *fiber.Ctx) error {
 	sort.Slice(out, func(i, j int) bool {
 		var ci, cj int64
 		for _, p := range out[i].Points {
-			ci += p.Cost
+			ci += effectiveAggregateChargedCost(p.ChargedCost, p.Cost)
 		}
 		for _, p := range out[j].Points {
-			cj += p.Cost
+			cj += effectiveAggregateChargedCost(p.ChargedCost, p.Cost)
 		}
 		return ci > cj
 	})
 
-	// 排序完成后填充 CostUSD（输出字段）。在累加阶段一直用 int64 micro 避免漂移。
+	// 排序完成后填充 USD 输出字段。在累加阶段一直用 int64 micro 避免漂移。
 	for _, s := range out {
 		for i := range s.Points {
-			s.Points[i].CostUSD = database.MicroToUSD(s.Points[i].Cost)
+			rawCost := s.Points[i].Cost
+			chargedCost := effectiveAggregateChargedCost(s.Points[i].ChargedCost, rawCost)
+			s.Points[i].CostUSD = database.MicroToUSD(rawCost)
+			s.Points[i].RawCostUSD = database.MicroToUSD(rawCost)
+			s.Points[i].ChargedCostUSD = database.MicroToUSD(chargedCost)
 		}
 	}
 
@@ -620,6 +655,7 @@ func GetUsersUsageEvents(c *fiber.Ctx) error {
 	// 拉本页 ApiLog 对应的 revenue 归因（订阅 / 余额）。事实化记录在 side table，
 	// 避免依赖 ApiLog.ChargedCost 推断（订阅扣 charged、余额扣 raw 后两者口径不一致）。
 	revenueByLog := map[uint]database.ApiLogRevenue{}
+	usageLinesByLog := map[uint][]database.PublicApiLogUsageLine{}
 	if len(logs) > 0 {
 		logIDs := make([]uint, 0, len(logs))
 		for _, l := range logs {
@@ -631,6 +667,15 @@ func GetUsersUsageEvents(c *fiber.Ctx) error {
 		}
 		for _, r := range revenues {
 			revenueByLog[r.ApiLogID] = r
+		}
+		if database.DB.Migrator().HasTable(&database.ApiLogUsageLine{}) {
+			var usageLines []database.ApiLogUsageLine
+			if err := database.DB.Where("api_log_id IN ?", logIDs).Order("api_log_id ASC, id ASC").Find(&usageLines).Error; err != nil {
+				log.Printf("[USERS-USAGE-EVENTS] usage lines lookup failed: %v", err)
+			}
+			for _, line := range usageLines {
+				usageLinesByLog[line.ApiLogID] = append(usageLinesByLog[line.ApiLogID], line.ToPublic())
+			}
 		}
 	}
 
@@ -667,55 +712,56 @@ func GetUsersUsageEvents(c *fiber.Ctx) error {
 	}
 
 	type eventOut struct {
-		ID                     uint    `json:"id"`
-		UserID                 uint    `json:"user_id"`
-		Username               string  `json:"username"`
-		TokenName              string  `json:"token_name"`
-		ModelName              string  `json:"model_name"`
-		RequestedModel         string  `json:"requested_model"`
-		ServedModel            string  `json:"served_model"`
-		PromptTokens           int     `json:"prompt_tokens"`
-		CompletionTokens       int     `json:"completion_tokens"`
-		ReasoningTokens        int     `json:"reasoning_tokens"`
-		CachedTokens           int     `json:"cached_tokens"`
-		CacheWriteTokens       int     `json:"cache_write_tokens"`
-		CacheWrite5mTokens     int     `json:"cache_write_5m_tokens"`
-		CacheWrite1hTokens     int     `json:"cache_write_1h_tokens"`
-		TotalTokens            int     `json:"total_tokens"`
-		Cost                   float64 `json:"cost"`
-		RawCost                float64 `json:"raw_cost"`
-		ChargedCost            float64 `json:"charged_cost"`
-		RevenueSource          string  `json:"revenue_source"`
-		EffectiveRevenue       float64 `json:"effective_revenue"`
-		ModelWeight            float64 `json:"model_weight"`
-		HealthMultiplier       float64 `json:"health_multiplier"`
-		BillingRulesVersion    string  `json:"billing_rules_version"`
-		PrecheckInputTokens    int     `json:"precheck_input_tokens"`
-		PrecheckOutputTokens   int     `json:"precheck_output_tokens"`
-		PrecheckRawCost        float64 `json:"precheck_raw_cost"`
-		PrecheckChargedCost    float64 `json:"precheck_charged_cost"`
-		PrecheckQuotaPlanID    uint    `json:"precheck_quota_plan_id"`
-		PrecheckQuotaLimit     float64 `json:"precheck_quota_limit"`
-		PrecheckQuotaUsed      float64 `json:"precheck_quota_used"`
-		PrecheckQuotaRemaining float64 `json:"precheck_quota_remaining"`
-		PrecheckWindowEndAt    string  `json:"precheck_window_end_at"`
-		BlockReason            string  `json:"block_reason"`
-		FallbackUserOptIn      bool    `json:"fallback_user_opt_in"`
-		FallbackReason         string  `json:"fallback_reason"`
-		UpstreamProvider       string  `json:"upstream_provider"`
-		UpstreamAuthIndex      string  `json:"upstream_auth_index"`
-		UpstreamAuthType       string  `json:"upstream_auth_type"`
-		UpstreamSource         string  `json:"upstream_source"`
-		UpstreamRequestID      string  `json:"upstream_request_id"`
-		UpstreamUsageRecordID  uint    `json:"upstream_usage_record_id"`
-		UpstreamUsageMatch     string  `json:"upstream_usage_match"`
-		Latency                int64   `json:"latency_ms"`
-		Status                 int     `json:"status"`
-		IPAddress              string  `json:"ip_address"`
-		RequestPath            string  `json:"request_path"`
-		ErrorType              string  `json:"error_type"`
-		ErrorMessage           string  `json:"error_message"`
-		CreatedAt              string  `json:"created_at"`
+		ID                     uint                             `json:"id"`
+		UserID                 uint                             `json:"user_id"`
+		Username               string                           `json:"username"`
+		TokenName              string                           `json:"token_name"`
+		ModelName              string                           `json:"model_name"`
+		RequestedModel         string                           `json:"requested_model"`
+		ServedModel            string                           `json:"served_model"`
+		PromptTokens           int                              `json:"prompt_tokens"`
+		CompletionTokens       int                              `json:"completion_tokens"`
+		ReasoningTokens        int                              `json:"reasoning_tokens"`
+		CachedTokens           int                              `json:"cached_tokens"`
+		CacheWriteTokens       int                              `json:"cache_write_tokens"`
+		CacheWrite5mTokens     int                              `json:"cache_write_5m_tokens"`
+		CacheWrite1hTokens     int                              `json:"cache_write_1h_tokens"`
+		TotalTokens            int                              `json:"total_tokens"`
+		Cost                   float64                          `json:"cost"`
+		RawCost                float64                          `json:"raw_cost"`
+		ChargedCost            float64                          `json:"charged_cost"`
+		RevenueSource          string                           `json:"revenue_source"`
+		EffectiveRevenue       float64                          `json:"effective_revenue"`
+		ModelWeight            float64                          `json:"model_weight"`
+		HealthMultiplier       float64                          `json:"health_multiplier"`
+		BillingRulesVersion    string                           `json:"billing_rules_version"`
+		PrecheckInputTokens    int                              `json:"precheck_input_tokens"`
+		PrecheckOutputTokens   int                              `json:"precheck_output_tokens"`
+		PrecheckRawCost        float64                          `json:"precheck_raw_cost"`
+		PrecheckChargedCost    float64                          `json:"precheck_charged_cost"`
+		PrecheckQuotaPlanID    uint                             `json:"precheck_quota_plan_id"`
+		PrecheckQuotaLimit     float64                          `json:"precheck_quota_limit"`
+		PrecheckQuotaUsed      float64                          `json:"precheck_quota_used"`
+		PrecheckQuotaRemaining float64                          `json:"precheck_quota_remaining"`
+		PrecheckWindowEndAt    string                           `json:"precheck_window_end_at"`
+		BlockReason            string                           `json:"block_reason"`
+		FallbackUserOptIn      bool                             `json:"fallback_user_opt_in"`
+		FallbackReason         string                           `json:"fallback_reason"`
+		UpstreamProvider       string                           `json:"upstream_provider"`
+		UpstreamAuthIndex      string                           `json:"upstream_auth_index"`
+		UpstreamAuthType       string                           `json:"upstream_auth_type"`
+		UpstreamSource         string                           `json:"upstream_source"`
+		UpstreamRequestID      string                           `json:"upstream_request_id"`
+		UpstreamUsageRecordID  uint                             `json:"upstream_usage_record_id"`
+		UpstreamUsageMatch     string                           `json:"upstream_usage_match"`
+		Latency                int64                            `json:"latency_ms"`
+		Status                 int                              `json:"status"`
+		IPAddress              string                           `json:"ip_address"`
+		RequestPath            string                           `json:"request_path"`
+		ErrorType              string                           `json:"error_type"`
+		ErrorMessage           string                           `json:"error_message"`
+		UsageLines             []database.PublicApiLogUsageLine `json:"usage_lines,omitempty"`
+		CreatedAt              string                           `json:"created_at"`
 	}
 	out := make([]eventOut, 0, len(logs))
 	for _, l := range logs {
@@ -769,6 +815,7 @@ func GetUsersUsageEvents(c *fiber.Ctx) error {
 			RequestPath:            l.RequestPath,
 			ErrorType:              l.ErrorType,
 			ErrorMessage:           l.ErrorMessage,
+			UsageLines:             usageLinesByLog[l.ID],
 			CreatedAt:              l.CreatedAt.Format(time.RFC3339),
 		})
 	}
@@ -789,7 +836,9 @@ func GetUsersUsageEvents(c *fiber.Ctx) error {
 func sortUserUsageRows(rows []UserUsageRow, key string) {
 	switch key {
 	case "cost_asc":
-		sort.SliceStable(rows, func(i, j int) bool { return rows[i].Cost < rows[j].Cost })
+		sort.SliceStable(rows, func(i, j int) bool {
+			return usageRowCostForSort(rows[i].ChargedCost, rows[i].Cost) < usageRowCostForSort(rows[j].ChargedCost, rows[j].Cost)
+		})
 	case "requests_desc":
 		sort.SliceStable(rows, func(i, j int) bool { return rows[i].Requests > rows[j].Requests })
 	case "requests_asc":
@@ -811,8 +860,17 @@ func sortUserUsageRows(rows []UserUsageRow, key string) {
 	case "username_asc":
 		sort.SliceStable(rows, func(i, j int) bool { return rows[i].Username < rows[j].Username })
 	default: // cost_desc
-		sort.SliceStable(rows, func(i, j int) bool { return rows[i].Cost > rows[j].Cost })
+		sort.SliceStable(rows, func(i, j int) bool {
+			return usageRowCostForSort(rows[i].ChargedCost, rows[i].Cost) > usageRowCostForSort(rows[j].ChargedCost, rows[j].Cost)
+		})
 	}
+}
+
+func usageRowCostForSort(chargedCost, rawCost float64) float64 {
+	if chargedCost == 0 && rawCost > 0 {
+		return rawCost
+	}
+	return chargedCost
 }
 
 func firstNonEmpty(values ...string) string {

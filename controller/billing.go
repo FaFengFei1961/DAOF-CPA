@@ -142,14 +142,103 @@ type adminBillingEntryDTO struct {
 	ReconcileResult string `json:"reconcile_result,omitempty"`
 }
 
-func adminBillingEntryDTOsFrom(rows []billingEntryWithReconcile) []adminBillingEntryDTO {
+type billingApiLogEstimate struct {
+	RawCostMicroUSD     int64
+	ChargedCostMicroUSD int64
+}
+
+func adminBillingEntryDTOsFrom(rows []billingEntryWithReconcile, estimates map[uint]billingApiLogEstimate) []adminBillingEntryDTO {
 	out := make([]adminBillingEntryDTO, 0, len(rows))
 	for _, row := range rows {
 		out = append(out, adminBillingEntryDTO{
-			BillingEntryView: billingEntryViewFrom(row.BillingEntry),
+			BillingEntryView: billingEntryViewFromWithEstimate(row.BillingEntry, estimates),
 			IsReconciled:     row.IsReconciled,
 			ReconcileResult:  row.ReconcileResult,
 		})
+	}
+	return out
+}
+
+func billingEntryViewsFromWithEstimates(rows []database.BillingEntry, estimates map[uint]billingApiLogEstimate) []BillingEntryView {
+	out := make([]BillingEntryView, 0, len(rows))
+	for _, row := range rows {
+		out = append(out, billingEntryViewFromWithEstimate(row, estimates))
+	}
+	return out
+}
+
+func billingEntryViewFromWithEstimate(row database.BillingEntry, estimates map[uint]billingApiLogEstimate) BillingEntryView {
+	view := billingEntryViewFrom(row)
+	view.EstimatedReconcileCostUSD = database.MicroToUSD(row.EstimatedCostUSD)
+	if estimate, ok := estimates[row.ID]; ok {
+		view.EstimatedRawCostUSD = database.MicroToUSD(estimate.RawCostMicroUSD)
+		view.EstimatedChargedCostUSD = database.MicroToUSD(estimate.ChargedCostMicroUSD)
+	}
+	if row.EntryType == database.BillingTypeApiUsagePendingReconcile &&
+		row.EstimatedCostUSD > 0 &&
+		view.EstimatedRawCostUSD == 0 &&
+		view.EstimatedChargedCostUSD == 0 {
+		view.EstimatedRawCostUSD = database.MicroToUSD(row.EstimatedCostUSD)
+		view.EstimatedChargedCostUSD = database.MicroToUSD(row.EstimatedCostUSD)
+	}
+	return view
+}
+
+func billingCostEstimatesForEntries(rows []database.BillingEntry) map[uint]billingApiLogEstimate {
+	apiLogByEntryID := make(map[uint]uint)
+	apiLogIDs := make([]uint, 0, len(rows))
+	for _, row := range rows {
+		if row.RelatedID == 0 || row.RelatedType != "api_log" {
+			continue
+		}
+		apiLogByEntryID[row.ID] = row.RelatedID
+		apiLogIDs = append(apiLogIDs, row.RelatedID)
+	}
+	if len(apiLogIDs) == 0 {
+		return nil
+	}
+
+	type apiLogCostRow struct {
+		ID                  uint
+		Cost                int64
+		ChargedCost         int64
+		PrecheckRawCost     int64
+		PrecheckChargedCost int64
+	}
+	var logs []apiLogCostRow
+	if err := database.DB.Model(&database.ApiLog{}).
+		Select("id, cost, charged_cost, precheck_raw_cost, precheck_charged_cost").
+		Where("id IN ?", apiLogIDs).
+		Scan(&logs).Error; err != nil {
+		log.Printf("[BILLING-LIST] api_log estimate lookup failed: %v", err)
+		return nil
+	}
+	byApiLogID := make(map[uint]billingApiLogEstimate, len(logs))
+	for _, row := range logs {
+		rawCost := row.PrecheckRawCost
+		chargedCost := row.PrecheckChargedCost
+		if rawCost == 0 && chargedCost == 0 {
+			rawCost = row.Cost
+			chargedCost = row.ChargedCost
+		}
+		if rawCost > 0 && chargedCost == 0 {
+			chargedCost = rawCost
+		}
+		if chargedCost > 0 && rawCost == 0 {
+			rawCost = chargedCost
+		}
+		if rawCost > 0 || chargedCost > 0 {
+			byApiLogID[row.ID] = billingApiLogEstimate{
+				RawCostMicroUSD:     rawCost,
+				ChargedCostMicroUSD: chargedCost,
+			}
+		}
+	}
+	out := make(map[uint]billingApiLogEstimate, len(apiLogByEntryID))
+	for entryID, apiLogID := range apiLogByEntryID {
+		if estimate, ok := byApiLogID[apiLogID]; ok {
+			out[entryID] = estimate
+		}
 	}
 	return out
 }
@@ -214,9 +303,14 @@ func listBillingEntries(c *fiber.Ctx, userID uint, includeInternal bool) error {
 			rows = rows[:size]
 			nextCursor = int64(rows[len(rows)-1].ID)
 		}
+		entries := make([]database.BillingEntry, 0, len(rows))
+		for _, row := range rows {
+			entries = append(entries, row.BillingEntry)
+		}
+		estimates := billingCostEstimatesForEntries(entries)
 		return c.JSON(fiber.Map{
 			"success":     true,
-			"data":        adminBillingEntryDTOsFrom(rows),
+			"data":        adminBillingEntryDTOsFrom(rows, estimates),
 			"next_cursor": nextCursor,
 		})
 	}
@@ -238,6 +332,7 @@ func listBillingEntries(c *fiber.Ctx, userID uint, includeInternal bool) error {
 		rows = rows[:size]
 		nextCursor = int64(rows[len(rows)-1].ID)
 	}
+	estimates := billingCostEstimatesForEntries(rows)
 	for i := range rows {
 		rows[i].UserID = 0
 		rows[i].Description = publicBillingDescription(rows[i])
@@ -248,7 +343,7 @@ func listBillingEntries(c *fiber.Ctx, userID uint, includeInternal bool) error {
 
 	return c.JSON(fiber.Map{
 		"success":     true,
-		"data":        billingEntryViewsFrom(rows),
+		"data":        billingEntryViewsFromWithEstimates(rows, estimates),
 		"next_cursor": nextCursor,
 	})
 }

@@ -11,6 +11,7 @@ import (
 	"time"
 
 	"daof-cpa/database"
+	"daof-cpa/proxy"
 )
 
 // helper：列出指定用户的全部账单（按 occurred_at 升序，便于断言时间线）
@@ -57,6 +58,112 @@ func TestBilling_PurchaseSubWritesEntry(t *testing.T) {
 	}
 }
 
+func TestBilling_PurchaseSubWithCouponUsesNetPaidAmount(t *testing.T) {
+	setupSubTestDB(t)
+
+	referrer := database.User{
+		Username: "coupon-referrer",
+		Token:    "sk-coupon-referrer",
+		Role:     "user",
+		Status:   1,
+	}
+	if err := database.DB.Create(&referrer).Error; err != nil {
+		t.Fatalf("seed referrer: %v", err)
+	}
+	user := seedTestUser(t, 20)
+	if err := database.DB.Model(&database.User{}).Where("id = ?", user.ID).Updates(map[string]any{
+		"paid_quota":          20 * database.MicroPerUSD,
+		"referred_by_user_id": referrer.ID,
+		"referred_at":         time.Now().Add(-time.Hour),
+	}).Error; err != nil {
+		t.Fatalf("mark referred user: %v", err)
+	}
+
+	proxy.SysConfigMutex.Lock()
+	oldBPS, hadOldBPS := proxy.SysConfigCache[database.ReferralPaidSpendRewardBPSConfigKey]
+	oldWindow, hadOldWindow := proxy.SysConfigCache[database.ReferralPaidSpendRewardWindowSecondsConfigKey]
+	proxy.SysConfigCache[database.ReferralPaidSpendRewardBPSConfigKey] = "1000" // 10%
+	proxy.SysConfigCache[database.ReferralPaidSpendRewardWindowSecondsConfigKey] = "2592000"
+	proxy.SysConfigMutex.Unlock()
+	t.Cleanup(func() {
+		proxy.SysConfigMutex.Lock()
+		defer proxy.SysConfigMutex.Unlock()
+		if hadOldBPS {
+			proxy.SysConfigCache[database.ReferralPaidSpendRewardBPSConfigKey] = oldBPS
+		} else {
+			delete(proxy.SysConfigCache, database.ReferralPaidSpendRewardBPSConfigKey)
+		}
+		if hadOldWindow {
+			proxy.SysConfigCache[database.ReferralPaidSpendRewardWindowSecondsConfigKey] = oldWindow
+		} else {
+			delete(proxy.SysConfigCache, database.ReferralPaidSpendRewardWindowSecondsConfigKey)
+		}
+	})
+
+	pkg := seedPackage(t, func(p *database.Package) {
+		p.PriceAmount = 10 * database.MicroPerUSD
+		p.CostFloorMicroUSD = 3 * database.MicroPerUSD
+	})
+	coupon := database.UserCoupon{
+		UserID: user.ID, Code: "CP-net-paid", Status: "available",
+		SnapshotType: "fixed_price", SnapshotValue: 3 * database.MicroPerUSD,
+		SnapshotPackageIDs: "[" + itoaUint(pkg.ID) + "]",
+	}
+	if err := database.DB.Create(&coupon).Error; err != nil {
+		t.Fatalf("seed coupon: %v", err)
+	}
+
+	app := newTestApp(user)
+	code, resp := doJSON(t, app, "POST", "/purchase",
+		map[string]any{"package_id": pkg.ID, "quantity": 1, "coupon_id": coupon.ID})
+	if code != 200 {
+		t.Fatalf("purchase with coupon failed: %d body=%v", code, resp)
+	}
+
+	var purchase database.BillingEntry
+	if err := database.DB.Where("user_id = ? AND entry_type = ?", user.ID, database.BillingTypePurchaseSub).First(&purchase).Error; err != nil {
+		t.Fatalf("purchase billing missing: %v", err)
+	}
+	if purchase.AmountUSD != -3*database.MicroPerUSD {
+		t.Fatalf("purchase amount=%d, want net paid -$3", purchase.AmountUSD)
+	}
+	if purchase.BalanceAfterUSD != 17*database.MicroPerUSD {
+		t.Fatalf("balance_after=%d, want $17", purchase.BalanceAfterUSD)
+	}
+
+	var sub database.UserSubscription
+	if err := database.DB.Where("user_id = ?", user.ID).First(&sub).Error; err != nil {
+		t.Fatalf("subscription missing: %v", err)
+	}
+	if sub.PurchasedUnitPriceUSD != 3*database.MicroPerUSD || sub.AppliedCouponID != coupon.ID {
+		t.Fatalf("subscription price/coupon=(%d,%d), want (3 USD,%d)", sub.PurchasedUnitPriceUSD, sub.AppliedCouponID, coupon.ID)
+	}
+
+	var freshCoupon database.UserCoupon
+	if err := database.DB.First(&freshCoupon, coupon.ID).Error; err != nil {
+		t.Fatalf("coupon missing: %v", err)
+	}
+	if freshCoupon.Status != "used" || freshCoupon.UsedSavingUSD != 7*database.MicroPerUSD || freshCoupon.UsedOnSubID == nil || *freshCoupon.UsedOnSubID != sub.ID {
+		t.Fatalf("coupon usage not recorded correctly: %+v", freshCoupon)
+	}
+
+	var freshUser database.User
+	if err := database.DB.First(&freshUser, user.ID).Error; err != nil {
+		t.Fatalf("user missing: %v", err)
+	}
+	if freshUser.Quota != 17*database.MicroPerUSD || freshUser.PaidQuota != 17*database.MicroPerUSD {
+		t.Fatalf("user quota/paid_quota=(%d,%d), want ($17,$17)", freshUser.Quota, freshUser.PaidQuota)
+	}
+
+	var reward database.BillingEntry
+	if err := database.DB.Where("user_id = ? AND entry_type = ?", referrer.ID, database.BillingTypeBonusCredit).First(&reward).Error; err != nil {
+		t.Fatalf("referral reward missing: %v", err)
+	}
+	if reward.AmountUSD != 300_000 {
+		t.Fatalf("reward amount=%d, want 10%% of net paid $3 = $0.30", reward.AmountUSD)
+	}
+}
+
 // TestBilling_PurchaseQuantityWritesEntryPerSubscription 叠加购买每份写一行 purchase 账单，不写奖励入账。
 func TestBilling_PurchaseQuantityWritesEntryPerSubscription(t *testing.T) {
 	setupSubTestDB(t)
@@ -91,6 +198,252 @@ func TestBilling_PurchaseQuantityWritesEntryPerSubscription(t *testing.T) {
 		Count(&bonusCount)
 	if bonusCount != 0 {
 		t.Errorf("purchase should not write bonus_credit entries, got %d", bonusCount)
+	}
+}
+
+func TestBilling_PurchaseSubRewardsReferrerForPaidQuotaWithinWindow(t *testing.T) {
+	setupSubTestDB(t)
+
+	referrer := database.User{
+		Username: "purchase-referrer",
+		Token:    "sk-purchase-referrer",
+		Role:     "user",
+		Status:   1,
+	}
+	if err := database.DB.Create(&referrer).Error; err != nil {
+		t.Fatalf("seed referrer: %v", err)
+	}
+	user := seedTestUser(t, 20)
+	referredAt := time.Now().Add(-time.Hour)
+	if err := database.DB.Model(&database.User{}).Where("id = ?", user.ID).Updates(map[string]any{
+		"paid_quota":          20 * database.MicroPerUSD,
+		"referred_by_user_id": referrer.ID,
+		"referred_at":         referredAt,
+	}).Error; err != nil {
+		t.Fatalf("mark referred user: %v", err)
+	}
+	proxy.SysConfigMutex.Lock()
+	oldBPS, hadOldBPS := proxy.SysConfigCache[database.ReferralPaidSpendRewardBPSConfigKey]
+	oldWindow, hadOldWindow := proxy.SysConfigCache[database.ReferralPaidSpendRewardWindowSecondsConfigKey]
+	proxy.SysConfigCache[database.ReferralPaidSpendRewardBPSConfigKey] = "1000" // 10%
+	proxy.SysConfigCache[database.ReferralPaidSpendRewardWindowSecondsConfigKey] = "2592000"
+	proxy.SysConfigMutex.Unlock()
+	t.Cleanup(func() {
+		proxy.SysConfigMutex.Lock()
+		defer proxy.SysConfigMutex.Unlock()
+		if hadOldBPS {
+			proxy.SysConfigCache[database.ReferralPaidSpendRewardBPSConfigKey] = oldBPS
+		} else {
+			delete(proxy.SysConfigCache, database.ReferralPaidSpendRewardBPSConfigKey)
+		}
+		if hadOldWindow {
+			proxy.SysConfigCache[database.ReferralPaidSpendRewardWindowSecondsConfigKey] = oldWindow
+		} else {
+			delete(proxy.SysConfigCache, database.ReferralPaidSpendRewardWindowSecondsConfigKey)
+		}
+	})
+
+	pkg := seedPackage(t, func(p *database.Package) {
+		p.PriceAmount = 10 * database.MicroPerUSD
+	})
+	app := newTestApp(user)
+
+	code, _ := doJSON(t, app, "POST", "/purchase", map[string]any{"package_id": pkg.ID, "quantity": 1})
+	if code != 200 {
+		t.Fatalf("purchase failed: %d", code)
+	}
+
+	var freshUser, freshReferrer database.User
+	if err := database.DB.First(&freshUser, user.ID).Error; err != nil {
+		t.Fatalf("load user: %v", err)
+	}
+	if freshUser.PaidQuota != 10*database.MicroPerUSD {
+		t.Fatalf("paid_quota=%d, want %d", freshUser.PaidQuota, 10*database.MicroPerUSD)
+	}
+	if err := database.DB.First(&freshReferrer, referrer.ID).Error; err != nil {
+		t.Fatalf("load referrer: %v", err)
+	}
+	if freshReferrer.Quota != database.MicroPerUSD {
+		t.Fatalf("referrer quota=%d, want %d", freshReferrer.Quota, database.MicroPerUSD)
+	}
+
+	var reward database.BillingEntry
+	if err := database.DB.Where("user_id = ? AND entry_type = ?", referrer.ID, database.BillingTypeBonusCredit).First(&reward).Error; err != nil {
+		t.Fatalf("reward billing missing: %v", err)
+	}
+	if reward.AmountUSD != database.MicroPerUSD || reward.RelatedType != "subscription" || reward.RelatedID == 0 {
+		t.Fatalf("unexpected reward billing: %+v", reward)
+	}
+
+	var sub database.UserSubscription
+	if err := database.DB.Where("user_id = ?", user.ID).First(&sub).Error; err != nil {
+		t.Fatalf("load purchased sub: %v", err)
+	}
+	admin := seedAdminUser(t)
+	adminApp := newAdminTestApp(admin)
+	code, resp := doJSON(t, adminApp, "POST",
+		"/admin/sub/"+itoaUint(sub.ID)+"/refund",
+		map[string]any{"amount_micro_usd": 10 * database.MicroPerUSD, "reason": "人工审核退款"})
+	if code != 200 {
+		t.Fatalf("refund after referral purchase failed: %d body=%v", code, resp)
+	}
+	if err := database.DB.First(&freshReferrer, referrer.ID).Error; err != nil {
+		t.Fatalf("reload referrer after refund: %v", err)
+	}
+	if freshReferrer.Quota != database.MicroPerUSD {
+		t.Fatalf("referrer quota after refund=%d, want reward preserved %d", freshReferrer.Quota, database.MicroPerUSD)
+	}
+	var rewardCount int64
+	database.DB.Model(&database.BillingEntry{}).
+		Where("user_id = ? AND entry_type = ?", referrer.ID, database.BillingTypeBonusCredit).
+		Count(&rewardCount)
+	if rewardCount != 1 {
+		t.Fatalf("refund should not claw back referral reward entries, got %d bonus entries", rewardCount)
+	}
+}
+
+func TestBilling_PurchaseSubDoesNotRewardBonusSpend(t *testing.T) {
+	setupSubTestDB(t)
+
+	referrer := database.User{
+		Username: "bonus-first-referrer",
+		Token:    "sk-bonus-first-referrer",
+		Role:     "user",
+		Status:   1,
+	}
+	if err := database.DB.Create(&referrer).Error; err != nil {
+		t.Fatalf("seed referrer: %v", err)
+	}
+	user := seedTestUser(t, 20)
+	if err := database.DB.Model(&database.User{}).Where("id = ?", user.ID).Updates(map[string]any{
+		"paid_quota":          10 * database.MicroPerUSD,
+		"referred_by_user_id": referrer.ID,
+		"referred_at":         time.Now().Add(-time.Hour),
+	}).Error; err != nil {
+		t.Fatalf("mark referred user: %v", err)
+	}
+	proxy.SysConfigMutex.Lock()
+	oldBPS, hadOldBPS := proxy.SysConfigCache[database.ReferralPaidSpendRewardBPSConfigKey]
+	oldWindow, hadOldWindow := proxy.SysConfigCache[database.ReferralPaidSpendRewardWindowSecondsConfigKey]
+	proxy.SysConfigCache[database.ReferralPaidSpendRewardBPSConfigKey] = "1000"
+	proxy.SysConfigCache[database.ReferralPaidSpendRewardWindowSecondsConfigKey] = "2592000"
+	proxy.SysConfigMutex.Unlock()
+	t.Cleanup(func() {
+		proxy.SysConfigMutex.Lock()
+		defer proxy.SysConfigMutex.Unlock()
+		if hadOldBPS {
+			proxy.SysConfigCache[database.ReferralPaidSpendRewardBPSConfigKey] = oldBPS
+		} else {
+			delete(proxy.SysConfigCache, database.ReferralPaidSpendRewardBPSConfigKey)
+		}
+		if hadOldWindow {
+			proxy.SysConfigCache[database.ReferralPaidSpendRewardWindowSecondsConfigKey] = oldWindow
+		} else {
+			delete(proxy.SysConfigCache, database.ReferralPaidSpendRewardWindowSecondsConfigKey)
+		}
+	})
+
+	pkg := seedPackage(t, func(p *database.Package) {
+		p.PriceAmount = 10 * database.MicroPerUSD
+	})
+	app := newTestApp(user)
+	code, resp := doJSON(t, app, "POST", "/purchase", map[string]any{"package_id": pkg.ID, "quantity": 1})
+	if code != 200 {
+		t.Fatalf("purchase failed: %d body=%v", code, resp)
+	}
+
+	var freshUser, freshReferrer database.User
+	if err := database.DB.First(&freshUser, user.ID).Error; err != nil {
+		t.Fatalf("load user: %v", err)
+	}
+	if freshUser.Quota != 10*database.MicroPerUSD || freshUser.PaidQuota != 10*database.MicroPerUSD {
+		t.Fatalf("quota/paid_quota=%d/%d, want $10/$10 (bonus consumed first)", freshUser.Quota, freshUser.PaidQuota)
+	}
+	if err := database.DB.First(&freshReferrer, referrer.ID).Error; err != nil {
+		t.Fatalf("load referrer: %v", err)
+	}
+	if freshReferrer.Quota != 0 {
+		t.Fatalf("referrer quota=%d, want 0", freshReferrer.Quota)
+	}
+	var rewardCount int64
+	database.DB.Model(&database.BillingEntry{}).
+		Where("user_id = ? AND entry_type = ?", referrer.ID, database.BillingTypeBonusCredit).
+		Count(&rewardCount)
+	if rewardCount != 0 {
+		t.Fatalf("bonus-layer spend should not reward, got %d reward entries", rewardCount)
+	}
+}
+
+func TestBilling_PurchaseQuantityRewardsFullPaidOrder(t *testing.T) {
+	setupSubTestDB(t)
+
+	referrer := database.User{
+		Username: "quantity-referrer",
+		Token:    "sk-quantity-referrer",
+		Role:     "user",
+		Status:   1,
+	}
+	if err := database.DB.Create(&referrer).Error; err != nil {
+		t.Fatalf("seed referrer: %v", err)
+	}
+	user := seedTestUser(t, 20)
+	if err := database.DB.Model(&database.User{}).Where("id = ?", user.ID).Updates(map[string]any{
+		"paid_quota":          20 * database.MicroPerUSD,
+		"referred_by_user_id": referrer.ID,
+		"referred_at":         time.Now().Add(-time.Hour),
+	}).Error; err != nil {
+		t.Fatalf("mark referred user: %v", err)
+	}
+	proxy.SysConfigMutex.Lock()
+	oldBPS, hadOldBPS := proxy.SysConfigCache[database.ReferralPaidSpendRewardBPSConfigKey]
+	oldWindow, hadOldWindow := proxy.SysConfigCache[database.ReferralPaidSpendRewardWindowSecondsConfigKey]
+	proxy.SysConfigCache[database.ReferralPaidSpendRewardBPSConfigKey] = "1000"
+	proxy.SysConfigCache[database.ReferralPaidSpendRewardWindowSecondsConfigKey] = "2592000"
+	proxy.SysConfigMutex.Unlock()
+	t.Cleanup(func() {
+		proxy.SysConfigMutex.Lock()
+		defer proxy.SysConfigMutex.Unlock()
+		if hadOldBPS {
+			proxy.SysConfigCache[database.ReferralPaidSpendRewardBPSConfigKey] = oldBPS
+		} else {
+			delete(proxy.SysConfigCache, database.ReferralPaidSpendRewardBPSConfigKey)
+		}
+		if hadOldWindow {
+			proxy.SysConfigCache[database.ReferralPaidSpendRewardWindowSecondsConfigKey] = oldWindow
+		} else {
+			delete(proxy.SysConfigCache, database.ReferralPaidSpendRewardWindowSecondsConfigKey)
+		}
+	})
+
+	pkg := seedPackage(t, func(p *database.Package) {
+		p.PriceAmount = 10 * database.MicroPerUSD
+		p.MaxActivePerUser = 2
+	})
+	app := newTestApp(user)
+	code, resp := doJSON(t, app, "POST", "/purchase", map[string]any{"package_id": pkg.ID, "quantity": 2})
+	if code != 200 {
+		t.Fatalf("quantity purchase failed: %d body=%v", code, resp)
+	}
+
+	var freshUser, freshReferrer database.User
+	if err := database.DB.First(&freshUser, user.ID).Error; err != nil {
+		t.Fatalf("load user: %v", err)
+	}
+	if freshUser.PaidQuota != 0 {
+		t.Fatalf("paid_quota=%d, want 0 after full paid order", freshUser.PaidQuota)
+	}
+	if err := database.DB.First(&freshReferrer, referrer.ID).Error; err != nil {
+		t.Fatalf("load referrer: %v", err)
+	}
+	if freshReferrer.Quota != 2*database.MicroPerUSD {
+		t.Fatalf("referrer quota=%d, want $2 reward", freshReferrer.Quota)
+	}
+	var rewardCount int64
+	database.DB.Model(&database.BillingEntry{}).
+		Where("user_id = ? AND entry_type = ?", referrer.ID, database.BillingTypeBonusCredit).
+		Count(&rewardCount)
+	if rewardCount != 1 {
+		t.Fatalf("quantity order should write one reward entry, got %d", rewardCount)
 	}
 }
 

@@ -111,6 +111,24 @@ func main() {
 	// 路由树 (Routing)
 	// ===========================
 
+	// LLM 代理入口先按 IP 做粗限流，挡随机 Bearer token 扫描造成的 DB 写入放大。
+	// 阈值故意很高（~83 RPS/IP），避免误伤正常多 agent / CLI 编排；真实用户仍由下方 token 限流约束。
+	llmIPCoarseLimiter := limiter.New(limiter.Config{
+		Max:        5000,
+		Expiration: 1 * time.Minute,
+		KeyGenerator: func(c *fiber.Ctx) string {
+			return "llm-ip-coarse:" + utils.RealClientIP(c)
+		},
+		LimitReached: func(c *fiber.Ctx) error {
+			return c.Status(429).JSON(fiber.Map{
+				"error": fiber.Map{
+					"type":    "rate_limit_exceeded",
+					"message": "Too many requests from this IP. Limit: 5000/min. Please slow down.",
+				},
+			})
+		},
+	})
+
 	// fix CRITICAL C-B1（codex 第二十一轮）：LLM 代理入口（/v1/*）原本无任何限流，
 	// 公开后任何用户的 token 泄漏 / 恶意脚本扫单 / 死循环调用都会瞬间打爆上游网关 + 拖垮 SQLite
 	// 写锁 + 烧账单链路。按 token 优先 + IP 兜底建限流：每个 token 每分钟最多 600 次（~10 RPS），
@@ -137,18 +155,22 @@ func main() {
 		},
 	})
 	// OpenAI 格式代理统一网关
-	app.All("/v1/chat/completions", llmProxyLimiter, proxy.ChatCompletionProxyHandler)
-	app.All("/v1/responses", llmProxyLimiter, proxy.ChatCompletionProxyHandler) // 兼容最新 OpenAI Agentic Responses API
+	app.All("/v1/chat/completions", llmIPCoarseLimiter, llmProxyLimiter, proxy.ChatCompletionProxyHandler)
+	app.All("/v1/responses", llmIPCoarseLimiter, llmProxyLimiter, proxy.ChatCompletionProxyHandler) // 兼容最新 OpenAI Agentic Responses API
+	app.Post("/v1/images/generations", llmIPCoarseLimiter, llmProxyLimiter, proxy.ImageGenerationProxyHandler)
+	app.Post("/v1/videos/generations", llmIPCoarseLimiter, llmProxyLimiter, proxy.VideoGenerationProxyHandler)
+	app.Get("/v1/videos/:request_id", llmIPCoarseLimiter, llmProxyLimiter, proxy.VideoRetrieveProxyHandler)
 	// Anthropic 原生 Messages API（Claude Code / Anthropic SDK 默认调用此路径）
-	app.All("/v1/messages", llmProxyLimiter, proxy.ChatCompletionProxyHandler)
+	app.All("/v1/messages", llmIPCoarseLimiter, llmProxyLimiter, proxy.ChatCompletionProxyHandler)
 	// 容错：客户端 base URL 误填为 ".../v1" 时 SDK 会拼出 /v1/v1/messages，仍正确路由
-	app.All("/v1/v1/messages", llmProxyLimiter, proxy.ChatCompletionProxyHandler)
-	app.All("/v1/messages/count_tokens", llmProxyLimiter, proxy.ChatCompletionProxyHandler)
-	app.All("/v1/v1/messages/count_tokens", llmProxyLimiter, proxy.ChatCompletionProxyHandler)
+	app.All("/v1/v1/messages", llmIPCoarseLimiter, llmProxyLimiter, proxy.ChatCompletionProxyHandler)
+	app.All("/v1/messages/count_tokens", llmIPCoarseLimiter, llmProxyLimiter, proxy.ChatCompletionProxyHandler)
+	app.All("/v1/v1/messages/count_tokens", llmIPCoarseLimiter, llmProxyLimiter, proxy.ChatCompletionProxyHandler)
 	// Gemini 原生 Generative Language API（Gemini CLI / Google GenAI SDK）
-	app.All("/v1beta/models/:modelAction", llmProxyLimiter, proxy.ChatCompletionProxyHandler)
-	app.All("/v1/models/:modelAction", llmProxyLimiter, proxy.ChatCompletionProxyHandler)
+	app.All("/v1beta/models/:modelAction", llmIPCoarseLimiter, llmProxyLimiter, proxy.ChatCompletionProxyHandler)
+	app.All("/v1/models/:modelAction", llmIPCoarseLimiter, llmProxyLimiter, proxy.ChatCompletionProxyHandler)
 	app.Get("/v1/models", controller.GetPublicModels)
+	app.Get("/v1/v1/models", controller.GetPublicModels)
 
 	// 前端控制台 API 占位
 	api := app.Group("/api")
@@ -260,6 +282,7 @@ func main() {
 	adminApi.Get("/users-usage/events", controller.GetUsersUsageEvents)
 	adminApi.Get("/upstream-account-cost-presets", controller.ListUpstreamAccountCostPresets)
 	adminApi.Get("/upstream-accounts", controller.ListUpstreamAccountCosts)
+	adminApi.Get("/upstream-accounts/candidates", controller.ListUpstreamAccountCandidates)
 	adminApi.Get("/upstream-accounts/stale", controller.ListStaleUpstreamAccountCosts)
 	adminApi.Post("/upstream-accounts", controller.CreateUpstreamAccountCost)
 	adminApi.Post("/upstream-accounts/bulk", controller.BulkUpsertUpstreamAccountCosts)
@@ -267,9 +290,11 @@ func main() {
 	adminApi.Delete("/upstream-accounts/:id", controller.DeleteUpstreamAccountCost)
 	adminApi.Get("/upstream-margin", controller.GetUpstreamMarginReport)
 	adminApi.Post("/billing/rules", controller.UpdateBillingRules)
+	adminApi.Post("/billing/rules/revisions/:id/cancel", controller.CancelBillingRuleRevision)
 	adminApi.Post("/users/bulk-quota/preview", controller.BulkAdjustQuotaPreview)
 	adminApi.Post("/users/bulk-quota", controller.BulkAdjustQuota)
 	adminApi.Post("/users/bulk-delete", controller.BulkDeleteUsers)
+	adminApi.Post("/users/:id/offline-topup", controller.AdminCreateOfflineTopup)
 	adminApi.Put("/users/:id", controller.UpdateUser)
 	adminApi.Post("/users/:id/purge", controller.AdminPurgeUser)
 	adminApi.Delete("/users/:id", controller.DeleteUser)
@@ -514,6 +539,7 @@ func main() {
 		},
 	})
 	adminApi.Get("/topup/orders", controller.AdminListTopupOrders)
+	adminApi.Post("/topup/orders/:id/mark-paid", refundLimiter, controller.AdminMarkTopupPaid)
 	adminApi.Post("/topup/orders/:id/refund", refundLimiter, controller.AdminRefundTopup)
 
 	// admin 账单：按用户查任意账单（嵌入 UserManagement 详情面板）

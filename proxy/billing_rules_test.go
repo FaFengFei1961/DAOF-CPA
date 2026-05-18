@@ -2,9 +2,15 @@ package proxy
 
 import (
 	"math/big"
+	"strconv"
 	"testing"
+	"time"
 
 	"daof-cpa/database"
+	"daof-cpa/utils"
+
+	"gorm.io/driver/sqlite"
+	"gorm.io/gorm"
 )
 
 func TestResolveBillingRulesDefaults(t *testing.T) {
@@ -12,27 +18,35 @@ func TestResolveBillingRulesDefaults(t *testing.T) {
 	defer replaceSysConfigForTest(old)
 
 	opus := ResolveBillingRules("claude-opus-4-7", nil, 0, ChannelTypeAnthropic, false).WithCosts(100)
-	if opus.ModelWeight != 3.5 {
-		t.Fatalf("opus weight = %v, want 3.5", opus.ModelWeight)
+	if opus.ModelWeight != 1 {
+		t.Fatalf("opus weight = %v, want 1", opus.ModelWeight)
 	}
-	if opus.ChargedCostMicroUSD != 350 {
-		t.Fatalf("opus charged = %d, want 350", opus.ChargedCostMicroUSD)
+	if opus.ChargedCostMicroUSD != 100 {
+		t.Fatalf("opus charged = %d, want 100", opus.ChargedCostMicroUSD)
 	}
 	if opus.RequestedModel != opus.ServedModel {
 		t.Fatalf("default path must not change model: %+v", opus)
 	}
 
-	// Thinking 倍率严格判定：必须同时有 reasoning_tokens > 0 + 请求里启用 thinking。
-	// 仅有请求字段（precheck 状态）不应触发 ×5。
+	// Claude extended thinking 不稳定返回独立 reasoning_tokens；显式 thinking 请求即按
+	// Claude thinking_weight 预检/扣减。
 	thinkingPrecheck := ResolveBillingRules("claude-opus-4-7", []byte(`{"thinking":{"type":"enabled","budget_tokens":1024}}`), 0, ChannelTypeAnthropic, true).WithCosts(100)
-	if thinkingPrecheck.ModelWeight != 3.5 {
-		t.Fatalf("precheck without reasoning_tokens must NOT trigger thinking weight; got %v, want 3.5", thinkingPrecheck.ModelWeight)
+	if thinkingPrecheck.ModelWeight != 1.5 {
+		t.Fatalf("claude thinking precheck weight = %v, want 1.5", thinkingPrecheck.ModelWeight)
 	}
 
-	// commit 时上游真的返回了 reasoning_tokens > 0 + 请求显式启用 thinking → ×5
+	// commit 时也保持同一 Claude thinking_weight。
 	thinkingCommit := ResolveBillingRules("claude-opus-4-7", []byte(`{"thinking":{"type":"enabled","budget_tokens":1024}}`), 800, ChannelTypeAnthropic, true).WithCosts(100)
-	if thinkingCommit.ModelWeight != 5 {
-		t.Fatalf("commit with reasoning_tokens + explicit thinking must trigger ×5; got %v, want 5", thinkingCommit.ModelWeight)
+	if thinkingCommit.ModelWeight != 1.5 {
+		t.Fatalf("commit with explicit Claude thinking must trigger ×1.5; got %v, want 1.5", thinkingCommit.ModelWeight)
+	}
+	adaptiveThinking := ResolveBillingRules("claude-opus-4-7", []byte(`{"thinking":{"type":"adaptive","budget_tokens":1024}}`), 0, ChannelTypeAnthropic, false).WithCosts(100)
+	if adaptiveThinking.ModelWeight != 1.5 {
+		t.Fatalf("claude adaptive thinking must trigger ×1.5 even without reasoning_tokens; got %v, want 1.5", adaptiveThinking.ModelWeight)
+	}
+	thinkingAlias := ResolveBillingRules("claude-opus-4-6-thinking", []byte(`{}`), 0, ChannelTypeAnthropic, false).WithCosts(100)
+	if thinkingAlias.ModelWeight != 1.5 {
+		t.Fatalf("claude *-thinking alias must trigger ×1.5 even without reasoning_tokens; got %v, want 1.5", thinkingAlias.ModelWeight)
 	}
 	if !thinkingCommit.FallbackUserOptIn {
 		t.Fatalf("fallback opt-in should be recorded")
@@ -49,25 +63,31 @@ func TestResolveBillingRulesThinkingDetection(t *testing.T) {
 		reasoning int
 		want      float64
 	}{
-		// === both conditions hold → thinking weight ===
-		{name: "anthropic enabled + reasoning tokens", body: `{"thinking":{"type":"enabled","budget_tokens":1024}}`, reasoning: 500, want: 5},
-		{name: "budget enables + reasoning tokens", body: `{"thinking":{"budget_tokens":1024}}`, reasoning: 500, want: 5},
-		{name: "openai effort medium + reasoning tokens", body: `{"reasoning":{"effort":"medium"}}`, reasoning: 100, want: 5},
-		{name: "top-level reasoning effort low + reasoning tokens", body: `{"reasoning_effort":"low"}`, reasoning: 100, want: 5},
+		// === explicit thinking + reasoning tokens → thinking weight ===
+		{name: "anthropic enabled + reasoning tokens", body: `{"thinking":{"type":"enabled","budget_tokens":1024}}`, reasoning: 500, want: 1.5},
+		{name: "budget enables + reasoning tokens", body: `{"thinking":{"budget_tokens":1024}}`, reasoning: 500, want: 1.5},
+		{name: "openai effort medium + reasoning tokens", body: `{"reasoning":{"effort":"medium"}}`, reasoning: 100, want: 1.5},
+		{name: "top-level reasoning effort low + reasoning tokens", body: `{"reasoning_effort":"low"}`, reasoning: 100, want: 1.5},
 
-		// === only one condition holds → fall back to base weight ===
-		{name: "request has thinking but reasoning=0 (precheck)", body: `{"thinking":{"type":"enabled","budget_tokens":1024}}`, reasoning: 0, want: 3.5},
-		{name: "openai effort high but no reasoning tokens", body: `{"reasoning":{"effort":"high"}}`, reasoning: 0, want: 3.5},
-		{name: "reasoning tokens but request has no thinking field", body: `{}`, reasoning: 1, want: 3.5},
-		{name: "reasoning tokens but thinking explicitly disabled", body: `{"thinking":{"type":"disabled"}}`, reasoning: 1, want: 3.5},
+		// === Claude explicit thinking without separate reasoning tokens still uses thinking weight ===
+		{name: "claude request has thinking but reasoning=0", body: `{"thinking":{"type":"enabled","budget_tokens":1024}}`, reasoning: 0, want: 1.5},
+		{name: "claude adaptive thinking but reasoning=0", body: `{"thinking":{"type":"adaptive","budget_tokens":1024}}`, reasoning: 0, want: 1.5},
+		{name: "claude openai chat reasoning_effort maps to thinking", body: `{"reasoning_effort":"high"}`, reasoning: 0, want: 1.5},
+		{name: "claude openai responses reasoning effort maps to thinking", body: `{"reasoning":{"effort":"high"}}`, reasoning: 0, want: 1.5},
+
+		// === no explicit thinking → base weight ===
+		{name: "claude openai chat reasoning_effort none disables thinking", body: `{"reasoning_effort":"none"}`, reasoning: 0, want: 1},
+		{name: "claude openai responses reasoning none disables thinking", body: `{"reasoning":{"effort":"none"}}`, reasoning: 0, want: 1},
+		{name: "reasoning tokens but request has no thinking field", body: `{}`, reasoning: 1, want: 1},
+		{name: "reasoning tokens but thinking explicitly disabled", body: `{"thinking":{"type":"disabled"}}`, reasoning: 1, want: 1},
 
 		// === neither holds → base weight ===
-		{name: "no thinking field, no reasoning tokens", body: `{}`, want: 3.5},
-		{name: "anthropic thinking disabled", body: `{"thinking":{"type":"disabled"}}`, want: 3.5},
-		{name: "empty thinking object", body: `{"thinking":{}}`, want: 3.5},
-		{name: "zero budget", body: `{"thinking":{"budget_tokens":0}}`, want: 3.5},
-		{name: "openai reasoning effort none", body: `{"reasoning":{"effort":"none"}}`, want: 3.5},
-		{name: "top-level reasoning effort none", body: `{"reasoning_effort":"none"}`, want: 3.5},
+		{name: "no thinking field, no reasoning tokens", body: `{}`, want: 1},
+		{name: "anthropic thinking disabled", body: `{"thinking":{"type":"disabled"}}`, want: 1},
+		{name: "empty thinking object", body: `{"thinking":{}}`, want: 1},
+		{name: "zero budget", body: `{"thinking":{"budget_tokens":0}}`, want: 1},
+		{name: "openai reasoning effort none", body: `{"reasoning":{"effort":"none"}}`, want: 1},
+		{name: "top-level reasoning effort none", body: `{"reasoning_effort":"none"}`, want: 1},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
@@ -76,6 +96,22 @@ func TestResolveBillingRulesThinkingDetection(t *testing.T) {
 				t.Fatalf("model weight = %v, want %v", got, tc.want)
 			}
 		})
+	}
+}
+
+func TestResolveBillingRulesNonClaudeThinkingStillRequiresReasoningTokens(t *testing.T) {
+	old := replaceSysConfigForTest(map[string]string{
+		BillingModelWeightsConfigKey: `[{"pattern":"gpt-*","weight":1,"thinking_weight":1.5}]`,
+	})
+	defer replaceSysConfigForTest(old)
+
+	precheck := ResolveBillingRules("gpt-5.5", []byte(`{"reasoning":{"effort":"high"}}`), 0, ChannelTypeOpenAI, false)
+	if precheck.ModelWeight != 1 {
+		t.Fatalf("non-Claude precheck must stay base weight, got %v want 1", precheck.ModelWeight)
+	}
+	commit := ResolveBillingRules("gpt-5.5", []byte(`{"reasoning":{"effort":"high"}}`), 100, ChannelTypeOpenAI, false)
+	if commit.ModelWeight != 1.5 {
+		t.Fatalf("non-Claude commit with reasoning tokens should use thinking weight, got %v want 1.5", commit.ModelWeight)
 	}
 }
 
@@ -122,6 +158,18 @@ func TestGetPublicBillingRulesExposesBalanceStrategy(t *testing.T) {
 	}
 	if rules.Subscription["formula"] == "" {
 		t.Fatalf("subscription.formula must not be empty")
+	}
+}
+
+func TestSubscriptionRevenueMicroUSD_GrantedSubscriptionIsZero(t *testing.T) {
+	if got := subscriptionRevenueMicroUSD(12345, true); got != 0 {
+		t.Fatalf("granted subscription revenue = %d, want 0", got)
+	}
+	if got := subscriptionRevenueMicroUSD(12345, false); got != 12345 {
+		t.Fatalf("paid subscription revenue = %d, want charged cost", got)
+	}
+	if got := subscriptionRevenueMicroUSD(-1, false); got != 0 {
+		t.Fatalf("negative charged cost should clamp to 0, got %d", got)
 	}
 }
 
@@ -181,10 +229,88 @@ func TestApplyBillingMultiplier_CeilPreventsSubMicroLoss(t *testing.T) {
 	}
 }
 
+func TestActivateDueBillingRuleRevisionsSkipsCanceledAndAppliesLatestDue(t *testing.T) {
+	utils.InitCrypto()
+	db, err := gorm.Open(sqlite.Open("file:billing_rule_activation?mode=memory&cache=shared"), &gorm.Config{})
+	if err != nil {
+		t.Fatalf("open db: %v", err)
+	}
+	if err := db.AutoMigrate(
+		&database.SysConfig{}, &database.BillingRuleRevision{}, &database.BillingRuleRevisionCancellation{},
+		&database.Channel{}, &database.ChannelModel{}, &database.User{}, &database.AccessToken{},
+	); err != nil {
+		t.Fatalf("migrate: %v", err)
+	}
+	oldDB := database.DB
+	database.DB = db
+	t.Cleanup(func() { database.DB = oldDB })
+
+	oldCache := replaceSysConfigForTest(map[string]string{})
+	defer replaceSysConfigForTest(oldCache)
+
+	now := time.Now().UTC()
+	canceledAt := now.Add(-2 * time.Minute)
+	dueAt := now.Add(-1 * time.Minute)
+	canceled := database.BillingRuleRevision{
+		Version:               "scheduled-canceled",
+		EffectiveSince:        canceledAt.Format("2006-01-02"),
+		PublishedAt:           &now,
+		EffectiveAt:           &canceledAt,
+		ModelWeightsJSON:      `[{"pattern":"canceled-*","weight":9}]`,
+		HealthMultipliersJSON: `[{"pattern":"*","weight":1}]`,
+		ModelCount:            1,
+		HealthCount:           1,
+	}
+	active := database.BillingRuleRevision{
+		Version:               "scheduled-active",
+		EffectiveSince:        dueAt.Format("2006-01-02"),
+		PublishedAt:           &now,
+		EffectiveAt:           &dueAt,
+		ModelWeightsJSON:      `[{"pattern":"active-*","weight":2}]`,
+		HealthMultipliersJSON: `[{"pattern":"*","weight":1}]`,
+		ModelCount:            1,
+		HealthCount:           1,
+	}
+	if err := db.Create(&canceled).Error; err != nil {
+		t.Fatalf("create canceled revision: %v", err)
+	}
+	if err := db.Create(&active).Error; err != nil {
+		t.Fatalf("create active revision: %v", err)
+	}
+	if err := db.Create(&database.BillingRuleRevisionCancellation{RevisionID: canceled.ID}).Error; err != nil {
+		t.Fatalf("create cancellation: %v", err)
+	}
+
+	activateDueBillingRuleRevisions(now)
+
+	if got := readPlainSysConfigForBillingRulesTest(t, BillingRulesVersionConfigKey); got != active.Version {
+		t.Fatalf("active version = %q, want %q", got, active.Version)
+	}
+	if got := readPlainSysConfigForBillingRulesTest(t, BillingRulesRevisionIDConfigKey); got != strconv.Itoa(int(active.ID)) {
+		t.Fatalf("active revision id = %q, want %d", got, active.ID)
+	}
+	if got := readPlainSysConfigForBillingRulesTest(t, BillingModelWeightsConfigKey); got != active.ModelWeightsJSON {
+		t.Fatalf("model weights = %q, want %q", got, active.ModelWeightsJSON)
+	}
+}
+
 func replaceSysConfigForTest(next map[string]string) map[string]string {
 	SysConfigMutex.Lock()
 	defer SysConfigMutex.Unlock()
 	old := SysConfigCache
 	SysConfigCache = next
 	return old
+}
+
+func readPlainSysConfigForBillingRulesTest(t *testing.T, key string) string {
+	t.Helper()
+	var row database.SysConfig
+	if err := database.DB.Where("key = ?", key).First(&row).Error; err != nil {
+		t.Fatalf("read sysconfig %s: %v", key, err)
+	}
+	plain, err := utils.Decrypt(row.Value)
+	if err != nil {
+		t.Fatalf("decrypt sysconfig %s: %v", key, err)
+	}
+	return plain
 }

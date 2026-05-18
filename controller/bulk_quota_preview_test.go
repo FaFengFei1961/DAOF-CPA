@@ -116,6 +116,45 @@ func TestBulkAdjustQuotaPreview_HappyPath(t *testing.T) {
 	}
 }
 
+func TestBulkAdjustQuotaPreview_ProtectsPaidQuota(t *testing.T) {
+	setupBulkQuotaPreviewDB(t)
+	app := newBulkQuotaPreviewApp()
+
+	user := database.User{
+		ID:        1,
+		Username:  "paid-floor",
+		Role:      "user",
+		Token:     "sk-paid-floor",
+		Quota:     10 * database.MicroPerUSD,
+		PaidQuota: 6 * database.MicroPerUSD,
+	}
+	if err := database.DB.Create(&user).Error; err != nil {
+		t.Fatalf("seed user: %v", err)
+	}
+
+	code, resp := postBulkQuotaPreview(t, app, map[string]any{
+		"user_ids":   []int64{1},
+		"action":     "subtract",
+		"amount_usd": 5.0,
+	})
+	if code != 200 {
+		t.Fatalf("expected 200, got %d: %v", code, resp)
+	}
+	data := resp["data"].(map[string]any)
+	if got := data["total_delta_usd"].(float64); got != -4 {
+		t.Fatalf("total_delta_usd=%v, want -4", got)
+	}
+	row := data["users"].([]any)[0].(map[string]any)
+	if row["current_usd"].(float64) != 10 ||
+		row["paid_quota_usd"].(float64) != 6 ||
+		row["bonus_usd"].(float64) != 4 ||
+		row["min_quota_usd"].(float64) != 6 ||
+		row["future_usd"].(float64) != 6 ||
+		row["protected"].(bool) != true {
+		t.Fatalf("unexpected protected preview: %#v", row)
+	}
+}
+
 func TestBulkAdjustQuotaPreview_OverLimit(t *testing.T) {
 	setupBulkQuotaPreviewDB(t)
 	app := newBulkQuotaPreviewApp()

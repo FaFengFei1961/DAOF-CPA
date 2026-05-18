@@ -281,6 +281,64 @@ func TestIntegration_MySubscriptionsIncludesUsageSummary(t *testing.T) {
 	}
 }
 
+func TestIntegration_MySubscriptionsDisplaysExpiredWindowAsFresh(t *testing.T) {
+	setupSubTestDB(t)
+	user := seedTestUser(t, 100)
+	pkg := seedPackage(t)
+	if err := database.DB.Model(&database.QuotaPlan{}).Where("1 = 1").Update("window_seconds", 3600).Error; err != nil {
+		t.Fatalf("seed windowed quota plan: %v", err)
+	}
+
+	app := newTestApp(user)
+	code, resp := doJSON(t, app, "POST", "/purchase", map[string]any{
+		"package_id": pkg.ID, "quantity": 1,
+	})
+	if code != 200 {
+		t.Fatalf("purchase expected 200, got %d, body=%v", code, resp)
+	}
+
+	var sub database.UserSubscription
+	if err := database.DB.Where("user_id = ?", user.ID).First(&sub).Error; err != nil {
+		t.Fatalf("load subscription: %v", err)
+	}
+	var plan database.QuotaPlan
+	if err := database.DB.First(&plan).Error; err != nil {
+		t.Fatalf("load quota plan: %v", err)
+	}
+	now := time.Now()
+	if err := database.DB.Create(&database.SubscriptionUsage{
+		SubscriptionID: sub.ID,
+		QuotaPlanID:    plan.ID,
+		ModelBucket:    "*",
+		WindowStartAt:  now.Add(-2 * time.Hour),
+		WindowEndAt:    now.Add(-time.Hour),
+		ConsumedValue:  99,
+		RequestCount:   7,
+	}).Error; err != nil {
+		t.Fatalf("seed expired usage: %v", err)
+	}
+
+	code, resp = doJSON(t, app, "GET", "/my", nil)
+	if code != 200 {
+		t.Fatalf("my subscriptions expected 200, got %d, body=%v", code, resp)
+	}
+	data := resp["data"].([]any)
+	summaries := data[0].(map[string]any)["usage_summary"].([]any)
+	summary := summaries[0].(map[string]any)
+	if got, _ := summary["consumed"].(float64); got != 0 {
+		t.Fatalf("expired window should display as fresh consumed=0, got %#v", summary["consumed"])
+	}
+	if got, _ := summary["request_count"].(float64); got != 0 {
+		t.Fatalf("expired window should display as fresh request_count=0, got %#v", summary["request_count"])
+	}
+	if _, ok := summary["window_end_at"]; ok {
+		t.Fatalf("expired window should not expose old window_end_at, got %#v", summary["window_end_at"])
+	}
+	if got, _ := summary["remaining"].(float64); got < 9999.9 {
+		t.Fatalf("expired window should show full remaining quota, got %#v", summary["remaining"])
+	}
+}
+
 func TestIntegration_PurchasePackage_InsufficientBalance(t *testing.T) {
 	setupSubTestDB(t)
 	user := seedTestUser(t, 5) // 余额 5，套餐 9.9
@@ -875,12 +933,12 @@ func TestIntegration_PurchaseWithBelowFloorCouponRejected(t *testing.T) {
 	pkg.MaxActivePerUser = 5
 	database.DB.Create(&pkg)
 
-	// 给用户一张低于 fallback 下限的 $0 券
-	freeCoupon := database.UserCoupon{
-		UserID: user.ID, Code: "CP-test-free", Status: "available",
-		SnapshotType: "fixed_price", SnapshotValue: 0, SnapshotPackageIDs: "",
+	// 给用户一张低于 fallback 下限的 $1 券
+	lowCoupon := database.UserCoupon{
+		UserID: user.ID, Code: "CP-test-low-price", Status: "available",
+		SnapshotType: "fixed_price", SnapshotValue: database.MicroPerUSD, SnapshotPackageIDs: "",
 	}
-	database.DB.Create(&freeCoupon)
+	database.DB.Create(&lowCoupon)
 
 	app := fiber.New()
 	app.Use(func(c *fiber.Ctx) error { c.Locals("user", user); return c.Next() })
@@ -890,7 +948,7 @@ func TestIntegration_PurchaseWithBelowFloorCouponRejected(t *testing.T) {
 	code, resp := doJSON(t, app, "POST", "/purchase", map[string]any{
 		"package_id": pkg.ID,
 		"quantity":   1,
-		"coupon_id":  freeCoupon.ID,
+		"coupon_id":  lowCoupon.ID,
 	})
 	if code != 409 {
 		t.Fatalf("purchase should reject below-floor coupon, got %d body=%v", code, resp)
@@ -908,7 +966,7 @@ func TestIntegration_PurchaseWithBelowFloorCouponRejected(t *testing.T) {
 	}
 
 	var freshCoupon database.UserCoupon
-	database.DB.First(&freshCoupon, freeCoupon.ID)
+	database.DB.First(&freshCoupon, lowCoupon.ID)
 	if freshCoupon.Status != "available" {
 		t.Errorf("rejected coupon status=%q want available", freshCoupon.Status)
 	}

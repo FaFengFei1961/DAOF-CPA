@@ -71,6 +71,7 @@ func runSubscriptionCronOnce() {
 	}()
 
 	expireSubscriptions()
+	ActivateDueBillingRuleRevisions()
 	notifyExpiringSubscriptions()
 	cleanupOldApiLogs()
 	cleanupClosedTickets()

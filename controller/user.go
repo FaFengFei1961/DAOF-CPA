@@ -11,6 +11,7 @@ import (
 	"strconv"
 	"strings"
 	"time"
+	"unicode"
 
 	"github.com/gofiber/fiber/v2"
 	"gorm.io/gorm"
@@ -25,8 +26,11 @@ const MaxAdminQuotaUSD = 1e9
 const bulkQuotaPreviewUserLimit = 500
 
 var (
-	errLastActiveAdmin = errors.New("last active admin cannot be disabled or deleted")
-	errAdminStateRaced = errors.New("admin state changed concurrently")
+	errLastActiveAdmin       = errors.New("last active admin cannot be disabled or deleted")
+	errAdminStateRaced       = errors.New("admin state changed concurrently")
+	errQuotaBelowPaidBalance = errors.New("quota cannot be reduced below paid quota")
+	errOfflineTopupDuplicate = errors.New("offline topup payment reference already used")
+	errOfflineTopupTarget    = errors.New("offline topup target must be normal user")
 )
 
 // validateAdminQuotaInput 校验 admin 输入的 quota / amount 值。
@@ -43,6 +47,10 @@ func validateAdminQuotaInput(v float64) error {
 		return fmt.Errorf("额度绝对值超过上限 %v USD，请检查输入", MaxAdminQuotaUSD)
 	}
 	return nil
+}
+
+func protectsPaidQuotaReduction(before database.User, nextQuotaMicro int64) bool {
+	return nextQuotaMicro < before.Quota && nextQuotaMicro < before.PaidQuota
 }
 
 func GetUsers(c *fiber.Ctx) error {
@@ -131,6 +139,249 @@ type UserPayload struct {
 	BanReason string  `json:"ban_reason"`
 }
 
+type offlineTopupPayload struct {
+	AmountUSD        float64 `json:"amount_usd"`         // 本次入账的 USD 额度
+	MoneyFen         int64   `json:"money_fen"`          // 线下实际收款金额，CNY/RMB 时单位为分
+	CurrencyOriginal string  `json:"currency_original"`  // CNY/RMB/USD，默认 CNY
+	PaymentMethod    string  `json:"payment_method"`     // wechat/alipay/bank/paypal/other
+	ExternalTradeRef string  `json:"external_trade_ref"` // 线下收款凭证号，全局幂等
+	Reason           string  `json:"reason"`             // 可选备注
+}
+
+func normalizeOfflineTopupMethod(method string) (string, bool) {
+	method = strings.ToLower(strings.TrimSpace(method))
+	if method == "" {
+		method = "wechat"
+	}
+	switch method {
+	case "wechat", "alipay", "bank", "paypal", "other":
+		return method, true
+	default:
+		return "", false
+	}
+}
+
+func offlineTopupMethodLabel(method string) string {
+	switch method {
+	case "wechat":
+		return "微信转账"
+	case "alipay":
+		return "支付宝转账"
+	case "bank":
+		return "银行转账"
+	case "paypal":
+		return "PayPal 转账"
+	default:
+		return "其他线下收款"
+	}
+}
+
+func validateAdminReason(reason string) error {
+	if runeLen := len([]rune(reason)); runeLen > topupManualPaidReasonMaxLen {
+		return fmt.Errorf("reason 长度不能超过 %d 字符（当前 %d）", topupManualPaidReasonMaxLen, runeLen)
+	}
+	for _, r := range reason {
+		if unicode.IsControl(r) {
+			return errors.New("reason contains control char")
+		}
+	}
+	return nil
+}
+
+// AdminCreateOfflineTopup POST /api/admin/users/:id/offline-topup
+//
+// 用于“用户没有走平台充值通道，而是通过微信/支付宝/银行等线下方式真实付款”的人工入账。
+// 该入口和普通管理员调额不同：它代表真实收款，必须同时增加 quota 与 paid_quota，
+// 并写入 topup 财务账单，使后续套餐购买/API 余额消费可以按自充来源参与拉新返佣。
+func AdminCreateOfflineTopup(c *fiber.Ctx) error {
+	op := loadAdminUser(c)
+	if op == nil {
+		return c.Status(401).JSON(fiber.Map{"success": false, "message_code": "ERR_NO_AUTH"})
+	}
+	id, parseErr := strconv.Atoi(c.Params("id"))
+	if parseErr != nil || id <= 0 {
+		return c.Status(400).JSON(fiber.Map{"success": false, "message_code": "ERR_INVALID_PARAMS"})
+	}
+	var req offlineTopupPayload
+	if err := c.BodyParser(&req); err != nil {
+		return c.Status(400).JSON(fiber.Map{"success": false, "message_code": "ERR_BAD_REQUEST"})
+	}
+	if err := validateAdminQuotaInput(req.AmountUSD); err != nil || req.AmountUSD <= 0 {
+		return c.Status(400).JSON(fiber.Map{"success": false, "message_code": "ERR_OFFLINE_TOPUP_AMOUNT_REQUIRED"})
+	}
+	amountMicro, ok := database.USDToMicro(req.AmountUSD)
+	if !ok || amountMicro <= 0 {
+		return c.Status(400).JSON(fiber.Map{"success": false, "message_code": "ERR_OFFLINE_TOPUP_AMOUNT_REQUIRED"})
+	}
+	currency := strings.ToUpper(strings.TrimSpace(req.CurrencyOriginal))
+	if currency == "" {
+		currency = "CNY"
+	}
+	if currency == "RMB" {
+		currency = "CNY"
+	}
+	if currency != "CNY" && currency != "USD" {
+		return c.Status(400).JSON(fiber.Map{"success": false, "message_code": "ERR_CURRENCY_INVALID"})
+	}
+	if currency == "CNY" && req.MoneyFen <= 0 {
+		return c.Status(400).JSON(fiber.Map{"success": false, "message_code": "ERR_OFFLINE_TOPUP_ORIGINAL_AMOUNT_REQUIRED"})
+	}
+	if req.MoneyFen < 0 {
+		return c.Status(400).JSON(fiber.Map{"success": false, "message_code": "ERR_OFFLINE_TOPUP_ORIGINAL_AMOUNT_REQUIRED"})
+	}
+	method, methodOK := normalizeOfflineTopupMethod(req.PaymentMethod)
+	if !methodOK {
+		return c.Status(400).JSON(fiber.Map{"success": false, "message_code": "ERR_PAYMENT_METHOD_INVALID"})
+	}
+	externalRef := sanitizeExternalRef(strings.TrimSpace(req.ExternalTradeRef))
+	if externalRef == "" {
+		return c.Status(400).JSON(fiber.Map{"success": false, "message_code": "ERR_EXTERNAL_REF_REQUIRED"})
+	}
+	reason := strings.TrimSpace(req.Reason)
+	if err := validateAdminReason(reason); err != nil {
+		if strings.Contains(err.Error(), "control") {
+			return c.Status(400).JSON(fiber.Map{"success": false, "message_code": "ERR_REASON_CTRL_CHAR"})
+		}
+		return c.Status(400).JSON(fiber.Map{"success": false, "message": err.Error(), "message_code": "ERR_REASON_TOO_LONG"})
+	}
+
+	now := time.Now()
+	var target database.User
+	var opLogID uint
+	txErr := database.DB.Transaction(func(tx *gorm.DB) error {
+		if err := lockUserForUpdate(tx, uint(id)); err != nil {
+			return fmt.Errorf("lock user: %w", err)
+		}
+		if err := tx.Select("id, username, role, status, quota, paid_quota").First(&target, uint(id)).Error; err != nil {
+			return fmt.Errorf("read user: %w", err)
+		}
+		if target.Role != "user" {
+			return errOfflineTopupTarget
+		}
+		nextQuota, ok := database.CheckedAddInt64(target.Quota, amountMicro)
+		if !ok {
+			return errPriceOverflow
+		}
+		nextPaidQuota, ok := database.CheckedAddInt64(target.PaidQuota, amountMicro)
+		if !ok {
+			return errPriceOverflow
+		}
+
+		outTradeNo := fmt.Sprintf("off:u%d:%d", target.ID, now.UnixNano())
+		receipt := database.PaymentWebhookReceipt{
+			Provider:      manualPaidReceiptProvider,
+			Nonce:         externalRef,
+			SignatureHash: signatureHash("offline-paid:" + outTradeNo + ":" + externalRef),
+			OutTradeNo:    outTradeNo,
+			RemoteIP:      c.IP(),
+			Status:        "accepted_manual",
+			Reason:        reason,
+			ReceivedAt:    now,
+		}
+		if err := tx.Create(&receipt).Error; err != nil {
+			if strings.Contains(strings.ToLower(err.Error()), "unique") {
+				return errOfflineTopupDuplicate
+			}
+			return fmt.Errorf("insert offline receipt: %w", err)
+		}
+
+		if err := tx.Model(&database.User{}).
+			Where("id = ?", target.ID).
+			Updates(map[string]any{
+				"quota":      nextQuota,
+				"paid_quota": nextPaidQuota,
+			}).Error; err != nil {
+			return fmt.Errorf("update paid quota: %w", err)
+		}
+
+		amountOriginal := amountMicro
+		if currency == "CNY" {
+			amountOriginal = req.MoneyFen
+		}
+		details, _ := json.Marshal([]map[string]any{
+			{
+				"type":                 "OFFLINE_TOPUP",
+				"target":               target.Username,
+				"amount":               database.MicroToUSD(amountMicro),
+				"amount_micro_usd":     amountMicro,
+				"currency_original":    currency,
+				"amount_original":      amountOriginal,
+				"payment_method":       method,
+				"external_trade_ref":   externalRef,
+				"old_quota_micro":      target.Quota,
+				"new_quota_micro":      nextQuota,
+				"old_paid_quota_micro": target.PaidQuota,
+				"new_paid_quota_micro": nextPaidQuota,
+				"old":                  database.MicroToUSD(target.Quota),
+				"new":                  database.MicroToUSD(nextQuota),
+				"old_paid_quota":       database.MicroToUSD(target.PaidQuota),
+				"new_paid_quota":       database.MicroToUSD(nextPaidQuota),
+				"reason":               reason,
+			},
+		})
+		var err error
+		opLogID, err = LogOperationByTxReturning(tx, op.ID, target.ID, "admin", "OFFLINE_TOPUP", c.IP(), string(details))
+		if err != nil {
+			return fmt.Errorf("write audit: %w", err)
+		}
+
+		desc := fmt.Sprintf("线下收款入账 · %s · 凭证 %s · 入账 $%s",
+			offlineTopupMethodLabel(method), externalRef, database.FormatMicroUSD(amountMicro))
+		if currency == "CNY" {
+			desc += " · 实收 ¥" + database.FormatFen(req.MoneyFen)
+		}
+		if reason != "" {
+			desc += " · " + reason
+		}
+		if err := database.WriteBillingEntry(tx, database.BillingEntryInput{
+			UserID:           target.ID,
+			OccurredAt:       now,
+			EntryType:        database.BillingTypeTopup,
+			AmountUSD:        amountMicro,
+			BalanceAfterUSD:  nextQuota,
+			RelatedType:      "operation_log",
+			RelatedID:        opLogID,
+			Description:      desc,
+			CurrencyOriginal: currency,
+			AmountOriginal:   amountOriginal,
+		}); err != nil {
+			return fmt.Errorf("write billing entry: %w", err)
+		}
+		return nil
+	})
+	if errors.Is(txErr, errOfflineTopupDuplicate) {
+		return c.Status(409).JSON(fiber.Map{"success": false, "message_code": "ERR_OFFLINE_TOPUP_REF_DUPLICATE"})
+	}
+	if errors.Is(txErr, errOfflineTopupTarget) {
+		return c.Status(400).JSON(fiber.Map{"success": false, "message_code": "ERR_TARGET_NOT_USER"})
+	}
+	if errors.Is(txErr, errPriceOverflow) {
+		return c.Status(400).JSON(fiber.Map{"success": false, "message_code": "ERR_PRICE_OVERFLOW"})
+	}
+	if txErr != nil {
+		log.Printf("[OFFLINE-TOPUP] tx failed user=%d admin=%d err=%v", id, op.ID, txErr)
+		return c.Status(500).JSON(fiber.Map{"success": false, "message_code": "ERR_DB_TRANSACTION"})
+	}
+
+	proxy.RefreshUserAuth(target.ID)
+	proxy.InvalidateUserSubscriptionCache(target.ID)
+
+	title := readSysConfigCached("notif_topup_title", "充值成功")
+	bodyTpl := readSysConfigCached("notif_topup_body", "您充值的 ¥{amount_rmb} 已到账，等额 {amount_usd} USD 已加入余额。")
+	amountRMB := "-"
+	if strings.EqualFold(req.CurrencyOriginal, "CNY") || strings.EqualFold(req.CurrencyOriginal, "RMB") || strings.TrimSpace(req.CurrencyOriginal) == "" {
+		amountRMB = database.FormatFen(req.MoneyFen)
+	}
+	body := strings.ReplaceAll(bodyTpl, "{amount_rmb}", amountRMB)
+	body = strings.ReplaceAll(body, "{amount_usd}", database.FormatMicroUSD(amountMicro))
+	dedupKey := fmt.Sprintf("offline_topup:%d:%d", target.ID, opLogID)
+	proxy.Dispatch(target.ID, "topup", "success", title, body,
+		proxy.LinkBills("topup"), "查看账单", "operation_log", opLogID, &dedupKey)
+
+	log.Printf("[OFFLINE-TOPUP] OK user=%d admin=%d ref=%q usd_micro=%d", target.ID, op.ID, externalRef, amountMicro)
+	return c.JSON(fiber.Map{"success": true, "message_code": "SUCCESS_OFFLINE_TOPUP_RECORDED"})
+}
+
 func UpdateUser(c *fiber.Ctx) error {
 	id := c.Params("id")
 	var req UserPayload
@@ -208,8 +459,11 @@ func UpdateUser(c *fiber.Ctx) error {
 			return fmt.Errorf("lock user: %w", err)
 		}
 		var before database.User
-		if err := tx.Select("id, quota, role, status").First(&before, user.ID).Error; err != nil {
+		if err := tx.Select("id, quota, paid_quota, role, status").First(&before, user.ID).Error; err != nil {
 			return fmt.Errorf("read before: %w", err)
+		}
+		if protectsPaidQuotaReduction(before, reqQuotaMicro) {
+			return errQuotaBelowPaidBalance
 		}
 		updateQ := tx.Model(&database.User{}).Where("id = ?", user.ID)
 		if before.Role == "admin" && before.Status == 1 && effectiveStatus != 1 {
@@ -268,6 +522,9 @@ func UpdateUser(c *fiber.Ctx) error {
 		}
 		if errors.Is(txErr, errAdminStateRaced) {
 			return c.Status(409).JSON(fiber.Map{"success": false, "message": "管理员状态已变化，请刷新后重试", "message_code": "ERR_UPDATE_CONFLICT"})
+		}
+		if errors.Is(txErr, errQuotaBelowPaidBalance) {
+			return c.Status(400).JSON(fiber.Map{"success": false, "message": "普通调额不能把余额扣到自充余额以下", "message_code": "ERR_QUOTA_BELOW_PAID_BALANCE"})
 		}
 		return c.Status(500).JSON(fiber.Map{"success": false, "message": "数据更新失败，存在冲突", "message_code": "ERR_UPDATE_CONFLICT"})
 	}
@@ -344,13 +601,28 @@ type BulkQuotaPreviewPayload struct {
 }
 
 type bulkQuotaPreviewUser struct {
-	ID         uint    `json:"id"`
-	Username   string  `json:"username"`
-	CurrentUSD float64 `json:"current_usd"`
-	FutureUSD  float64 `json:"future_usd"`
+	ID           uint    `json:"id"`
+	Username     string  `json:"username"`
+	CurrentUSD   float64 `json:"current_usd"`
+	PaidQuotaUSD float64 `json:"paid_quota_usd"`
+	BonusUSD     float64 `json:"bonus_usd"`
+	MinQuotaUSD  float64 `json:"min_quota_usd"`
+	FutureUSD    float64 `json:"future_usd"`
+	Protected    bool    `json:"protected"`
 }
 
-func bulkQuotaPreviewFutureMicro(currentMicro, amountMicro int64, action string) int64 {
+func bulkQuotaProtectedFloorMicro(currentMicro, paidQuotaMicro int64) int64 {
+	if paidQuotaMicro <= 0 {
+		return 0
+	}
+	if currentMicro < paidQuotaMicro {
+		return currentMicro
+	}
+	return paidQuotaMicro
+}
+
+func bulkQuotaPreviewFutureMicro(currentMicro, paidQuotaMicro, amountMicro int64, action string) int64 {
+	floorMicro := bulkQuotaProtectedFloorMicro(currentMicro, paidQuotaMicro)
 	switch action {
 	case "add":
 		if amountMicro > 0 && currentMicro > math.MaxInt64-amountMicro {
@@ -362,11 +634,14 @@ func bulkQuotaPreviewFutureMicro(currentMicro, amountMicro int64, action string)
 		}
 		return futureMicro
 	case "subtract":
-		if currentMicro <= amountMicro {
-			return 0
+		if currentMicro-amountMicro < floorMicro {
+			return floorMicro
 		}
 		return currentMicro - amountMicro
 	case "set":
+		if amountMicro < floorMicro {
+			return floorMicro
+		}
 		return amountMicro
 	default:
 		return currentMicro
@@ -420,7 +695,7 @@ func BulkAdjustQuotaPreview(c *fiber.Ctx) error {
 	}
 
 	var users []database.User
-	if err := database.DB.Select("id, username, quota").
+	if err := database.DB.Select("id, username, quota, paid_quota").
 		Where("id IN ? AND role = ?", uniqIDs, "user").
 		Order("id ASC").
 		Find(&users).Error; err != nil {
@@ -430,13 +705,22 @@ func BulkAdjustQuotaPreview(c *fiber.Ctx) error {
 	previewUsers := make([]bulkQuotaPreviewUser, 0, len(users))
 	totalDeltaMicro := int64(0)
 	for _, u := range users {
-		futureMicro := bulkQuotaPreviewFutureMicro(u.Quota, amountMicro, req.Action)
+		floorMicro := bulkQuotaProtectedFloorMicro(u.Quota, u.PaidQuota)
+		futureMicro := bulkQuotaPreviewFutureMicro(u.Quota, u.PaidQuota, amountMicro, req.Action)
+		bonusMicro := u.Quota - u.PaidQuota
+		if bonusMicro < 0 {
+			bonusMicro = 0
+		}
 		totalDeltaMicro += futureMicro - u.Quota
 		previewUsers = append(previewUsers, bulkQuotaPreviewUser{
-			ID:         u.ID,
-			Username:   u.Username,
-			CurrentUSD: database.MicroToUSD(u.Quota),
-			FutureUSD:  database.MicroToUSD(futureMicro),
+			ID:           u.ID,
+			Username:     u.Username,
+			CurrentUSD:   database.MicroToUSD(u.Quota),
+			PaidQuotaUSD: database.MicroToUSD(u.PaidQuota),
+			BonusUSD:     database.MicroToUSD(bonusMicro),
+			MinQuotaUSD:  database.MicroToUSD(floorMicro),
+			FutureUSD:    database.MicroToUSD(futureMicro),
+			Protected:    futureMicro != bulkQuotaPreviewFutureMicro(u.Quota, 0, amountMicro, req.Action),
 		})
 	}
 
@@ -451,7 +735,7 @@ func BulkAdjustQuotaPreview(c *fiber.Ctx) error {
 }
 
 // BulkAdjustQuota 批量调整额度。
-// 安全约束：不允许调整 admin（避免误操作）；金额永远 clamp 到 >= 0。
+// 安全约束：不允许调整 admin（避免误操作）；普通扣减不能越过 paid_quota 保护线。
 func BulkAdjustQuota(c *fiber.Ctx) error {
 	var req BulkQuotaPayload
 	if err := c.BodyParser(&req); err != nil {
@@ -515,19 +799,22 @@ func BulkAdjustQuota(c *fiber.Ctx) error {
 				return fmt.Errorf("lock user: %w", err)
 			}
 			var before database.User
-			if err := tx.Select("id, quota").First(&before, u.ID).Error; err != nil {
+			if err := tx.Select("id, quota, paid_quota").First(&before, u.ID).Error; err != nil {
 				return fmt.Errorf("read before: %w", err)
+			}
+			if req.Mode == "set" && protectsPaidQuotaReduction(before, amountMicro) {
+				return errQuotaBelowPaidBalance
 			}
 
 			// 用 SQL 表达式原子更新，避免"读-改-写"的 race 让并发额度操作互相覆盖。
-			// SQLite 的 MAX 只能做聚合，所以用 CASE 表达"clamp 到 0"。
+			// SQLite 的 MAX 只能做聚合，所以用 CASE 表达"clamp 到 protected floor"。
 			// fix MAJOR M22-A1 Phase 1：amountMicro 单位 micro_usd（与 quota 列一致）
 			var expr interface{}
 			switch req.Mode {
 			case "add":
 				expr = gorm.Expr("CASE WHEN quota + ? < 0 THEN 0 ELSE quota + ? END", amountMicro, amountMicro)
 			case "sub":
-				expr = gorm.Expr("CASE WHEN quota - ? < 0 THEN 0 ELSE quota - ? END", amountMicro, amountMicro)
+				expr = gorm.Expr("CASE WHEN quota <= paid_quota THEN quota WHEN quota - ? < paid_quota THEN paid_quota ELSE quota - ? END", amountMicro, amountMicro)
 			case "set":
 				expr = amountMicro
 			}
@@ -588,10 +875,14 @@ func BulkAdjustQuota(c *fiber.Ctx) error {
 		})
 		if err != nil {
 			log.Printf("[BULK-QUOTA] user=%d failed: %v (collected as partial failure)", u.ID, err)
+			reason := err.Error()
+			if errors.Is(err, errQuotaBelowPaidBalance) {
+				reason = "ERR_QUOTA_BELOW_PAID_BALANCE"
+			}
 			failures = append(failures, bulkFailure{
 				UserID:   u.ID,
 				Username: u.Username,
-				Reason:   err.Error(),
+				Reason:   reason,
 			})
 			continue
 		}
@@ -606,8 +897,20 @@ func BulkAdjustQuota(c *fiber.Ctx) error {
 	msgCode := "SUCCESS_BULK_QUOTA"
 	if len(failures) > 0 {
 		if updated == 0 {
-			status = 500 // 全失败 → 500 提示严重故障
-			msgCode = "ERR_BULK_QUOTA_ALL_FAILED"
+			allPaidFloorFailures := true
+			for _, f := range failures {
+				if f.Reason != "ERR_QUOTA_BELOW_PAID_BALANCE" {
+					allPaidFloorFailures = false
+					break
+				}
+			}
+			if allPaidFloorFailures {
+				status = 400
+				msgCode = "ERR_QUOTA_BELOW_PAID_BALANCE"
+			} else {
+				status = 500 // 全失败 → 500 提示严重故障
+				msgCode = "ERR_BULK_QUOTA_ALL_FAILED"
+			}
 		} else {
 			status = 207 // 部分成功 → Multi-Status
 			msgCode = "PARTIAL_BULK_QUOTA"
@@ -822,9 +1125,17 @@ func purgeUserDependents(tx *gorm.DB, userID uint) error {
 			"DELETE FROM api_log_revenues WHERE api_log_id IN (SELECT id FROM api_logs WHERE user_id = ?)", userID); err != nil {
 			return err
 		}
+		if err := purgeExecIfTableExists(tx, "api_log_usage_lines",
+			"DELETE FROM api_log_usage_lines WHERE api_log_id IN (SELECT id FROM api_logs WHERE user_id = ?)", userID); err != nil {
+			return err
+		}
 		if err := tx.Exec("DELETE FROM api_logs WHERE user_id = ?", userID).Error; err != nil {
 			return err
 		}
+	}
+	if err := purgeExecIfTableExists(tx, "media_generation_jobs",
+		"DELETE FROM media_generation_jobs WHERE user_id = ?", userID); err != nil {
+		return err
 	}
 	if tx.Migrator().HasTable(&database.UserSubscription{}) {
 		if err := purgeExecIfTableExists(tx, "subscription_usages",
@@ -840,6 +1151,11 @@ func purgeUserDependents(tx *gorm.DB, userID uint) error {
 		// 必须在 topup_orders 被删之前清理（子查询依赖父表）。
 		if err := purgeExecIfTableExists(tx, "payment_webhook_receipts",
 			"DELETE FROM payment_webhook_receipts WHERE out_trade_no IN (SELECT out_trade_no FROM topup_orders WHERE user_id = ?)", userID); err != nil {
+			return err
+		}
+		if err := purgeExecIfTableExists(tx, "payment_webhook_receipts",
+			"DELETE FROM payment_webhook_receipts WHERE provider = ? AND out_trade_no LIKE ?",
+			manualPaidReceiptProvider, fmt.Sprintf("off:u%d:%%", userID)); err != nil {
 			return err
 		}
 		if err := purgeExecIfTableExists(tx, "topup_refunds",

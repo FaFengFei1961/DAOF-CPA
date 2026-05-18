@@ -506,8 +506,8 @@ var ModerationSysConfigDefaults = map[string]string{
 	// ── 多模态图片策略 ──
 	// "skip"   - 跳过图片不审
 	// "submit" - 预留：未来接入可真正解析图片的审核服务；当前 CPA 分类器不支持外部 image_url
-	// "reject" - 直接拒绝带图片的请求（当前默认，避免未审核图片被放行）
-	"moderation_image_policy": "reject",
+	// "reject" - 直接拒绝带图片的请求（最保守，但会误拦 GPT 多模态正常用法）
+	"moderation_image_policy": "skip",
 
 	// ── 自动处置 / 风控闭环 ──
 	// 内测阶段默认开启；管理员可在后台关闭。
@@ -580,6 +580,9 @@ func SeedModerationDefaults() {
 		if err := enforceModerationAutobanSafetyDefaults(tx); err != nil {
 			return err
 		}
+		if err := enforceModerationImagePolicyDefault(tx); err != nil {
+			return err
+		}
 		return nil
 	})
 	if err != nil {
@@ -589,6 +592,22 @@ func SeedModerationDefaults() {
 	if created > 0 {
 		log.Printf("🌱 内容审核系统：写入 %d 条默认配置（已存在的未覆盖）", created)
 	}
+}
+
+const moderationImagePolicyDefaultVersion = "2026-05-18-skip"
+
+func enforceModerationImagePolicyDefault(tx *gorm.DB) error {
+	if readPlainSysConfigInTx(tx, "moderation_image_policy_default_version") == moderationImagePolicyDefaultVersion {
+		return nil
+	}
+	cur := strings.ToLower(strings.TrimSpace(readPlainSysConfigInTx(tx, "moderation_image_policy")))
+	if cur == "" || cur == "reject" {
+		if err := upsertPlainSysConfigInTx(tx, "moderation_image_policy", "skip"); err != nil {
+			return err
+		}
+		log.Printf("[MODERATION-SEED] 图片审核默认策略已迁移为 skip，避免 GPT 多模态请求被全局误拦")
+	}
+	return upsertPlainSysConfigInTx(tx, "moderation_image_policy_default_version", moderationImagePolicyDefaultVersion)
 }
 
 func enforceModerationProviderDefault(tx *gorm.DB) error {

@@ -19,7 +19,7 @@ import (
 	"strings"
 	"sync"
 	"time"
-	"unicode/utf8"
+	"unicode"
 
 	"daof-cpa/database"
 
@@ -39,6 +39,20 @@ const (
 	defaultNonStreamUpstreamTimeout  = 15 * time.Minute
 	minNonStreamUpstreamTimeout      = 30 * time.Second
 	maxNonStreamUpstreamTimeout      = 60 * time.Minute
+
+	invalidAuthLogLimitPerIPPerMinute = 60
+)
+
+type invalidAuthLogBucket struct {
+	windowStart time.Time
+	count       int
+	suppressed  int
+}
+
+var (
+	invalidAuthLogMu          sync.Mutex
+	invalidAuthLogBuckets     = map[string]*invalidAuthLogBucket{}
+	invalidAuthLogLastCleanup time.Time
 )
 
 type StatusAction int
@@ -131,6 +145,23 @@ func nonStreamUpstreamTimeout() time.Duration {
 	return timeout
 }
 
+func readReferralPaidSpendRewardConfig() (int64, int64) {
+	SysConfigMutex.RLock()
+	bpsRaw := strings.TrimSpace(SysConfigCache[database.ReferralPaidSpendRewardBPSConfigKey])
+	windowRaw := strings.TrimSpace(SysConfigCache[database.ReferralPaidSpendRewardWindowSecondsConfigKey])
+	SysConfigMutex.RUnlock()
+
+	bps, err := strconv.ParseInt(bpsRaw, 10, 64)
+	if err != nil {
+		bps = 0
+	}
+	windowSeconds, err := strconv.ParseInt(windowRaw, 10, 64)
+	if err != nil {
+		windowSeconds = database.DefaultReferralPaidSpendRewardWindowSeconds
+	}
+	return database.NormalizeReferralRewardBPS(bps), database.NormalizeReferralRewardWindowSeconds(windowSeconds)
+}
+
 // truncForLog 把上游 body 截短供服务端日志使用，不让超大错误 body 撑爆 log。
 func truncForLog(b []byte, n int) string {
 	if len(b) <= n {
@@ -184,46 +215,99 @@ func isLocalProxy(host string) bool {
 	return ip.IsLoopback() || ip.IsPrivate()
 }
 
+func newCancelableUpstreamPostRequest(parent context.Context, upstreamURL string, payload []byte) (*http.Request, context.CancelFunc, error) {
+	upstreamCtx, cancel := context.WithCancel(parent)
+	req, err := http.NewRequestWithContext(upstreamCtx, http.MethodPost, upstreamURL, bytes.NewReader(payload))
+	if err != nil {
+		cancel()
+		return nil, nil, err
+	}
+	return req, cancel, nil
+}
+
+// estimateTextPrecheckTokens is a fast, conservative text-token estimate.
+// CJK text stays near 1 rune ≈ 1 token; ASCII/code/JSON uses 2 runes ≈ 1 token
+// to avoid treating every English character as a full token in large Codex contexts.
+func estimateTextPrecheckTokens(s string) int {
+	cjkRunes := 0
+	asciiLikeRunes := 0
+	otherRunes := 0
+	for _, r := range s {
+		switch {
+		case unicode.Is(unicode.Han, r), unicode.Is(unicode.Hiragana, r), unicode.Is(unicode.Katakana, r), unicode.Is(unicode.Hangul, r):
+			cjkRunes++
+		case r <= 0x7f:
+			asciiLikeRunes++
+		default:
+			otherRunes++
+		}
+	}
+	ceilDiv := func(n, d int) int {
+		if n <= 0 {
+			return 0
+		}
+		return (n + d - 1) / d
+	}
+	return cjkRunes + ceilDiv(asciiLikeRunes, 2) + ceilDiv(otherRunes, 2)
+}
+
 // estimatePrecheckTokens 给 Decide(IsPrecheck=true) 用的粗粒度 token 估算。
 //
-// 真实 token 数要等上游 tokenizer 跑过才能拿到（成本 ~5ms）。precheck 不能等。
+// 真实 token 数要等上游 tokenizer 跑过才能拿到；precheck 不能等。
 //
-// 估算策略（codex 第十六轮再修订）：
-//   - 用 utf8.RuneCountInString 而非 len()，避免 UTF-8 多字节字符按 byte 计数
-//     （之前对 CJK 偏低估算，3 字节中文按 byte/4 = 0.75 token，实际接近 1 token）
-//   - 中文/日韩 rune 比例约 1:1，英文约 4:1；混合用 1:1 做**上界估算**最安全
-//     （估高 token 数让 precheck 更容易触发余额检查；估低才有白嫖空间）
-//   - 累加范围：messages/prompt/input + Anthropic 顶层 system + tools/functions schema 字符数
-//   - 多模态非文本部分（image/audio）按固定常数加 token（image 约 765 tok，audio 按时长）—
-//     此处简化为每非文本 part 加 200 tok 的保守估算
+// 累加范围：messages/prompt/input + Anthropic 顶层 system + tools/functions schema 字符数。
+// 多模态非文本部分（image/audio/video/file）按固定常数加 token。
 func estimatePrecheckTokens(body []byte) int {
-	totalChars := 0
+	totalTokens := 0
 	addText := func(s string) {
-		// utf8.RuneCountInString 给 CJK 更准（英文与 byte 数相同）
-		totalChars += utf8.RuneCountInString(s)
+		totalTokens += estimateTextPrecheckTokens(s)
 	}
 	// 多模态非文本占位（image/audio/video）— 每个 part 加保守常数
 	nonTextParts := 0
+	addContentPart := func(p gjson.Result) {
+		if p.Type == gjson.String {
+			addText(p.String())
+			return
+		}
+		t := strings.ToLower(strings.TrimSpace(p.Get("type").String()))
+		switch t {
+		case "text", "input_text", "output_text", "":
+			if text := p.Get("text"); text.Exists() {
+				addText(text.String())
+				return
+			}
+			if p.Get("image_url").Exists() || p.Get("source").Exists() || p.Get("inline_data").Exists() || p.Get("file_data").Exists() {
+				nonTextParts++
+			}
+		case "image", "image_url", "input_image", "input_audio", "audio", "video", "file", "input_file":
+			nonTextParts++
+		default:
+			if text := p.Get("text"); text.Exists() {
+				addText(text.String())
+			} else {
+				nonTextParts++
+			}
+		}
+	}
+	addContent := func(content gjson.Result) {
+		if !content.Exists() {
+			return
+		}
+		if content.IsArray() {
+			content.ForEach(func(_, p gjson.Result) bool {
+				addContentPart(p)
+				return true
+			})
+			return
+		}
+		addContentPart(content)
+	}
 
 	// messages: [{role, content}] 数组（OpenAI/Anthropic 兼容）
 	if msgs := gjson.GetBytes(body, "messages"); msgs.IsArray() {
 		msgs.ForEach(func(_, m gjson.Result) bool {
 			addText(m.Get("role").String())
-			content := m.Get("content")
-			if content.IsArray() {
-				content.ForEach(func(_, p gjson.Result) bool {
-					t := p.Get("type").String()
-					switch t {
-					case "text", "input_text", "output_text", "":
-						addText(p.Get("text").String())
-					default:
-						nonTextParts++ // image_url / image / audio / video / file 等
-					}
-					return true
-				})
-			} else {
-				addText(content.String())
-			}
+			addContent(m.Get("content"))
 			return true
 		})
 	}
@@ -251,16 +335,33 @@ func estimatePrecheckTokens(body []byte) int {
 			addText(prompt.String())
 		}
 	}
-	// input: embeddings API
+	// input: OpenAI Responses API / embeddings API
 	if input := gjson.GetBytes(body, "input"); input.Exists() {
 		if input.IsArray() {
-			input.ForEach(func(_, p gjson.Result) bool {
-				addText(p.String())
+			input.ForEach(func(_, item gjson.Result) bool {
+				if item.Type == gjson.String {
+					addText(item.String())
+					return true
+				}
+				addText(item.Get("role").String())
+				addContent(item.Get("content"))
+				if text := item.Get("text"); text.Exists() {
+					addText(text.String())
+				}
+				if output := item.Get("output"); output.Exists() {
+					addContent(output)
+				}
+				if arguments := item.Get("arguments"); arguments.Exists() {
+					addText(arguments.String())
+				}
 				return true
 			})
 		} else {
 			addText(input.String())
 		}
+	}
+	if ins := gjson.GetBytes(body, "instructions"); ins.Exists() {
+		addText(ins.String())
 	}
 	// Gemini contents / systemInstruction
 	if contents := gjson.GetBytes(body, "contents"); contents.IsArray() {
@@ -299,9 +400,8 @@ func estimatePrecheckTokens(body []byte) int {
 		})
 	}
 
-	// CJK 上界：1 rune ≈ 1 token；英文实际 4 rune ≈ 1 token，但用 1:1 估高对账更安全。
-	estimated := totalChars + nonTextParts*200
-	if estimated < 1 && totalChars > 0 {
+	estimated := totalTokens + nonTextParts*200
+	if estimated < 1 && totalTokens > 0 {
 		estimated = 1
 	}
 	return estimated
@@ -336,6 +436,37 @@ func isClaudeCountTokensPath(path string) bool {
 	return strings.Contains(strings.ToLower(path), "/messages/count_tokens")
 }
 
+func normalizeCLIProxyUpstreamPath(path string, srcFormat sdktranslator.Format) string {
+	if srcFormat != sdktranslator.FormatClaude {
+		return path
+	}
+	p := strings.TrimSpace(path)
+	if p == "" {
+		return path
+	}
+	if strings.HasPrefix(p, "//") {
+		p = "/" + strings.TrimLeft(p, "/")
+	}
+	for strings.HasPrefix(p, "/v1/v1/") {
+		p = "/v1/" + strings.TrimPrefix(p, "/v1/v1/")
+	}
+	return p
+}
+
+func isPlainCLIProxyRouteNotFound(channelType string, status int, body []byte) bool {
+	if NormalizeChannelType(channelType) != ChannelTypeCLIProxy || status != http.StatusNotFound {
+		return false
+	}
+	msg := strings.ToLower(strings.TrimSpace(string(body)))
+	if msg == "404 page not found" {
+		return true
+	}
+	if len(msg) <= 200 && strings.Contains(msg, "404 page not found") {
+		return true
+	}
+	return false
+}
+
 func recordProxyApiLog(userID uint, token, modelName string, status int, clientIP string, startTime time.Time, requestPath, errorType, errorMessage string) {
 	modelName = strings.TrimSpace(modelName)
 	if modelName == "" {
@@ -362,6 +493,50 @@ func recordProxyApiLog(userID uint, token, modelName string, status int, clientI
 		ErrorMessage:     sanitizeError(errorMessage, 512),
 		CreatedAt:        time.Now(),
 	})
+}
+
+func shouldRecordInvalidAuthApiLog(clientIP string) bool {
+	return shouldRecordInvalidAuthApiLogAt(clientIP, time.Now())
+}
+
+func shouldRecordInvalidAuthApiLogAt(clientIP string, now time.Time) bool {
+	key := strings.TrimSpace(clientIP)
+	if key == "" {
+		key = "<unknown>"
+	}
+	windowStart := now.Truncate(time.Minute)
+
+	invalidAuthLogMu.Lock()
+	if invalidAuthLogLastCleanup.IsZero() || windowStart.Sub(invalidAuthLogLastCleanup) >= time.Minute {
+		cutoff := windowStart.Add(-2 * time.Minute)
+		for ip, bucket := range invalidAuthLogBuckets {
+			if bucket.windowStart.Before(cutoff) {
+				delete(invalidAuthLogBuckets, ip)
+			}
+		}
+		invalidAuthLogLastCleanup = windowStart
+	}
+
+	bucket := invalidAuthLogBuckets[key]
+	if bucket == nil || !bucket.windowStart.Equal(windowStart) {
+		bucket = &invalidAuthLogBucket{windowStart: windowStart}
+		invalidAuthLogBuckets[key] = bucket
+	}
+	if bucket.count < invalidAuthLogLimitPerIPPerMinute {
+		bucket.count++
+		invalidAuthLogMu.Unlock()
+		return true
+	}
+
+	bucket.suppressed++
+	suppressed := bucket.suppressed
+	shouldLog := suppressed == 1 || suppressed%1000 == 0
+	invalidAuthLogMu.Unlock()
+
+	if shouldLog {
+		log.Printf("[AUTH-INVALID-SUPPRESSED] ip=%s window=%s suppressed=%d", key, windowStart.Format(time.RFC3339), suppressed)
+	}
+	return false
 }
 
 func recordProxyApiLogWithPrecheck(userID uint, token, modelName string, status int, clientIP string, startTime time.Time, requestPath, errorType, errorMessage string, inputTokens, outputTokens int, billing BillingRuleResolution, decision EngineDecision) {
@@ -510,7 +685,9 @@ func ChatCompletionProxyHandler(c *fiber.Ctx) error {
 	authSnapshotMutex.RUnlock()
 
 	if !exists {
-		recordProxyApiLog(0, token, "unknown", 401, clientIP, startTime, path, "auth_error", "Invalid API Key")
+		if shouldRecordInvalidAuthApiLog(clientIP) {
+			recordProxyApiLog(0, token, "unknown", 401, clientIP, startTime, path, "auth_error", "Invalid API Key")
+		}
 		return c.Status(401).JSON(fiber.Map{"error": fiber.Map{"message": "Invalid API Key", "type": "auth_error"}})
 	}
 	// fix Major（codex 第五轮）：纵深防御——即使 RefreshUserAuth 漏过封禁用户的清理（DB 异步竞态），
@@ -560,121 +737,92 @@ func ChatCompletionProxyHandler(c *fiber.Ctx) error {
 		isStream = true
 	}
 
-	// fix CRITICAL C1（codex 第十五轮）：precheck 必须传**估算的 token 数**，而非 0。
-	// 否则对于 limit_unit=input_tokens / total_tokens / weighted_tokens / api_cost_usd 的订阅 plan，
-	// computeDelta=0 → atomicConsume 永远放行 → 上游服务 → commit 时 BalanceConsumeEnabled=false 不扣费 →
-	// 用户可重复白嫖 token-unit 订阅。
-	//
-	// 估算策略：对 messages/prompt/input 字段做粗略字符长度估算（4 字符≈1 token，业界经验值）。
-	// 是上界估算 — 真实 input_tokens 通常更小，确保 precheck 不会"放过"超额请求。
-	precheckInputTokens := estimatePrecheckTokens(body)
-	// fix CRITICAL R23+3-C1（codex 第四轮）：precheck 阶段给 OutputTokens 一个**保守上界估算**，
-	// 防"零估算 + 并发请求"全部通过预检后 commit 才发现超限的超卖漏洞。
-	//
-	// 估算策略：取 max_tokens（客户端传的限制）或默认 4096，作为最坏情况上界。
-	// 真实 OutputTokens 通常更小，predict 高让窗口更早触发限额；commit 用真实值修正。
-	precheckOutputTokens := 4096 // 默认保守上界
-	if isCountTokensRequest {
-		precheckOutputTokens = 0
-	} else if maxTok := gjson.GetBytes(body, "max_tokens").Int(); maxTok > 0 {
-		precheckOutputTokens = int(maxTok)
-	} else if maxTok := gjson.GetBytes(body, "max_output_tokens").Int(); maxTok > 0 {
-		precheckOutputTokens = int(maxTok) // OpenAI Responses API
-	} else if maxTok := gjson.GetBytes(body, "max_completion_tokens").Int(); maxTok > 0 {
-		precheckOutputTokens = int(maxTok)
-	} else if maxTok := gjson.GetBytes(body, "generationConfig.maxOutputTokens").Int(); maxTok > 0 {
-		precheckOutputTokens = int(maxTok)
-	}
-	// 客户端可能传巨大值想绕开预检，cap 到合理上限（与窗口相比仍是有意义的占位）
-	if precheckOutputTokens > 100000 {
-		precheckOutputTokens = 100000
-	}
-	precheckCostMicroUSD := estimatePrecheckBalanceDelta(modelName, precheckInputTokens, precheckOutputTokens)
-	precheckBilling := ResolveBillingRules(modelName, body, 0, "", fallbackUserOptIn).WithCosts(precheckCostMicroUSD)
-	engineDecision := Decide(EngineRequest{
-		UserID:       user.ID,
-		ModelName:    modelName,
-		InputTokens:  precheckInputTokens,
-		OutputTokens: precheckOutputTokens,
-		CostMicroUSD: precheckBilling.ChargedCostMicroUSD,
-		IsPrecheck:   true,
-	})
-	if !engineDecision.Allowed {
-		msg := engineDecision.BlockMessage
-		if msg == "" {
-			msg = "您的订阅额度已用尽，请购买套餐或充值余额"
+	var engineDecision EngineDecision
+	if !isCountTokensRequest {
+		// fix CRITICAL C1（codex 第十五轮）：precheck 必须传**估算的 token 数**，非 0。
+		// Anthropic /messages/count_tokens 是官方免费辅助接口，不进入额度预检或扣费链路。
+		precheckInputTokens := estimatePrecheckTokens(body)
+		// fix CRITICAL R23+3-C1（codex 第四轮）：precheck 阶段给 OutputTokens 一个保守上界估算。
+		precheckOutputTokens := 4096 // 默认保守上界
+		if maxTok := gjson.GetBytes(body, "max_tokens").Int(); maxTok > 0 {
+			precheckOutputTokens = int(maxTok)
+		} else if maxTok := gjson.GetBytes(body, "max_output_tokens").Int(); maxTok > 0 {
+			precheckOutputTokens = int(maxTok) // OpenAI Responses API
+		} else if maxTok := gjson.GetBytes(body, "max_completion_tokens").Int(); maxTok > 0 {
+			precheckOutputTokens = int(maxTok)
+		} else if maxTok := gjson.GetBytes(body, "generationConfig.maxOutputTokens").Int(); maxTok > 0 {
+			precheckOutputTokens = int(maxTok)
 		}
-		// fix CRITICAL R23+2-C3：DB 加载失败 fail-closed 503（让客户端 backoff），
-		// 而不是 402 让用户以为"额度用尽"
-		if engineDecision.NeedsRetry {
-			recordProxyApiLog(user.ID, token, modelName, 503, clientIP, startTime, path, "subscription_load_failed", msg)
-			return c.Status(503).JSON(fiber.Map{"error": fiber.Map{"message": msg, "type": "service_unavailable", "code": "subscription_load_failed"}})
+		// 客户端可能传巨大值想绕开预检，cap 到合理上限（与窗口相比仍是有意义的占位）
+		if precheckOutputTokens > 100000 {
+			precheckOutputTokens = 100000
 		}
-		if engineDecision.BlockQuotaPlanID != 0 {
-			msg = precheckLimitMessage(engineDecision, precheckBilling)
-			recordProxyApiLogWithPrecheck(user.ID, token, modelName, 402, clientIP, startTime, path, "request_estimate_exceeds_window_remaining", msg, precheckInputTokens, precheckOutputTokens, precheckBilling, engineDecision)
-			return c.Status(402).JSON(precheckLimitErrorPayload(msg, engineDecision, precheckInputTokens, precheckOutputTokens, precheckBilling))
-		}
-		recordProxyApiLog(user.ID, token, modelName, 402, clientIP, startTime, path, "subscription_required", msg)
-		return c.Status(402).JSON(fiber.Map{"error": fiber.Map{"message": msg, "type": "subscription_required"}})
-	}
-	// fallback 到余额：必须 (1) BalanceConsumeEnabled (2) 窗口限额未用尽 (3) 余额>0。
-	// 项目未上线，不保留绕过余额消费开关的旧直扣路径。
-	if engineDecision.FallbackToBalance {
-		if !user.BalanceConsumeEnabled {
+		precheckCostMicroUSD := estimatePrecheckBalanceDelta(modelName, precheckInputTokens, precheckOutputTokens)
+		precheckBilling := ResolveBillingRules(modelName, body, 0, "", fallbackUserOptIn).WithCosts(precheckCostMicroUSD)
+		engineDecision = Decide(EngineRequest{
+			UserID:       user.ID,
+			ModelName:    modelName,
+			InputTokens:  precheckInputTokens,
+			OutputTokens: precheckOutputTokens,
+			CostMicroUSD: precheckBilling.ChargedCostMicroUSD,
+			IsPrecheck:   true,
+		})
+		if !engineDecision.Allowed {
+			msg := engineDecision.BlockMessage
+			if msg == "" {
+				msg = "您的订阅额度已用尽，请购买套餐或充值余额"
+			}
+			// fix CRITICAL R23+2-C3：DB 加载失败 fail-closed 503（让客户端 backoff），
+			// 而不是 402 让用户以为"额度用尽"
+			if engineDecision.NeedsRetry {
+				recordProxyApiLog(user.ID, token, modelName, 503, clientIP, startTime, path, "subscription_load_failed", msg)
+				return c.Status(503).JSON(fiber.Map{"error": fiber.Map{"message": msg, "type": "service_unavailable", "code": "subscription_load_failed"}})
+			}
 			if engineDecision.BlockQuotaPlanID != 0 {
-				msg := precheckLimitMessage(engineDecision, precheckBilling)
+				msg = precheckLimitMessage(engineDecision, precheckBilling)
 				recordProxyApiLogWithPrecheck(user.ID, token, modelName, 402, clientIP, startTime, path, "request_estimate_exceeds_window_remaining", msg, precheckInputTokens, precheckOutputTokens, precheckBilling, engineDecision)
 				return c.Status(402).JSON(precheckLimitErrorPayload(msg, engineDecision, precheckInputTokens, precheckOutputTokens, precheckBilling))
 			}
-			recordProxyApiLog(user.ID, token, modelName, 402, clientIP, startTime, path, "subscription_required", "subscription quota unavailable and balance consume disabled")
-			return c.Status(402).JSON(fiber.Map{"error": fiber.Map{
-				"message":      "当前请求无法使用订阅额度。请购买套餐，或在「账号设置 → 余额消费控制」中开启余额消费。",
-				"type":         "subscription_required",
-				"message_code": "ERR_QUOTA_EXHAUSTED_BALANCE_DISABLED",
-			}})
+			recordProxyApiLog(user.ID, token, modelName, 402, clientIP, startTime, path, "subscription_required", msg)
+			return c.Status(402).JSON(fiber.Map{"error": fiber.Map{"message": msg, "type": "subscription_required"}})
 		}
-		// fix MAJOR M4（codex 第二十轮）：预检 deltaUSD 必须包含 output token 与真实模型价格。
-		//
-		// 旧实现只用 input tokens × 平铺 $1/1M 单价 + 下限 $0.0001：
-		//   - 短输入 + 高输出（如 gpt-4o $2.50/$10/1M、o1 $15/$60/1M）请求被严重低估
-		//   - 攻击者在窗口将满时仍可发送请求，commit 真实成本远超预检值 → 余额限额被穿
-		//
-		// 新实现：
-		//   - 按 modelName 在 RouteCache 中找**最贵**路由（HighInput/HighOutput 阈值场景也覆盖）
-		//   - delta = precheckInput * maxInput + precheckOutput * maxOutput（USD/token）
-		//   - 找不到路由 → 用保守上界 $30/1M（覆盖 GPT-4 Turbo、Claude Opus 等高端档位）
-		//
-		// fix MAJOR（多模型审计第二十五轮）：余额消费窗口检查必须用 charged cost
-		// （precheckBilling.ChargedCostMicroUSD），不能用 raw precheckCostMicroUSD。
-		// 否则高权重模型（Opus weight=3.5）会被低估、绕过窗口限额；低权重模型（Haiku weight=0.3）
-		// 会被错误拦截。和 P0-1a commit 路径保持一致：raw cost 仅用于日志/ApiLog.Cost；
-		// 用户侧任何"是否允许扣"的判断都必须用 charged cost。
-		//
-		// PRODUCT REVERSAL（本次决策）：经业务确认，余额预检改回 rawCost。理由：
-		//   - 订阅是"模型组合包月"产品，modelWeight 调配 Haiku/Opus 含金量是产品定义
-		//   - 余额是用户预付美元，应按上游真实成本扣，不应被 modelWeight 重定价
-		//   - 这是产品策略变更，不是 bug 回退
-		//   - 业务影响：纯余额用户 Opus 扣费下降（3.5x→1x），Haiku 扣费上升（0.3x→1x）
-		if !CheckBalanceConsumeAllowed(user, precheckBilling.RawCostMicroUSD) {
-			recordProxyApiLog(user.ID, token, modelName, 402, clientIP, startTime, path, "balance_limit_reached", "balance consume window limit reached")
-			return c.Status(402).JSON(fiber.Map{"error": fiber.Map{
-				"message":      "本周期余额消费已达上限，请提高限额或等待下次重置。",
-				"type":         "balance_limit_reached",
-				"message_code": "ERR_BALANCE_LIMIT_REACHED",
-			}})
+		// fallback 到余额：必须 (1) BalanceConsumeEnabled (2) 窗口限额未用尽 (3) 余额>0。
+		// 项目未上线，不保留绕过余额消费开关的旧直扣路径。
+		if engineDecision.FallbackToBalance {
+			if !user.BalanceConsumeEnabled {
+				if engineDecision.BlockQuotaPlanID != 0 {
+					msg := precheckLimitMessage(engineDecision, precheckBilling)
+					recordProxyApiLogWithPrecheck(user.ID, token, modelName, 402, clientIP, startTime, path, "request_estimate_exceeds_window_remaining", msg, precheckInputTokens, precheckOutputTokens, precheckBilling, engineDecision)
+					return c.Status(402).JSON(precheckLimitErrorPayload(msg, engineDecision, precheckInputTokens, precheckOutputTokens, precheckBilling))
+				}
+				recordProxyApiLog(user.ID, token, modelName, 402, clientIP, startTime, path, "subscription_required", "subscription quota unavailable and balance consume disabled")
+				return c.Status(402).JSON(fiber.Map{"error": fiber.Map{
+					"message":      "当前请求无法使用订阅额度。请购买套餐，或在「账号设置 → 余额消费控制」中开启余额消费。",
+					"type":         "subscription_required",
+					"message_code": "ERR_QUOTA_EXHAUSTED_BALANCE_DISABLED",
+				}})
+			}
+			// 余额预检使用 rawCost：用户预付美元按上游真实成本扣，不应用订阅权重。
+			if !CheckBalanceConsumeAllowed(user, precheckBilling.RawCostMicroUSD) {
+				recordProxyApiLog(user.ID, token, modelName, 402, clientIP, startTime, path, "balance_limit_reached", "balance consume window limit reached")
+				return c.Status(402).JSON(fiber.Map{"error": fiber.Map{
+					"message":      "本周期余额消费已达上限，请提高限额或等待下次重置。",
+					"type":         "balance_limit_reached",
+					"message_code": "ERR_BALANCE_LIMIT_REACHED",
+				}})
+			}
+			if user.Quota <= 0 {
+				recordProxyApiLog(user.ID, token, modelName, 403, clientIP, startTime, path, "quota_exceeded", "insufficient balance")
+				return c.Status(403).JSON(fiber.Map{"error": fiber.Map{
+					"message":      "余额不足，请充值",
+					"type":         "quota_exceeded",
+					"message_code": "ERR_INSUFFICIENT_BALANCE",
+				}})
+			}
 		}
-		if user.Quota <= 0 {
-			recordProxyApiLog(user.ID, token, modelName, 403, clientIP, startTime, path, "quota_exceeded", "insufficient balance")
-			return c.Status(403).JSON(fiber.Map{"error": fiber.Map{
-				"message":      "余额不足，请充值",
-				"type":         "quota_exceeded",
-				"message_code": "ERR_INSUFFICIENT_BALANCE",
-			}})
-		}
+		// 把决策结果存到 locals，事后 ApiLog 关联订阅 / plan 用
+		c.Locals("subscription_decision", engineDecision)
 	}
-	// 把决策结果存到 locals，事后 ApiLog 关联订阅 / plan 用
-	c.Locals("subscription_decision", engineDecision)
 
 	// 3. Fast Routing & Weight calculation
 	// fix CRITICAL Sprint4-M2：route + channel 在同一 RLock 段内读，保证一致快照
@@ -871,9 +1019,11 @@ func ChatCompletionProxyHandler(c *fiber.Ctx) error {
 		case ChannelTypeCLIProxy:
 			// CLIProxyAPI is already a multi-protocol gateway. Preserve the client
 			// protocol and path so Claude Code tools, Codex responses, and OpenAI
-			// chat payloads are not cross-translated before reaching it.
+			// chat payloads are not cross-translated before reaching it. Claude
+			// desktop often appends /v1/messages to a base URL that already ends in
+			// /v1; normalize that compat path before forwarding to CLIProxyAPI.
 			targetFormat = srcFormat
-			upstreamURL += pathSuffix
+			upstreamURL += normalizeCLIProxyUpstreamPath(pathSuffix, srcFormat)
 		case ChannelTypeOpenAI:
 			targetFormat = sdktranslator.FormatOpenAI
 			upstreamURL += pathSuffix
@@ -899,10 +1049,8 @@ func ChatCompletionProxyHandler(c *fiber.Ctx) error {
 		// 改为 derive cancelable child context；SSE 写失败时显式 cancel 中止 upstream Read。
 		// 选中成功的 upstream 后，把其 cancel 函数保存到 successfulUpstreamCancel，
 		// 让下面 SSE BodyStreamWriter 的 cleanup（断连/正常完成）都能调用到。
-		upstreamCtx, upstreamCancel := context.WithCancel(c.Context())
-		httpReq, err := http.NewRequestWithContext(upstreamCtx, http.MethodPost, upstreamURL, bytes.NewReader(finalPayload))
+		httpReq, upstreamCancel, err := newCancelableUpstreamPostRequest(c.Context(), upstreamURL, finalPayload)
 		if err != nil {
-			upstreamCancel()
 			failedChannels[selectedPath.ChannelID] = true
 			lastErrStatus = 502
 			lastErrType = "bad_gateway"
@@ -1008,20 +1156,34 @@ func ChatCompletionProxyHandler(c *fiber.Ctx) error {
 		case StatusActionConfigError:
 			upstreamCancel()
 			failedChannels[selectedPath.ChannelID] = true
-			markChannelModelUnhealthy(selectedPath.ChannelID, modelName)
-			releaseChannelProbe(selectedPath.ChannelID)
-			lastErrStatus = resp.StatusCode
-			lastErrType = "channel_model_unhealthy"
 			respBytes, _ := io.ReadAll(io.LimitReader(resp.Body, 4*1024))
 			resp.Body.Close()
+			routeNotFound := isPlainCLIProxyRouteNotFound(selectedChan.Type, resp.StatusCode, respBytes)
+			if !routeNotFound {
+				markChannelModelUnhealthy(selectedPath.ChannelID, modelName)
+			}
+			releaseChannelProbe(selectedPath.ChannelID)
+			lastErrStatus = resp.StatusCode
 			lastErrMessage = string(respBytes)
-			log.Printf("[UPSTREAM-CONFIG-ERR] channel=%d model=%s status=%d body=%q", selectedPath.ChannelID, modelName, resp.StatusCode, truncForLog(respBytes, 256))
-			lastErrResp, _ = json.Marshal(map[string]any{
-				"error": map[string]any{
-					"message": fmt.Sprintf("upstream returned %d for configured model (route marked unhealthy)", resp.StatusCode),
-					"type":    "channel_model_unhealthy",
-				},
-			})
+			if routeNotFound {
+				lastErrType = "upstream_route_not_found"
+				log.Printf("[UPSTREAM-ROUTE-404] channel=%d model=%s path=%s body=%q", selectedPath.ChannelID, modelName, path, truncForLog(respBytes, 256))
+				lastErrResp, _ = json.Marshal(map[string]any{
+					"error": map[string]any{
+						"message": "upstream route not found",
+						"type":    "upstream_route_not_found",
+					},
+				})
+			} else {
+				lastErrType = "channel_model_unhealthy"
+				log.Printf("[UPSTREAM-CONFIG-ERR] channel=%d model=%s status=%d body=%q", selectedPath.ChannelID, modelName, resp.StatusCode, truncForLog(respBytes, 256))
+				lastErrResp, _ = json.Marshal(map[string]any{
+					"error": map[string]any{
+						"message": fmt.Sprintf("upstream returned %d for configured model (route marked unhealthy)", resp.StatusCode),
+						"type":    "channel_model_unhealthy",
+					},
+				})
+			}
 			continue
 		case StatusActionAuthError:
 			upstreamCancel()
@@ -1084,21 +1246,26 @@ retryLoopExhausted:
 	apiErrorType := ""
 	apiErrorMessage := ""
 	type manualBillingStateInput struct {
-		BillingState          string
-		ReasonTag             string
-		ErrorType             string
-		ErrorMessage          string
-		Status                int
-		PromptTokens          int
-		CompletionTokens      int
-		CachedTokens          int
-		CacheWriteTokens      int
-		CacheWrite5mTokens    int
-		CacheWrite1hTokens    int
-		ReasoningTokens       int
-		DeliveredBytes        int64
-		EstimatedInputTokens  int
-		EstimatedCostMicroUSD int64
+		BillingState                 string
+		ReasonTag                    string
+		ErrorType                    string
+		ErrorMessage                 string
+		Status                       int
+		PromptTokens                 int
+		CompletionTokens             int
+		CachedTokens                 int
+		CacheWriteTokens             int
+		CacheWrite5mTokens           int
+		CacheWrite1hTokens           int
+		ReasoningTokens              int
+		DeliveredBytes               int64
+		EstimatedInputTokens         int
+		EstimatedRawCostMicroUSD     int64
+		EstimatedChargedCostMicroUSD int64
+	}
+	type deliveredCostEstimate struct {
+		RawCostMicroUSD     int64
+		ChargedCostMicroUSD int64
 	}
 	selectedChannelTypeForBilling := func() string {
 		if selectedChan == nil {
@@ -1140,38 +1307,53 @@ retryLoopExhausted:
 			in.Status = 200
 		}
 		selectedChannelType := selectedChannelTypeForBilling()
-		resolution := ResolveBillingRules(modelName, body, in.ReasoningTokens, selectedChannelType, fallbackUserOptIn).WithCosts(0)
+		estimatedRawCostMicroUSD := in.EstimatedRawCostMicroUSD
+		if estimatedRawCostMicroUSD < 0 {
+			estimatedRawCostMicroUSD = 0
+		}
+		resolution := ResolveBillingRules(modelName, body, in.ReasoningTokens, selectedChannelType, fallbackUserOptIn).WithCosts(estimatedRawCostMicroUSD)
+		estimatedChargedCostMicroUSD := in.EstimatedChargedCostMicroUSD
+		if estimatedChargedCostMicroUSD <= 0 && estimatedRawCostMicroUSD > 0 {
+			estimatedChargedCostMicroUSD = resolution.ChargedCostMicroUSD
+		}
+		if estimatedChargedCostMicroUSD < 0 {
+			estimatedChargedCostMicroUSD = 0
+		}
+		reconcileCostMicroUSD := estimatedRawCostMicroUSD
+		if !engineDecision.FallbackToBalance {
+			reconcileCostMicroUSD = estimatedChargedCostMicroUSD
+		}
 		apiLog := database.ApiLog{
-			UserID:               user.ID,
-			TokenName:            HashTokenForLog(token),
-			ModelName:            modelName,
-			RequestedModel:       resolution.RequestedModel,
-			ServedModel:          resolution.ServedModel,
-			PromptTokens:         in.PromptTokens,
-			CompletionTokens:     in.CompletionTokens,
-			CachedTokens:         in.CachedTokens,
-			CacheWriteTokens:     in.CacheWriteTokens,
-			CacheWrite5mTokens:   in.CacheWrite5mTokens,
-			CacheWrite1hTokens:   in.CacheWrite1hTokens,
-			ReasoningTokens:      in.ReasoningTokens,
-			Cost:                 0,
-			ChargedCost:          0,
-			ModelWeight:          resolution.ModelWeight,
-			HealthMultiplier:     resolution.HealthMultiplier,
-			BillingRulesVersion:  resolution.BillingRulesVersion,
-			FallbackUserOptIn:    resolution.FallbackUserOptIn,
-			FallbackReason:       sanitizeError(resolution.FallbackReason, 160),
-			UpstreamProvider:     sanitizeError(strings.ToLower(strings.TrimSpace(selectedChannelType)), 64),
-			Latency:              time.Since(startTime).Milliseconds(),
-			Status:               in.Status,
-			IPAddress:            clientIP,
-			RequestPath:          sanitizeError(path, 160),
-			ErrorType:            sanitizeError(in.ErrorType, 64),
-			ErrorMessage:         sanitizeError(in.ErrorMessage, 512),
-			PrecheckInputTokens:  in.EstimatedInputTokens,
-			PrecheckRawCost:      in.EstimatedCostMicroUSD,
-			PrecheckChargedCost:  in.EstimatedCostMicroUSD,
-			CreatedAt:            time.Now(),
+			UserID:              user.ID,
+			TokenName:           HashTokenForLog(token),
+			ModelName:           modelName,
+			RequestedModel:      resolution.RequestedModel,
+			ServedModel:         resolution.ServedModel,
+			PromptTokens:        in.PromptTokens,
+			CompletionTokens:    in.CompletionTokens,
+			CachedTokens:        in.CachedTokens,
+			CacheWriteTokens:    in.CacheWriteTokens,
+			CacheWrite5mTokens:  in.CacheWrite5mTokens,
+			CacheWrite1hTokens:  in.CacheWrite1hTokens,
+			ReasoningTokens:     in.ReasoningTokens,
+			Cost:                0,
+			ChargedCost:         0,
+			ModelWeight:         resolution.ModelWeight,
+			HealthMultiplier:    resolution.HealthMultiplier,
+			BillingRulesVersion: resolution.BillingRulesVersion,
+			FallbackUserOptIn:   resolution.FallbackUserOptIn,
+			FallbackReason:      sanitizeError(resolution.FallbackReason, 160),
+			UpstreamProvider:    sanitizeError(strings.ToLower(strings.TrimSpace(selectedChannelType)), 64),
+			Latency:             time.Since(startTime).Milliseconds(),
+			Status:              in.Status,
+			IPAddress:           clientIP,
+			RequestPath:         sanitizeError(path, 160),
+			ErrorType:           sanitizeError(in.ErrorType, 64),
+			ErrorMessage:        sanitizeError(in.ErrorMessage, 512),
+			PrecheckInputTokens: in.EstimatedInputTokens,
+			PrecheckRawCost:     estimatedRawCostMicroUSD,
+			PrecheckChargedCost: estimatedChargedCostMicroUSD,
+			CreatedAt:           time.Now(),
 		}
 		apiLogPersisted := true
 		if err := database.DB.Create(&apiLog).Error; err != nil {
@@ -1196,23 +1378,27 @@ retryLoopExhausted:
 			RequestID:            requestID,
 			DeliveredBytes:       in.DeliveredBytes,
 			EstimatedInputTokens: in.EstimatedInputTokens,
-			EstimatedCostUSD:     in.EstimatedCostMicroUSD,
+			EstimatedCostUSD:     reconcileCostMicroUSD,
 			RelatedType:          relatedType,
 			RelatedID:            relatedID,
-			Description: fmt.Sprintf("[%s] %s · request_id=%s · delivered_bytes=%d · estimated_input_tokens=%d · estimated_cost=%s · %s",
+			Description: fmt.Sprintf("[%s] %s · request_id=%s · delivered_bytes=%d · estimated_input_tokens=%d · estimated_cost=%s · reconcile_cost=%s · %s",
 				in.ReasonTag, modelName, requestID, in.DeliveredBytes, in.EstimatedInputTokens,
-				FormatChargedCostForDescription(in.EstimatedCostMicroUSD, in.EstimatedCostMicroUSD), in.ErrorMessage),
+				FormatChargedCostForDescription(estimatedRawCostMicroUSD, estimatedChargedCostMicroUSD),
+				database.FormatMicroUSD(reconcileCostMicroUSD), in.ErrorMessage),
 		}
-		writeBillingWithRetry(entry, in.EstimatedCostMicroUSD, in.EstimatedCostMicroUSD, relatedID)
+		writeBillingWithRetry(entry, estimatedRawCostMicroUSD, estimatedChargedCostMicroUSD, relatedID)
 	}
-	estimateDeliveredCost := func(deliveredBytes int64) int64 {
+	estimateDeliveredCost := func(deliveredBytes int64, reasoningTokens int) deliveredCostEstimate {
 		outputTokens := 0
 		if deliveredBytes > 0 {
 			outputTokens = int((deliveredBytes + 3) / 4)
 		}
-		estimated := estimatePrecheckBalanceDelta(modelName, estimatePrecheckTokens(body), outputTokens)
-		resolution := ResolveBillingRules(modelName, body, 0, selectedChannelTypeForBilling(), fallbackUserOptIn).WithCosts(estimated)
-		return resolution.ChargedCostMicroUSD
+		rawCost := estimatePrecheckBalanceDelta(modelName, estimatePrecheckTokens(body), outputTokens)
+		resolution := ResolveBillingRules(modelName, body, reasoningTokens, selectedChannelTypeForBilling(), fallbackUserOptIn).WithCosts(rawCost)
+		return deliveredCostEstimate{
+			RawCostMicroUSD:     rawCost,
+			ChargedCostMicroUSD: resolution.ChargedCostMicroUSD,
+		}
 	}
 	deductQuota := func(promptTokens, completionTokens, cachedTokens, cacheWriteTokens, cacheWrite5mTokens, cacheWrite1hTokens, reasoningTokens, status int, deliveredBytes int64) bool {
 		// fix CRITICAL Phase 4-codex（第二十四轮）：所有 token 必须 clamp >= 0；
@@ -1331,22 +1517,24 @@ retryLoopExhausted:
 					user.ID, modelName, promptTokens, completionTokens, cachedTokens, cacheWriteTokens, cacheWrite5mTokens, cacheWrite1hTokens, reasoningTokens,
 					inputPricePico, outputPricePico, cachedInputPricePico, cacheWriteInputPricePico, cacheWrite1hInputPricePico)
 				if isStream {
+					estimatedCost := estimateDeliveredCost(deliveredBytes, reasoningTokens)
 					recordManualBillingState(manualBillingStateInput{
-						BillingState:          database.BillingStatePendingReconcile,
-						ReasonTag:             "COST-CALC-FAILED",
-						ErrorType:             "billing_cost_invalid",
-						ErrorMessage:          "stream delivered but cost calculation failed",
-						Status:                200,
-						PromptTokens:          promptTokens,
-						CompletionTokens:      completionTokens,
-						CachedTokens:          cachedTokens,
-						CacheWriteTokens:      cacheWriteTokens,
-						CacheWrite5mTokens:    cacheWrite5mTokens,
-						CacheWrite1hTokens:    cacheWrite1hTokens,
-						ReasoningTokens:       reasoningTokens,
-						DeliveredBytes:        deliveredBytes,
-						EstimatedInputTokens:  promptTokens,
-						EstimatedCostMicroUSD: estimateDeliveredCost(deliveredBytes),
+						BillingState:                 database.BillingStatePendingReconcile,
+						ReasonTag:                    "COST-CALC-FAILED",
+						ErrorType:                    "billing_cost_invalid",
+						ErrorMessage:                 "stream delivered but cost calculation failed",
+						Status:                       200,
+						PromptTokens:                 promptTokens,
+						CompletionTokens:             completionTokens,
+						CachedTokens:                 cachedTokens,
+						CacheWriteTokens:             cacheWriteTokens,
+						CacheWrite5mTokens:           cacheWrite5mTokens,
+						CacheWrite1hTokens:           cacheWrite1hTokens,
+						ReasoningTokens:              reasoningTokens,
+						DeliveredBytes:               deliveredBytes,
+						EstimatedInputTokens:         promptTokens,
+						EstimatedRawCostMicroUSD:     estimatedCost.RawCostMicroUSD,
+						EstimatedChargedCostMicroUSD: estimatedCost.ChargedCostMicroUSD,
 					})
 				} else {
 					recordProxyApiLog(user.ID, token, modelName, 502, clientIP, startTime, path, "billing_cost_invalid", "cost calculation failed")
@@ -1362,33 +1550,33 @@ retryLoopExhausted:
 		chargedCostMicroUSD := billingResolution.ChargedCostMicroUSD
 
 		apiLog := database.ApiLog{
-			UserID:               user.ID,
-			TokenName:            HashTokenForLog(token),
-			ModelName:            modelName,
-			RequestedModel:       billingResolution.RequestedModel,
-			ServedModel:          billingResolution.ServedModel,
-			PromptTokens:         promptTokens,
-			CompletionTokens:     completionTokens,
-			CachedTokens:         cachedTokens,
-			CacheWriteTokens:     cacheWriteTokens,
-			CacheWrite5mTokens:   cacheWrite5mTokens,
-			CacheWrite1hTokens:   cacheWrite1hTokens,
-			ReasoningTokens:      reasoningTokens,
-			Cost:                 costMicroUSD,
-			ChargedCost:          chargedCostMicroUSD,
-			ModelWeight:          billingResolution.ModelWeight,
-			HealthMultiplier:     billingResolution.HealthMultiplier,
-			BillingRulesVersion:  billingResolution.BillingRulesVersion,
-			FallbackUserOptIn:    billingResolution.FallbackUserOptIn,
-			FallbackReason:       sanitizeError(billingResolution.FallbackReason, 160),
-			UpstreamProvider:     sanitizeError(strings.ToLower(strings.TrimSpace(selectedChannelType)), 64),
-			Latency:              time.Since(startTime).Milliseconds(), // Parity Tracker
-			Status:               status,                               // Parity Tracker
-			IPAddress:            clientIP,                             // Parity Tracker
-			RequestPath:          sanitizeError(path, 160),
-			ErrorType:            sanitizeError(apiErrorType, 64),
-			ErrorMessage:         sanitizeError(apiErrorMessage, 512),
-			CreatedAt:            time.Now(),
+			UserID:              user.ID,
+			TokenName:           HashTokenForLog(token),
+			ModelName:           modelName,
+			RequestedModel:      billingResolution.RequestedModel,
+			ServedModel:         billingResolution.ServedModel,
+			PromptTokens:        promptTokens,
+			CompletionTokens:    completionTokens,
+			CachedTokens:        cachedTokens,
+			CacheWriteTokens:    cacheWriteTokens,
+			CacheWrite5mTokens:  cacheWrite5mTokens,
+			CacheWrite1hTokens:  cacheWrite1hTokens,
+			ReasoningTokens:     reasoningTokens,
+			Cost:                costMicroUSD,
+			ChargedCost:         chargedCostMicroUSD,
+			ModelWeight:         billingResolution.ModelWeight,
+			HealthMultiplier:    billingResolution.HealthMultiplier,
+			BillingRulesVersion: billingResolution.BillingRulesVersion,
+			FallbackUserOptIn:   billingResolution.FallbackUserOptIn,
+			FallbackReason:      sanitizeError(billingResolution.FallbackReason, 160),
+			UpstreamProvider:    sanitizeError(strings.ToLower(strings.TrimSpace(selectedChannelType)), 64),
+			Latency:             time.Since(startTime).Milliseconds(), // Parity Tracker
+			Status:              status,                               // Parity Tracker
+			IPAddress:           clientIP,                             // Parity Tracker
+			RequestPath:         sanitizeError(path, 160),
+			ErrorType:           sanitizeError(apiErrorType, 64),
+			ErrorMessage:        sanitizeError(apiErrorMessage, 512),
+			CreatedAt:           time.Now(),
 		}
 		// fix Major（codex 第十四轮）：原 Create 未检 .Error → apiLog.ID=0 时下游账单
 		// RelatedID 写空指针。失败仅日志告警，但账单条目对应 RelatedID 留空避免假关联。
@@ -1505,10 +1693,11 @@ retryLoopExhausted:
 			}); billErr != nil {
 				log.Printf("[BILLING-AUDIT-FAIL] user=%d sub=%d type=%s: %v", user.ID, subID, entryType, billErr)
 			}
-			// 事实化记录：本次请求收入归订阅，金额 = chargedCost（订阅扣减口径）
-			effectiveRevenueMicroUSD = chargedCostMicroUSD
+			// 事实化记录：本次请求收入归订阅。付费订阅 = chargedCost；管理员赠送订阅 = 0。
+			// 赠送订阅仍会保留 ApiLog.cost 作为真实上游成本，但不应污染真实营收与毛利分子。
+			effectiveRevenueMicroUSD = subscriptionRevenueMicroUSD(chargedCostMicroUSD, commitDecision.SubscriptionIsGranted)
 			if apiLogPersisted {
-				RecordApiLogRevenue(apiLog.ID, database.RevenueSourceSubscription, chargedCostMicroUSD, subID)
+				RecordApiLogRevenue(apiLog.ID, database.RevenueSourceSubscription, effectiveRevenueMicroUSD, subID)
 			}
 		}
 
@@ -1534,6 +1723,8 @@ retryLoopExhausted:
 				var balanceAfterMicroUSD int64
 				balanceConsumeMicroUSD := costMicroUSD // rawCost：余额路径按上游真实成本扣费
 				balanceConsumed := false               // CAS 成功（非 pending）才记 revenue
+				var referralReward database.ReferralPaidSpendRewardResult
+				referralRewardBPS, referralRewardWindowSeconds := readReferralPaidSpendRewardConfig()
 				txErr := database.DB.Transaction(func(tx *gorm.DB) error {
 					if !TryConsumeBalanceTx(tx, user.ID, balanceConsumeMicroUSD, true /* forceTrack */) {
 						log.Printf("[BILLING-WINDOW-TRACK-FAIL] user=%d model=%s raw_cost_micro=%d charged_cost_micro=%d forceTrack failed (DB issue), continuing quota deduct", user.ID, modelName, balanceConsumeMicroUSD, chargedCostMicroUSD)
@@ -1603,6 +1794,21 @@ retryLoopExhausted:
 					}); err != nil {
 						return fmt.Errorf("write billing: %w", err)
 					}
+					reward, err := database.ApplyReferralPaidSpendRewardTx(
+						tx,
+						user.ID,
+						balanceConsumeMicroUSD,
+						referralRewardBPS,
+						referralRewardWindowSeconds,
+						time.Now(),
+						relatedType,
+						relatedID,
+						fmt.Sprintf("余额扣费 · %s", modelName),
+					)
+					if err != nil {
+						return fmt.Errorf("apply referral spend reward: %w", err)
+					}
+					referralReward = reward
 					balanceConsumed = true
 					return nil
 				})
@@ -1619,6 +1825,9 @@ retryLoopExhausted:
 					}
 				}
 				RefreshUserAuth(user.ID)
+				if referralReward.ReferrerID != 0 && referralReward.RewardMicroUSD > 0 {
+					RefreshUserAuth(referralReward.ReferrerID)
+				}
 			}
 
 			if !user.BalanceConsumeEnabled {
@@ -1760,12 +1969,32 @@ retryLoopExhausted:
 			if inputTokens < 0 {
 				inputTokens = 0
 			}
-			if !deductQuota(inputTokens, 0, 0, 0, 0, 0, 0, statusCode, 0) {
-				c.Set("Content-Type", "application/json")
-				return c.Status(502).JSON(fiber.Map{"error": fiber.Map{
-					"message": "billing cost calculation failed",
-					"type":    "billing_cost_invalid",
-				}})
+			// Anthropic token counting is a free helper endpoint. Keep an ApiLog
+			// for observability, but never consume subscription/balance quota and
+			// never write BillingEntry/Revenue rows.
+			resolution := ResolveBillingRules(modelName, body, 0, selectedChannelTypeForBilling(), fallbackUserOptIn).WithCosts(0)
+			if err := database.DB.Create(&database.ApiLog{
+				UserID:              user.ID,
+				TokenName:           HashTokenForLog(token),
+				ModelName:           modelName,
+				RequestedModel:      resolution.RequestedModel,
+				ServedModel:         resolution.ServedModel,
+				PromptTokens:        inputTokens,
+				Cost:                0,
+				ChargedCost:         0,
+				ModelWeight:         resolution.ModelWeight,
+				HealthMultiplier:    resolution.HealthMultiplier,
+				BillingRulesVersion: resolution.BillingRulesVersion,
+				FallbackUserOptIn:   resolution.FallbackUserOptIn,
+				FallbackReason:      sanitizeError(resolution.FallbackReason, 160),
+				UpstreamProvider:    sanitizeError(strings.ToLower(strings.TrimSpace(selectedChannelTypeForBilling())), 64),
+				Latency:             time.Since(startTime).Milliseconds(),
+				Status:              statusCode,
+				IPAddress:           clientIP,
+				RequestPath:         sanitizeError(path, 160),
+				CreatedAt:           time.Now(),
+			}).Error; err != nil {
+				log.Printf("[BILLING-AUDIT-FAIL] free count_tokens api_log create failed user=%d model=%s: %v", user.ID, modelName, err)
 			}
 			return c.Send(bodyCopy)
 		}
@@ -1977,22 +2206,24 @@ retryLoopExhausted:
 				log.Printf("[BILLING-UNMETERED] user=%d model=%s stream disconnected before usage metadata; delivered portion not billed", user.ID, modelName)
 				apiErrorType = "client_disconnected_unmetered"
 				apiErrorMessage = "client disconnected before usage metadata"
+				estimatedCost := estimateDeliveredCost(deliveredBytes, reasoningTokens)
 				recordManualBillingState(manualBillingStateInput{
-					BillingState:          database.BillingStatePendingReconcile,
-					ReasonTag:             "CLIENT-DISCONNECT",
-					ErrorType:             apiErrorType,
-					ErrorMessage:          apiErrorMessage,
-					Status:                499,
-					PromptTokens:          promptTokens,
-					CompletionTokens:      completionTokens,
-					CachedTokens:          cachedTokens,
-					CacheWriteTokens:      cacheWriteTokens,
-					CacheWrite5mTokens:    cacheWrite5mTokens,
-					CacheWrite1hTokens:    cacheWrite1hTokens,
-					ReasoningTokens:       reasoningTokens,
-					DeliveredBytes:        deliveredBytes,
-					EstimatedInputTokens:  estimatePrecheckTokens(body),
-					EstimatedCostMicroUSD: estimateDeliveredCost(deliveredBytes),
+					BillingState:                 database.BillingStatePendingReconcile,
+					ReasonTag:                    "CLIENT-DISCONNECT",
+					ErrorType:                    apiErrorType,
+					ErrorMessage:                 apiErrorMessage,
+					Status:                       499,
+					PromptTokens:                 promptTokens,
+					CompletionTokens:             completionTokens,
+					CachedTokens:                 cachedTokens,
+					CacheWriteTokens:             cacheWriteTokens,
+					CacheWrite5mTokens:           cacheWrite5mTokens,
+					CacheWrite1hTokens:           cacheWrite1hTokens,
+					ReasoningTokens:              reasoningTokens,
+					DeliveredBytes:               deliveredBytes,
+					EstimatedInputTokens:         estimatePrecheckTokens(body),
+					EstimatedRawCostMicroUSD:     estimatedCost.RawCostMicroUSD,
+					EstimatedChargedCostMicroUSD: estimatedCost.ChargedCostMicroUSD,
 				})
 				return
 			}
@@ -2044,22 +2275,24 @@ retryLoopExhausted:
 			log.Printf("[BILLING-PENDING] user=%d model=%s stream upstream omitted usage metadata after delivery; recording pending_reconcile (admin reconcile)", user.ID, modelName)
 			apiErrorType = "upstream_unmetered"
 			apiErrorMessage = "upstream stream omitted usage metadata"
+			estimatedCost := estimateDeliveredCost(deliveredBytes, reasoningTokens)
 			recordManualBillingState(manualBillingStateInput{
-				BillingState:          database.BillingStatePendingReconcile,
-				ReasonTag:             "UPSTREAM-NO-USAGE",
-				ErrorType:             apiErrorType,
-				ErrorMessage:          apiErrorMessage,
-				Status:                502,
-				PromptTokens:          promptTokens,
-				CompletionTokens:      completionTokens,
-				CachedTokens:          cachedTokens,
-				CacheWriteTokens:      cacheWriteTokens,
-				CacheWrite5mTokens:    cacheWrite5mTokens,
-				CacheWrite1hTokens:    cacheWrite1hTokens,
-				ReasoningTokens:       reasoningTokens,
-				DeliveredBytes:        deliveredBytes,
-				EstimatedInputTokens:  estimatePrecheckTokens(body),
-				EstimatedCostMicroUSD: estimateDeliveredCost(deliveredBytes),
+				BillingState:                 database.BillingStatePendingReconcile,
+				ReasonTag:                    "UPSTREAM-NO-USAGE",
+				ErrorType:                    apiErrorType,
+				ErrorMessage:                 apiErrorMessage,
+				Status:                       502,
+				PromptTokens:                 promptTokens,
+				CompletionTokens:             completionTokens,
+				CachedTokens:                 cachedTokens,
+				CacheWriteTokens:             cacheWriteTokens,
+				CacheWrite5mTokens:           cacheWrite5mTokens,
+				CacheWrite1hTokens:           cacheWrite1hTokens,
+				ReasoningTokens:              reasoningTokens,
+				DeliveredBytes:               deliveredBytes,
+				EstimatedInputTokens:         estimatePrecheckTokens(body),
+				EstimatedRawCostMicroUSD:     estimatedCost.RawCostMicroUSD,
+				EstimatedChargedCostMicroUSD: estimatedCost.ChargedCostMicroUSD,
 			})
 			return
 		}
@@ -2115,14 +2348,16 @@ func estimatePrecheckBalanceDelta(modelName string, inputTokens, outputTokens in
 		if r == nil {
 			continue
 		}
-		// 用 High 价格作为悲观上界（部分模型按 context 长度切档）
 		inP := r.InputPricePicoPerToken
-		if r.HighInputPricePicoPerToken > inP {
-			inP = r.HighInputPricePicoPerToken
-		}
 		outP := r.OutputPricePicoPerToken
-		if r.HighOutputPricePicoPerToken > outP {
-			outP = r.HighOutputPricePicoPerToken
+		// 与 commit 路径保持一致：只有估算输入 token 达到上下文阈值时，才启用长上下文高价档。
+		if r.ContextPriceThreshold > 0 && inputTokens >= r.ContextPriceThreshold {
+			if r.HighInputPricePicoPerToken > 0 {
+				inP = r.HighInputPricePicoPerToken
+			}
+			if r.HighOutputPricePicoPerToken > 0 {
+				outP = r.HighOutputPricePicoPerToken
+			}
 		}
 		if inP > maxInputPico {
 			maxInputPico = inP

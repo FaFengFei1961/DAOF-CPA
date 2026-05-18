@@ -4,6 +4,7 @@ import { Key, Plus, Copy, Trash2, CheckCircle2, Activity, ShieldAlert, Power, Cl
 import { useCurrency } from '../context/CurrencyContext';
 import toast from 'react-hot-toast';
 import { useConfirm } from '../context/ConfirmContext';
+import { useAuth } from '../context/AuthContext';
 import { authFetch, readAuthState } from '../utils/authFetch';
 import { isPageCacheFresh, readPageCache, writePageCache } from '../utils/pageCache';
 import { StorePage } from './store/StorePrimitives';
@@ -44,13 +45,15 @@ const tokenApiMessage = (code, t) => {
 
 const TokenManager = ({ isAuthenticated }) => {
     const confirm = useConfirm();
+    const { isAuthenticated: contextAuthenticated } = useAuth();
+    const effectiveIsAuthenticated = isAuthenticated ?? contextAuthenticated;
     const { t } = useTranslation();
     const { formatCurrency } = useCurrency();
     const newTokenNameRef = useRef(null);
-    const tokenCacheKey = useMemo(getTokenCacheKey, [isAuthenticated]);
+    const tokenCacheKey = useMemo(getTokenCacheKey, [effectiveIsAuthenticated]);
     const [tokens, setTokens] = useState(() => readPageCache(tokenCacheKey) || []);
     // Avoid a loading card for signed-out users; RequireAuth already owns that state.
-    const [loadingTokens, setLoadingTokens] = useState(() => isAuthenticated && !readPageCache(tokenCacheKey));
+    const [loadingTokens, setLoadingTokens] = useState(() => effectiveIsAuthenticated && !readPageCache(tokenCacheKey));
     const [isCreating, setIsCreating] = useState(false);
     const [newTokenName, setNewTokenName] = useState('');
     const [editingTokenId, setEditingTokenId] = useState(null);
@@ -61,7 +64,7 @@ const TokenManager = ({ isAuthenticated }) => {
     const [editingExpiry, setEditingExpiry] = useState('');
 
     const fetchTokens = useCallback(async ({ force = false } = {}) => {
-        if (!isAuthenticated) {
+        if (!effectiveIsAuthenticated) {
             setTokens([]);
             setLoadingTokens(false);
             return;
@@ -88,13 +91,13 @@ const TokenManager = ({ isAuthenticated }) => {
         } finally {
             setLoadingTokens(false);
         }
-    }, [isAuthenticated, t, tokenCacheKey]);
+    }, [effectiveIsAuthenticated, t, tokenCacheKey]);
 
     useEffect(() => {
-        if (isAuthenticated) {
+        if (effectiveIsAuthenticated) {
             fetchTokens();
         }
-    }, [isAuthenticated, fetchTokens]);
+    }, [effectiveIsAuthenticated, fetchTokens]);
 
     const handleCreateToken = async () => {
         if (isCreating) return;
@@ -111,10 +114,18 @@ const TokenManager = ({ isAuthenticated }) => {
                 }
             });
             if (data.success) {
+                if (data.data) {
+                    setTokens(prev => {
+                        const withoutDuplicate = prev.filter(token => token.id !== data.data.id);
+                        const nextTokens = [data.data, ...withoutDuplicate];
+                        writePageCache(tokenCacheKey, nextTokens);
+                        return nextTokens;
+                    });
+                }
                 setNewTokenName('');
                 setNewQuotaLimit('');
                 setNewExpiredAt('');
-                fetchTokens({ force: true });
+                await fetchTokens({ force: true });
                 toast.success(t('TOKEN_MGMT.CREATE_OK', '令牌已创建'));
             } else {
                 toast.error(tokenApiMessage(data.message_code, t) || data.message || t('TOKEN_MGMT.CREATE_FAIL', '创建失败'));
