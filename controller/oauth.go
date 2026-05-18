@@ -746,12 +746,18 @@ func GetPublicConfig(c *fiber.Ctx) error {
 	serverAddress := proxy.SysConfigCache["server_address"]
 	rateStr := proxy.SysConfigCache["exchange_rate_rmb_per_usd_micros"]
 	proxy.SysConfigMutex.RUnlock()
+	signupBonus, referrerBonus, refereeBonus := resolveBonusConfig()
 
 	return c.JSON(fiber.Map{
 		"success":                          true,
 		"github_client_id":                 clientID,
 		"server_address":                   serverAddress,
 		"exchange_rate_rmb_per_usd_micros": rateStr,
+		"referral_incentives": fiber.Map{
+			"signup_bonus_micro_usd":   fmt.Sprintf("%d", signupBonus),
+			"referrer_bonus_micro_usd": fmt.Sprintf("%d", referrerBonus),
+			"referee_bonus_micro_usd":  fmt.Sprintf("%d", refereeBonus),
+		},
 	})
 }
 

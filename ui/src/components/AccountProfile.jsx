@@ -1,16 +1,30 @@
 import React, { useState, useEffect, useMemo } from 'react';
 import { useTranslation } from 'react-i18next';
-import { User, Copy, CheckCircle2, Lock, ShieldAlert, Key } from 'lucide-react';
+import { User, Copy, Lock, ShieldAlert, Gift, UserPlus } from 'lucide-react';
 import toast from 'react-hot-toast';
 import { useConfirm } from '../context/ConfirmContext';
 import { authFetch, readAuthState } from '../utils/authFetch';
 import { isPageCacheFresh, readPageCache, writePageCache } from '../utils/pageCache';
 
 const PROFILE_CACHE_TTL_MS = 30000;
+const MICRO_PER_USD = 1_000_000;
 const BANNED_MARKER = '\u5c01\u7981';
 const getProfileCacheKey = () => {
     const { isAdmin, userToken } = readAuthState();
     return `profile:${isAdmin ? 'admin' : userToken || 'guest'}`;
+};
+
+const formatMicroUSD = (microValue) => {
+    if (microValue == null || microValue === '') return '—';
+    const micro = Number.parseInt(microValue, 10);
+    if (!Number.isFinite(micro) || micro < 0) return '—';
+    const fractionDigits = micro % MICRO_PER_USD === 0 ? 0 : 2;
+    return new Intl.NumberFormat(undefined, {
+        style: 'currency',
+        currency: 'USD',
+        minimumFractionDigits: fractionDigits,
+        maximumFractionDigits: 6,
+    }).format(micro / MICRO_PER_USD);
 };
 
 const AccountProfile = () => {
@@ -20,6 +34,7 @@ const AccountProfile = () => {
     const cachedProfile = readPageCache(profileCacheKey);
     const [profile, setProfile] = useState(() => cachedProfile);
     const [loading, setLoading] = useState(() => !cachedProfile);
+    const [publicConfig, setPublicConfig] = useState(null);
 
 
     // Admin form state
@@ -28,6 +43,17 @@ const AccountProfile = () => {
         password: ''
     }));
     const [updatingAdmin, setUpdatingAdmin] = useState(false);
+
+    useEffect(() => {
+        let alive = true;
+        fetch('/api/public-config', { credentials: 'same-origin' })
+            .then(res => res.json())
+            .then(data => {
+                if (alive && data?.success) setPublicConfig(data);
+            })
+            .catch(() => {});
+        return () => { alive = false; };
+    }, []);
 
     useEffect(() => {
         const isAdmin = localStorage.getItem('daof_admin_unlocked') === '1';
@@ -88,6 +114,9 @@ const AccountProfile = () => {
 
     if (loading) return <div className="text-on-surface-variant p-8 text-center ">{t('ACCOUNT.LOADING')}</div>;
     if (!profile) return <div className="bg-error/10 border border-error/30 text-error p-6 rounded-overlay text-center">{t('ACCOUNT.LOAD_FAILED')}</div>;
+    const referralIncentives = publicConfig?.referral_incentives || {};
+    const referralBaseUrl = String(publicConfig?.server_address || window.location.origin).trim().replace(/\/+$/, '') || window.location.origin;
+    const referralUrl = `${referralBaseUrl}/?ref=${encodeURIComponent(profile.username)}`;
 
     return (
         <div className="fl-card p-8 mb-8">
@@ -124,26 +153,57 @@ const AccountProfile = () => {
                 {profile.role !== 'admin' && (
                     <div className="bg-surface-container-high border border-outline rounded-overlay p-6">
                         <div className="flex items-start gap-3 mb-3">
-                            <span className="text-2xl">🎁</span>
+                            <div className="w-9 h-9 rounded-control bg-primary/15 text-primary flex items-center justify-center shrink-0">
+                                <Gift size={18} />
+                            </div>
                             <div>
                                 <h3 className="text-base font-bold text-on-surface tracking-tight">
                                     {t('ACCOUNT.REFERRAL_TITLE', '我的拉新推荐链接')}
                                 </h3>
                                 <p className="text-xs text-on-surface-variant mt-1">
-                                    {t('ACCOUNT.REFERRAL_DESC', '分享给朋友。每成功带来一个新用户，你和对方都将获得平台奖励额度（金额由管理员配置）。')}
+                                    {t('ACCOUNT.REFERRAL_DESC', '分享给朋友。每成功带来一个新用户，你和对方都将获得平台奖励额度。')}
                                 </p>
                             </div>
+                        </div>
+                        <div className="grid grid-cols-1 md:grid-cols-2 gap-2 mb-3">
+                            <div className="rounded-control border border-outline-variant/60 bg-black/20 px-3 py-2 flex items-center justify-between gap-3">
+                                <div className="min-w-0">
+                                    <div className="text-xs text-on-surface-variant">{t('ACCOUNT.REFERRER_REWARD_LABEL', '你获得')}</div>
+                                    <div className="text-[11px] text-outline mt-0.5 truncate">{t('ACCOUNT.REFERRER_REWARD_HINT', '好友通过链接注册成功后发放')}</div>
+                                </div>
+                                <div className="text-sm font-semibold font-mono text-primary shrink-0">
+                                    {formatMicroUSD(referralIncentives.referrer_bonus_micro_usd)}
+                                </div>
+                            </div>
+                            <div className="rounded-control border border-outline-variant/60 bg-black/20 px-3 py-2 flex items-center justify-between gap-3">
+                                <div className="min-w-0">
+                                    <div className="text-xs text-on-surface-variant">{t('ACCOUNT.REFEREE_REWARD_LABEL', '好友获得')}</div>
+                                    <div className="text-[11px] text-outline mt-0.5 truncate">
+                                        {t('ACCOUNT.REFEREE_REWARD_HINT', '在注册基础奖励之外叠加')}
+                                    </div>
+                                </div>
+                                <div className="text-sm font-semibold font-mono text-primary shrink-0">
+                                    {formatMicroUSD(referralIncentives.referee_bonus_micro_usd)}
+                                </div>
+                            </div>
+                        </div>
+                        <div className="mb-3 inline-flex items-center gap-1.5 text-[11px] text-on-surface-variant">
+                            <UserPlus size={12} />
+                            {t('ACCOUNT.SIGNUP_REWARD_LABEL', {
+                                amount: formatMicroUSD(referralIncentives.signup_bonus_micro_usd),
+                                defaultValue: '新用户注册基础奖励：{{amount}}',
+                            })}
                         </div>
                         <div className="flex items-stretch gap-2">
                             <input
                                 type="text"
                                 readOnly
-                                value={`${window.location.origin}/?ref=${profile.username}`}
+                                value={referralUrl}
                                 className="flex-1 h-10 bg-black/40 border border-outline-variant rounded-control px-3 text-xs text-on-surface font-mono outline-none select-all"
                             />
                             <button
                                 onClick={() => {
-                                    navigator.clipboard.writeText(`${window.location.origin}/?ref=${profile.username}`);
+                                    navigator.clipboard.writeText(referralUrl);
                                     toast.success(t('ACCOUNT.REFERRAL_COPIED', '推荐链接已复制'));
                                 }}
                                 className="px-4 bg-primary text-on-primary rounded-control text-sm font-medium hover:opacity-90 flex items-center gap-1"
