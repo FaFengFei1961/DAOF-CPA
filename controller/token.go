@@ -31,6 +31,12 @@ func isValidQuotaLimit(v float64) bool {
 
 // getCurrentUser 从 UserGuard / AdminGuard 注入到 Locals 的 user 取出。
 // 路由必须挂 UserGuard / AdminGuard，否则视为编程错误（panic 比静默 401 更好定位）。
+//
+// fix CRITICAL（codex review --uncommitted）：原先在 u.Status==2 时返回 ERR_BANNED，
+// 与 UserGuardAllowBanned 的"软门"设计冲突——banned 用户走 AllowBanned 端点进来后，
+// controller 调 getCurrentUser 又被 banned 拒回，appeal 流死路。
+// banned 拦截已由 middleware UserGuard 完成（硬门）；getCurrentUser 仅做 locals 解析，
+// 不再做状态判断。需要禁止 banned 写动作的控制器，请显式检查 c.Locals("user_banned")。
 func getCurrentUser(c *fiber.Ctx) (*database.User, error) {
 	v := c.Locals("user")
 	if v == nil {
@@ -39,9 +45,6 @@ func getCurrentUser(c *fiber.Ctx) (*database.User, error) {
 	u, ok := v.(*database.User)
 	if !ok || u == nil {
 		return nil, fmt.Errorf("ERR_IDENTITY_UNTRACEABLE")
-	}
-	if u.Status == 2 {
-		return nil, fmt.Errorf("ERR_BANNED")
 	}
 	return u, nil
 }

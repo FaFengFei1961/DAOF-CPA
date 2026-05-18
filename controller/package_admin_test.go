@@ -128,7 +128,6 @@ func TestCreatePackage_ValidationRejects(t *testing.T) {
 		{"negative cost floor", map[string]any{"name": "x", "price_amount": 10.0, "cost_floor_micro_usd": -1, "billing_period_seconds": 86400}},
 		{"cost floor exceeds price", map[string]any{"name": "x", "price_amount": 10.0, "cost_floor_micro_usd": 11_000_000, "billing_period_seconds": 86400}},
 		{"zero period", map[string]any{"name": "x", "price_amount": 10.0, "billing_period_seconds": 0}},
-		{"deprecated bonus field", map[string]any{"name": "x", "price_amount": 10.0, "billing_period_seconds": 86400, "bonus_balance_usd": 0}},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {

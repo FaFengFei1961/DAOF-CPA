@@ -617,6 +617,23 @@ func GetUsersUsageEvents(c *fiber.Ctx) error {
 		return c.Status(500).JSON(fiber.Map{"success": false, "message_code": "ERR_DB_QUERY"})
 	}
 
+	// 拉本页 ApiLog 对应的 revenue 归因（订阅 / 余额）。事实化记录在 side table，
+	// 避免依赖 ApiLog.ChargedCost 推断（订阅扣 charged、余额扣 raw 后两者口径不一致）。
+	revenueByLog := map[uint]database.ApiLogRevenue{}
+	if len(logs) > 0 {
+		logIDs := make([]uint, 0, len(logs))
+		for _, l := range logs {
+			logIDs = append(logIDs, l.ID)
+		}
+		var revenues []database.ApiLogRevenue
+		if err := database.DB.Where("api_log_id IN ?", logIDs).Find(&revenues).Error; err != nil {
+			log.Printf("[USERS-USAGE-EVENTS] revenue lookup failed: %v", err)
+		}
+		for _, r := range revenues {
+			revenueByLog[r.ApiLogID] = r
+		}
+	}
+
 	// 拉相关 user 的 username（同样对硬删用户 fallback 到 token_name 解析）
 	idSet := map[uint]struct{}{}
 	for _, l := range logs {
@@ -668,7 +685,8 @@ func GetUsersUsageEvents(c *fiber.Ctx) error {
 		Cost                   float64 `json:"cost"`
 		RawCost                float64 `json:"raw_cost"`
 		ChargedCost            float64 `json:"charged_cost"`
-		PlatformCostEstimate   float64 `json:"platform_cost_estimate"`
+		RevenueSource          string  `json:"revenue_source"`
+		EffectiveRevenue       float64 `json:"effective_revenue"`
 		ModelWeight            float64 `json:"model_weight"`
 		HealthMultiplier       float64 `json:"health_multiplier"`
 		BillingRulesVersion    string  `json:"billing_rules_version"`
@@ -701,6 +719,7 @@ func GetUsersUsageEvents(c *fiber.Ctx) error {
 	}
 	out := make([]eventOut, 0, len(logs))
 	for _, l := range logs {
+		rev := revenueByLog[l.ID]
 		out = append(out, eventOut{
 			ID:                     l.ID,
 			UserID:                 l.UserID,
@@ -720,7 +739,8 @@ func GetUsersUsageEvents(c *fiber.Ctx) error {
 			Cost:                   database.MicroToUSD(l.Cost),
 			RawCost:                database.MicroToUSD(l.Cost),
 			ChargedCost:            database.MicroToUSD(effectiveChargedCost(l)),
-			PlatformCostEstimate:   database.MicroToUSD(l.PlatformCostEstimate),
+			RevenueSource:          rev.RevenueSource,
+			EffectiveRevenue:       database.MicroToUSD(rev.EffectiveRevenueMicroUSD),
 			ModelWeight:            effectivePositive(l.ModelWeight, 1),
 			HealthMultiplier:       effectivePositive(l.HealthMultiplier, 1),
 			BillingRulesVersion:    l.BillingRulesVersion,

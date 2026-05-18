@@ -50,7 +50,12 @@ const Dashboard = () => {
     ]).then(([meRes, logsRes]) => {
       if (ctrl.signal.aborted) return;
       if (meRes?.success) setMe(meRes.data);
-      if (logsRes?.success) setRecentLogs(logsRes.data?.items || logsRes.data || []);
+      // 后端 /api/logs 返回 { data: { logs: [...], total, page, limit } }，
+      // 字段名是 logs 不是 items。Array.isArray 兜底防御非数组响应（避免 reduce 崩）。
+      if (logsRes?.success) {
+        const raw = logsRes.data?.logs ?? logsRes.data?.items ?? logsRes.data;
+        setRecentLogs(Array.isArray(raw) ? raw : []);
+      }
       setMeLoading(false);
     });
     return () => ctrl.abort();

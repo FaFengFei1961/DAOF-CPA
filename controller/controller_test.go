@@ -191,9 +191,29 @@ func TestDeleteUserMega(t *testing.T) {
 // ----------------------
 func TestGetChannelsMega(t *testing.T) {
 	app := initializeMegaTestDB()
+	database.DB.Create(&database.Channel{
+		ID:   1,
+		Name: "Platform CLIProxy",
+		Type: "cliproxy",
+		Key:  "sk-platform-cleartext-123456",
+	})
 	resp := sendRequest(app, "GET", "/api/admin/channels", nil, "")
 	if resp.StatusCode != 200 {
 		t.Errorf("expected 200, got %d", resp.StatusCode)
+	}
+
+	var body struct {
+		Success bool               `json:"success"`
+		Data    []database.Channel `json:"data"`
+	}
+	if err := json.NewDecoder(resp.Body).Decode(&body); err != nil {
+		t.Fatalf("decode channels: %v", err)
+	}
+	if !body.Success || len(body.Data) != 1 {
+		t.Fatalf("unexpected response: %+v", body)
+	}
+	if body.Data[0].Key != "sk-platform-cleartext-123456" {
+		t.Fatalf("channel key=%q want cleartext", body.Data[0].Key)
 	}
 }
 
@@ -560,17 +580,17 @@ func TestOAuthMega(t *testing.T) {
 	// Test Public Config
 	sendRequest(app, "GET", "/api/public-config", nil, "")
 
-	// Test GithubCallback empty
+	// code/state 现在通过 query 传入；空 query → ERR_INVALID_OAUTH_CODE (400)
 	sendRequest(app, "POST", "/api/auth/github", GithubAuthRequest{}, "")
-	// Test GithubCallback no config
-	sendRequest(app, "POST", "/api/auth/github", GithubAuthRequest{Code: "123"}, "")
+	// code 存在但 state 未在 oauthStateStore → 403 (PKCE state 校验失败)
+	sendRequest(app, "POST", "/api/auth/github?code=123&state=bogus", GithubAuthRequest{}, "")
 
 	proxy.SysConfigMutex.Lock()
 	proxy.SysConfigCache["github_client_id"] = "test"
 	proxy.SysConfigCache["github_client_secret"] = "test"
 	proxy.SysConfigMutex.Unlock()
-	// Let it hit HTTP req
-	sendRequest(app, "POST", "/api/auth/github", GithubAuthRequest{Code: "123"}, "")
+	// 配置存在但 state 仍非法 → 同样 403，覆盖到 SysConfigCache 读路径
+	sendRequest(app, "POST", "/api/auth/github?code=123&state=bogus", GithubAuthRequest{}, "")
 
 	// CompleteRisk Edge Cases
 	// 1. empty body

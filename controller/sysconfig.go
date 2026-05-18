@@ -100,8 +100,7 @@ const (
 	moderationAutobanMinWindowSeconds     = 60
 	moderationAutobanMaxWindowSeconds     = 365 * 24 * 60 * 60
 
-	balanceConsumeDefaultLimitMicroUSDKey      = "balance_consume_default_limit_micro_usd"
-	deprecatedBalanceConsumeDefaultLimitUSDKey = "balance_consume_default_limit_usd"
+	balanceConsumeDefaultLimitMicroUSDKey = "balance_consume_default_limit_micro_usd"
 )
 
 func validateSysConfigPayload(payload map[string]string) (string, string, bool) {
@@ -320,10 +319,6 @@ func BatchUpdateSysConfigs(c *fiber.Ctx) error {
 		return c.Status(400).JSON(fiber.Map{"success": false, "message": "请求参数解析失败", "message_code": "ERR_PARSE_PAYLOAD"})
 	}
 	allowEmpty := c.Query("allow_empty") == "1"
-	if _, ok := payload[deprecatedBalanceConsumeDefaultLimitUSDKey]; ok {
-		log.Printf("[SYSCONFIG] WARN deprecated key %q ignored; use %q", deprecatedBalanceConsumeDefaultLimitUSDKey, balanceConsumeDefaultLimitMicroUSDKey)
-		delete(payload, deprecatedBalanceConsumeDefaultLimitUSDKey)
-	}
 	if code, msg, ok := validateSysConfigPayload(payload); !ok {
 		return c.Status(400).JSON(fiber.Map{"success": false, "message": msg, "message_code": code})
 	}
@@ -355,9 +350,6 @@ func BatchUpdateSysConfigs(c *fiber.Ctx) error {
 	updated := 0
 	moderationSecretChanged := false
 	err := database.DB.Transaction(func(tx *gorm.DB) error {
-		if err := tx.Where("key = ?", deprecatedBalanceConsumeDefaultLimitUSDKey).Delete(&database.SysConfig{}).Error; err != nil {
-			return fmt.Errorf("delete deprecated %s: %w", deprecatedBalanceConsumeDefaultLimitUSDKey, err)
-		}
 		for k, v := range payload {
 			if v == "" && !allowEmpty && !isClearableEmptyConfigKey(k) {
 				continue // 默认：空值视为未修改

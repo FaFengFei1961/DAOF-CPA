@@ -151,7 +151,6 @@ func UpdateUser(c *fiber.Ctx) error {
 	if err := database.DB.First(&user, id).Error; err != nil {
 		return c.Status(404).JSON(fiber.Map{"success": false, "message": "未找到相关记录", "message_code": "ERR_NODE_GONE"})
 	}
-	oldStatus := user.Status
 	effectiveStatus := user.Status
 	if req.Status != nil {
 		if *req.Status < 0 || *req.Status > 99 {
@@ -272,16 +271,16 @@ func UpdateUser(c *fiber.Ctx) error {
 		}
 		return c.Status(500).JSON(fiber.Map{"success": false, "message": "数据更新失败，存在冲突", "message_code": "ERR_UPDATE_CONFLICT"})
 	}
-	if oldStatus != 2 && effectiveStatus == 2 {
-		if err := database.RevokeSessionsForUser(user.ID); err != nil {
-			log.Printf("[USER-STATUS] revoke session failed for user=%d: %v", user.ID, err)
-		}
-	}
+	// fix CRITICAL（codex review --uncommitted）：原先 ban 即 RevokeSessionsForUser →
+	// 浏览器 session 被撤销 → LookupUserBySession 返回 false → middleware 401 →
+	// UserGuardAllowBanned 设计的"banned 用户能查 /user/me、提工单、看账单"appeal 流程
+	// 完全死路。保留 session 让 banned 用户能 UI 申诉；middleware 用 c.Locals("user_banned")
+	// 标记，控制器自行决定是否拒绝写动作。EvictUserToken 仍然撤销 API token cache
+	// 防 banned 用户继续调 LLM。
 
 	// ZERO-TRUST 防御：无论状态改成什么，都强力同步到高速内存里，瞬间实现封号！
 	proxy.SyncCacheConfig()
-	// 双保险：被封禁时精准淘汰该 token，防 SyncCacheConfig 万一 DB 查询失败时
-	// AuthCache 仍保留旧 entry —— EvictUserToken 直接从 map 删除即可。
+	// 被封禁时精准淘汰 API token cache（LLM 路径用 Bearer API token，不是 session）。
 	if effectiveStatus == 2 && user.Token != "" {
 		proxy.EvictUserToken(user.Token)
 	}
@@ -289,7 +288,7 @@ func UpdateUser(c *fiber.Ctx) error {
 	// 封禁通知（仅在状态变成 2=banned 时触发；同日 dedup 防 admin 反复改 ban_reason 重发）
 	if effectiveStatus == 2 && user.Status != 2 {
 		title := readSysConfigCached("notif_security_ban_title", "您的账户已被限制")
-		bodyTpl := readSysConfigCached("notif_security_ban_body", "原因：{reason}。如有疑问请联系客服。")
+		bodyTpl := readSysConfigCached("notif_security_ban_body", "原因：{reason}。如有疑问请提交工单。")
 		reason := req.BanReason
 		if reason == "" {
 			reason = "未提供"
@@ -313,21 +312,20 @@ func GetSelfData(c *fiber.Ctx) error {
 	if err != nil {
 		return c.Status(401).JSON(fiber.Map{"success": false, "message_code": err.Error()})
 	}
-	if user.Status == 2 {
-		return c.Status(403).JSON(fiber.Map{"success": false, "message_code": "ERR_BANNED", "ban_reason": user.BanReason})
-	}
+	// 封禁用户也要拿到 profile（含 status=2 + ban_reason），让前端能持续显示
+	// 封禁横幅 + 引导提工单申诉。其它业务 controller 仍走 UserGuard 会被 403 拦截。
 	// fix CRITICAL Sprint2-M1：自身路由也不暴露 token。
 	// 旧实现每次 /api/user/me 都附带 token 明文 → 浏览器 devtools、Sentry/日志、
 	// XSS 任意脚本都能采集。token 应通过专门的 reveal 接口 + 二次确认获取。
-	// UI 实际消费的字段：id / username / role / quota / status，无 token 引用（已 grep 验证）。
 	return c.JSON(fiber.Map{
 		"success": true,
 		"data": map[string]interface{}{
-			"id":       user.ID,
-			"username": user.Username,
-			"role":     user.Role,
-			"quota":    database.MicroToUSD(user.Quota),
-			"status":   user.Status,
+			"id":         user.ID,
+			"username":   user.Username,
+			"role":       user.Role,
+			"quota":      database.MicroToUSD(user.Quota),
+			"status":     user.Status,
+			"ban_reason": user.BanReason,
 		},
 	})
 }
@@ -817,6 +815,13 @@ func purgeUserDependents(tx *gorm.DB, userID uint) error {
 			"DELETE FROM api_log_cost_estimates WHERE api_log_id IN (SELECT id FROM api_logs WHERE user_id = ?)", userID); err != nil {
 			return err
 		}
+		// fix CRITICAL（codex audit-integrity）：补漏新加的 api_log_revenues 侧表清理。
+		// 若漏删，GDPR purge 后侧表保留指向已删 api_logs 的孤儿行（含 effective_revenue_micro_usd
+		// 金额），既违反 GDPR 又污染毛利报表。
+		if err := purgeExecIfTableExists(tx, "api_log_revenues",
+			"DELETE FROM api_log_revenues WHERE api_log_id IN (SELECT id FROM api_logs WHERE user_id = ?)", userID); err != nil {
+			return err
+		}
 		if err := tx.Exec("DELETE FROM api_logs WHERE user_id = ?", userID).Error; err != nil {
 			return err
 		}
@@ -831,6 +836,12 @@ func purgeUserDependents(tx *gorm.DB, userID uint) error {
 		}
 	}
 	if tx.Migrator().HasTable(&database.TopupOrder{}) {
+		// fix MEDIUM（codex audit-integrity）：payment_webhook_receipts 按 out_trade_no 关联，
+		// 必须在 topup_orders 被删之前清理（子查询依赖父表）。
+		if err := purgeExecIfTableExists(tx, "payment_webhook_receipts",
+			"DELETE FROM payment_webhook_receipts WHERE out_trade_no IN (SELECT out_trade_no FROM topup_orders WHERE user_id = ?)", userID); err != nil {
+			return err
+		}
 		if err := purgeExecIfTableExists(tx, "topup_refunds",
 			"DELETE FROM topup_refunds WHERE topup_order_id IN (SELECT id FROM topup_orders WHERE user_id = ?)", userID); err != nil {
 			return err

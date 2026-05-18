@@ -297,11 +297,10 @@ func TestCompleteProfile_UsesBalanceConsumeDefaultLimitMicroUSD(t *testing.T) {
 	proxy.SysConfigMutex.Lock()
 	old := proxy.SysConfigCache
 	proxy.SysConfigCache = map[string]string{
-		"signup_bonus":                             "0",
-		"balance_consume_default_enabled":          "true",
-		balanceConsumeDefaultLimitMicroUSDKey:      "1234567",
-		"balance_consume_default_window_secs":      "86400",
-		deprecatedBalanceConsumeDefaultLimitUSDKey: "99.99",
+		"signup_bonus":                        "0",
+		"balance_consume_default_enabled":     "true",
+		balanceConsumeDefaultLimitMicroUSDKey: "1234567",
+		"balance_consume_default_window_secs": "86400",
 	}
 	proxy.SysConfigMutex.Unlock()
 	t.Cleanup(func() {

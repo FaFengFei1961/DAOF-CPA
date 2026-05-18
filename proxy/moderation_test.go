@@ -93,7 +93,7 @@ func TestKeywordFilter_ConcurrentSafe(t *testing.T) {
 	wg.Wait()
 }
 
-func TestLookupModerationPolicy_OpenAIModelForcedStrictClosed(t *testing.T) {
+func TestLookupModerationPolicy_OpenAICompatibleRelayUsesSavedPolicy(t *testing.T) {
 	db, err := gorm.Open(sqlite.Open("file::memory:?cache=private"), &gorm.Config{
 		Logger: logger.Default.LogMode(logger.Silent),
 	})
@@ -119,10 +119,8 @@ func TestLookupModerationPolicy_OpenAIModelForcedStrictClosed(t *testing.T) {
 	FlushAllModerationPolicyCache()
 
 	policy := LookupModerationPolicy("gpt-5.4-mini")
-	if policy.Level != database.OpenAIModelModerationLevel || policy.FailMode != database.OpenAIModelModerationFailMode {
-		t.Fatalf("policy=%s/%s want %s/%s",
-			policy.Level, policy.FailMode,
-			database.OpenAIModelModerationLevel, database.OpenAIModelModerationFailMode)
+	if policy.Level != "off" || policy.FailMode != "open" {
+		t.Fatalf("policy=%s/%s want off/open", policy.Level, policy.FailMode)
 	}
 }
 

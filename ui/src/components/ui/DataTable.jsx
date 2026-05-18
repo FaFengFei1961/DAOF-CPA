@@ -47,6 +47,7 @@ const DataTable = ({
   stickyHeader = true,
   edgeGradient = true,
   className = '',
+  rowClassName,
 }) => {
   const { t } = useTranslation();
   const headerCls = stickyHeader ? '' : 'fl-table-no-sticky';
@@ -94,11 +95,12 @@ const DataTable = ({
               rows.map((row) => {
                 const key = rowKey ? rowKey(row) : (row.id ?? Math.random());
                 const clickable = !!onRowClick;
+                const extraRowClass = rowClassName ? rowClassName(row) : '';
                 return (
                   <tr
                     key={key}
                     onClick={clickable ? () => onRowClick(row) : undefined}
-                    className={`${clickable ? 'cursor-pointer hover:bg-on-surface/[0.04]' : 'hover:bg-surface-container/40'} transition`}
+                    className={`${clickable ? 'cursor-pointer hover:bg-on-surface/[0.04]' : 'hover:bg-surface-container/40'} ${extraRowClass} transition`}
                   >
                     {columns.map(col => (
                       <td

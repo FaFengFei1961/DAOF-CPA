@@ -9,9 +9,19 @@
  * and mobile navigation.
  */
 import React, { lazy } from 'react';
-import { createBrowserRouter, Navigate } from 'react-router-dom';
+import { createBrowserRouter, Navigate, useSearchParams } from 'react-router-dom';
 // navManifest.js owns menu data; routes only consume adminTabItems for legacy tab routes.
 import { adminTabItems } from './navManifest';
+
+// fix P2（codex review verify-r5）：旧 /upgrade?pane=mine|store 通知链接 compat redirect。
+// pane=mine（已订阅用户看续费 / 退款）→ Dashboard 不弹 modal；
+// pane=store（看新套餐营销）→ Dashboard + ?openBrowse=store 让 MySubscriptions 自动弹 modal。
+const UpgradeRedirect = () => {
+  const [searchParams] = useSearchParams();
+  const pane = searchParams.get('pane');
+  const target = pane === 'store' ? '/?openBrowse=store' : '/';
+  return <Navigate to={target} replace />;
+};
 
 // Shells
 const UserShell = lazy(() => import('./shells/UserShell'));
@@ -23,7 +33,6 @@ const Dashboard = lazy(() => import('./components/Dashboard'));
 const TokenManager = lazy(() => import('./components/TokenManager'));
 const StatisticsDash = lazy(() => import('./components/StatisticsDash'));
 const PricingDash = lazy(() => import('./components/PricingDash'));
-const UpgradePage = lazy(() => import('./components/UpgradePage'));
 const Topup = lazy(() => import('./components/Topup'));
 const TopupResult = lazy(() => import('./components/TopupResult'));
 const BillsPage = lazy(() => import('./components/BillsPage'));
@@ -59,6 +68,7 @@ const GeneralAdminPage = lazy(() => import('./pages/admin/system/GeneralAdminPag
 const RiskPage = lazy(() => import('./pages/admin/system/RiskPage'));
 const FinanceShell = lazy(() => import('./pages/admin/finance/FinancePage'));
 const FinanceSettingsPage = lazy(() => import('./pages/admin/finance/FinanceSettingsPage'));
+const BillingRulesAdminPage = lazy(() => import('./pages/admin/finance/BillingRulesPage'));
 const AdminPaymentChannels = lazy(() => import('./components/AdminPaymentChannels'));
 const AdminTopupOrders = lazy(() => import('./components/AdminTopupOrders'));
 const AdminSubscriptions = lazy(() => import('./components/AdminSubscriptions'));
@@ -71,8 +81,16 @@ const router = createBrowserRouter([
       // Public routes.
       { index: true,    element: <Dashboard /> },
       { path: 'pricing',element: <PricingDash /> },
-      { path: 'upgrade',element: <UpgradePage /> },
       { path: 'topup-result', element: <TopupResult /> },
+      // fix P2（codex review verify-1 + verify-r4 + verify-r5）：后端 notification_links.go
+      // 仍生成 `/upgrade?pane=mine|store` 用于通知 action_url。/upgrade 路由删除后这些通知按钮
+      // silent 跳全局 404。
+      //
+      // 不能用 static <Navigate>：pane=mine 和 pane=store 行为不同：
+      //   - pane=mine（订阅到期 / 退款 / 看自己订阅）→ 落到 Dashboard，**不弹** modal
+      //   - pane=store（营销 / 看新套餐）→ Dashboard + ?openBrowse=store 自动弹 modal
+      // 用 UpgradeRedirect 动态组件读 search.pane 决定 Navigate 目标。
+      { path: 'upgrade', element: <UpgradeRedirect /> },
       // User routes guarded by the RequireAuth banner.
       { path: 'tokens',  element: <RouteGuard><TokenManager /></RouteGuard> },
       { path: 'stats',   element: <RouteGuard><StatisticsDash /></RouteGuard> },
@@ -117,6 +135,7 @@ const router = createBrowserRouter([
         element: <FinanceShell />,
         children: [
           { index: true,           element: <FinanceSettingsPage /> },
+          { path: 'rules',         element: <BillingRulesAdminPage /> },
           { path: 'payment',       element: <AdminPaymentChannels /> },
           { path: 'topups',        element: <AdminTopupOrders /> },
           { path: 'subscriptions', element: <AdminSubscriptions /> },

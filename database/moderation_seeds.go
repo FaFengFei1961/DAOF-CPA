@@ -498,8 +498,8 @@ var ModerationSysConfigDefaults = map[string]string{
 
 	// ── 用户拒绝文案 ──
 	// 给客户端看的 message（不透传审核 category/score——防反向工程）
-	"moderation_block_message_zh":       "您的请求包含违规内容，已被系统拦截。如认为这是误判，请联系客服。",
-	"moderation_block_message_en":       "Your request was blocked by content moderation. Please contact support if you believe this is a mistake.",
+	"moderation_block_message_zh":       "您的请求包含违规内容，已被系统拦截。如认为这是误判，请提交工单。",
+	"moderation_block_message_en":       "Your request was blocked by content moderation. Please open a ticket if you believe this is a mistake.",
 	"moderation_unavailable_message_zh": "内容审核服务暂时不可用，请稍后重试。",
 	"moderation_unavailable_message_en": "Content moderation is temporarily unavailable. Please retry later.",
 

@@ -389,7 +389,6 @@ func recordProxyApiLogWithPrecheck(userID uint, token, modelName string, status 
 		Latency:                time.Since(startTime).Milliseconds(),
 		Cost:                   0,
 		ChargedCost:            0,
-		PlatformCostEstimate:   0,
 		PrecheckInputTokens:    inputTokens,
 		PrecheckOutputTokens:   outputTokens,
 		PrecheckRawCost:        billing.RawCostMicroUSD,
@@ -1157,7 +1156,6 @@ retryLoopExhausted:
 			ReasoningTokens:      in.ReasoningTokens,
 			Cost:                 0,
 			ChargedCost:          0,
-			PlatformCostEstimate: 0,
 			ModelWeight:          resolution.ModelWeight,
 			HealthMultiplier:     resolution.HealthMultiplier,
 			BillingRulesVersion:  resolution.BillingRulesVersion,
@@ -1378,7 +1376,6 @@ retryLoopExhausted:
 			ReasoningTokens:      reasoningTokens,
 			Cost:                 costMicroUSD,
 			ChargedCost:          chargedCostMicroUSD,
-			PlatformCostEstimate: billingResolution.PlatformCostEstimateMicro,
 			ModelWeight:          billingResolution.ModelWeight,
 			HealthMultiplier:     billingResolution.HealthMultiplier,
 			BillingRulesVersion:  billingResolution.BillingRulesVersion,
@@ -1404,6 +1401,10 @@ retryLoopExhausted:
 		// 订阅扣费：实扣（基于真实 token 数）。命中订阅则不扣 USD 余额。
 		// 失败的请求（status < 200 || >= 400）不扣订阅额度也不扣余额。
 		commitOK := false
+		// effectiveRevenueMicroUSD 是"本次请求真实从用户那拿到多少钱"。
+		// 订阅命中 → chargedCost；余额扣费成功 → rawCost (=costMicroUSD)；其它（失败/pending）→ 0。
+		// 同时驱动两件事：ApiLogRevenue.effective_revenue + 子 token UsedQuota 累加。
+		var effectiveRevenueMicroUSD int64
 		var commitDecision EngineDecision
 		if !failedRequest {
 			commitDecision = Decide(EngineRequest{
@@ -1504,6 +1505,11 @@ retryLoopExhausted:
 			}); billErr != nil {
 				log.Printf("[BILLING-AUDIT-FAIL] user=%d sub=%d type=%s: %v", user.ID, subID, entryType, billErr)
 			}
+			// 事实化记录：本次请求收入归订阅，金额 = chargedCost（订阅扣减口径）
+			effectiveRevenueMicroUSD = chargedCostMicroUSD
+			if apiLogPersisted {
+				RecordApiLogRevenue(apiLog.ID, database.RevenueSourceSubscription, chargedCostMicroUSD, subID)
+			}
 		}
 
 		if !commitOK && chargedCostMicroUSD > 0 {
@@ -1527,6 +1533,7 @@ retryLoopExhausted:
 			deductQuotaAtomic := func() {
 				var balanceAfterMicroUSD int64
 				balanceConsumeMicroUSD := costMicroUSD // rawCost：余额路径按上游真实成本扣费
+				balanceConsumed := false               // CAS 成功（非 pending）才记 revenue
 				txErr := database.DB.Transaction(func(tx *gorm.DB) error {
 					if !TryConsumeBalanceTx(tx, user.ID, balanceConsumeMicroUSD, true /* forceTrack */) {
 						log.Printf("[BILLING-WINDOW-TRACK-FAIL] user=%d model=%s raw_cost_micro=%d charged_cost_micro=%d forceTrack failed (DB issue), continuing quota deduct", user.ID, modelName, balanceConsumeMicroUSD, chargedCostMicroUSD)
@@ -1596,12 +1603,20 @@ retryLoopExhausted:
 					}); err != nil {
 						return fmt.Errorf("write billing: %w", err)
 					}
+					balanceConsumed = true
 					return nil
 				})
 				if txErr != nil {
 					log.Printf("[BILLING-CRITICAL] user=%d model=%s raw_cost_micro=%d charged_cost_micro=%d QUOTA-DEDUCT-TX-FAILED reason=balance-fallback: %v",
 						user.ID, modelName, costMicroUSD, chargedCostMicroUSD, txErr)
 					return
+				}
+				// 事实化记录：CAS 成功的余额扣费路径才记 revenue；pending_reconcile 分支未真实扣钱不记
+				if balanceConsumed {
+					effectiveRevenueMicroUSD = balanceConsumeMicroUSD
+					if apiLogPersisted {
+						RecordApiLogRevenue(apiLog.ID, database.RevenueSourceBalance, balanceConsumeMicroUSD, 0)
+					}
 				}
 				RefreshUserAuth(user.ID)
 			}
@@ -1656,25 +1671,31 @@ retryLoopExhausted:
 
 		// 子 token UsedQuota 累加（详见原注释 — 选择"无条件累加 + precheck 拦截"模型）
 		//
-		// fix CRITICAL（多模型审计第二十五轮）：子 token quota 必须按 chargedCostMicroUSD 累加，
-		// 不能用 raw costMicroUSD —— 否则 used_quota 会绕过模型权重，让 quota_limit 失去对应模型权重的语义。
-		if isSubToken && chargedCostMicroUSD > 0 && status >= 200 && status < 400 {
+		// 按 effectiveRevenueMicroUSD 累加，与"用户实际花了多少"对齐：
+		//   - 订阅命中 → effective = chargedCost（与 SubscriptionUsage.ConsumedValue 同口径）
+		//   - 余额扣费 → effective = rawCost（与 User.Quota 扣减同口径）
+		//   - pending / 失败 → effective = 0，不累加
+		//
+		// 这样 sub-token.QuotaLimit 永远反映"用户实际花了多少美元"，无论后端走哪条扣减路径。
+		// 旧实现（一刀切按 chargedCost）会让纯余额用户：Opus weight=3.5 时 UsedQuota 虚高 3.5×，
+		// Haiku weight=0.3 时 UsedQuota 虚低 3.3× —— 子 token 限额语义被破坏。
+		if isSubToken && effectiveRevenueMicroUSD > 0 && status >= 200 && status < 400 {
 			res := database.DB.Model(&database.AccessToken{}).
 				Where("id = ?", subToken.ID).
-				UpdateColumn("used_quota", gorm.Expr("used_quota + ?", chargedCostMicroUSD))
+				UpdateColumn("used_quota", gorm.Expr("used_quota + ?", effectiveRevenueMicroUSD))
 			if res.Error != nil {
-				log.Printf("[SUB-TOKEN-CRITICAL] token_id=%d charged_cost_micro=%d UsedQuota-UPDATE-FAILED: %v", subToken.ID, chargedCostMicroUSD, res.Error)
+				log.Printf("[SUB-TOKEN-CRITICAL] token_id=%d effective_revenue_micro=%d UsedQuota-UPDATE-FAILED: %v", subToken.ID, effectiveRevenueMicroUSD, res.Error)
 			} else if res.RowsAffected == 0 {
-				log.Printf("[SUB-TOKEN-CRITICAL] token_id=%d charged_cost_micro=%d token-not-found-at-commit", subToken.ID, chargedCostMicroUSD)
+				log.Printf("[SUB-TOKEN-CRITICAL] token_id=%d effective_revenue_micro=%d token-not-found-at-commit", subToken.ID, effectiveRevenueMicroUSD)
 			} else {
-				if subToken.QuotaLimit > 0 && subToken.UsedQuota+chargedCostMicroUSD > subToken.QuotaLimit {
-					log.Printf("[SUB-TOKEN-OVERLIMIT] token_id=%d charged_cost_micro=%d used-quota-exceeded-limit", subToken.ID, chargedCostMicroUSD)
+				if subToken.QuotaLimit > 0 && subToken.UsedQuota+effectiveRevenueMicroUSD > subToken.QuotaLimit {
+					log.Printf("[SUB-TOKEN-OVERLIMIT] token_id=%d effective_revenue_micro=%d used-quota-exceeded-limit", subToken.ID, effectiveRevenueMicroUSD)
 				}
 				// clone-on-write 防 data race
 				authSnapshotMutex.Lock()
 				if existing, ok := AuthTokenCache[token]; ok {
 					updated := *existing
-					updated.UsedQuota += chargedCostMicroUSD
+					updated.UsedQuota += effectiveRevenueMicroUSD
 					AuthTokenCache[token] = &updated
 				}
 				authSnapshotMutex.Unlock()

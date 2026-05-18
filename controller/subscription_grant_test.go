@@ -250,28 +250,6 @@ func TestGrant_QuantityDoesNotCreditBalance(t *testing.T) {
 	}
 }
 
-func TestGrant_RejectDeprecatedApplyBonus(t *testing.T) {
-	setupSubTestDB(t)
-	admin := seedAdminUser(t)
-	user := seedTestUser(t, 1)
-	pkg := seedPackage(t)
-	app := newAdminGrantTestApp(admin)
-
-	code, resp := doJSON(t, app, "POST", "/admin/sub/grant", map[string]any{
-		"user_id":     user.ID,
-		"package_id":  pkg.ID,
-		"quantity":    1,
-		"reason":      "旧字段拒绝测试",
-		"apply_bonus": false,
-	})
-	if code != 400 {
-		t.Fatalf("expected 400 for deprecated apply_bonus, got %d body=%v", code, resp)
-	}
-	if resp["message_code"] != "ERR_DEPRECATED_FIELD" {
-		t.Errorf("expected ERR_DEPRECATED_FIELD, got %v", resp["message_code"])
-	}
-}
-
 // Phase 8 只保留订阅产品类型。
 
 // TestGrant_RejectSelf admin 不能给自己赠送。

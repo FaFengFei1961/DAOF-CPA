@@ -21,7 +21,7 @@ func setupUpstreamCostTestDB(t *testing.T) *fiber.App {
 	if err != nil {
 		t.Fatalf("open sqlite: %v", err)
 	}
-	if err := db.AutoMigrate(&database.ApiLog{}, &database.ApiLogAttribution{}, &database.ApiLogCostEstimate{}, &database.UpstreamAccountCost{}); err != nil {
+	if err := db.AutoMigrate(&database.ApiLog{}, &database.ApiLogAttribution{}, &database.ApiLogCostEstimate{}, &database.ApiLogRevenue{}, &database.UpstreamAccountCost{}); err != nil {
 		t.Fatalf("migrate: %v", err)
 	}
 	database.DB = db
@@ -117,7 +117,7 @@ func replaceSysConfigCacheForUpstreamCostTest(next map[string]string) map[string
 func TestUpstreamMarginReportUsesAccountCostCapacity(t *testing.T) {
 	app := setupUpstreamCostTestDB(t)
 	now := time.Now()
-	if err := database.DB.Create(&database.ApiLog{
+	apiLog := database.ApiLog{
 		UserID:            1,
 		ModelName:         "gpt-5.5",
 		UpstreamProvider:  "codex",
@@ -129,8 +129,18 @@ func TestUpstreamMarginReportUsesAccountCostCapacity(t *testing.T) {
 		ChargedCost:       150 * database.MicroPerUSD,
 		Status:            200,
 		CreatedAt:         now,
-	}).Error; err != nil {
+	}
+	if err := database.DB.Create(&apiLog).Error; err != nil {
 		t.Fatalf("seed api log: %v", err)
+	}
+	// 该请求由订阅扣减：营收 = chargedCost = 150 USD
+	if err := database.DB.Create(&database.ApiLogRevenue{
+		ApiLogID:                 apiLog.ID,
+		RevenueSource:            database.RevenueSourceSubscription,
+		EffectiveRevenueMicroUSD: 150 * database.MicroPerUSD,
+		RecordedAt:               now,
+	}).Error; err != nil {
+		t.Fatalf("seed api log revenue: %v", err)
 	}
 
 	payload := map[string]any{
@@ -167,7 +177,9 @@ func TestUpstreamMarginReportUsesAccountCostCapacity(t *testing.T) {
 				AuthIndex               string  `json:"auth_index"`
 				AccountConfigured       bool    `json:"account_configured"`
 				RawCostUSD              float64 `json:"raw_cost_usd"`
-				ChargedCostUSD          float64 `json:"charged_cost_usd"`
+				SubscriptionRevenueUSD  float64 `json:"subscription_revenue_usd"`
+				BalanceRevenueUSD       float64 `json:"balance_revenue_usd"`
+				TotalRevenueUSD         float64 `json:"total_revenue_usd"`
 				PlatformCostEstimateUSD float64 `json:"platform_cost_estimate_usd"`
 				GrossMarginUSD          float64 `json:"gross_margin_usd"`
 				CostBasis               string  `json:"cost_basis"`
@@ -184,7 +196,11 @@ func TestUpstreamMarginReportUsesAccountCostCapacity(t *testing.T) {
 	if row.Provider != "codex" || row.AuthIndex != "acct-1" || !row.AccountConfigured {
 		t.Fatalf("bad row identity/config: %+v", row)
 	}
-	if row.RawCostUSD != 100 || row.ChargedCostUSD != 150 || row.PlatformCostEstimateUSD != 10 || row.GrossMarginUSD != 140 {
+	// 订阅收入 150、余额收入 0、平台成本 = 100 × 20 / 200 = 10、毛利 = 150 - 10 = 140
+	if row.RawCostUSD != 100 || row.SubscriptionRevenueUSD != 150 || row.BalanceRevenueUSD != 0 || row.TotalRevenueUSD != 150 {
+		t.Fatalf("bad revenue split: %+v", row)
+	}
+	if row.PlatformCostEstimateUSD != 10 || row.GrossMarginUSD != 140 {
 		t.Fatalf("bad margin math: %+v", row)
 	}
 	if row.CostBasis != "account_capacity" {

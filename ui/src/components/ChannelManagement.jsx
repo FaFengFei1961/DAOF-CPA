@@ -1,6 +1,6 @@
 import React, { useState, useEffect, useMemo, useRef } from 'react';
 import { useTranslation, Trans } from 'react-i18next';
-import { Search, Plus, Edit2, Trash2, Server, Save, X, RefreshCw, AlertTriangle, ArrowLeft, Network, Box } from 'lucide-react';
+import { Search, Plus, Edit2, Trash2, Server, Save, X, RefreshCw, AlertTriangle, ArrowLeft, Network, Box, ChevronRight, ShieldAlert, ShieldCheck, ShieldOff } from 'lucide-react';
 import { useCurrency } from '../context/CurrencyContext';
 import toast from 'react-hot-toast';
 import { authFetch } from '../utils/authFetch';
@@ -9,6 +9,79 @@ import { useModalA11y } from '../hooks/useModalA11y';
 import DataTable from './ui/DataTable';
 import StatusBadge from './ui/StatusBadge';
 import ChannelCircuitMonitor from './ChannelCircuitMonitor';
+import { groupModelsByProvider, inferModelProvider, brandFor, hexA } from '../utils/modelProviders';
+
+// fix CRITICAL（codex money-unit + verify-final）：后端 channelModelPayload 只接受
+// *_pico_per_token int64 字段，前端表单展示的是 USD/1M tokens（admin 习惯单位）。
+//
+// 后端常量（database/schema.go:121-123）：
+//   PicoPerUSD                = 1e15 (1 USD = 1e15 pico)
+//   PicoPerTokenPerUSDPerMTok = 1e9  (USD/1M tokens × 1e9 = pico/token)
+// 推导：1 USD/1M tokens = 1e-6 USD/token = 1e-6 × 1e15 = 1e9 pico/token ✓
+//
+// 之前用 1e6（错 1000 倍 → 平台只收真实价 0.1%，灾难性少收）。必须用 1e9。
+const PICO_PER_TOKEN_PER_USD_PER_M_TOK = 1_000_000_000;
+
+const usdPerMillionToPicoPerToken = (usdPerMillion) => {
+    const v = parseFloat(usdPerMillion);
+    if (!isFinite(v) || v < 0) return 0;
+    return Math.round(v * PICO_PER_TOKEN_PER_USD_PER_M_TOK);
+};
+const picoPerTokenToUsdPerMillion = (pico) => {
+    const v = Number(pico);
+    if (!isFinite(v) || v <= 0) return 0;
+    return v / PICO_PER_TOKEN_PER_USD_PER_M_TOK;
+};
+
+const inferModelFamily = (modelId = '') => {
+    const id = String(modelId).trim().toLowerCase();
+    if (id.includes('claude')) {
+        if (id.includes('claude-3-') || id === 'claude-opus-4-20250514' || id === 'claude-opus-4-1-20250805') {
+            return { key: 'anthropic-legacy', name: 'Claude Legacy / Deprecated', order: 19 };
+        }
+        if (id.includes('opus')) return { key: 'anthropic-opus', name: 'Claude Opus', order: 10 };
+        if (id.includes('sonnet')) return { key: 'anthropic-sonnet', name: 'Claude Sonnet', order: 11 };
+        if (id.includes('haiku')) return { key: 'anthropic-haiku', name: 'Claude Haiku', order: 12 };
+        return { key: 'anthropic-other', name: 'Claude Other', order: 18 };
+    }
+    if (id.includes('gpt-image') || id.includes('dall')) return { key: 'openai-image', name: 'OpenAI Image', order: 29 };
+    if (id.includes('codex')) return { key: 'openai-codex', name: 'Codex / Internal', order: 22 };
+    if (id.includes('gpt-5')) return { key: 'openai-gpt5', name: 'GPT-5', order: 20 };
+    if (id.includes('gpt')) return { key: 'openai-gpt', name: 'GPT', order: 21 };
+    if (id.startsWith('o')) return { key: 'openai-reasoning', name: 'OpenAI Reasoning', order: 23 };
+    if (id.includes('gemini')) {
+        if (id.includes('flash-image')) return { key: 'google-image', name: 'Gemini Image', order: 39 };
+        if (id.includes('agent')) return { key: 'google-agent', name: 'Gemini Agent / Alias', order: 38 };
+        if (id.startsWith('gemini-2.5')) return { key: 'google-25', name: 'Gemini 2.5', order: 30 };
+        if (id.startsWith('gemini-3.1')) return { key: 'google-31', name: 'Gemini 3.1', order: 32 };
+        if (id.startsWith('gemini-3')) return { key: 'google-3', name: 'Gemini 3', order: 31 };
+        return { key: 'google-other', name: 'Gemini Other', order: 37 };
+    }
+    if (id.includes('grok-imagine')) return { key: 'xai-imagine', name: 'Grok Imagine', order: 79 };
+    if (id.includes('grok-3')) return { key: 'xai-grok3', name: 'Grok 3', order: 70 };
+    if (id.includes('grok-4')) return { key: 'xai-grok4', name: 'Grok 4', order: 71 };
+    if (id.includes('grok') || id.includes('xai')) return { key: 'xai-other', name: 'Grok Other', order: 78 };
+    return { key: 'other', name: 'Other Models', order: 1000 };
+};
+
+const hasTokenPrice = (model = {}) => [
+    'input_price_pico_per_token',
+    'output_price_pico_per_token',
+    'cached_input_price_pico_per_token',
+    'high_input_price_pico_per_token',
+    'high_output_price_pico_per_token',
+].some(key => Number(model[key]) > 0);
+
+const looksLikeMediaModel = (modelId = '') => {
+    const id = String(modelId).toLowerCase();
+    return id.includes('image') || id.includes('video') || id.includes('imagine');
+};
+
+const normalizeModerationLevel = (model = {}) => String(model.moderation_level || 'off').toLowerCase();
+const normalizeModerationFailMode = (model = {}) => String(model.moderation_fail_mode || 'open').toLowerCase();
+const modelHasAnyModeration = (model = {}) => normalizeModerationLevel(model) !== 'off';
+const modelHasSmartModeration = (model = {}) => ['moderation', 'strict'].includes(normalizeModerationLevel(model));
+const modelIsFailClosed = (model = {}) => normalizeModerationFailMode(model) === 'closed';
 
 const ChannelManagement = () => {
     const confirm = useConfirm();
@@ -38,6 +111,7 @@ const ChannelManagement = () => {
     const [channelModels, setChannelModels] = useState([]);
     const [loadingModels, setLoadingModels] = useState(false);
     const [modelSearchTerm, setModelSearchTerm] = useState('');
+    const [moderationFilter, setModerationFilter] = useState('all');
 
     // Models Modal State
     const [isModelModalOpen, setIsModelModalOpen] = useState(false);
@@ -57,6 +131,7 @@ const ChannelManagement = () => {
             if (s.startsWith('claude') || s.startsWith('anthropic')) return 'Anthropic';
             if (s.startsWith('gemini') || s.startsWith('imagen') || s.startsWith('palm') || s.startsWith('bison')) return 'Google';
             if (s.startsWith('gpt') || s.startsWith('chatgpt') || s.startsWith('codex') || s.startsWith('o1') || s.startsWith('o3') || s.startsWith('o4') || s.startsWith('dall') || s.startsWith('whisper') || s.startsWith('tts') || s.startsWith('text-embedding')) return 'OpenAI';
+            if (s.startsWith('grok') || s.startsWith('xai')) return 'xAI';
             return 'Other';
         };
         const grouped = upstreamModels.reduce((acc, modelId) => {
@@ -68,7 +143,7 @@ const ChannelManagement = () => {
         // Sort inside each group.
         Object.values(grouped).forEach(arr => arr.sort((a, b) => a.localeCompare(b)));
         // Preserve preferred group order.
-        const order = ['Anthropic', 'OpenAI', 'Google', 'Other'];
+        const order = ['Anthropic', 'OpenAI', 'Google', 'xAI', 'Other'];
         return order.filter(g => grouped[g]?.length).map(g => [g, grouped[g]]);
     }, [upstreamModels]);
 
@@ -100,7 +175,7 @@ const ChannelManagement = () => {
         model_id: '', display_name: '', input_price: 0, output_price: 0,
         cached_input_price: 0, cache_write_input_price: 0, cache_write_1h_input_price: 0,
         context_price_threshold: 0, high_input_price: 0, high_cached_input_price: 0, high_output_price: 0,
-        weight: 1, max_context_length: 0,
+        weight: 1, max_context_length: 0, status: 1,
         endpoint_policy: 'all',
         // fix CRITICAL R23: content moderation fields per channel model.
         moderation_level: 'off',          // off / keyword / moderation / strict
@@ -116,23 +191,6 @@ const ChannelManagement = () => {
         gemini: ['generativelanguage.googleapis.com'],
     };
 
-    const isOpenAIModelId = (modelId = '') => {
-        const id = String(modelId).trim().toLowerCase();
-        if (!id) return false;
-        const hasGptSegment = id.split(/[/: \t]+/).some(part => part === 'gpt' || part.startsWith('gpt-') || part.startsWith('gpt_'));
-        return hasGptSegment
-            || id.includes('openai')
-            || id.startsWith('chatgpt-')
-            || id.startsWith('codex-')
-            || /^o\d/.test(id);
-    };
-
-    const withOpenAIModelModeration = (form) => (
-        isOpenAIModelId(form.model_id)
-            ? { ...form, moderation_level: 'strict', moderation_fail_mode: 'closed', confirm_official_no_moderation: false }
-            : form
-    );
-
     const withEndpointPolicyDefaults = (form) => {
         const id = String(form.model_id || '').trim().toLowerCase();
         if (id === 'gpt-5.5' && (!form.endpoint_policy || form.endpoint_policy === 'all')) {
@@ -140,8 +198,6 @@ const ChannelManagement = () => {
         }
         return { ...form, endpoint_policy: form.endpoint_policy || 'all' };
     };
-
-    const isOpenAIModel = useMemo(() => isOpenAIModelId(modelForm.model_id), [modelForm.model_id]);
 
     // Detect whether the selected channel points to an official upstream.
     const isOfficialChannel = useMemo(() => {
@@ -158,12 +214,10 @@ const ChannelManagement = () => {
         }
     }, [selectedChannel]);
 
-    // Recommended preset: OpenAI models use strict+closed; official channels use moderation+closed;
-    // non-official non-OpenAI models use off+open, matching server defaults.
+    // Recommended preset: official direct channels use moderation+closed;
+    // non-official / cloaked channels use off+open, matching server defaults.
     const applyRecommendedModerationPreset = () => {
-        if (isOpenAIModel) {
-            setModelForm(prev => ({ ...prev, moderation_level: 'strict', moderation_fail_mode: 'closed', confirm_official_no_moderation: false }));
-        } else if (isOfficialChannel) {
+        if (isOfficialChannel) {
             setModelForm(prev => ({ ...prev, moderation_level: 'moderation', moderation_fail_mode: 'closed', confirm_official_no_moderation: false }));
         } else {
             setModelForm(prev => ({ ...prev, moderation_level: 'off', moderation_fail_mode: 'open', confirm_official_no_moderation: false }));
@@ -171,7 +225,7 @@ const ChannelManagement = () => {
     };
 
     // Small list badges for moderation levels, matching gemini R23 feedback.
-    const ModerationBadge = ({ level, failMode }) => {
+    const ModerationBadge = ({ level, failMode, compact = false }) => {
         const lvl = (level || 'off').toLowerCase();
         const fm = (failMode || 'open').toLowerCase();
         const map = {
@@ -182,11 +236,74 @@ const ChannelManagement = () => {
         };
         const meta = map[lvl] || map.off;
         return (
-            <span className={`inline-flex items-center gap-1 px-1.5 py-0.5 rounded-control border text-[10px] font-medium ${meta.cls}`}
+            <span className={`inline-flex items-center gap-1 rounded-control border font-medium ${compact ? 'px-1.5 py-0.5 text-[10px]' : 'px-2 py-1 text-[11px]'} ${meta.cls}`}
                 title={`${t('CHANNEL_MGMT.MOD.LEVEL', '审核等级')}: ${lvl} / ${t('CHANNEL_MGMT.MOD.FAIL_MODE', '失败模式')}: ${fm}`}
             >
-                {meta.txt}{lvl !== 'off' && fm === 'closed' ? '·🔒' : ''}
+                {meta.txt}
+                {lvl !== 'off' && (
+                    <span className="opacity-80">
+                        {fm === 'closed'
+                            ? t('CHANNEL_MGMT.MOD.FAIL_CLOSED_SHORT', 'closed')
+                            : t('CHANNEL_MGMT.MOD.FAIL_OPEN_SHORT', 'open')}
+                    </span>
+                )}
             </span>
+        );
+    };
+
+    const ModerationPolicyCell = ({ model }) => {
+        const level = normalizeModerationLevel(model);
+        const failMode = normalizeModerationFailMode(model);
+        const copy = {
+            off: t('CHANNEL_MGMT.MOD.CELL_OFF', '未接入审核'),
+            keyword: t('CHANNEL_MGMT.MOD.CELL_KEYWORD', '本地关键词快扫'),
+            moderation: t('CHANNEL_MGMT.MOD.CELL_MODERATION', '智能审核 provider'),
+            strict: t('CHANNEL_MGMT.MOD.CELL_STRICT', '关键词 + 智能审核'),
+        }[level] || level;
+        const Icon = level === 'off' ? ShieldOff : modelIsFailClosed(model) ? ShieldCheck : ShieldAlert;
+        const iconClass = level === 'off'
+            ? 'text-on-surface-variant'
+            : modelIsFailClosed(model)
+            ? 'text-success'
+            : 'text-warning';
+        return (
+            <div className="flex flex-col gap-1.5 min-w-[130px]">
+                <div className="flex items-center gap-1.5">
+                    <Icon size={14} className={iconClass} />
+                    <ModerationBadge level={level} failMode={failMode} />
+                </div>
+                <div className="text-[11px] leading-snug text-on-surface-variant">
+                    {copy}
+                </div>
+            </div>
+        );
+    };
+
+    const ModerationGroupSummary = ({ row }) => {
+        const off = row.items.length - (row.moderated || 0);
+        return (
+            <div className="flex flex-wrap gap-1.5 text-[11px]">
+                {row.moderated > 0 && (
+                    <span className="text-success font-medium">
+                        {t('CHANNEL_MGMT.MOD.GROUP_REVIEWED', '{{count}} 审核', { count: row.moderated })}
+                    </span>
+                )}
+                {row.smart > 0 && (
+                    <span className="text-primary font-medium">
+                        {t('CHANNEL_MGMT.MOD.GROUP_SMART', '{{count}} 智能', { count: row.smart })}
+                    </span>
+                )}
+                {row.failOpen > 0 && (
+                    <span className="text-warning font-medium">
+                        {t('CHANNEL_MGMT.MOD.GROUP_FAIL_OPEN', '{{count}} open', { count: row.failOpen })}
+                    </span>
+                )}
+                {off > 0 && (
+                    <span className="text-on-surface-variant">
+                        {t('CHANNEL_MGMT.MOD.GROUP_OFF', '{{count}} 未审', { count: off })}
+                    </span>
+                )}
+            </div>
         );
     };
 
@@ -249,9 +366,7 @@ const ChannelManagement = () => {
     const handleOpenChanModal = (chan = null) => {
         if (chan) {
             setCurrentChannel(chan);
-            // Edit mode does not prefill the key because the backend only returns a mask.
-            // Leaving it blank keeps the existing key; entering a value replaces it.
-            setChanForm({ type: chan.type, name: chan.name || '', key: '', base_url: chan.base_url, proxy_url: chan.proxy_url || '', headers: chan.headers || '', weight: chan.weight });
+            setChanForm({ type: chan.type, name: chan.name || '', key: chan.key || '', base_url: chan.base_url, proxy_url: chan.proxy_url || '', headers: chan.headers || '', weight: chan.weight });
         } else {
             setCurrentChannel(null);
             setChanForm(initChanForm);
@@ -303,13 +418,22 @@ const ChannelManagement = () => {
         setInputCurrency('USD');
         if (model) {
             setCurrentModel(model);
-            setModelForm(withEndpointPolicyDefaults(withOpenAIModelModeration({
+            // 后端返回 *_pico_per_token 字段；form 内部用 USD/1M tokens 单位（admin 习惯）。
+            setModelForm(withEndpointPolicyDefaults({
                 ...model,
+                input_price: picoPerTokenToUsdPerMillion(model.input_price_pico_per_token),
+                output_price: picoPerTokenToUsdPerMillion(model.output_price_pico_per_token),
+                cached_input_price: picoPerTokenToUsdPerMillion(model.cached_input_price_pico_per_token),
+                cache_write_input_price: picoPerTokenToUsdPerMillion(model.cache_write_input_price_pico_per_token),
+                cache_write_1h_input_price: picoPerTokenToUsdPerMillion(model.cache_write_1h_input_price_pico_per_token),
+                high_input_price: picoPerTokenToUsdPerMillion(model.high_input_price_pico_per_token),
+                high_cached_input_price: picoPerTokenToUsdPerMillion(model.high_cached_input_price_pico_per_token),
+                high_output_price: picoPerTokenToUsdPerMillion(model.high_output_price_pico_per_token),
                 endpoint_policy: model.endpoint_policy || 'all',
                 moderation_level: model.moderation_level,
                 moderation_fail_mode: model.moderation_fail_mode,
                 confirm_official_no_moderation: false,
-            })));
+            }));
         } else {
             setCurrentModel(null);
             // New model path applies recommended presets based on official-channel detection.
@@ -325,11 +449,11 @@ const ChannelManagement = () => {
                     } catch { /* Invalid URL is not treated as official. */ }
                 }
             }
-            setModelForm(withEndpointPolicyDefaults(withOpenAIModelModeration({
+            setModelForm(withEndpointPolicyDefaults({
                 ...initModelForm,
                 moderation_level: isOfficial ? 'moderation' : 'off',
                 moderation_fail_mode: isOfficial ? 'closed' : 'open',
-            })));
+            }));
         }
         setIsModelModalOpen(true);
     };
@@ -356,24 +480,41 @@ const ChannelManagement = () => {
                 : `/api/admin/channels/${selectedChannel.id}/models`;
             const method = currentModel ? 'PUT' : 'POST';
 
+            // form 是 USD/1M tokens（admin 单位），后端只接受 *_pico_per_token int64。
+            // 若 admin 选了 CNY 输入，先 ÷ exchangeRate 折回 USD；再 × 1e9 转 pico/token。
+            const toUsdPerMillion = (raw) => {
+                const v = parseFloat(raw) || 0;
+                return inputCurrency === 'CNY' ? v / exchangeRate : v;
+            };
             const payload = {
                 ...modelForm,
-                input_price: inputCurrency === 'CNY' ? (parseFloat(modelForm.input_price) || 0) / exchangeRate : (parseFloat(modelForm.input_price) || 0),
-                output_price: inputCurrency === 'CNY' ? (parseFloat(modelForm.output_price) || 0) / exchangeRate : (parseFloat(modelForm.output_price) || 0),
-                cached_input_price: inputCurrency === 'CNY' ? (parseFloat(modelForm.cached_input_price) || 0) / exchangeRate : (parseFloat(modelForm.cached_input_price) || 0),
-                cache_write_input_price: inputCurrency === 'CNY' ? (parseFloat(modelForm.cache_write_input_price) || 0) / exchangeRate : (parseFloat(modelForm.cache_write_input_price) || 0),
-                cache_write_1h_input_price: inputCurrency === 'CNY' ? (parseFloat(modelForm.cache_write_1h_input_price) || 0) / exchangeRate : (parseFloat(modelForm.cache_write_1h_input_price) || 0),
+                // 删 USD/1M 旧字段：后端 BodyParser 不读这些字段，留着只会让 admin 误以为生效
+                input_price: undefined,
+                output_price: undefined,
+                cached_input_price: undefined,
+                cache_write_input_price: undefined,
+                cache_write_1h_input_price: undefined,
+                high_input_price: undefined,
+                high_cached_input_price: undefined,
+                high_output_price: undefined,
+                // 加 pico/token 新字段（后端契约）
+                input_price_pico_per_token: usdPerMillionToPicoPerToken(toUsdPerMillion(modelForm.input_price)),
+                output_price_pico_per_token: usdPerMillionToPicoPerToken(toUsdPerMillion(modelForm.output_price)),
+                cached_input_price_pico_per_token: usdPerMillionToPicoPerToken(toUsdPerMillion(modelForm.cached_input_price)),
+                cache_write_input_price_pico_per_token: usdPerMillionToPicoPerToken(toUsdPerMillion(modelForm.cache_write_input_price)),
+                cache_write_1h_input_price_pico_per_token: usdPerMillionToPicoPerToken(toUsdPerMillion(modelForm.cache_write_1h_input_price)),
+                high_input_price_pico_per_token: usdPerMillionToPicoPerToken(toUsdPerMillion(modelForm.high_input_price)),
+                high_cached_input_price_pico_per_token: usdPerMillionToPicoPerToken(toUsdPerMillion(modelForm.high_cached_input_price)),
+                high_output_price_pico_per_token: usdPerMillionToPicoPerToken(toUsdPerMillion(modelForm.high_output_price)),
                 context_price_threshold: parseInt(modelForm.context_price_threshold) || 0,
-                high_input_price: inputCurrency === 'CNY' ? (parseFloat(modelForm.high_input_price) || 0) / exchangeRate : (parseFloat(modelForm.high_input_price) || 0),
-                high_cached_input_price: inputCurrency === 'CNY' ? (parseFloat(modelForm.high_cached_input_price) || 0) / exchangeRate : (parseFloat(modelForm.high_cached_input_price) || 0),
-                high_output_price: inputCurrency === 'CNY' ? (parseFloat(modelForm.high_output_price) || 0) / exchangeRate : (parseFloat(modelForm.high_output_price) || 0),
                 weight: parseInt(modelForm.weight) || 1,
+                status: parseInt(modelForm.status) === 2 ? 2 : 1,
                 max_context_length: parseInt(modelForm.max_context_length) || 0,
                 endpoint_policy: modelForm.endpoint_policy || 'all',
                 // fix CRITICAL R23: pass moderation fields through; backend validates enums.
-                moderation_level: isOpenAIModel ? 'strict' : (modelForm.moderation_level || 'off'),
-                moderation_fail_mode: isOpenAIModel ? 'closed' : (modelForm.moderation_fail_mode || 'open'),
-                confirm_official_no_moderation: isOpenAIModel ? false : !!modelForm.confirm_official_no_moderation,
+                moderation_level: modelForm.moderation_level || 'off',
+                moderation_fail_mode: modelForm.moderation_fail_mode || 'open',
+                confirm_official_no_moderation: !!modelForm.confirm_official_no_moderation,
             };
 
             const data = await authFetch(url, { method, body: payload });
@@ -383,6 +524,63 @@ const ChannelManagement = () => {
                 toast.success(currentModel
                     ? t('CHANNEL_MGMT.MODEL_UPDATED', '模型已更新')
                     : t('CHANNEL_MGMT.MODEL_ADDED', '模型已添加'));
+            } else {
+                toast.error(data.message || t('API.' + data.message_code));
+            }
+        } catch {
+            toast.error(t('API.ERR_NETWORK', '网络异常'));
+        } finally {
+            setIsSubmitting(false);
+        }
+    };
+
+    const buildChannelModelPayload = (model, overrides = {}) => ({
+        model_id: model.model_id,
+        display_name: model.display_name || model.model_id,
+        input_price_pico_per_token: Number(model.input_price_pico_per_token) || 0,
+        output_price_pico_per_token: Number(model.output_price_pico_per_token) || 0,
+        cached_input_price_pico_per_token: Number(model.cached_input_price_pico_per_token) || 0,
+        cache_write_input_price_pico_per_token: Number(model.cache_write_input_price_pico_per_token) || 0,
+        cache_write_1h_input_price_pico_per_token: Number(model.cache_write_1h_input_price_pico_per_token) || 0,
+        context_price_threshold: Number(model.context_price_threshold) || 0,
+        high_input_price_pico_per_token: Number(model.high_input_price_pico_per_token) || 0,
+        high_cached_input_price_pico_per_token: Number(model.high_cached_input_price_pico_per_token) || 0,
+        high_output_price_pico_per_token: Number(model.high_output_price_pico_per_token) || 0,
+        max_context_length: Number(model.max_context_length) || 0,
+        weight: Number(model.weight) || 1,
+        status: model.status === 2 ? 2 : 1,
+        endpoint_policy: model.endpoint_policy || 'all',
+        moderation_level: model.moderation_level || 'off',
+        moderation_fail_mode: model.moderation_fail_mode || 'open',
+        ...overrides,
+    });
+
+    const handleToggleModelStatus = async (model) => {
+        const nextStatus = model.status === 1 ? 2 : 1;
+        if (nextStatus === 1) {
+            if (!hasTokenPrice(model)) {
+                const ok = await confirm(t(
+                    'CHANNEL_MGMT.MODEL.ZERO_PRICE_ENABLE_CONFIRM',
+                    '该模型当前价格为 $0。启用后可能免费放量或计费异常，仍要启用吗？'
+                ));
+                if (!ok) return;
+            } else if (looksLikeMediaModel(model.model_id)) {
+                const ok = await confirm(t(
+                    'CHANNEL_MGMT.MODEL.MEDIA_ENABLE_CONFIRM',
+                    '该模型看起来是图像/视频模型，当前平台仍按 token 公式计费。确认启用吗？'
+                ));
+                if (!ok) return;
+            }
+        }
+        setIsSubmitting(true);
+        try {
+            const payload = buildChannelModelPayload(model, { status: nextStatus });
+            const data = await authFetch(`/api/admin/channel-models/${model.id}`, { method: 'PUT', body: payload });
+            if (data.success) {
+                fetchModels(selectedChannel.id);
+                toast.success(nextStatus === 1
+                    ? t('CHANNEL_MGMT.MODEL_ENABLED', '模型已启用')
+                    : t('CHANNEL_MGMT.MODEL_DISABLED', '模型已禁用'));
             } else {
                 toast.error(data.message || t('API.' + data.message_code));
             }
@@ -455,11 +653,110 @@ const ChannelManagement = () => {
     };
 
     const filteredChannels = channels.filter(c => c.type.toLowerCase().includes(searchTerm.toLowerCase()));
-    const filteredModels = channelModels.filter(m => m.model_id.toLowerCase().includes(modelSearchTerm.toLowerCase()));
+    const modelModerationStats = useMemo(() => {
+        const stats = {
+            total: channelModels.length,
+            reviewed: 0,
+            smart: 0,
+            strict: 0,
+            off: 0,
+            failClosed: 0,
+            failOpen: 0,
+        };
+        for (const model of channelModels) {
+            const level = normalizeModerationLevel(model);
+            const hasReview = level !== 'off';
+            if (hasReview) stats.reviewed++;
+            else stats.off++;
+            if (modelHasSmartModeration(model)) stats.smart++;
+            if (level === 'strict') stats.strict++;
+            if (hasReview && modelIsFailClosed(model)) stats.failClosed++;
+            if (hasReview && !modelIsFailClosed(model)) stats.failOpen++;
+        }
+        return stats;
+    }, [channelModels]);
+
+    const filteredModels = useMemo(() => {
+        const q = modelSearchTerm.trim().toLowerCase();
+        return channelModels.filter(m => {
+            const matchesSearch = !q || m.model_id.toLowerCase().includes(q);
+            if (!matchesSearch) return false;
+            switch (moderationFilter) {
+                case 'reviewed':
+                    return modelHasAnyModeration(m);
+                case 'smart':
+                    return modelHasSmartModeration(m);
+                case 'strict':
+                    return normalizeModerationLevel(m) === 'strict';
+                case 'off':
+                    return !modelHasAnyModeration(m);
+                case 'fail_open':
+                    return modelHasAnyModeration(m) && !modelIsFailClosed(m);
+                default:
+                    return true;
+            }
+        });
+    }, [channelModels, modelSearchTerm, moderationFilter]);
+    const groupedModelRows = useMemo(() => groupModelsByProvider(filteredModels).flatMap(providerGroup => {
+        const providerEnabled = providerGroup.items.filter(m => m.status === 1).length;
+        const providerDisabled = providerGroup.items.length - providerEnabled;
+        const providerModerated = providerGroup.items.filter(modelHasAnyModeration).length;
+        const providerSmart = providerGroup.items.filter(modelHasSmartModeration).length;
+        const providerFailOpen = providerGroup.items.filter(m => modelHasAnyModeration(m) && !modelIsFailClosed(m)).length;
+        const familyMap = new Map();
+        for (const model of providerGroup.items) {
+            const family = inferModelFamily(model.model_id);
+            if (!familyMap.has(family.key)) {
+                familyMap.set(family.key, { family, items: [] });
+            }
+            familyMap.get(family.key).items.push(model);
+        }
+        const familyRows = Array.from(familyMap.values())
+            .map(group => ({
+                ...group,
+                items: [...group.items].sort((a, b) => {
+                    const statusDelta = (b.status === 1 ? 1 : 0) - (a.status === 1 ? 1 : 0);
+                    return statusDelta || String(a.model_id || '').localeCompare(String(b.model_id || ''));
+                }),
+            }))
+            .sort((a, b) => a.family.order - b.family.order || a.family.name.localeCompare(b.family.name))
+            .flatMap(group => {
+                const enabled = group.items.filter(m => m.status === 1).length;
+                const disabled = group.items.length - enabled;
+                const moderated = group.items.filter(modelHasAnyModeration).length;
+                const smart = group.items.filter(modelHasSmartModeration).length;
+                const failOpen = group.items.filter(m => modelHasAnyModeration(m) && !modelIsFailClosed(m)).length;
+                return [
+                    { isFamilyGroup: true, provider: providerGroup.provider, family: group.family, items: group.items, enabled, disabled, moderated, smart, failOpen },
+                    ...group.items.map(m => ({ model: m, providerObj: inferModelProvider(m.model_id), family: group.family })),
+                ];
+            });
+        return [
+            {
+                isProviderGroup: true,
+                provider: providerGroup.provider,
+                items: providerGroup.items,
+                enabled: providerEnabled,
+                disabled: providerDisabled,
+                moderated: providerModerated,
+                smart: providerSmart,
+                failOpen: providerFailOpen,
+            },
+            ...familyRows,
+        ];
+    }), [filteredModels]);
 
     // --- Sub-Renders ---
 
     if (view === 'models') {
+        const moderationFilterOptions = [
+            { id: 'all', label: t('CHANNEL_MGMT.MOD.FILTER_ALL', '全部'), count: channelModels.length },
+            { id: 'reviewed', label: t('CHANNEL_MGMT.MOD.FILTER_REVIEWED', '已接入审核'), count: modelModerationStats.reviewed },
+            { id: 'smart', label: t('CHANNEL_MGMT.MOD.FILTER_SMART', '智能审核'), count: modelModerationStats.smart },
+            { id: 'strict', label: t('CHANNEL_MGMT.MOD.FILTER_STRICT', 'STRICT'), count: modelModerationStats.strict },
+            { id: 'off', label: t('CHANNEL_MGMT.MOD.FILTER_OFF', '未审核'), count: modelModerationStats.off },
+            { id: 'fail_open', label: t('CHANNEL_MGMT.MOD.FILTER_FAIL_OPEN', '审核失败放行'), count: modelModerationStats.failOpen },
+        ];
         return (
             <div className="w-full animation-fade-in relative z-10">
                 <button onClick={() => setView('channels')} className="flex items-center gap-2 text-on-surface-variant hover:text-primary mb-6 text-sm font-medium">
@@ -502,66 +799,210 @@ const ChannelManagement = () => {
                     </div>
                 </div>
 
+                <div className="grid grid-cols-2 md:grid-cols-5 gap-2 mb-4">
+                    <ModerationStatCard
+                        icon={Box}
+                        label={t('CHANNEL_MGMT.MOD.SUMMARY_TOTAL', '模型总数')}
+                        value={modelModerationStats.total}
+                        tone="neutral"
+                    />
+                    <ModerationStatCard
+                        icon={ShieldCheck}
+                        label={t('CHANNEL_MGMT.MOD.SUMMARY_REVIEWED', '接入审核')}
+                        value={modelModerationStats.reviewed}
+                        tone="success"
+                    />
+                    <ModerationStatCard
+                        icon={AlertTriangle}
+                        label={t('CHANNEL_MGMT.MOD.SUMMARY_SMART', '智能审核')}
+                        value={modelModerationStats.smart}
+                        tone="primary"
+                    />
+                    <ModerationStatCard
+                        icon={ShieldCheck}
+                        label={t('CHANNEL_MGMT.MOD.SUMMARY_FAIL_CLOSED', 'Fail-closed')}
+                        value={modelModerationStats.failClosed}
+                        tone="success"
+                    />
+                    <ModerationStatCard
+                        icon={ShieldOff}
+                        label={t('CHANNEL_MGMT.MOD.SUMMARY_OFF', '未审核')}
+                        value={modelModerationStats.off}
+                        tone={modelModerationStats.off > 0 ? 'warning' : 'neutral'}
+                    />
+                </div>
+
+                <div className="flex flex-wrap items-center gap-2 mb-4">
+                    <span className="text-xs font-semibold text-on-surface-variant mr-1">
+                        {t('CHANNEL_MGMT.MOD.FILTER_LABEL', '审核筛选')}
+                    </span>
+                    {moderationFilterOptions.map(option => {
+                        const active = moderationFilter === option.id;
+                        return (
+                            <button
+                                key={option.id}
+                                type="button"
+                                onClick={() => setModerationFilter(option.id)}
+                                className={`inline-flex items-center gap-1.5 rounded-control border px-3 py-1.5 text-xs font-medium transition ${
+                                    active
+                                        ? 'border-primary bg-primary text-on-primary'
+                                        : 'border-outline-variant bg-surface-container text-on-surface-variant hover:text-on-surface hover:bg-surface-container-high'
+                                }`}
+                            >
+                                <span>{option.label}</span>
+                                <span className={`font-mono ${active ? 'text-on-primary/80' : 'text-on-surface-variant'}`}>
+                                    {option.count}
+                                </span>
+                            </button>
+                        );
+                    })}
+                    {moderationFilter !== 'all' && (
+                        <span className="text-xs text-on-surface-variant">
+                            {t('CHANNEL_MGMT.MOD.FILTER_RESULT', '当前显示 {{shown}} / {{total}} 个模型', { shown: filteredModels.length, total: channelModels.length })}
+                        </span>
+                    )}
+                </div>
+
                 {/* Model Table */}
                 <div className="bg-surface-container border border-outline-variant rounded-overlay overflow-hidden ">
                     <div className="overflow-x-auto">
                         
                         <DataTable
                             columns={[
-                                { key: 'model', header: t('CHANNEL_MGMT.MODEL.TABLE.MODEL_ID'), width: '25%', render: m => (
-                                    <div className="font-mono text-primary font-semibold flex flex-col gap-1 w-full">
+                                { key: 'model', header: t('CHANNEL_MGMT.MODEL.TABLE.MODEL_ID'), width: '27%', render: row => {
+                                    if (row.isProviderGroup) {
+                                        return (
+                                            <div className="flex items-center gap-2.5 py-1">
+                                                <ProviderIcon provider={row.provider} />
+                                                <span className="text-sm font-semibold text-on-surface">{row.provider.name}</span>
+                                                <span className="fl-brand-chip" data-brand={brandFor(row.provider.name)}>{row.items.length}</span>
+                                                <ChevronRight size={16} className="text-on-surface-variant ml-auto" />
+                                            </div>
+                                        );
+                                    }
+                                    if (row.isFamilyGroup) {
+                                        return (
+                                            <div className="flex items-center gap-2 pl-8 py-0.5">
+                                                <span className="h-1.5 w-1.5 rounded-full bg-primary/70" />
+                                                <span className="text-xs font-semibold text-on-surface">{row.family.name}</span>
+                                                <span className="font-mono text-[11px] text-on-surface-variant">{row.items.length}</span>
+                                            </div>
+                                        );
+                                    }
+                                    const m = row.model;
+                                    return (
+                                    <div className={`font-mono font-semibold flex flex-col gap-1 w-full pl-8 ${m.status === 1 ? 'text-primary' : 'text-on-surface-variant'}`}>
                                         <div className="truncate" title={m.model_id}>{m.model_id}</div>
-                                        {m.endpoint_policy === 'no_chat_non_stream' && (
-                                            <span className="text-[10px] bg-warning/10 text-warning px-1.5 py-0.5 rounded-control border border-warning/20 w-fit">{t('CHANNEL_MGMT.ENDPOINT.NO_CHAT_NS', '禁非流式 Chat')}</span>
-                                        )}
-                                        {m.moderation_level !== 'off' && m.moderation_level && (
-                                            <span className={`text-[10px] px-1.5 py-0.5 rounded-control border w-fit ${
-                                                m.moderation_level === 'strict' ? 'bg-warning/10 text-warning border-warning/20' :
-                                                m.moderation_level === 'severe' ? 'bg-error/10 text-error border-error/20' :
-                                                'bg-surface-container text-on-surface-variant border-outline-variant'
-                                            }`}>
-                                                {t(`MODERATION.LEVEL_${m.moderation_level.toUpperCase()}`, m.moderation_level)}
-                                            </span>
+                                        <div className="flex items-center gap-1.5 text-[10px] font-sans">
+                                            <ProviderIcon provider={row.providerObj} compact />
+                                            <span className="text-on-surface-variant">{row.family.name}</span>
+                                        </div>
+                                        {m.endpoint_policy && m.endpoint_policy !== 'all' && (
+                                            <EndpointPolicyBadge policy={m.endpoint_policy} />
                                         )}
                                     </div>
-                                )},
-                                { key: 'max_ctx', header: t('CHANNEL_MGMT.MODEL.TABLE.MAX_CTX'), width: '15%', render: m => (
+                                );}},
+                                { key: 'max_ctx', header: t('CHANNEL_MGMT.MODEL.TABLE.MAX_CTX'), width: '8%', render: row => {
+                                    if (row.isProviderGroup || row.isFamilyGroup) {
+                                        return null;
+                                    }
+                                    const m = row.model;
+                                    return (
                                     m.max_context_length > 0 ? (
                                         <span className="text-xs bg-surface-container-high/50 text-on-surface-variant px-2 py-1 rounded-control border border-outline-variant/50">
                                             {formatTokens(m.max_context_length)}
                                         </span>
                                     ) : <span className="text-outline-variant">-</span>
-                                )},
-                                { key: 'base_pricing', header: t('CHANNEL_MGMT.MODEL.TABLE.BASE_PRICING'), width: '15%', render: m => (
-                                    <div className="flex flex-col text-xs font-mono space-y-1 text-on-surface-variant">
-                                        <span>{t('CHANNEL_MGMT.MODEL.IN')}: {formatCurrency(m.input_price, 6)}</span>
-                                        <span>{t('CHANNEL_MGMT.MODEL.OUT')}: {formatCurrency(m.output_price, 6)}</span>
-                                        {m.cached_input_price > 0 && <span className="text-primary">{t('CHANNEL_MGMT.MODEL.CACHE')}: {formatCurrency(m.cached_input_price, 6)}</span>}
-                                    </div>
-                                )},
-                                { key: 'tier_pricing', header: t('CHANNEL_MGMT.MODEL.TABLE.TIER_PRICING'), width: '20%', render: m => (
-                                    m.context_price_threshold > 0 ? (
+                                );}},
+                                { key: 'status', header: t('CHANNEL_MGMT.MODEL.TABLE.STATUS'), width: '9%', render: row => {
+                                    if (row.isProviderGroup || row.isFamilyGroup) {
+                                        return (
+                                            <div className="flex flex-wrap gap-1.5 text-[11px]">
+                                                <span className="text-success font-medium">{t('CHANNEL_MGMT.MODEL.GROUP_ENABLED', '{{count}} 启用', { count: row.enabled })}</span>
+                                                {row.disabled > 0 && <span className="text-on-surface-variant">{t('CHANNEL_MGMT.MODEL.GROUP_DISABLED', '{{count}} 禁用', { count: row.disabled })}</span>}
+                                            </div>
+                                        );
+                                    }
+                                    const enabled = row.model.status === 1;
+                                    return (
+                                        <button
+                                            type="button"
+                                            onClick={() => handleToggleModelStatus(row.model)}
+                                            disabled={isSubmitting}
+                                            aria-pressed={enabled}
+                                            title={enabled ? t('CHANNEL_MGMT.MODEL.TOGGLE_DISABLE', '点击禁用') : t('CHANNEL_MGMT.MODEL.TOGGLE_ENABLE', '点击启用')}
+                                            className={`inline-flex items-center gap-1.5 rounded-full border px-2 py-1 text-[11px] font-semibold transition disabled:opacity-50 ${
+                                                enabled
+                                                    ? 'bg-success/10 text-success border-success/30 hover:bg-success/15'
+                                                    : 'bg-surface-container text-on-surface-variant border-outline-variant hover:text-on-surface hover:bg-surface-container-high'
+                                            }`}
+                                        >
+                                            <span className={`relative inline-flex h-3.5 w-6 rounded-full transition ${enabled ? 'bg-success/45' : 'bg-outline-variant/50'}`}>
+                                                <span className={`absolute top-0.5 h-2.5 w-2.5 rounded-full bg-current transition-transform ${enabled ? 'translate-x-3' : 'translate-x-0.5'}`} />
+                                            </span>
+                                            {enabled ? t('CHANNEL_MGMT.MODEL.STATUS_ENABLED') : t('CHANNEL_MGMT.MODEL.STATUS_DISABLED')}
+                                        </button>
+                                    );
+                                }},
+                                { key: 'moderation', header: t('CHANNEL_MGMT.MODEL.TABLE.MODERATION', '内容审核'), width: '14%', render: row => {
+                                    if (row.isProviderGroup || row.isFamilyGroup) {
+                                        return <ModerationGroupSummary row={row} />;
+                                    }
+                                    return <ModerationPolicyCell model={row.model} />;
+                                }},
+                                { key: 'base_pricing', header: t('CHANNEL_MGMT.MODEL.TABLE.BASE_PRICING'), width: '14%', render: row => {
+                                    if (row.isProviderGroup || row.isFamilyGroup) return null;
+                                    const m = row.model;
+                                    // 后端只返回 *_pico_per_token；UI 展示 USD/1M tokens。
+                                    const inUsd = picoPerTokenToUsdPerMillion(m.input_price_pico_per_token);
+                                    const outUsd = picoPerTokenToUsdPerMillion(m.output_price_pico_per_token);
+                                    const cacheUsd = picoPerTokenToUsdPerMillion(m.cached_input_price_pico_per_token);
+                                    return (
+                                        <div className="flex flex-col text-xs font-mono space-y-1 text-on-surface-variant">
+                                            <span>{t('CHANNEL_MGMT.MODEL.IN')}: {formatCurrency(inUsd, 6)}</span>
+                                            <span>{t('CHANNEL_MGMT.MODEL.OUT')}: {formatCurrency(outUsd, 6)}</span>
+                                            {cacheUsd > 0 && <span className="text-primary">{t('CHANNEL_MGMT.MODEL.CACHE')}: {formatCurrency(cacheUsd, 6)}</span>}
+                                        </div>
+                                    );
+                                }},
+                                { key: 'tier_pricing', header: t('CHANNEL_MGMT.MODEL.TABLE.TIER_PRICING'), width: '15%', render: row => {
+                                    if (row.isProviderGroup || row.isFamilyGroup) return null;
+                                    const m = row.model;
+                                    if (!(m.context_price_threshold > 0)) {
+                                        return <span className="text-outline-variant">-</span>;
+                                    }
+                                    const hiIn = picoPerTokenToUsdPerMillion(m.high_input_price_pico_per_token);
+                                    const hiOut = picoPerTokenToUsdPerMillion(m.high_output_price_pico_per_token);
+                                    const hiCache = picoPerTokenToUsdPerMillion(m.high_cached_input_price_pico_per_token);
+                                    return (
                                         <div className="flex flex-col text-xs space-y-1 bg-warning/10 border border-warning/30 p-2 rounded-control w-fit">
                                             <div className="font-semibold text-warning whitespace-nowrap">
                                                 {t('CHANNEL_MGMT.MODEL.TIER_ACTIVE', { threshold: formatTokens(m.context_price_threshold) })}
                                             </div>
                                             <div className="font-mono text-warning/80">
-                                                <div>In: {formatCurrency(m.high_input_price, 6)}</div>
-                                                <div>Out: {formatCurrency(m.high_output_price, 6)}</div>
-                                                {m.high_cached_input_price > 0 && <div className="text-primary">{t('CHANNEL_MGMT.MODEL.CACHE')}: {formatCurrency(m.high_cached_input_price, 6)}</div>}
+                                                <div>In: {formatCurrency(hiIn, 6)}</div>
+                                                <div>Out: {formatCurrency(hiOut, 6)}</div>
+                                                {hiCache > 0 && <div className="text-primary">{t('CHANNEL_MGMT.MODEL.CACHE')}: {formatCurrency(hiCache, 6)}</div>}
                                             </div>
                                         </div>
-                                    ) : <span className="text-outline-variant">-</span>
-                                )},
-                                { key: 'weight', header: t('CHANNEL_MGMT.MODEL.TABLE.WEIGHT'), width: '15%', render: m => m.weight },
-                                { key: 'actions', header: t('CHANNEL_MGMT.MODEL.TABLE.ACTIONS'), align: 'right', width: '15%', render: m => (
+                                    );
+                                }},
+                                { key: 'weight', header: t('CHANNEL_MGMT.MODEL.TABLE.WEIGHT'), width: '5%', render: row => (row.isProviderGroup || row.isFamilyGroup) ? null : row.model.weight },
+                                { key: 'actions', header: t('CHANNEL_MGMT.MODEL.TABLE.ACTIONS'), align: 'right', width: '8%', render: row => (row.isProviderGroup || row.isFamilyGroup) ? null : (
                                     <>
-                                        <button onClick={() => handleOpenModelModal(m)} className="p-2 hover:bg-primary/20 text-primary rounded-control mr-2"><Edit2 size={16} /></button>
-                                        <button onClick={() => handleDeleteModel(m.id)} className="p-2 hover:bg-error/20 text-error rounded-control"><Trash2 size={16} /></button>
+                                        <button onClick={() => handleOpenModelModal(row.model)} className="p-2 hover:bg-primary/20 text-primary rounded-control mr-2"><Edit2 size={16} /></button>
+                                        <button onClick={() => handleDeleteModel(row.model.id)} className="p-2 hover:bg-error/20 text-error rounded-control"><Trash2 size={16} /></button>
                                     </>
                                 )}
                             ]}
-                            rows={filteredModels}
+                            rows={groupedModelRows}
+                            rowKey={row => row.isProviderGroup ? `provider-${row.provider.name}` : row.isFamilyGroup ? `family-${row.provider.name}-${row.family.key}` : row.model.id}
+                            rowClassName={row => row.isProviderGroup
+                                ? 'bg-surface-container-high/80 hover:bg-surface-container-high border-t border-outline-variant/80'
+                                : row.isFamilyGroup
+                                ? 'bg-surface-container/65 hover:bg-surface-container border-t border-outline-variant/40'
+                                : row.model?.status === 1 ? '' : 'opacity-70'
+                            }
                             loading={loadingModels}
                             emptyTitle={t('CHANNEL_MGMT.MODEL.TABLE.EMPTY', 'No models found for this channel.')}
                         />
@@ -609,7 +1050,7 @@ const ChannelManagement = () => {
                                         type="text"
                                         required
                                         value={modelForm.model_id}
-                                        onChange={e=>setModelForm(withEndpointPolicyDefaults(withOpenAIModelModeration({...modelForm, model_id: e.target.value})))}
+                                        onChange={e=>setModelForm(withEndpointPolicyDefaults({...modelForm, model_id: e.target.value}))}
                                         className="w-full bg-surface-container-high border border-outline-variant rounded-overlay px-4 py-2.5 text-on-surface"
                                     />
                                 </div>
@@ -617,7 +1058,7 @@ const ChannelManagement = () => {
                                     <label htmlFor="channel-model-display-name" className="block text-xs font-medium text-on-surface-variant mb-1">{t('CHANNEL_MGMT.MODEL.MODAL.DISPLAY_NAME')}</label>
                                     <input id="channel-model-display-name" type="text" value={modelForm.display_name || ''} onChange={e=>setModelForm({...modelForm, display_name: e.target.value})} className="w-full bg-surface-container-high border border-outline-variant rounded-overlay px-4 py-2.5 text-on-surface" />
                                 </div>
-                                <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+                                <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
                                     <div>
                                         <label htmlFor="channel-model-max-context" className="block text-xs font-medium text-on-surface-variant mb-1">{t('CHANNEL_MGMT.MODEL.MODAL.MAX_CONTEXT_LENGTH')} <span className="ml-1 text-on-surface-variant/70">(Tokens)</span></label>
                                         <input id="channel-model-max-context" type="number" min="0" value={modelForm.max_context_length || ''} onChange={e=>setModelForm({...modelForm, max_context_length: parseInt(e.target.value) || 0})} className="w-full bg-surface-container-high border border-outline-variant rounded-overlay px-4 py-2.5 text-on-surface" placeholder={t('CHANNEL_MGMT.MODEL.MODAL.NO_LIMIT_PLACEHOLDER', '0 = 不限制')} />
@@ -630,6 +1071,18 @@ const ChannelManagement = () => {
                                     <div>
                                         <label htmlFor="channel-model-weight" className="block text-xs font-medium text-on-surface-variant mb-1">{t('CHANNEL_MGMT.MODEL.MODAL.WEIGHT')}</label>
                                         <input id="channel-model-weight" type="number" min="0" value={modelForm.weight} onChange={e=>setModelForm({...modelForm, weight: e.target.value})} className="w-full bg-surface-container-high border border-outline-variant rounded-overlay px-4 py-2.5 text-on-surface" />
+                                    </div>
+                                    <div>
+                                        <label htmlFor="channel-model-status" className="block text-xs font-medium text-on-surface-variant mb-1">{t('CHANNEL_MGMT.MODEL.MODAL.STATUS', '启用状态')}</label>
+                                        <select
+                                            id="channel-model-status"
+                                            value={modelForm.status === 2 ? 2 : 1}
+                                            onChange={e=>setModelForm({...modelForm, status: parseInt(e.target.value)})}
+                                            className="w-full bg-surface-container-high border border-outline-variant rounded-overlay px-4 py-2.5 text-on-surface"
+                                        >
+                                            <option value={1}>{t('CHANNEL_MGMT.MODEL.STATUS_ENABLED')}</option>
+                                            <option value={2}>{t('CHANNEL_MGMT.MODEL.STATUS_DISABLED')}</option>
+                                        </select>
                                     </div>
                                 </div>
                                 <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
@@ -743,8 +1196,7 @@ const ChannelManagement = () => {
                                             <select
                                                 id="moderation-level"
                                                 value={modelForm.moderation_level || 'off'}
-                                                onChange={e=>setModelForm(withOpenAIModelModeration({...modelForm, moderation_level: e.target.value, confirm_official_no_moderation: false}))}
-                                                disabled={isOpenAIModel}
+                                                onChange={e=>setModelForm({...modelForm, moderation_level: e.target.value, confirm_official_no_moderation: false})}
                                                 className="w-full bg-surface-container-high border border-outline-variant rounded-overlay px-4 py-2.5 text-on-surface"
                                             >
                                                 <option value="off">{t('CHANNEL_MGMT.MOD.LEVEL_OFF', 'OFF — 不审核')}</option>
@@ -760,8 +1212,7 @@ const ChannelManagement = () => {
                                             <select
                                                 id="moderation-fail-mode"
                                                 value={modelForm.moderation_fail_mode || 'open'}
-                                                onChange={e=>setModelForm(withOpenAIModelModeration({...modelForm, moderation_fail_mode: e.target.value}))}
-                                                disabled={isOpenAIModel}
+                                                onChange={e=>setModelForm({...modelForm, moderation_fail_mode: e.target.value})}
                                                 className="w-full bg-surface-container-high border border-outline-variant rounded-overlay px-4 py-2.5 text-on-surface"
                                             >
                                                 <option value="open">{t('CHANNEL_MGMT.MOD.FAIL_OPEN', 'OPEN — 放行（cloaked 路径推荐）')}</option>
@@ -772,20 +1223,12 @@ const ChannelManagement = () => {
                                     {isOfficialChannel && (
                                         <div className="mt-3 p-3 bg-warning/10 border border-warning/30 rounded-control text-xs text-warning leading-relaxed">
                                             <AlertTriangle size={12} className="inline mr-1 -mt-0.5" />
-                                            {t('CHANNEL_MGMT.MOD.OFFICIAL_HINT', '当前渠道指向官方 API（OpenAI / Anthropic / Gemini）。建议设为 STRICT + CLOSED 防账号被封禁。点击右下角"应用推荐预设"。')}
-                                        </div>
-                                    )}
-                                    {isOpenAIModel && (
-                                        <div className="mt-3 p-3 bg-success/10 border border-success/30 rounded-control text-xs text-success leading-relaxed">
-                                            <AlertTriangle size={12} className="inline mr-1 -mt-0.5" />
-                                            {t('CHANNEL_MGMT.MOD.OPENAI_LOCK_HINT', 'OpenAI / Codex-family 模型已全局强制启用 STRICT + CLOSED 内容审查。')}
+                                            {t('CHANNEL_MGMT.MOD.OFFICIAL_HINT', '当前渠道指向官方 API（OpenAI / Anthropic / Gemini）。建议至少设为 MOD + CLOSED 防账号被封禁。点击右下角"应用推荐预设"。')}
                                         </div>
                                     )}
                                     <div className="flex items-center justify-between mt-3">
                                         <span className="text-[11px] text-on-surface-variant italic">
-                                            {isOpenAIModel
-                                                ? t('CHANNEL_MGMT.MOD.PRESET_OPENAI_DESC', '强制：STRICT + CLOSED')
-                                                : isOfficialChannel
+                                            {isOfficialChannel
                                                 ? t('CHANNEL_MGMT.MOD.PRESET_OFFICIAL_DESC', '推荐：MOD + CLOSED')
                                                 : t('CHANNEL_MGMT.MOD.PRESET_CLOAKED_DESC', '推荐（cloaked / 自部署）：OFF + OPEN')}
                                         </span>
@@ -811,7 +1254,7 @@ const ChannelManagement = () => {
                                 {/* Disable save until official-channel moderation-off risk is acknowledged. */}
                                 <button
                                     onClick={handleModelSubmit}
-                                    disabled={isSubmitting || (!isOpenAIModel && isOfficialChannel && modelForm.moderation_level === 'off' && !modelForm.confirm_official_no_moderation)}
+                                    disabled={isSubmitting || (isOfficialChannel && modelForm.moderation_level === 'off' && !modelForm.confirm_official_no_moderation)}
                                     className="px-6 py-2.5 bg-primary text-on-primary hover:bg-primary-container hover:text-on-primary-container rounded-overlay font-medium flex items-center gap-2 disabled:opacity-50 disabled:cursor-not-allowed"
                                 >
                                     {isSubmitting ? <RefreshCw className="animate-spin" size={18}/> : <Save size={18}/>} {t('CHANNEL_MGMT.MODEL.MODAL.BTN_SAVE')}
@@ -1076,6 +1519,45 @@ const ChannelManagement = () => {
                     </div>
                 </div>
             )}
+        </div>
+    );
+};
+
+const ProviderIcon = ({ provider, compact = false }) => {
+    const Icon = provider.icon;
+    const size = compact ? 18 : 28;
+    const iconSize = compact ? 11 : 15;
+    return (
+        <span
+            className="rounded-control flex items-center justify-center border shrink-0"
+            style={{
+                width: size,
+                height: size,
+                background: hexA(provider.hue, compact ? 0.1 : 0.14),
+                borderColor: hexA(provider.hue, compact ? 0.18 : 0.24),
+            }}
+        >
+            <Icon size={iconSize} style={{ color: provider.hue }} />
+        </span>
+    );
+};
+
+const ModerationStatCard = ({ icon: Icon, label, value, tone = 'neutral' }) => {
+    const toneClass = {
+        success: 'text-success bg-success/10 border-success/30',
+        warning: 'text-warning bg-warning/10 border-warning/30',
+        primary: 'text-primary bg-primary/10 border-primary/30',
+        neutral: 'text-on-surface-variant bg-surface-container-high border-outline-variant/60',
+    }[tone] || 'text-on-surface-variant bg-surface-container-high border-outline-variant/60';
+    return (
+        <div className="rounded-control border border-outline-variant bg-surface-container p-3 flex items-center gap-3 min-w-0">
+            <span className={`w-8 h-8 rounded-control border flex items-center justify-center shrink-0 ${toneClass}`}>
+                <Icon size={16} />
+            </span>
+            <div className="min-w-0">
+                <div className="text-[11px] text-on-surface-variant truncate">{label}</div>
+                <div className="text-lg font-semibold text-on-surface tabular-nums">{value}</div>
+            </div>
         </div>
     );
 };

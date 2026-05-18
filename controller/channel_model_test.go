@@ -203,7 +203,7 @@ func TestValidateChannelModelModeration_DefaultsWhenEmpty(t *testing.T) {
 	}
 }
 
-func TestValidateChannelModelModeration_OpenAIModelForcedStrictClosed(t *testing.T) {
+func TestValidateChannelModelModeration_OpenAICompatibleRelayEditable(t *testing.T) {
 	thirdParty := &database.Channel{Type: "openai", BaseURL: "https://relay.example.com"}
 	cm := database.ChannelModel{
 		ModelID:            "gpt-5.4-mini",
@@ -212,12 +212,10 @@ func TestValidateChannelModelModeration_OpenAIModelForcedStrictClosed(t *testing
 	}
 	status, _, _ := validateChannelModelModeration(&cm, thirdParty, true)
 	if status != 0 {
-		t.Fatalf("OpenAI-family model should normalize instead of reject, got %d", status)
+		t.Fatalf("OpenAI-compatible relay model should be editable, got %d", status)
 	}
-	if cm.ModerationLevel != database.OpenAIModelModerationLevel || cm.ModerationFailMode != database.OpenAIModelModerationFailMode {
-		t.Fatalf("moderation=%s/%s want %s/%s",
-			cm.ModerationLevel, cm.ModerationFailMode,
-			database.OpenAIModelModerationLevel, database.OpenAIModelModerationFailMode)
+	if cm.ModerationLevel != "off" || cm.ModerationFailMode != "open" {
+		t.Fatalf("moderation=%s/%s want off/open", cm.ModerationLevel, cm.ModerationFailMode)
 	}
 }
 

@@ -64,9 +64,6 @@ func TestModerationConfig(c *fiber.Ctx) error {
 	base["latency_ms"] = latencyMs
 	base["from_cache"] = result.FromCache
 	base["flagged"] = result.Flagged
-	if result.AuthIndex != "" {
-		base["auth_index"] = result.AuthIndex
-	}
 
 	if result.Err != nil {
 		tag := proxy.ClassifyModerationAPIError(result.Err)

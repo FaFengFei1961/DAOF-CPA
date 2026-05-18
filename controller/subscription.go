@@ -408,7 +408,7 @@ func purchaseAsInstant(c *fiber.Ctx, user *database.User, pkg *database.Package,
 		if errors.Is(err, errCouponSnapshotBelowCostFloor) {
 			return c.Status(409).JSON(fiber.Map{
 				"success":      false,
-				"message":      "优惠券价格快照低于当前套餐下限，请联系客服或更换优惠券",
+				"message":      "优惠券价格快照低于当前套餐下限，请提交工单或更换优惠券",
 				"message_code": MessageCodeCouponSnapshotBelowCostFloor,
 			})
 		}
@@ -425,12 +425,12 @@ func purchaseAsInstant(c *fiber.Ctx, user *database.User, pkg *database.Package,
 				"message": "套餐已被管理员下架，请刷新页面"})
 		case errors.Is(err, errPackageInvalidNumericInTx):
 			return c.Status(500).JSON(fiber.Map{"success": false, "message_code": "ERR_PACKAGE_INVALID_NUMERIC",
-				"message": "套餐金额数据损坏，请联系客服"})
+				"message": "套餐金额数据损坏，请提交工单"})
 		case errors.Is(err, errPackagePeriodInvalidInTx):
 			// fix Minor Mi-1（codex 第二十一轮）：period 越界专用错误码
 			log.Printf("[PURCHASE] BLOCKED package %d invalid billing_period_seconds in fresh tx", pkg.ID)
 			return c.Status(500).JSON(fiber.Map{"success": false, "message_code": "ERR_PACKAGE_INVALID_PERIOD",
-				"message": "套餐周期数据损坏，请联系客服"})
+				"message": "套餐周期数据损坏，请提交工单"})
 		}
 		// 不向客户端泄露 GORM 内部 err（含表名/约束名等）
 		log.Printf("[SUB] purchase tx failed user=%d pkg=%d err=%v", user.ID, pkg.ID, err)
@@ -732,7 +732,7 @@ func CancelSubscription(c *fiber.Ctx) error {
 	body = strings.ReplaceAll(body, "{{cancel_time}}", now.Format("2006-01-02 15:04:05"))
 	dedupKey := fmt.Sprintf("cancel:sub_%d", sub.ID)
 	proxy.Dispatch(user.ID, "subscription", "info", title, body,
-		proxy.LinkTickets(), "联系客服", "subscription", sub.ID, &dedupKey)
+		proxy.LinkTickets(), "提交工单", "subscription", sub.ID, &dedupKey)
 
 	return c.JSON(fiber.Map{
 		"success":      true,
@@ -1132,9 +1132,9 @@ func AdminRevokeGrantedSubscription(c *fiber.Ctx) error {
 		"system",
 		"warning",
 		"赠送权益已收回",
-		fmt.Sprintf("管理员已收回赠送的「%s」。如有疑问，请联系支持。", pkgName),
+		fmt.Sprintf("管理员已收回赠送的「%s」。如有疑问，请提交工单。", pkgName),
 		proxy.LinkTickets(),
-		"联系客服",
+		"提交工单",
 		"subscription",
 		sub.ID,
 		&dedupKey,

@@ -181,7 +181,7 @@ func handleModerationRiskAfterAudit(evt ModerationAuditEvent, auditID uint) {
 	dedupKey := fmt.Sprintf("moderation-autoban:%d:%d", evt.UserID, auditID)
 	Dispatch(evt.UserID, "security", "error",
 		"您的账户已被自动限制",
-		reason+"。如认为这是误判，请联系客服。",
+		reason+"。如认为这是误判，请提交工单。",
 		"", "", "user", evt.UserID, &dedupKey)
 	log.Printf("[MODERATION-AUTOBAN] user=%d action=%s count=%d threshold=%d audit=%d",
 		evt.UserID, evt.ActionType, hitCount, threshold, auditID)

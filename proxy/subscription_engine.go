@@ -728,7 +728,13 @@ func consumePlanInTx(tx *gorm.DB, subID uint, spec consumeSpec, isPrecheck bool)
 	}
 	exceedsLimit := func(consumedValue float64, consumedMicroUSD int64) bool {
 		if isAPICost {
-			return spec.LimitValueMicroUSD > 0 && consumedMicroUSD+spec.DeltaMicroUSD > spec.LimitValueMicroUSD
+			// fix MEDIUM（codex money-unit）：裸 int64 加法溢出会环绕到负数，被误判为"未超限"。
+			// CheckedAddInt64 失败视为已超限。
+			sum, ok := database.CheckedAddInt64(consumedMicroUSD, spec.DeltaMicroUSD)
+			if !ok {
+				return true
+			}
+			return spec.LimitValueMicroUSD > 0 && sum > spec.LimitValueMicroUSD
 		}
 		return spec.LimitValue > 0 && consumedValue+spec.Delta > spec.LimitValue
 	}
@@ -957,26 +963,82 @@ func get402Message() string {
 }
 
 func uintFromAny(v any) uint {
-	if f, ok := v.(float64); ok {
-		return uint(f)
+	switch n := v.(type) {
+	case json.Number:
+		if i, err := n.Int64(); err == nil && i >= 0 {
+			return uint(i)
+		}
+		return 0
+	case uint:
+		return n
+	case int64:
+		if n >= 0 {
+			return uint(n)
+		}
+		return 0
+	case int:
+		if n >= 0 {
+			return uint(n)
+		}
+		return 0
+	case float64:
+		return uint(n)
 	}
 	return 0
 }
+// int64FromAny 从 map[string]any 中提取 int64。
+//
+// fix HIGH（codex money-unit）：jsonUnmarshalSafe 用 UseNumber()，数字保持为 json.Number
+// （string-backed）防止 float64 精度丢失（int64 超 2^53 时）。优先解析 json.Number，
+// 兼容旧路径直接传 float64 / int64 / int 的情况。
 func int64FromAny(v any) int64 {
-	if f, ok := v.(float64); ok {
-		return int64(f)
+	switch n := v.(type) {
+	case json.Number:
+		if i, err := n.Int64(); err == nil {
+			return i
+		}
+		if f, err := n.Float64(); err == nil {
+			return int64(f)
+		}
+		return 0
+	case int64:
+		return n
+	case int:
+		return int64(n)
+	case float64:
+		return int64(n)
 	}
 	return 0
 }
 func intFromAny(v any) int {
-	if f, ok := v.(float64); ok {
-		return int(f)
+	switch n := v.(type) {
+	case json.Number:
+		if i, err := n.Int64(); err == nil {
+			return int(i)
+		}
+		return 0
+	case int:
+		return n
+	case int64:
+		return int(n)
+	case float64:
+		return int(n)
 	}
 	return 0
 }
 func floatFromAny(v any) float64 {
-	if f, ok := v.(float64); ok {
-		return f
+	switch n := v.(type) {
+	case json.Number:
+		if f, err := n.Float64(); err == nil {
+			return f
+		}
+		return 0
+	case float64:
+		return n
+	case int64:
+		return float64(n)
+	case int:
+		return float64(n)
 	}
 	return 0
 }

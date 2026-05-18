@@ -44,7 +44,6 @@ type ModerationResult struct {
 	FromCache    bool   // 是否命中本地缓存
 	Err          error  // 远程调用失败时设置（与 Flagged=false 同时发生）
 	Endpoint     string // 实际请求的 endpoint（审计用）
-	AuthIndex    string // 兼容旧诊断字段；CPA 模型池路径通常为空
 }
 
 // ModerationAPIError is a sanitized upstream error. It keeps only status,

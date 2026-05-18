@@ -183,6 +183,34 @@ if (-not $KeepData) {
     Write-Ok "保留泄露文件检查（-KeepData）"
 }
 
+# ─── 4.55 清理旧项目迁移产物（含潜在敏感 SysConfig 快照）────────
+# scripts/old_config_export.json / old_channels_export.json 是 dump_old_config.py /
+# export_old_channels.py 的一次性导出产物。.gitignore 已禁止入库，出厂状态不应保留。
+# codex review 标 P1：含解密后的 SysConfig（可能携带凭证片段），不能跨重置周期残留。
+if (-not $KeepData) {
+    Write-Step "清理 scripts/ 下的旧项目迁移产物..."
+    $migrationArtifacts = @(
+        "scripts/old_config_export.json",
+        "scripts/old_channels_export.json"
+    )
+    $removed = 0
+    foreach ($f in $migrationArtifacts) {
+        if (Test-Path $f) {
+            $size = [math]::Round((Get-Item $f).Length / 1KB, 2)
+            Write-Host "    rm $f  ($size KB)" -ForegroundColor DarkGray
+            Remove-Item $f -Force -ErrorAction SilentlyContinue
+            $removed++
+        }
+    }
+    if ($removed -gt 0) {
+        Write-Ok "已删除 $removed 个旧迁移产物"
+    } else {
+        Write-Ok "无旧迁移产物"
+    }
+} else {
+    Write-Ok "保留旧迁移产物（-KeepData）"
+}
+
 # ─── 4.6 清理覆盖率产物 ────────────────────────────
 Write-Step "清理测试覆盖率产物..."
 $covPatterns = @("cov", "cov.out", "cov.txt", "coverage", "coverage.out", "coverage.html",

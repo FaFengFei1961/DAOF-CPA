@@ -42,8 +42,9 @@ var TopupSysConfigDefaults = map[string]string{
 	"yifut_product_name": "DAOF-CPA 余额充值",
 
 	// ── 回调与同步页 ──
-	// 同步跳转后用户落地页（前端是 hash 路由：/#topup_result?status=...）
-	"yifut_return_path": "/#topup_result",
+	// 同步跳转后用户落地页（前端 React Router 路径路由：/topup-result?status=...）
+	// fix P2（codex review verify-1）：前端 hashRedirect.js 已删除，hash 路由不再被改写。
+	"yifut_return_path": "/topup-result",
 	// 异步通知端点（后端固定路径，记录这里只是给 admin 看）
 	"yifut_notify_path": "/api/payment/notify/yifut",
 

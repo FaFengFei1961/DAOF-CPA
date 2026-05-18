@@ -73,6 +73,7 @@ type CLIProxyUsageSyncResult struct {
 	Stored    int `json:"stored"`
 	Matched   int `json:"matched"`
 	Unmatched int `json:"unmatched"`
+	Ignored   int `json:"ignored"`
 }
 
 // StartCLIProxyUsageSyncCron 定时拉取 CPA usage queue。
@@ -333,9 +334,21 @@ func storeAndMatchCLIProxyUsageRecords(records []cpaUsageQueueRecord) (CLIProxyU
 	}
 	result.Stored = len(usageRecords)
 
+	platformKeyHashes, err := loadPlatformCLIProxyAPIKeyHashes()
+	if err != nil {
+		return result, err
+	}
+
 	for i := range usageRecords {
 		rec := usageRecords[i]
 		err := database.DB.Transaction(func(tx *gorm.DB) error {
+			if ignored, reason := usageRecordIgnoredByAPIKey(rec.APIKeyHash, platformKeyHashes); ignored {
+				result.Ignored++
+				return tx.Model(&rec).Updates(map[string]any{
+					"match_status": "ignored",
+					"match_reason": trimForDB(reason, 255),
+				}).Error
+			}
 			matched, reason, err := matchUpstreamUsageRecordTx(tx, &rec)
 			if err != nil {
 				return err
@@ -355,6 +368,39 @@ func storeAndMatchCLIProxyUsageRecords(records []cpaUsageQueueRecord) (CLIProxyU
 		}
 	}
 	return result, nil
+}
+
+func loadPlatformCLIProxyAPIKeyHashes() (map[string]struct{}, error) {
+	out := map[string]struct{}{}
+	if !database.DB.Migrator().HasTable(&database.Channel{}) {
+		return out, nil
+	}
+
+	var channels []database.Channel
+	if err := database.DB.
+		Where("type = ? AND status = ? AND key <> ?", proxy.ChannelTypeCLIProxy, 1, "").
+		Find(&channels).Error; err != nil {
+		return nil, fmt.Errorf("load platform cliproxy channel keys: %w", err)
+	}
+	for _, ch := range channels {
+		if h := proxy.HashTokenForLog(ch.Key); h != "" {
+			out[h] = struct{}{}
+		}
+	}
+	return out, nil
+}
+
+func usageRecordIgnoredByAPIKey(apiKeyHash string, platformKeyHashes map[string]struct{}) (bool, string) {
+	if len(platformKeyHashes) == 0 {
+		return false, ""
+	}
+	if strings.TrimSpace(apiKeyHash) == "" {
+		return true, "missing_api_key_hash"
+	}
+	if _, ok := platformKeyHashes[apiKeyHash]; !ok {
+		return true, "ignored_non_platform_key"
+	}
+	return false, ""
 }
 
 func convertCPAUsageRecord(raw cpaUsageQueueRecord) database.UpstreamUsageRecord {

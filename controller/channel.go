@@ -15,9 +15,8 @@ import (
 
 // GetAdminChannels 查询系统内所有上游渠道配置。
 //
-// 安全：返回时对 key 字段做掩码，避免 admin 浏览器界面 / XSS / 截屏暴露完整 API key。
-// 真实 key 保存在 DB 加密列里，调用上游时由后端从 DB 读出。如需修改 key，使用专门的
-// PUT /api/admin/channels/:id/reset-key 接口或编辑时显式输入新 key（空值=保持不变）。
+// 这是 admin-only 接口，渠道页需要明文 key 来区分平台 key / 个人 key 等运维场景。
+// 因此这里有意返回完整 key；公网部署时应继续依赖 admin 鉴权、Cloudflare 隧道与本机访问边界。
 func GetAdminChannels(c *fiber.Ctx) error {
 	var channels []database.Channel
 	if err := database.DB.Order("id desc").Find(&channels).Error; err != nil {
@@ -27,10 +26,6 @@ func GetAdminChannels(c *fiber.Ctx) error {
 			"message_code": "ERR_CHANNEL_READ_FAILED",
 			"message":      "Failed to fetch channel list",
 		})
-	}
-	// 对 key 字段统一脱敏后再下发
-	for i := range channels {
-		channels[i].Key = MaskSecret(channels[i].Key)
 	}
 	return c.JSON(fiber.Map{
 		"success": true,
@@ -186,7 +181,7 @@ func UpdateChannel(c *fiber.Ctx) error {
 	if body.Name != "" {
 		ch.Name = body.Name
 	}
-	// 仅在传入真实 key 时才更新；空值或掩码（含 ********）一律忽略，避免把脱敏字符串写回 DB。
+	// 仅在传入真实 key 时才更新；空值或历史掩码（含 ********）一律忽略，避免旧前端把脱敏字符串写回 DB。
 	if body.Key != "" && !strings.Contains(body.Key, "********") {
 		ch.Key = body.Key
 	}

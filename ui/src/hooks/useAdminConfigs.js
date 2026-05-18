@@ -30,14 +30,16 @@ const DEFAULT_CONFIGS = {
   reg_strategy: 'dynamic',
   reg_ip_limit: '3',
   max_users: '0',
-  signup_bonus: '1',
+  // 三个 bonus 字段持久化层是 micro_usd 整数字符串（与后端 readMicroUSDConfig 对齐）。
+  // 1000000 = $1。RiskPage 通过 UsdAmountInput 在 admin 输入/显示时换算。
+  signup_bonus: '1000000',
   referrer_bonus: '0',
   referee_bonus: '0',
   signup_coupon_template_id: '0',
   server_address: '',
   exchange_rate_rmb_per_usd_micros: '',
   balance_consume_default_enabled: 'false',
-  balance_consume_default_limit_usd: '0',
+  balance_consume_default_limit_micro_usd: '0',
   balance_consume_default_window_secs: '2592000',
   cliproxy_url: '',
   cliproxy_key: '',
@@ -81,10 +83,11 @@ const validateConfigs = (cfg) => {
       errors.push('新用户余额消费默认开关必须是 true/false');
     }
   }
-  if (cfg.balance_consume_default_limit_usd !== undefined) {
-    const limit = parseFloat(cfg.balance_consume_default_limit_usd);
-    if (Number.isNaN(limit) || !Number.isFinite(limit) || limit < 0) {
-      errors.push('新用户余额消费默认限额必须 ≥ 0');
+  if (cfg.balance_consume_default_limit_micro_usd !== undefined) {
+    // micro_usd 整数字符串校验（与后端 sysconfig.go:130 校验语义一致）
+    const limit = parseInt(cfg.balance_consume_default_limit_micro_usd, 10);
+    if (Number.isNaN(limit) || limit < 0) {
+      errors.push('新用户余额消费默认限额必须 ≥ 0（micro_usd 整数）');
     }
   }
   if (cfg.balance_consume_default_window_secs !== undefined) {

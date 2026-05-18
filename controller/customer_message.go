@@ -439,18 +439,30 @@ func AdminListTickets(c *fiber.Ctx) error {
 //
 // 新策略：Bearer header = 用户 SDK / curl / 程序化访问；cookie = 浏览器后台。
 // 优先 Bearer 让 SDK 永远走 user 分支；admin 走管理后台必须用 cookie（且自动免疫 CSRF token 抢占）。
+//
+// fix CRITICAL（codex review verify-r6）：
+//   1) 原 Bearer 路径只识别 API token（sk-daof-*），不识别浏览器 session_id → banned 用户从前端 UI
+//      调 /api/tickets/:id 等 ticket detail/messages 路由时 LookupUserByToken 返回 nil → 401 →
+//      appeal flow 死路（C1 修复让 session 保留，但本函数没用上）。补 IsSessionID + LookupUserBySession。
+//   2) banned 用户的 user 路径**放行**（不再 ERR_BANNED）—— 与 UserGuardAllowBanned 设计一致。
+//      Admin 路径（cookie）仍拒 banned admin（admin 被 ban 是平台决定，不允许 appeal）。
 func loadCurrentRole(c *fiber.Ctx) (*database.User, bool, error) {
-	// 1) Bearer header 优先（SDK / curl / 用户脚本场景）
+	// 1) Bearer header 优先（SDK / curl / 用户脚本 / 浏览器 session）
 	authHeader := c.Get("Authorization")
 	if strings.HasPrefix(authHeader, "Bearer ") || strings.HasPrefix(authHeader, "bearer ") {
 		token := strings.TrimSpace(authHeader[7:])
 		if token != "" {
-			if u := proxy.LookupUserByToken(token); u != nil {
-				if u.Status == 2 {
-					return nil, false, fmt.Errorf("ERR_BANNED")
+			// 优先识别 session_id（浏览器 UI 用，含 banned 用户的 appeal session）
+			if database.IsSessionID(token) {
+				if u, ok := database.LookupUserBySession(token); ok && u != nil {
+					// banned 用户允许进入 user 路径；具体路由可通过 u.Status 判断是否允许写动作。
+					return u, false, nil
 				}
-				// Bearer 只代表"用户 SDK 视角"；即使 token 属于 admin 账户，本路径下也以普通用户身份处理。
-				// admin 操作工单必须走管理后台浏览器（cookie），与下面的 admin cookie 分支区分。
+			}
+			// 再尝试 API token（sk-daof-*）
+			if u := proxy.LookupUserByToken(token); u != nil {
+				// API token：banned 用户的 token 在 SyncCacheConfig 已 evict（user.go:285-287），
+				// 这里 LookupUserByToken 不会返回 banned 用户的 token，但兜底放行让 controller 决定。
 				return u, false, nil
 			}
 		}

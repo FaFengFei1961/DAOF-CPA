@@ -196,7 +196,7 @@ func CreateTopup(c *fiber.Ctx) error {
 		}
 		return c.Status(500).JSON(fiber.Map{
 			"success":      false,
-			"message":      "支付订单创建失败，请重试或联系客服",
+			"message":      "支付订单创建失败，请重试或提交工单",
 			"message_code": "ERR_PERSIST_GATEWAY_RESP",
 		})
 	}
@@ -477,19 +477,26 @@ func YifutNotify(c *fiber.Ctx) error {
 //
 // 同步跳转。验签后 redirect 到前端结果页（不在这里加额度——加额度只走 notify）。
 //
-// 前端是 hash 路由（/#topup_result）；约定把 query 放在 hash 之后：
+// fix P2（codex review verify-1 + verify-final）：前端 hashRedirect.js 已删除，hash 路由
+// 不再被改写到 path 路由。默认 return_path 改为 `/topup-result`，TopupResult.jsx 从
+// window.location.search 解析 query。升级安装上 SysConfig 可能仍存旧值 `/#topup_result`
+// （Seed 不覆盖已存在 key），运行时强制规范化到新路径。
 //
-//	/#topup_result?status=success&out_trade_no=xxx
-//
-// TopupResult.jsx 从 window.location.hash 解析 query。
+// 路径形如：/topup-result?status=success&out_trade_no=xxx
 func YifutReturn(c *fiber.Ctx) error {
 	cfg := proxy.LoadYifutConfig()
-	resultPath := readStringConfig("yifut_return_path", "/#topup_result")
+	resultPath := readStringConfig("yifut_return_path", "/topup-result")
+	// fix P2（codex review verify-final）：规范化历史 hash 路径。旧 SysConfig 可能仍是
+	// "/#topup_result"，去掉 hashRedirect 后会落到 React Router 解析不到的 URL → silent 跳首页。
+	if strings.HasPrefix(resultPath, "/#topup_result") || resultPath == "/#topup_result" {
+		log.Printf("[TOPUP-RETURN] yifut_return_path legacy hash %q → normalized to /topup-result", resultPath)
+		resultPath = "/topup-result"
+	}
 	// fix Minor（codex 第四轮）：yifut_return_path 是 SysConfig 项，被污染后可指向外部站点
 	// 形成支付返回 open redirect。强制必须以单 `/` 开头、不能 `//`、不能含控制字符。
 	if !isSafeReturnPath(resultPath) {
 		log.Printf("[TOPUP-RETURN] yifut_return_path unsafe=%q, fallback to default", resultPath)
-		resultPath = "/#topup_result"
+		resultPath = "/topup-result"
 	}
 
 	buildRedirect := func(status, outTradeNo string) string {

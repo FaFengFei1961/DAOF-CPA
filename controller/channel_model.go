@@ -224,14 +224,6 @@ func validateChannelModelModeration(cm *database.ChannelModel, ch *database.Chan
 			"moderation_fail_mode 取值非法（允许：open / closed）"
 	}
 
-	// OpenAI/Codex-family 模型一律实装内容审查。这里按 model_id 判定，而不是按
-	// channel.Type 判定：openai 通道类型也承载 DeepSeek/国产/自部署等 OpenAI-compatible
-	// 模型，不能误伤到整个兼容协议族。
-	if database.IsOpenAIModelID(cm.ModelID) {
-		level = database.OpenAIModelModerationLevel
-		failMode = database.OpenAIModelModerationFailMode
-	}
-
 	// fix CRITICAL R23-C3（codex 审查）：官方渠道下"打开了审核但配 fail_mode=open"等同于
 	// 没开审 —— 审核 API 不可达时 prompt 直接透传到官方 key 引发封号。强制策略：
 	//   - level=off → 必须 confirm（与之前一致）
@@ -785,20 +777,14 @@ func AddChannelModelsBatch(c *fiber.Ctx) error {
 
 	var toInsert []database.ChannelModel
 	for _, m := range payload.Models {
-		level := defaultLevel
-		failMode := defaultFailMode
-		if database.IsOpenAIModelID(m) {
-			level = database.OpenAIModelModerationLevel
-			failMode = database.OpenAIModelModerationFailMode
-		}
 		toInsert = append(toInsert, database.ChannelModel{
 			ChannelID:          uint(channelID),
 			ModelID:            m,
 			DisplayName:        m,
 			Weight:             1,
 			Status:             1,
-			ModerationLevel:    level,
-			ModerationFailMode: failMode,
+			ModerationLevel:    defaultLevel,
+			ModerationFailMode: defaultFailMode,
 		})
 	}
 	modelIDs := make([]string, 0, len(toInsert))

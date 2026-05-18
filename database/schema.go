@@ -6,7 +6,6 @@ import (
 	"time"
 
 	"gorm.io/gorm"
-	"gorm.io/gorm/clause"
 )
 
 // User 代表核心的用户实体，集成 Oauth 与手机双重绑定体系
@@ -192,10 +191,9 @@ type ApiLog struct {
 	CacheWrite5mTokens     int        `gorm:"column:cache_write_5m_tokens;<-:create" json:"cache_write_5m_tokens"`
 	CacheWrite1hTokens     int        `gorm:"column:cache_write_1h_tokens;<-:create" json:"cache_write_1h_tokens"`
 	ReasoningTokens        int        `gorm:"<-:create" json:"reasoning_tokens"`
-	Cost                   int64      `gorm:"<-:create" json:"cost"`                             // 原始 API 等值成本（micro_usd, USD * 1e6）
-	ChargedCost            int64      `gorm:"default:0;<-:create" json:"charged_cost"`           // 套餐/credits 扣减成本（micro_usd），余额扣费仍使用 Cost
-	PlatformCostEstimate   int64      `gorm:"default:0;<-:create" json:"platform_cost_estimate"` // 平台真实账号成本估算（micro_usd，仅毛利分析）
-	ModelWeight            float64    `gorm:"default:1;<-:create" json:"model_weight"`           // 公开模型权重
+	Cost                   int64      `gorm:"<-:create" json:"cost"`                   // 原始 API 等值成本（micro_usd, USD * 1e6），= rawCost
+	ChargedCost            int64      `gorm:"default:0;<-:create" json:"charged_cost"` // 订阅扣减口径（rawCost × modelWeight × healthMultiplier），实际营收去 ApiLogRevenue
+	ModelWeight            float64    `gorm:"default:1;<-:create" json:"model_weight"` // 公开模型权重
 	HealthMultiplier       float64    `gorm:"default:1;<-:create" json:"health_multiplier"`      // 公开高峰/健康系数
 	BillingRulesVersion    string     `gorm:"size:64;default:'';<-:create" json:"billing_rules_version"`
 	PrecheckInputTokens    int        `gorm:"default:0;<-:create" json:"precheck_input_tokens"`    // 预检估算输入 tokens（失败请求不计入用量）
@@ -229,14 +227,16 @@ type ApiLog struct {
 
 var ErrApiLogAppendOnly = errors.New("api_logs is append-only; write mutable attribution or estimates to side tables")
 
+// fix HIGH（codex audit-integrity）：原实现注入 WHERE 1=0 让 SQL 静默命中 0 行，
+// 调用方不检查 RowsAffected 会误以为 update 成功。改为 return Err，与 3 张侧表
+// (ApiLogAttribution / ApiLogCostEstimate / ApiLogRevenue) 保持一致的 loud reject 策略。
+// GDPR purge 用 raw SQL `tx.Exec("DELETE FROM api_logs ...")`，不走 GORM hook，不受影响。
 func (l *ApiLog) BeforeUpdate(tx *gorm.DB) error {
-	tx.Statement.AddClause(clause.Where{Exprs: []clause.Expression{clause.Expr{SQL: "1 = 0"}}})
-	return nil
+	return ErrApiLogAppendOnly
 }
 
 func (l *ApiLog) BeforeDelete(tx *gorm.DB) error {
-	tx.Statement.AddClause(clause.Where{Exprs: []clause.Expression{clause.Expr{SQL: "1 = 0"}}})
-	return nil
+	return ErrApiLogAppendOnly
 }
 
 // UpstreamUsageRecord 保存从 CLIProxyAPI usage queue 拉取到的原始用量事实。

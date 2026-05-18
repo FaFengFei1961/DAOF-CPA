@@ -43,7 +43,6 @@ func TestCacheBillingColumnNames(t *testing.T) {
 		"requested_model",
 		"served_model",
 		"charged_cost",
-		"platform_cost_estimate",
 		"model_weight",
 		"health_multiplier",
 		"billing_rules_version",

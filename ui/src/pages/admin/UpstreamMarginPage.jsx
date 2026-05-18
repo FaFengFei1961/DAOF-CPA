@@ -10,15 +10,23 @@
  */
 import React, { useEffect, useMemo, useState } from 'react';
 import {
-  Activity, Coins, Zap, BarChart3, AlertTriangle, RefreshCw, Settings as SettingsIcon,
+  Activity, Coins, Wallet, Zap, BarChart3, AlertTriangle, RefreshCw, Settings as SettingsIcon,
+  Trash2, AlertOctagon, ChevronDown, ChevronUp,
 } from 'lucide-react';
 import toast from 'react-hot-toast';
 import {
   PageContainer, PageHeader, StatCard, DataTable, Drawer, FormRow,
 } from '../../components/ui';
 import { useCurrency } from '../../context/CurrencyContext';
+import { useConfirm } from '../../context/ConfirmContext';
 import { authFetch } from '../../utils/authFetch';
 import { PERIODS, formatPercent, makeFormatMeterCost } from './shared';
+
+const STALE_REASON_LABEL = {
+  not_in_cpa:    { tone: 'error',   label: 'CPA 已删除' },
+  cpa_disabled:  { tone: 'warning', label: 'CPA 已禁用' },
+  cpa_unseen_7d: { tone: 'warning', label: 'CPA 7 天未见' },
+};
 
 const PeriodSwitch = ({ value, onChange }) => (
   <div className="flex items-center gap-1 bg-surface-container p-0.5 rounded-control border border-outline-variant">
@@ -38,6 +46,7 @@ const PeriodSwitch = ({ value, onChange }) => (
 const UpstreamMarginPage = () => {
   const { formatCurrencyFixed } = useCurrency();
   const formatMeterCost = makeFormatMeterCost(formatCurrencyFixed);
+  const confirm = useConfirm();
 
   const [period, setPeriod] = useState('7d');
   const [data, setData] = useState(null);
@@ -49,6 +58,8 @@ const UpstreamMarginPage = () => {
   const [saving, setSaving] = useState(false);
   const [form, setForm] = useState(emptyForm());
   const [selectedPreset, setSelectedPreset] = useState('');
+  const [stale, setStale] = useState([]);
+  const [staleOpen, setStaleOpen] = useState(false);
 
   const fetchData = async () => {
     setLoading(true);
@@ -73,8 +84,39 @@ const UpstreamMarginPage = () => {
     }
   };
 
+  const fetchStale = async () => {
+    try {
+      const res = await fetch('/api/admin/upstream-accounts/stale', { credentials: 'include' });
+      const json = await res.json();
+      if (json.success) {
+        const list = json.data || [];
+        setStale(list);
+        if (list.length > 0) setStaleOpen(true); // 有孤儿时默认展开
+      }
+    } catch {
+      // 静默：孤儿对账失败不影响主报表
+    }
+  };
+
+  const deleteAccount = async (id, label) => {
+    const ok = await confirm(`确认删除配置：${label}？\n\n该配置将从本地数据库永久删除，历史 ApiLog 不受影响。`);
+    if (!ok) return;
+    try {
+      const json = await authFetch(`/api/admin/upstream-accounts/${id}`, { method: 'DELETE' });
+      if (json.success) {
+        toast.success('配置已删除');
+        fetchStale();
+        fetchData();
+      } else {
+        toast.error(json.message || '删除失败');
+      }
+    } catch {
+      toast.error('网络异常');
+    }
+  };
+
   useEffect(() => { fetchData(); }, [period]);
-  useEffect(() => { fetchPresets(); }, []);
+  useEffect(() => { fetchPresets(); fetchStale(); }, []);
 
   const summary = data?.summary || {};
   const rows = data?.rows || [];
@@ -224,8 +266,13 @@ const UpstreamMarginPage = () => {
       </div>
     ) },
     { key: 'requests', header: '请求', align: 'right', mono: true, render: r => (r.requests || 0).toLocaleString() },
-    { key: 'charged', header: '扣减', align: 'right', mono: true, render: r => (
-      <span className="text-primary">{formatMeterCost(r.charged_cost_usd || 0)}</span>
+    { key: 'revenue', header: '总营收', align: 'right', mono: true, render: r => (
+      <div className="min-w-0">
+        <div className="text-primary font-semibold">{formatMeterCost(r.total_revenue_usd || 0)}</div>
+        <div className="text-[10px] font-normal text-on-surface-variant whitespace-nowrap">
+          订阅 {formatMeterCost(r.subscription_revenue_usd || 0)} · 余额 {formatMeterCost(r.balance_revenue_usd || 0)}
+        </div>
+      </div>
     ) },
     { key: 'platform', header: '平台成本', align: 'right', mono: true, render: r => formatMeterCost(r.platform_cost_estimate_usd || 0) },
     { key: 'margin', header: '毛利', align: 'right', mono: true, render: r => (
@@ -235,6 +282,22 @@ const UpstreamMarginPage = () => {
       </span>
     ) },
     { key: 'cap', header: '容量利用', align: 'right', mono: true, render: r => formatPercent(r.capacity_utilization) },
+    {
+      key: 'actions', header: '', width: 50, render: r => r.account_configured ? (
+        <button
+          type="button"
+          onClick={(e) => {
+            e.stopPropagation();
+            deleteAccount(r.account_id || 0, r.label || `${r.provider}:${r.auth_index}`);
+          }}
+          className="p-1.5 rounded-control text-on-surface-variant hover:text-error hover:bg-error/[0.08] transition"
+          aria-label="删除配置"
+          title="删除此账号的成本配置"
+        >
+          <Trash2 size={14} />
+        </button>
+      ) : null,
+    },
   ];
 
   const headerActions = (
@@ -268,7 +331,80 @@ const UpstreamMarginPage = () => {
         actions={headerActions}
       />
 
-      <div className="grid grid-cols-2 lg:grid-cols-5 gap-3">
+      {stale.length > 0 && (
+        <div className="rounded-overlay border border-warning/40 bg-warning/[0.06] overflow-hidden">
+          <button
+            type="button"
+            onClick={() => setStaleOpen(o => !o)}
+            className="w-full flex items-center gap-3 px-4 py-3 text-left hover:bg-warning/[0.04]"
+            aria-expanded={staleOpen}
+          >
+            <AlertOctagon size={18} className="text-warning shrink-0" />
+            <div className="flex-1 min-w-0">
+              <div className="text-sm font-semibold text-on-surface">
+                {stale.length} 条孤儿成本配置
+              </div>
+              <div className="text-xs text-on-surface-variant mt-0.5">
+                本地配置过但 CPA 端已删除 / 已禁用 / 7 天未见。不影响业务，建议清理。
+              </div>
+            </div>
+            {staleOpen ? <ChevronUp size={16} className="text-on-surface-variant" /> : <ChevronDown size={16} className="text-on-surface-variant" />}
+          </button>
+          {staleOpen && (
+            <div className="border-t border-warning/30 bg-surface">
+              <table className="w-full text-xs">
+                <thead className="bg-surface-container-high text-[11px] uppercase tracking-wider text-on-surface-variant">
+                  <tr>
+                    <th className="text-left px-4 py-2 font-medium">账号</th>
+                    <th className="text-left px-4 py-2 font-medium">原因</th>
+                    <th className="text-left px-4 py-2 font-medium">配置</th>
+                    <th className="text-left px-4 py-2 font-medium">CPA 最后见</th>
+                    <th className="px-4 py-2"></th>
+                  </tr>
+                </thead>
+                <tbody className="divide-y divide-outline-variant/30">
+                  {stale.map((s) => {
+                    const reason = STALE_REASON_LABEL[s.stale_reason] || { tone: 'warning', label: s.stale_reason };
+                    return (
+                      <tr key={s.id}>
+                        <td className="px-4 py-2">
+                          <div className="font-medium text-on-surface">{s.provider}</div>
+                          <div className="text-[10px] text-on-surface-variant font-mono truncate max-w-[260px]" title={s.auth_index}>
+                            {s.auth_index}
+                          </div>
+                          {s.label && <div className="text-[10px] text-on-surface-variant">{s.label}</div>}
+                        </td>
+                        <td className="px-4 py-2">
+                          <span className={`inline-block text-[10px] px-2 py-0.5 rounded-control bg-${reason.tone}/10 text-${reason.tone} border border-${reason.tone}/20`}>
+                            {reason.label}
+                          </span>
+                        </td>
+                        <td className="px-4 py-2 text-on-surface-variant">
+                          月费 {formatMeterCost(s.monthly_cost_usd || 0)} · 容量 {formatMeterCost(s.estimated_monthly_capacity_usd || 0)}
+                        </td>
+                        <td className="px-4 py-2 text-on-surface-variant font-mono text-[10px]">
+                          {s.cpa_last_seen_at ? new Date(s.cpa_last_seen_at).toLocaleString() : '—'}
+                        </td>
+                        <td className="px-4 py-2 text-right">
+                          <button
+                            type="button"
+                            onClick={() => deleteAccount(s.id, s.label || `${s.provider}:${s.auth_index}`)}
+                            className="inline-flex items-center gap-1 px-2 py-1 rounded-control text-error border border-error/30 hover:bg-error/[0.08] text-[11px]"
+                          >
+                            <Trash2 size={12} /> 删除
+                          </button>
+                        </td>
+                      </tr>
+                    );
+                  })}
+                </tbody>
+              </table>
+            </div>
+          )}
+        </div>
+      )}
+
+      <div className="grid grid-cols-2 lg:grid-cols-6 gap-3">
         <StatCard
           icon={Activity}
           iconColor="text-primary"
@@ -281,9 +417,17 @@ const UpstreamMarginPage = () => {
           icon={Coins}
           iconColor="text-primary"
           iconBg="bg-primary/10"
-          label="扣减 Credits"
-          value={formatMeterCost(summary.charged_cost_usd || 0)}
-          sub="套餐 / credits 核销口径"
+          label="订阅营收"
+          value={formatMeterCost(summary.subscription_revenue_usd || 0)}
+          sub="按 charged_cost 扣套餐额度"
+        />
+        <StatCard
+          icon={Wallet}
+          iconColor="text-primary"
+          iconBg="bg-primary/10"
+          label="余额营收"
+          value={formatMeterCost(summary.balance_revenue_usd || 0)}
+          sub="按 raw_cost 1:1 扣余额"
         />
         <StatCard
           icon={Zap}

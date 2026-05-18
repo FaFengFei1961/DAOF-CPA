@@ -195,17 +195,6 @@ func loadStrictestPolicyFromDB(modelName string) ModerationPolicy {
 		Level:    rankToLevel(maxRank),
 		FailMode: failMode,
 	}
-	return enforceOpenAIModelModerationPolicy(modelName, policy)
-}
-
-func enforceOpenAIModelModerationPolicy(modelName string, policy ModerationPolicy) ModerationPolicy {
-	if !database.IsOpenAIModelID(modelName) {
-		return policy
-	}
-	if levelRank(policy.Level) < levelRank(database.OpenAIModelModerationLevel) {
-		policy.Level = database.OpenAIModelModerationLevel
-	}
-	policy.FailMode = database.OpenAIModelModerationFailMode
 	return policy
 }
 

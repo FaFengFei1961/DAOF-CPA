@@ -42,16 +42,15 @@ var SubscriptionSysConfigDefaults = map[string]string{
 	"apilog_cleanup_batch_size": "5000", // 单次清理的最大行数（避免一次锁表过久）
 
 	// ── 三段消费模型默认值（admin 全局配置，影响新用户初始化）──
-	"balance_consume_default_enabled":     "false",   // 余额消费默认关闭（最严策略）
-	"balance_consume_default_limit_usd":   "0",       // 默认无限额
-	"balance_consume_default_window_secs": "2592000", // 默认 30 天重置窗口
-	"subscription_default_period_seconds": "2592000", // 订阅默认周期 30 天
+	"balance_consume_default_enabled":         "false",   // 余额消费默认关闭（最严策略）
+	"balance_consume_default_limit_micro_usd": "0",       // 默认无限额（micro_usd 整数；旧 *_usd USD float key 已废弃）
+	"balance_consume_default_window_secs":     "2592000", // 默认 30 天重置窗口
+	"subscription_default_period_seconds":     "2592000", // 订阅默认周期 30 天
 
-	// ── 公开透明计费规则（三账：raw_cost / charged_cost / platform_cost_estimate）──
-	"billing_rules_version":              "default-2026-05-13",
-	"billing_model_weights_json":         `[{"pattern":"*haiku*","weight":0.3,"label":"Claude Haiku","reason":"低成本/轻量模型"},{"pattern":"*sonnet*","weight":1,"thinking_weight":1.5,"label":"Claude Sonnet","reason":"Claude 基准模型；thinking 启用时加权"},{"pattern":"*opus*","weight":3.5,"thinking_weight":5,"label":"Claude Opus","reason":"高成本/高额度消耗模型"},{"pattern":"*gemini*flash*","weight":0.4,"label":"Gemini Flash","reason":"低成本快速模型"},{"pattern":"*gemini*pro*","weight":0.9,"label":"Gemini Pro","reason":"Gemini 主力模型"},{"pattern":"*gpt*mini*","weight":0.5,"label":"GPT mini","reason":"低成本模型"},{"pattern":"*o1*","weight":2.5,"label":"OpenAI reasoning","reason":"高推理成本模型"},{"pattern":"*o3*","weight":3.5,"label":"OpenAI reasoning","reason":"高推理成本模型"},{"pattern":"*gpt*","weight":1,"label":"GPT","reason":"OpenAI 基准模型"}]`,
+	// ── 公开透明计费规则（订阅 charged_cost 口径 + 余额 raw_cost 1:1 口径）──
+	"billing_rules_version":              "default-active-series-2026-05-17",
+	"billing_model_weights_json":         `[{"pattern":"claude-haiku-*","weight":0.3,"label":"Claude Haiku","reason":"当前启用的 Claude 轻量系列"},{"pattern":"claude-sonnet-*","weight":1,"thinking_weight":1.5,"label":"Claude Sonnet","reason":"当前启用的 Claude 基准系列；thinking 启用时加权"},{"pattern":"claude-opus-*","weight":3.5,"thinking_weight":5,"label":"Claude Opus","reason":"当前启用的 Claude 高消耗系列"},{"pattern":"gemini-*-flash-lite*","weight":0.2,"label":"Gemini Flash Lite","reason":"当前启用的 Gemini 超轻量系列"},{"pattern":"gemini-*-flash*","weight":0.4,"label":"Gemini Flash","reason":"当前启用的 Gemini 快速系列"},{"pattern":"gemini-*-pro*","weight":0.9,"label":"Gemini Pro","reason":"当前启用的 Gemini 主力系列"},{"pattern":"gpt-*-mini*","weight":0.5,"label":"GPT mini","reason":"当前启用的 GPT 轻量系列"},{"pattern":"gpt-*","weight":1,"label":"GPT","reason":"当前启用的 GPT 主力系列"},{"pattern":"grok-*","weight":1,"label":"Grok","reason":"当前启用的 xAI Grok 系列"}]`,
 	"billing_health_multipliers_json":    `[{"pattern":"*","weight":1,"label":"Normal","reason":"默认无高峰加权"}]`,
-	"billing_provider_cost_factors_json": `{"anthropic":1,"openai":1,"gemini":1,"google-cli":1,"codex":1,"cliproxy":1,"unknown":1}`,
 	"upstream_account_cost_presets_json": `[{"id":"claude-pro","label":"Claude Pro","provider":"anthropic","plan_name":"Claude Pro","monthly_cost_usd":20,"estimated_monthly_capacity_usd":0,"notes":"仅填官方月费；容量需按本平台实测填写。"},{"id":"claude-max-5x","label":"Claude Max 5x","provider":"anthropic","plan_name":"Claude Max 5x","monthly_cost_usd":100,"estimated_monthly_capacity_usd":0,"notes":"仅填官方月费；容量需按本平台实测填写。"},{"id":"claude-max-20x","label":"Claude Max 20x","provider":"anthropic","plan_name":"Claude Max 20x","monthly_cost_usd":200,"estimated_monthly_capacity_usd":0,"notes":"仅填官方月费；容量需按本平台实测填写。"},{"id":"chatgpt-plus","label":"ChatGPT Plus / Codex","provider":"codex","plan_name":"ChatGPT Plus","monthly_cost_usd":20,"estimated_monthly_capacity_usd":0,"notes":"仅填官方月费；容量需按本平台实测填写。"},{"id":"chatgpt-pro-100","label":"ChatGPT Pro 100 / Codex","provider":"codex","plan_name":"ChatGPT Pro 100","monthly_cost_usd":100,"estimated_monthly_capacity_usd":0,"notes":"仅填官方月费；容量需按本平台实测填写。"},{"id":"chatgpt-pro-200","label":"ChatGPT Pro 200 / Codex","provider":"codex","plan_name":"ChatGPT Pro 200","monthly_cost_usd":200,"estimated_monthly_capacity_usd":0,"notes":"仅填官方月费；容量需按本平台实测填写。"},{"id":"google-ai-pro","label":"Google AI Pro","provider":"gemini","plan_name":"Google AI Pro","monthly_cost_usd":20,"estimated_monthly_capacity_usd":0,"notes":"仅填官方月费；容量需按本平台实测填写。"},{"id":"google-ai-ultra","label":"Google AI Ultra","provider":"gemini","plan_name":"Google AI Ultra","monthly_cost_usd":250,"estimated_monthly_capacity_usd":0,"notes":"仅填官方月费；容量需按本平台实测填写。"}]`,
 
 	// ── CLIProxyAPI usage queue 同步（上游账号归因 / 毛利核算基础）──
@@ -103,6 +102,7 @@ type defaultSubscriptionTier struct {
 	ProviderLabel string
 	TierKey       string
 	TierLabel     string
+	HighlightTag  string
 	PackageName   string
 	Description   string
 	PriceUSD      float64
@@ -119,11 +119,11 @@ func SeedDefaultSubscriptionProducts() {
 	}
 	enabled := true
 	stackable := false
-	// 仅保留 Combo 组合套餐（产品决策：不再单独售卖 Claude / Codex / Gemini 单品套餐）
+	// 仅保留 Combo 组合套餐（产品决策：不再单独售卖 Claude / Codex / Gemini / Grok 单品套餐）
 	specs := []defaultSubscriptionTier{
-		{"combo", "Combo", "pro", "Pro", "Combo Pro", "Claude + Codex + Gemini 全部模型共享 API 等值额度。", 49, 25, 125, `["claude-*","gpt-*","o*","chatgpt-*","codex-*","gemini-*"]`, "combo:all", 310},
-		{"combo", "Combo", "max_5x", "Max 5x", "Combo Max 5x", "Claude + Codex + Gemini 全部模型共享更高额度。", 199, 125, 625, `["claude-*","gpt-*","o*","chatgpt-*","codex-*","gemini-*"]`, "combo:all", 320},
-		{"combo", "Combo", "max_20x", "Max 20x", "Combo Max 20x", "Claude + Codex + Gemini 全部模型共享旗舰额度。", 499, 400, 2000, `["claude-*","gpt-*","o*","chatgpt-*","codex-*","gemini-*"]`, "combo:all", 330},
+		{"combo", "Combo", "pro", "Pro", "轻量", "Combo Pro", "Claude + Codex + Gemini + Grok 全部模型共享 API 等值额度。", 49, 25, 125, `["claude-*","gpt-*","gemini-*","grok-*"]`, "combo:all", 310},
+		{"combo", "Combo", "max_5x", "Max 5x", "中等", "Combo Max 5x", "Claude + Codex + Gemini + Grok 全部模型共享更高额度。", 199, 125, 625, `["claude-*","gpt-*","gemini-*","grok-*"]`, "combo:all", 320},
+		{"combo", "Combo", "max_20x", "Max 20x", "重度", "Combo Max 20x", "Claude + Codex + Gemini + Grok 全部模型共享旗舰额度。", 499, 400, 2000, `["claude-*","gpt-*","gemini-*","grok-*"]`, "combo:all", 330},
 	}
 
 	createdPlans := 0
@@ -161,7 +161,7 @@ func SeedDefaultSubscriptionProducts() {
 					ProductType:          "subscription",
 					IconKey:              spec.ProviderKey,
 					BadgeColor:           "primary",
-					HighlightTag:         spec.TierLabel,
+					HighlightTag:         spec.HighlightTag,
 					PriceAmount:          priceMicro,
 					PriceCurrency:        "USD",
 					BillingPeriodSeconds: 30 * 86400,

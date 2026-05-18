@@ -50,6 +50,15 @@ const getCouponCacheKey = () => {
 
 const displayPackageName = (pkg) => String(pkg.name || '');
 const displayPackageDescription = (pkg) => String(pkg.description || '');
+const displayHighlightTag = (tag) => {
+  const normalized = String(tag || '').trim();
+  const legacyMap = {
+    Pro: '轻量',
+    'Max 5x': '中等',
+    'Max 20x': '重度',
+  };
+  return legacyMap[normalized] || normalized;
+};
 
 const PLAN_LIMIT_CALLS_UNIT = '\u6b21\u8c03\u7528';
 const LEGACY_TRINITY_NAME = '\u5fa1\u4e09\u5bb6';
@@ -72,7 +81,13 @@ const sortStorePackages = (packages) =>
     String(a.name || '').localeCompare(String(b.name || ''))
   );
 
-const UpgradePage = ({ onPurchaseSuccess }) => {
+/**
+ * UpgradePage 只作为 BrowsePackagesModal 的嵌入内容渲染（embedded=true）：
+ *   - 强制 pane='store'，不读/不写 URL ?pane（避免污染外层路由）
+ *   - 不渲染 mine/store tab 切换器
+ *   - 不渲染 MySubscriptions（避免 Dashboard → Modal → MySubscriptions → "浏览套餐" 递归）
+ */
+const UpgradePage = ({ onPurchaseSuccess, embedded = false }) => {
 
 
 
@@ -95,19 +110,22 @@ const UpgradePage = ({ onPurchaseSuccess }) => {
   const [searchParams, setSearchParams] = useSearchParams();
   const paneFromUrl = searchParams.get('pane');
   const [pane, setPane] = useState(() => {
+    if (embedded) return 'store';
     if (paneFromUrl === 'mine' || paneFromUrl === 'store') return paneFromUrl;
     return isLoggedIn() ? 'mine' : 'store';
   });
 
   useEffect(() => {
+    if (embedded) return;
     if (paneFromUrl === 'mine' || paneFromUrl === 'store') setPane(paneFromUrl);
-  }, [paneFromUrl]);
+  }, [paneFromUrl, embedded]);
   const setPaneAndUrl = useCallback((next) => {
     setPane(next);
+    if (embedded) return;
     const params = new URLSearchParams(searchParams);
     params.set('pane', next);
     setSearchParams(params, { replace: true });
-  }, [searchParams, setSearchParams]);
+  }, [searchParams, setSearchParams, embedded]);
 
 
 
@@ -224,7 +242,7 @@ const UpgradePage = ({ onPurchaseSuccess }) => {
       <StorePage>
 
 
-      {isAuthenticated && (
+      {!embedded && isAuthenticated && (
         <div className="inline-flex rounded-overlay border border-outline-variant bg-surface-container p-0.5 self-start">
           {[
             { id: 'mine', label: t('UPGRADE.PANE_MINE', '我的') },
@@ -248,10 +266,10 @@ const UpgradePage = ({ onPurchaseSuccess }) => {
       )}
 
 
-      {isAuthenticated && pane === 'mine' && <MySubscriptions isAuthenticated={isLoggedIn()} embedded />}
+      {!embedded && isAuthenticated && pane === 'mine' && <MySubscriptions isAuthenticated={isLoggedIn()} embedded />}
 
 
-      {(!isAuthenticated || pane === 'store') && (<>
+      {(embedded || !isAuthenticated || pane === 'store') && (<>
       {loading ? <div className="text-center py-20 text-on-surface-variant">{t('UPGRADE.LOADING', '加载中...')}</div>
         : (() => {
           const filtered = pkgs;
@@ -275,14 +293,15 @@ const UpgradePage = ({ onPurchaseSuccess }) => {
               const shownDescription = displayPackageDescription(pkg);
               const finalPriceText = formatCurrency(Number(finalPrice || 0), 2);
               const originalPriceText = formatCurrency(Number(pkg.price_amount || 0), 2);
-              const isRecommended = !!pkg.highlight_tag;
+              const highlightTag = displayHighlightTag(pkg.highlight_tag);
+              const isRecommended = !!highlightTag;
               return (
                 <div key={pkg.id}
                   className={`relative fl-card p-6 ${isRecommended ? 'border-primary' : ''}`}>
 
                   {isRecommended && (
                     <span className="absolute top-3 right-3 inline-flex items-center px-2 py-0.5 rounded-full text-[10px] font-medium bg-primary/15 text-primary border border-primary/30">
-                      {pkg.highlight_tag}
+                      {highlightTag}
                     </span>
                   )}
 

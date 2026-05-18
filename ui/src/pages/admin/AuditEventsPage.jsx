@@ -340,7 +340,19 @@ const EventDetail = ({ event, formatMeterCost, formatEventFailure }) => {
       <Section title="计费明细" flat>
         <div className="grid grid-cols-2 gap-x-4">
           <Field label="原始成本 (raw)" mono value={formatMeterCost(event.raw_cost ?? event.cost)} />
-          <Field label="扣减成本 (charged)" mono value={formatMeterCost(event.charged_cost ?? event.cost)} highlight />
+          <Field label="订阅口径 (charged)" mono value={formatMeterCost(event.charged_cost ?? event.cost)} />
+          <Field
+            label="实际营收来源"
+            value={event.revenue_source === 'subscription' ? '订阅扣减'
+              : event.revenue_source === 'balance' ? '余额扣减 (raw 1:1)'
+              : '未记录（失败/pending）'}
+          />
+          <Field
+            label="实际营收金额"
+            mono
+            value={event.revenue_source ? formatMeterCost(event.effective_revenue || 0) : '-'}
+            highlight={!!event.revenue_source}
+          />
           <Field label="模型权重" mono value={`×${Number(event.model_weight || 1).toFixed(2)}`} />
           {Number(event.health_multiplier || 1) !== 1 && (
             <Field label="高峰系数" mono value={`H×${Number(event.health_multiplier || 1).toFixed(2)}`} />

@@ -367,7 +367,7 @@ func TestIsOpenAIModelID(t *testing.T) {
 	}
 }
 
-func TestEnforceOpenAIModelModerationDefaults(t *testing.T) {
+func TestEnforceModelEndpointDefaultsDoesNotRewriteModeration(t *testing.T) {
 	setupModerationSeedTestDB(t)
 	if err := DB.AutoMigrate(&ChannelModel{}); err != nil {
 		t.Fatalf("migrate channel_models: %v", err)
@@ -383,27 +383,21 @@ func TestEnforceOpenAIModelModerationDefaults(t *testing.T) {
 		t.Fatalf("seed channel_models: %v", err)
 	}
 
-	EnforceOpenAIModelModerationDefaults()
+	EnforceModelEndpointDefaults()
 
 	var after []ChannelModel
 	if err := DB.Order("id").Find(&after).Error; err != nil {
 		t.Fatalf("read channel_models: %v", err)
 	}
-	for _, row := range after {
-		if IsOpenAIModelID(row.ModelID) {
-			if row.ModerationLevel != OpenAIModelModerationLevel || row.ModerationFailMode != OpenAIModelModerationFailMode {
-				t.Fatalf("%s moderation=%s/%s want %s/%s",
-					row.ModelID, row.ModerationLevel, row.ModerationFailMode,
-					OpenAIModelModerationLevel, OpenAIModelModerationFailMode)
-			}
-			if row.ModelID == "gpt-5.5" && row.EndpointPolicy != EndpointPolicyNoChatNonStream {
-				t.Fatalf("gpt-5.5 endpoint_policy=%s want %s", row.EndpointPolicy, EndpointPolicyNoChatNonStream)
-			}
-			continue
+	for i, row := range after {
+		want := rows[i]
+		if row.ModerationLevel != want.ModerationLevel || row.ModerationFailMode != want.ModerationFailMode {
+			t.Fatalf("%s moderation=%s/%s want original %s/%s",
+				row.ModelID, row.ModerationLevel, row.ModerationFailMode,
+				want.ModerationLevel, want.ModerationFailMode)
 		}
-		if row.ModerationLevel != "off" || row.ModerationFailMode != "open" {
-			t.Fatalf("non-OpenAI model %s should remain off/open, got %s/%s",
-				row.ModelID, row.ModerationLevel, row.ModerationFailMode)
+		if row.ModelID == "gpt-5.5" && row.EndpointPolicy != EndpointPolicyNoChatNonStream {
+			t.Fatalf("gpt-5.5 endpoint_policy=%s want %s", row.EndpointPolicy, EndpointPolicyNoChatNonStream)
 		}
 	}
 }

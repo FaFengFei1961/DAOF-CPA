@@ -10,6 +10,7 @@ import { useCurrency } from '../context/CurrencyContext';
 import { StorePage, StoreSection } from './store/StorePrimitives';
 import StatusBadge from './ui/StatusBadge';
 import ProgressBar from './ui/ProgressBar';
+import BrowsePackagesModal from './BrowsePackagesModal';
 
 const SUB_CACHE_TTL_MS = 15000;
 
@@ -22,6 +23,21 @@ const MySubscriptions = ({ isAuthenticated = true, embedded = false }) => {
   const { t } = useTranslation();
   const confirm = useConfirm();
   const { formatCurrencyFixed } = useCurrency();
+  // fix P2（codex review verify-r4）：旧通知链接 /upgrade?pane=store 被 routes.jsx redirect 到
+  // /?openBrowse=store。已订阅用户进 dashboard 时 modal 默认关闭 → 商店入口丢失。
+  // 检测到该 query 自动 open modal 并清理 URL（避免刷新重复触发）。
+  const [browseOpen, setBrowseOpen] = useState(() => {
+    if (typeof window === 'undefined') return false;
+    const params = new URLSearchParams(window.location.search);
+    if (params.get('openBrowse') === 'store' || params.get('openBrowse') === '1') {
+      // 清理 query 防 refresh 重弹
+      const url = new URL(window.location.href);
+      url.searchParams.delete('openBrowse');
+      window.history.replaceState({}, '', url.pathname + url.search + url.hash);
+      return true;
+    }
+    return false;
+  });
   const cacheKey = React.useMemo(getSubCacheKey, [isAuthenticated]);
   const [subs, setSubs] = useState(() => readPageCache(cacheKey) || []);
   const [loading, setLoading] = useState(() => isAuthenticated && !readPageCache(cacheKey));
@@ -78,7 +94,7 @@ const MySubscriptions = ({ isAuthenticated = true, embedded = false }) => {
     try {
       const json = await authFetch(`/api/subscriptions/${sub.id}/cancel`, { method: 'POST' });
       if (json.success) {
-        toast.success(t('MY_SUBS.CANCEL_OK', '订阅已取消。如需退款请联系客服。'));
+        toast.success(t('MY_SUBS.CANCEL_OK', '订阅已取消。如需退款请提交工单。'));
         load({ force: true });
       } else toast.error(json.message || t('MY_SUBS.CANCEL_FAIL', '取消失败'));
     } catch {
@@ -113,7 +129,8 @@ const MySubscriptions = ({ isAuthenticated = true, embedded = false }) => {
               <PackageIcon size={32} className="text-on-surface-variant/50" />
               <span>{t('MY_SUBS.GROUP_SUB_EMPTY', '暂无活跃订阅')}</span>
               <button
-                onClick={() => window.location.href = '/upgrade'}
+                type="button"
+                onClick={() => setBrowseOpen(true)}
                 className="mt-2 text-sm font-semibold text-primary hover:underline inline-flex items-center gap-1"
               >
                 {t('MY_SUBS.BROWSE_PACKAGES', '浏览套餐')}
@@ -139,7 +156,12 @@ const MySubscriptions = ({ isAuthenticated = true, embedded = false }) => {
   );
 
   if (embedded) {
-    return <div className="space-y-8">{body}</div>;
+    return (
+      <>
+        <div className="space-y-8">{body}</div>
+        <BrowsePackagesModal isOpen={browseOpen} onClose={() => { setBrowseOpen(false); load({ force: true }); }} />
+      </>
+    );
   }
 
   return (
@@ -151,6 +173,7 @@ const MySubscriptions = ({ isAuthenticated = true, embedded = false }) => {
       >
         {body}
       </StorePage>
+      <BrowsePackagesModal isOpen={browseOpen} onClose={() => { setBrowseOpen(false); load({ force: true }); }} />
     </div>
   );
 };

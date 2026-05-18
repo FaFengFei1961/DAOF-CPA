@@ -85,7 +85,6 @@ func (l ApiLog) MarshalJSON() ([]byte, error) {
 		Cost                   float64 `json:"cost"`
 		RawCost                float64 `json:"raw_cost"`
 		ChargedCost            float64 `json:"charged_cost"`
-		PlatformCostEstimate   float64 `json:"platform_cost_estimate"`
 		PrecheckRawCost        float64 `json:"precheck_raw_cost"`
 		PrecheckChargedCost    float64 `json:"precheck_charged_cost"`
 		PrecheckQuotaLimit     float64 `json:"precheck_quota_limit"`
@@ -100,7 +99,6 @@ func (l ApiLog) MarshalJSON() ([]byte, error) {
 		Cost:                   MicroToUSD(l.Cost),
 		RawCost:                MicroToUSD(l.Cost),
 		ChargedCost:            MicroToUSD(chargedCost),
-		PlatformCostEstimate:   MicroToUSD(l.PlatformCostEstimate),
 		PrecheckRawCost:        MicroToUSD(l.PrecheckRawCost),
 		PrecheckChargedCost:    MicroToUSD(l.PrecheckChargedCost),
 		PrecheckQuotaLimit:     MicroToUSD(l.PrecheckQuotaLimit),

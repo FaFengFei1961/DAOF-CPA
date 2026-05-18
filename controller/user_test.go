@@ -107,7 +107,11 @@ func TestUpdateUser_UsesQuotaUSDWire(t *testing.T) {
 	}
 }
 
-func TestUpdateUser_BanRevokesSessions(t *testing.T) {
+// fix CRITICAL（codex review --uncommitted）：banned 用户保留 session 以便走 UserGuardAllowBanned
+// 申诉路径（提工单 / 查 /user/me / 查账单）。原测试期望 ban 即撤销 session，与新设计冲突——
+// 改为断言 session **保留**（appeal flow 可达）；LLM/写动作由 middleware UserGuard + LLM 路径
+// 双层 status!=1 检查兜底。
+func TestUpdateUser_BanKeepsSessionForAppeal(t *testing.T) {
 	setupUserControllerTestDB(t)
 	app := newUpdateUserTestApp()
 	user := seedUpdateUserTarget(t, 10*database.MicroPerUSD, 1)
@@ -129,15 +133,18 @@ func TestUpdateUser_BanRevokesSessions(t *testing.T) {
 		t.Fatalf("expected 200 got %d body=%v", code, resp)
 	}
 
+	// session 不应被撤销 — banned 用户走 UserGuardAllowBanned 端点（/api/user/me、/api/tickets）
+	// 需要这条 session 解析成功。
 	var session database.UserSession
 	if err := database.DB.Where("session_id = ?", sessionID).First(&session).Error; err != nil {
 		t.Fatalf("reload session: %v", err)
 	}
-	if session.RevokedAt == nil {
-		t.Fatalf("session revoked_at is nil after ban")
+	if session.RevokedAt != nil {
+		t.Fatalf("session revoked_at should remain nil after ban, got %v (banned user must retain session for appeal)", session.RevokedAt)
 	}
-	if got, ok := database.LookupUserBySession(sessionID); ok || got != nil {
-		t.Fatalf("revoked session should not resolve, got user=%v ok=%v", got, ok)
+	// LookupUserBySession 仍可解析；middleware 用 c.Locals("user_banned") 区分 banned 用户。
+	if got, ok := database.LookupUserBySession(sessionID); !ok || got == nil || got.Status != 2 {
+		t.Fatalf("session should resolve to banned user, got user=%v ok=%v", got, ok)
 	}
 }
 

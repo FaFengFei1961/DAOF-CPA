@@ -29,8 +29,7 @@ import (
 // registerMu 保护"cap 检查 + 创建用户"为临界区，避免两个并发新注册都通过 cap 检查
 // 之后导致 user 总数超过 max_users。SQLite 的串行写只能部分缓解，不能确定性消除。
 var (
-	registerMu                            sync.Mutex
-	deprecatedBalanceConsumeLimitWarnOnce sync.Once
+	registerMu sync.Mutex
 )
 
 const oauthStateTTL = 5 * time.Minute
@@ -229,11 +228,10 @@ func maskPhone(phone string) string {
 	return phone[:3] + "****" + phone[len(phone)-4:]
 }
 
-// GithubAuthRequest 承接前台发来的 OAuth Code 和可选的推荐人标识
+// GithubAuthRequest 承接前台发来的可选推荐人标识。
+// code / state 必须从 query 读取，不接受 body 字段。
 type GithubAuthRequest struct {
-	Code  string `json:"code"`  // 已废弃：code 必须从 query 读取
-	State string `json:"state"` // 已废弃：state 必须从 query 读取
-	Ref   string `json:"ref"`   // 推荐人 username，可选；若有效则发拉新奖励
+	Ref string `json:"ref"` // 推荐人 username，可选；若有效则发拉新奖励
 }
 
 // resolveBonusConfig 从 SysConfig 读取新用户奖励三参数。
@@ -245,20 +243,11 @@ func resolveBonusConfig() (signupMicro, referrerMicro, refereeMicro int64) {
 		readMicroUSDConfig("referee_bonus", 0)
 }
 
+// fix MEDIUM（codex money-unit）：统一所有金额 SysConfig 读路径走 readMicroUSDConfig，
+// 与 signup_bonus/referrer_bonus/referee_bonus 一致。readMicroUSDConfig 内部包含非负 +
+// 有限数校验，旧 readInt64Config 没有"micro_usd 语义"标注容易让维护者误以为是普通整数。
 func readDefaultBalanceConsumeLimitMicroUSD() int64 {
-	proxy.SysConfigMutex.RLock()
-	_, hasDeprecated := proxy.SysConfigCache[deprecatedBalanceConsumeDefaultLimitUSDKey]
-	proxy.SysConfigMutex.RUnlock()
-	if hasDeprecated {
-		deprecatedBalanceConsumeLimitWarnOnce.Do(func() {
-			log.Printf("[SYSCONFIG] WARN deprecated key %q ignored; use %q", deprecatedBalanceConsumeDefaultLimitUSDKey, balanceConsumeDefaultLimitMicroUSDKey)
-		})
-	}
-	limit := readInt64Config(balanceConsumeDefaultLimitMicroUSDKey, 0)
-	if limit < 0 {
-		return 0
-	}
-	return limit
+	return readMicroUSDConfig(balanceConsumeDefaultLimitMicroUSDKey, 0)
 }
 
 // applyReferralBonuses 处理推荐链路奖励发放。
@@ -642,10 +631,22 @@ func GithubCallback(c *fiber.Ctx) error {
 	res := database.DB.Where("github_id = ?", ghID).First(&existingUser)
 	if res.RowsAffected > 0 {
 		if existingUser.Status == 2 {
-			return c.Status(403).JSON(fiber.Map{
-				"success":      false,
-				"message_code": "ERR_BANNED",
-				"ban_reason":   existingUser.BanReason,
+			// Banned users still need a browser session for appeal/read-only paths
+			// (/api/user/me, tickets, billing). Business writes and LLM API usage
+			// remain blocked by UserGuard / proxy auth status checks.
+			sessionID, err := database.CreateUserSession(existingUser.ID, c.Get("User-Agent"), c.IP())
+			if err != nil {
+				log.Printf("[OAUTH] create appeal session failed banned user=%d: %v", existingUser.ID, err)
+				return c.Status(500).JSON(fiber.Map{"success": false, "message_code": "ERR_DB_INSERT_FAILED"})
+			}
+			LogOperationBy(existingUser.ID, existingUser.ID, "user", "LOGIN_BANNED_APPEAL", c.IP(),
+				fmt.Sprintf(`[{"type":"LOGIN_BANNED_APPEAL","via":"github","username":%q,"github_id":%q}]`, existingUser.Username, ghID))
+			return c.JSON(fiber.Map{
+				"success":        true,
+				"message_code":   "SUCCESS_APPEAL_SESSION",
+				"account_status": 2,
+				"ban_reason":     existingUser.BanReason,
+				"session_id":     sessionID,
 			})
 		}
 

@@ -81,10 +81,9 @@ func TestResolveBillingRulesThinkingDetection(t *testing.T) {
 
 func TestResolveBillingRulesFromConfig(t *testing.T) {
 	old := replaceSysConfigForTest(map[string]string{
-		BillingModelWeightsConfigKey:        `[{"pattern":"special-*","weight":2.25}]`,
-		BillingHealthMultipliersConfigKey:   `[{"pattern":"special-*","weight":1.2}]`,
-		BillingProviderCostFactorsConfigKey: `{"openai":0.4}`,
-		BillingRulesVersionConfigKey:        "test-v1",
+		BillingModelWeightsConfigKey:      `[{"pattern":"special-*","weight":2.25}]`,
+		BillingHealthMultipliersConfigKey: `[{"pattern":"special-*","weight":1.2}]`,
+		BillingRulesVersionConfigKey:      "test-v1",
 	})
 	defer replaceSysConfigForTest(old)
 
@@ -92,11 +91,37 @@ func TestResolveBillingRulesFromConfig(t *testing.T) {
 	if r.BillingRulesVersion != "test-v1" {
 		t.Fatalf("version = %q", r.BillingRulesVersion)
 	}
+	// 订阅扣减：raw=100 × weight=2.25 × health=1.2 = 270
 	if r.ChargedCostMicroUSD != 270 {
 		t.Fatalf("charged = %d, want 270", r.ChargedCostMicroUSD)
 	}
-	if r.PlatformCostEstimateMicro != 40 {
-		t.Fatalf("platform estimate = %d, want 40", r.PlatformCostEstimateMicro)
+	// 余额扣减：永远 = raw（rawCost 1:1）
+	if r.RawCostMicroUSD != 100 {
+		t.Fatalf("raw = %d, want 100", r.RawCostMicroUSD)
+	}
+}
+
+func TestGetPublicBillingRulesExposesBalanceStrategy(t *testing.T) {
+	old := replaceSysConfigForTest(map[string]string{
+		BillingRulesVersionConfigKey: "v1-2026-05-13",
+	})
+	defer replaceSysConfigForTest(old)
+
+	rules := GetPublicBillingRules()
+	if rules.Version != "v1-2026-05-13" {
+		t.Fatalf("version = %q", rules.Version)
+	}
+	if rules.EffectiveSince != "2026-05-13" {
+		t.Fatalf("effective_since = %q, want 2026-05-13", rules.EffectiveSince)
+	}
+	if rules.Balance.Mode != "raw_cost_1x" {
+		t.Fatalf("balance.mode = %q, want raw_cost_1x", rules.Balance.Mode)
+	}
+	if rules.Balance.Note == "" {
+		t.Fatalf("balance.note must not be empty")
+	}
+	if rules.Subscription["formula"] == "" {
+		t.Fatalf("subscription.formula must not be empty")
 	}
 }
 

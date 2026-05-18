@@ -1,10 +1,11 @@
 import React, { Suspense, lazy } from 'react';
 import { useTranslation } from 'react-i18next';
 import { Outlet, NavLink, useLocation, Navigate } from 'react-router-dom';
-import { ShieldAlert, Wallet, Receipt, Package as PackageIcon } from 'lucide-react';
+import { ShieldAlert, Wallet, Receipt, Package as PackageIcon, Scale } from 'lucide-react';
 import { PageContainer, PageHeader } from '../../../components/ui';
 
 const FinanceSettingsPage = lazy(() => import('./FinanceSettingsPage'));
+const BillingRulesPage = lazy(() => import('./BillingRulesPage'));
 const AdminPaymentChannels = lazy(() => import('../../../components/AdminPaymentChannels'));
 const AdminTopupOrders = lazy(() => import('../../../components/AdminTopupOrders'));
 const AdminSubscriptions = lazy(() => import('../../../components/AdminSubscriptions'));
@@ -15,6 +16,7 @@ const AdminSubscriptions = lazy(() => import('../../../components/AdminSubscript
  */
 const FINANCE_TABS = [
   { id: 'settings',      path: '/admin/finance',               icon: ShieldAlert, labelKey: 'ADMIN_FINANCE.TABS.SETTINGS' },
+  { id: 'rules',         path: '/admin/finance/rules',         icon: Scale,       labelKey: 'ADMIN_FINANCE.TABS.RULES' },
   { id: 'payment',       path: '/admin/finance/payment',       icon: Wallet,      labelKey: 'ADMIN_FINANCE.TABS.PAYMENT' },
   { id: 'topups',        path: '/admin/finance/topups',        icon: Receipt,     labelKey: 'ADMIN_FINANCE.TABS.TOPUPS' },
   { id: 'subscriptions', path: '/admin/finance/subscriptions', icon: PackageIcon, labelKey: 'ADMIN_FINANCE.TABS.SUBSCRIPTIONS' },
@@ -67,6 +69,7 @@ const FinanceShell = () => {
 export default FinanceShell;
 export {
   FinanceSettingsPage,
+  BillingRulesPage,
   AdminPaymentChannels as FinancePaymentPage,
   AdminTopupOrders as FinanceTopupsPage,
   AdminSubscriptions as FinanceSubscriptionsPage,

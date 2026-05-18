@@ -31,6 +31,8 @@ export const SaveBar = ({ loading, onSave }) => {
 
 export const SecretInputField = ({ label, id, val, onChange, show, onToggle, isPassword }) => {
   const inputId = `admin-input-${id}`;
+  // Eye toggle 仅对密码类敏感字段才有意义。Client ID 等公开字段不该长一个无操作的眼睛图标。
+  const showToggle = !!isPassword;
   return (
     <div className="flex flex-col gap-2">
       <label htmlFor={inputId} className="text-xs font-semibold text-on-surface-variant ml-1">{label}</label>
@@ -41,8 +43,9 @@ export const SecretInputField = ({ label, id, val, onChange, show, onToggle, isP
         onChange={(e) => onChange(id, e.target.value)}
         placeholder="••••••••••••"
         prefix={KeyRound}
-        suffix={show ? EyeOff : Eye}
-        onSuffixClick={onToggle}
+        suffix={showToggle ? (show ? EyeOff : Eye) : undefined}
+        onSuffixClick={showToggle ? onToggle : undefined}
+        suffixAriaLabel={showToggle ? (show ? 'Hide secret' : 'Show secret') : undefined}
         className="font-mono"
       />
     </div>
