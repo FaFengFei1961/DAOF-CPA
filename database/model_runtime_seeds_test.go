@@ -111,14 +111,20 @@ func TestSeedModelRuntimeDefaults_ReproducibleFactoryModelPool(t *testing.T) {
 		t.Fatalf("video catalog should now be supported/public: %#v", videoCatalog)
 	}
 
-	// Gemini image runtime is not exposed through CLIProxyAPI's /v1/images/*
-	// surface yet, so no Gemini image catalog row should be seeded.
-	var geminiImageCount int64
-	if err := DB.Model(&ModelCatalog{}).Where("provider_key = ? AND category = ?", "google", ModelCategoryImage).Count(&geminiImageCount).Error; err != nil {
-		t.Fatalf("count gemini image catalog rows: %v", err)
+	// Gemini image runtime via CPA antigravity 路径 DAOF 当前不支持，但为了 admin UI 显示
+	// 完整的 CPA 暴露列表，仍 seed catalog row——必须 Supported=false 且 DefaultEnabled=false，
+	// admin 启用前会被 ValidateChannelModelActivation 拒绝（IsRuntimeImageModelSupported 返 false）。
+	var geminiImageCatalogs []ModelCatalog
+	if err := DB.Where("provider_key = ? AND category = ?", "google", ModelCategoryImage).Find(&geminiImageCatalogs).Error; err != nil {
+		t.Fatalf("load gemini image catalog rows: %v", err)
 	}
-	if geminiImageCount != 0 {
-		t.Fatalf("gemini image runtime not wired upstream; should not be seeded (got %d rows)", geminiImageCount)
+	for _, c := range geminiImageCatalogs {
+		if c.Supported {
+			t.Fatalf("gemini image catalog %q must keep Supported=false until CPA exposes via /v1/images/*", c.ModelID)
+		}
+		if c.DefaultEnabled {
+			t.Fatalf("gemini image catalog %q must keep DefaultEnabled=false", c.ModelID)
+		}
 	}
 
 	var pricingCount int64
@@ -220,6 +226,56 @@ func TestValidateChannelModelActivation_BlocksUnsupportedMediaAndUnpricedText(t 
 	text.InputPricePicoPerToken = PicoPerTokenPerUSDPerMTok
 	if err := ValidateChannelModelActivation(&text); err != nil {
 		t.Fatalf("priced text activation should pass: %v", err)
+	}
+}
+
+func TestSeedModelRuntimeDefaults_TotalCountAlignsWithCPA(t *testing.T) {
+	db, err := gorm.Open(sqlite.Open("file::memory:?cache=private"), &gorm.Config{})
+	if err != nil {
+		t.Fatalf("open sqlite: %v", err)
+	}
+	oldDB := DB
+	DB = db
+	t.Cleanup(func() { DB = oldDB })
+	if err := DB.AutoMigrate(&Channel{}, &ChannelModel{}, &ModelCatalog{}, &ModelPricingRule{}); err != nil {
+		t.Fatalf("migrate: %v", err)
+	}
+	SeedModelRuntimeDefaults()
+
+	// CPA 上游 2026-05-19 实际暴露 42 个模型（Anthropic 11 + OpenAI 7 + Google 15 + Grok 9）。
+	// DAOF seed 总数必须保持对齐——少了说明遗漏 CPA 新增模型；多了说明 seed 写入了上游
+	// 不存在的 alias。后续 CPA 暴露列表变化时需要同步更新此断言。
+	const cpaModelCount = int64(42)
+	var got int64
+	if err := DB.Model(&ModelCatalog{}).Count(&got).Error; err != nil {
+		t.Fatalf("count catalog: %v", err)
+	}
+	if got != cpaModelCount {
+		t.Fatalf("seed catalog count=%d want %d (must align with CPA's exposed model list)", got, cpaModelCount)
+	}
+
+	// 锁定补的 10 个 alias_or_unofficial 模型必须 Supported=false + DefaultEnabled=false
+	// （admin 启用前手动确认 pricing + 切 Supported=true）。
+	uncommitted := []string{
+		"gemini-3-flash", "gemini-3-pro-low", "gemini-3-pro-high", "gemini-3-pro-preview",
+		"gemini-flash-latest", "gemini-flash-lite-latest", "gemini-pro-agent",
+		"gemini-3.1-flash-image",
+		"grok-3-mini", "grok-3-mini-fast",
+	}
+	for _, id := range uncommitted {
+		var cat ModelCatalog
+		if err := DB.Where("model_id = ?", id).First(&cat).Error; err != nil {
+			t.Fatalf("alias model %q missing from seed: %v", id, err)
+		}
+		if cat.Supported {
+			t.Fatalf("alias model %q must keep Supported=false until pricing is confirmed", id)
+		}
+		if cat.DefaultEnabled {
+			t.Fatalf("alias model %q must keep DefaultEnabled=false", id)
+		}
+		if cat.OfficialStatus != "alias_or_unofficial" {
+			t.Fatalf("alias model %q official_status=%q want alias_or_unofficial", id, cat.OfficialStatus)
+		}
 	}
 }
 
