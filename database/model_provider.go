@@ -375,18 +375,25 @@ func NormalizeChannelModelMetadata(cm *ChannelModel) {
 	}
 }
 
+// ChannelModelHasTokenPricing 判断 ChannelModel 是否填了 token pricing 字段。
+// fix H3 (2026-05-19)：原实现只要任一字段 >0 就返回 true，admin 误把
+// Input/Output 都设 0 但 Cached 留旧值时会绕过激活校验 → commit 路径 cost=0
+// 用户白嫖。改为要求 Input 与 Output 都 > 0（每个文本请求都会有 input+output
+// token，缺一就会零成本）。Cached 等可选字段不要求。长上下文档若启用
+// (ContextPriceThreshold>0) 也必须 HighInput/HighOutput 都 > 0。
 func ChannelModelHasTokenPricing(cm *ChannelModel) bool {
 	if cm == nil {
 		return false
 	}
-	return cm.InputPricePicoPerToken > 0 ||
-		cm.OutputPricePicoPerToken > 0 ||
-		cm.CachedInputPricePicoPerToken > 0 ||
-		cm.CacheWriteInputPricePicoPerToken > 0 ||
-		cm.CacheWrite1hInputPricePicoPerToken > 0 ||
-		cm.HighInputPricePicoPerToken > 0 ||
-		cm.HighCachedInputPricePicoPerToken > 0 ||
-		cm.HighOutputPricePicoPerToken > 0
+	if cm.InputPricePicoPerToken <= 0 || cm.OutputPricePicoPerToken <= 0 {
+		return false
+	}
+	if cm.ContextPriceThreshold > 0 {
+		if cm.HighInputPricePicoPerToken <= 0 || cm.HighOutputPricePicoPerToken <= 0 {
+			return false
+		}
+	}
+	return true
 }
 
 func ChannelModelAllowsEndpoint(cm *ChannelModel, endpoint string) bool {

@@ -434,6 +434,36 @@ func CommitTextTurn(ctx CommitTextContext, usage TextUsage, status int, delivere
 			}
 			return false // caller 应 502；非流路径才用该返回值
 		}
+
+		// fix H3 (财务审计 2026-05-19)：cost=0 但请求成功（非 failedRequest）+ 有任意 token 消耗
+		// → admin 大概率把 ChannelModel.*PricePicoPerToken 全配成 0，导致用户白嫖且无告警。
+		// 这里写一个 pending_reconcile billing entry + log，让 admin 知道有零成本流量需要排查。
+		if costMicroUSD == 0 && (promptTokens > 0 || completionTokens > 0) {
+			log.Printf("[BILLING-CRITICAL] user=%d model=%s ZERO-COST-PRICING-MISCONFIG prompt=%d completion=%d cached=%d input_pico=%d output_pico=%d cached_pico=%d — request succeeded but cost=0; admin should verify ChannelModel pricing",
+				ctx.User.ID, ctx.ModelName, promptTokens, completionTokens, cachedTokens,
+				inputPricePico, outputPricePico, cachedInputPricePico)
+			if ctx.IsStream {
+				RecordManualBillingState(ctx, ManualBillingStateInput{
+					BillingState:                 database.BillingStatePendingReconcile,
+					ReasonTag:                    "ZERO-COST-PRICING-MISCONFIG",
+					ErrorType:                    "billing_zero_cost",
+					ErrorMessage:                 "request succeeded but cost is 0 — verify ChannelModel pricing",
+					Status:                       200,
+					PromptTokens:                 promptTokens,
+					CompletionTokens:             completionTokens,
+					CachedTokens:                 cachedTokens,
+					CacheWriteTokens:             cacheWriteTokens,
+					CacheWrite5mTokens:           cacheWrite5mTokens,
+					CacheWrite1hTokens:           cacheWrite1hTokens,
+					ReasoningTokens:              reasoningTokens,
+					DeliveredBytes:               deliveredBytes,
+					EstimatedInputTokens:         promptTokens,
+					EstimatedRawCostMicroUSD:     0,
+					EstimatedChargedCostMicroUSD: 0,
+				})
+			}
+			// 不阻塞请求完成（fail-open，已 200 给客户端），仅 audit + 告警
+		}
 	}
 
 	selectedChannelType := channelTypeOfSelected(ctx.SelectedChan)

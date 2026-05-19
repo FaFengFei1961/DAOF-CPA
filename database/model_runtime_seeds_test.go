@@ -225,9 +225,15 @@ func TestValidateChannelModelActivation_BlocksUnsupportedMediaAndUnpricedText(t 
 		t.Fatalf("unpriced text activation err=%v want %v", err, ErrTextModelRequiresTokenPricing)
 	}
 
+	// fix H3：单独的 input 价不足以激活，必须 input + output 都 >0（每个文本请求
+	// 都会有 input+output token，缺一就会零成本）。
 	text.InputPricePicoPerToken = PicoPerTokenPerUSDPerMTok
+	if err := ValidateChannelModelActivation(&text); err != ErrTextModelRequiresTokenPricing {
+		t.Fatalf("text with only InputPrice should still fail: %v", err)
+	}
+	text.OutputPricePicoPerToken = PicoPerTokenPerUSDPerMTok
 	if err := ValidateChannelModelActivation(&text); err != nil {
-		t.Fatalf("priced text activation should pass: %v", err)
+		t.Fatalf("text with input+output priced should pass: %v", err)
 	}
 }
 

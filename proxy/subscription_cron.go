@@ -88,13 +88,27 @@ func runSubscriptionCronOnce() {
 // JOIN billing_entries 只对真有 subscription/balance 计费的请求告警。
 //
 // 只扫最近 1 小时内的孤儿（避免百万行级历史 api_log 拖死 SQLite）。
+// fix D1 (2026-05-19)：原实现只 log 不补写，导致毛利报表 sum(ApiLogRevenue.effective)
+// 与 BillingEntry sum 系统性对不上。现在自动从 BillingEntry 反推 source 和 effective：
+//   - BillingTypeApiUsageSub → RevenueSourceSubscription，effective=charged_cost
+//   - BillingTypeApiConsumeBalance → RevenueSourceBalance，effective=cost（raw）
+// 仍然写日志，便于运维知道发生了多少次补救。
 func monitorApiLogRevenueOrphans() {
 	if !database.DB.Migrator().HasTable(&database.ApiLog{}) || !database.DB.Migrator().HasTable(&database.ApiLogRevenue{}) || !database.DB.Migrator().HasTable(&database.BillingEntry{}) {
 		return
 	}
 	cutoff := time.Now().Add(-1 * time.Hour)
-	var orphanCount int64
-	err := database.DB.Raw(`SELECT COUNT(*) FROM api_logs a
+	type orphanRow struct {
+		ApiLogID       uint
+		Cost           int64
+		ChargedCost    int64
+		EntryType      string
+		SubscriptionID *uint
+	}
+	var orphans []orphanRow
+	err := database.DB.Raw(`SELECT a.id AS api_log_id, a.cost, a.charged_cost,
+		be.entry_type, be.source_subscription_id AS subscription_id
+		FROM api_logs a
 		INNER JOIN billing_entries be
 			ON be.related_type = 'api_log' AND be.related_id = a.id
 			AND be.entry_type IN (?, ?)
@@ -103,15 +117,50 @@ func monitorApiLogRevenueOrphans() {
 		  AND a.status >= 200 AND a.status < 400
 		  AND r.id IS NULL`,
 		database.BillingTypeApiUsageSub, database.BillingTypeApiConsumeBalance, cutoff,
-	).Scan(&orphanCount).Error
+	).Scan(&orphans).Error
 	if err != nil {
 		log.Printf("[REVENUE-ORPHAN-MONITOR] query failed: %v", err)
 		return
 	}
-	if orphanCount > 0 {
-		log.Printf("[REVENUE-ORPHAN-MONITOR] 最近 1 小时内 %d 个 api_logs（已写 BillingEntry 但无 revenue 侧表行）—— RecordApiLogRevenue 重试 4 次仍失败，需 admin 排查",
-			orphanCount)
+	if len(orphans) == 0 {
+		return
 	}
+	recovered := 0
+	for _, o := range orphans {
+		var source string
+		var effective int64
+		var subID uint
+		switch o.EntryType {
+		case database.BillingTypeApiUsageSub:
+			source = database.RevenueSourceSubscription
+			effective = o.ChargedCost
+			if o.SubscriptionID != nil {
+				subID = *o.SubscriptionID
+			}
+		case database.BillingTypeApiConsumeBalance:
+			source = database.RevenueSourceBalance
+			effective = o.Cost
+		default:
+			continue
+		}
+		if effective < 0 {
+			effective = -effective // BillingEntry.AmountUSD 余额扣是负的，营收应为正
+		}
+		revenue := database.ApiLogRevenue{
+			ApiLogID:                 o.ApiLogID,
+			RevenueSource:            source,
+			EffectiveRevenueMicroUSD: effective,
+			SubscriptionID:           subID,
+			RecordedAt:               time.Now(),
+		}
+		if err := database.DB.Create(&revenue).Error; err != nil {
+			log.Printf("[REVENUE-ORPHAN-MONITOR] auto-recover api_log_id=%d failed: %v", o.ApiLogID, err)
+			continue
+		}
+		recovered++
+	}
+	log.Printf("[REVENUE-ORPHAN-MONITOR] 最近 1 小时内 %d 个孤儿 api_logs，自动补写 %d 行 ApiLogRevenue（剩 %d 写入失败需 admin 排查）",
+		len(orphans), recovered, len(orphans)-recovered)
 }
 
 // cleanupStaleCPACredentials 物理删除已软删（disabled=true）超过 30 天且本地未再见到的 CPA 凭证缓存。

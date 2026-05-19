@@ -105,6 +105,14 @@ func deductGeminiBalanceAndLog(user *database.User, token, modelName string, gem
 		if res.Error != nil {
 			return fmt.Errorf("quota deduct: %w", res.Error)
 		}
+		balanceInsufficient := res.RowsAffected == 0
+		// fix R5：余额不足 → pending_reconcile，ApiLog.Cost / ChargedCost 设 0 防污染报表
+		apiLogCost := price.AmountMicroUSD
+		apiLogChargedCost := billing.ChargedCostMicroUSD
+		if balanceInsufficient {
+			apiLogCost = 0
+			apiLogChargedCost = 0
+		}
 		apiLog := database.ApiLog{
 			UserID:              user.ID,
 			TokenName:           HashTokenForLog(token),
@@ -115,8 +123,8 @@ func deductGeminiBalanceAndLog(user *database.User, token, modelName string, gem
 			CompletionTokens:    price.CompletionTokens,
 			CachedTokens:        price.CachedTokens,
 			ReasoningTokens:     price.ReasoningTokens,
-			Cost:                price.AmountMicroUSD,
-			ChargedCost:         billing.ChargedCostMicroUSD,
+			Cost:                apiLogCost,
+			ChargedCost:         apiLogChargedCost,
 			ModelWeight:         billing.ModelWeight,
 			HealthMultiplier:    billing.HealthMultiplier,
 			BillingRulesVersion: billing.BillingRulesVersion,
@@ -148,7 +156,7 @@ func deductGeminiBalanceAndLog(user *database.User, token, modelName string, gem
 		}).Error; err != nil {
 			return fmt.Errorf("create usage line: %w", err)
 		}
-		if res.RowsAffected == 0 {
+		if balanceInsufficient {
 			// 并发耗光：写 pending reconcile（同 image/video 模式）
 			var current database.User
 			if err := tx.Select("id, quota").First(&current, user.ID).Error; err != nil {

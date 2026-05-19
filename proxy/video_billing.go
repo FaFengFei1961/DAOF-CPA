@@ -121,14 +121,22 @@ func deductVideoBalanceAndLog(user *database.User, token string, req videoGenera
 		if res.Error != nil {
 			return fmt.Errorf("quota deduct: %w", res.Error)
 		}
+		balanceInsufficient := res.RowsAffected == 0
+		// fix R5：余额不足 → pending_reconcile，ApiLog.Cost / ChargedCost 设 0 防污染报表
+		apiLogCost := price.AmountMicroUSD
+		apiLogChargedCost := billing.ChargedCostMicroUSD
+		if balanceInsufficient {
+			apiLogCost = 0
+			apiLogChargedCost = 0
+		}
 		apiLog := database.ApiLog{
 			UserID:              user.ID,
 			TokenName:           HashTokenForLog(token),
 			ModelName:           req.Model,
 			RequestedModel:      billing.RequestedModel,
 			ServedModel:         billing.ServedModel,
-			Cost:                price.AmountMicroUSD,
-			ChargedCost:         billing.ChargedCostMicroUSD,
+			Cost:                apiLogCost,
+			ChargedCost:         apiLogChargedCost,
 			ModelWeight:         billing.ModelWeight,
 			HealthMultiplier:    billing.HealthMultiplier,
 			BillingRulesVersion: billing.BillingRulesVersion,
@@ -164,7 +172,7 @@ func deductVideoBalanceAndLog(user *database.User, token string, req videoGenera
 		}).Error; err != nil {
 			return fmt.Errorf("create usage line: %w", err)
 		}
-		if res.RowsAffected == 0 {
+		if balanceInsufficient {
 			var current database.User
 			if err := tx.Select("id, quota").First(&current, user.ID).Error; err != nil {
 				return fmt.Errorf("user row missing: %w", err)

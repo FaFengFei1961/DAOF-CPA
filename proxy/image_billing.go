@@ -114,6 +114,17 @@ func deductImageBalanceAndLog(user *database.User, token string, req imageGenera
 		if res.Error != nil {
 			return fmt.Errorf("quota deduct: %w", res.Error)
 		}
+		balanceInsufficient := res.RowsAffected == 0
+		// fix R5 (2026-05-19)：余额不足 → 走 pending_reconcile 分支，但 ApiLog
+		// 已 INSERT 且 Cost=raw_cost 会污染 admin 报表 sum(cost) / sum(charged_cost)。
+		// 改为：pending 分支 ApiLog.Cost=0 + ChargedCost=0，真实 raw cost 仅存
+		// BillingEntry.EstimatedCostUSD 供对账员人工查看。
+		apiLogCost := price.AmountMicroUSD
+		apiLogChargedCost := billing.ChargedCostMicroUSD
+		if balanceInsufficient {
+			apiLogCost = 0
+			apiLogChargedCost = 0
+		}
 		apiLog := database.ApiLog{
 			UserID:              user.ID,
 			TokenName:           HashTokenForLog(token),
@@ -127,8 +138,8 @@ func deductImageBalanceAndLog(user *database.User, token string, req imageGenera
 			CacheWrite5mTokens:  price.CacheWrite5mTokens,
 			CacheWrite1hTokens:  price.CacheWrite1hTokens,
 			ReasoningTokens:     price.ReasoningTokens,
-			Cost:                price.AmountMicroUSD,
-			ChargedCost:         billing.ChargedCostMicroUSD,
+			Cost:                apiLogCost,
+			ChargedCost:         apiLogChargedCost,
 			ModelWeight:         billing.ModelWeight,
 			HealthMultiplier:    billing.HealthMultiplier,
 			BillingRulesVersion: billing.BillingRulesVersion,
@@ -151,7 +162,7 @@ func deductImageBalanceAndLog(user *database.User, token string, req imageGenera
 				return fmt.Errorf("create usage line: %w", err)
 			}
 		}
-		if res.RowsAffected == 0 {
+		if balanceInsufficient {
 			var current database.User
 			if err := tx.Select("id, quota").First(&current, user.ID).Error; err != nil {
 				return fmt.Errorf("user row missing: %w", err)
