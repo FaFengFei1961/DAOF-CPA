@@ -300,10 +300,12 @@ func RecordManualBillingState(ctx CommitTextContext, in ManualBillingStateInput)
 //
 // 返回值：
 //   - true: pipeline 完成（含 pending_reconcile / UNAUTHORIZED-FALLBACK / 成功扣费）
-//   - false: 仅当 !IsStream && cost 算不出（checkedCostMicroUSD 溢出）时返回，caller 应 502 返回
-//
-// 该函数 BEHAVIOR-EQUIVALENT 到原闭包 deductQuota；偏离点：
-//   - P8 起额外写 ApiLogUsageLine（原 SSE 路径漏写，WS 路径已写；统一）
+//   - false 路径有两种（caller 应将之视为 5xx）：
+//       1) ctx.User == nil 或 ctx.SelectedPath == nil（编程错误，caller 应返 500/502）
+//       2) !IsStream && checkedCostMicroUSD 溢出（caller 应返 502）
+//     流式路径若 cost 算不出会走 RecordManualBillingState 写 pending_reconcile，
+//     仍返回 false 表示"未扣费成功"；caller 通常已经在 SSE 流内 200 给客户端，
+//     false 返回值只用于非流路径的 HTTP 响应决策。
 func CommitTextTurn(ctx CommitTextContext, usage TextUsage, status int, deliveredBytes int64, apiErrorType, apiErrorMessage string) bool {
 	if ctx.User == nil || ctx.SelectedPath == nil {
 		log.Printf("[BILLING-CRITICAL] CommitTextTurn called with nil User or SelectedPath")

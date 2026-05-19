@@ -1,7 +1,9 @@
 // Package proxy / image_billing.go
 //
 // M-R6 重构（2026-05-19）：从 image_generation.go 1892 行单体抽出 billing 相关
-// helper，纯文件物理拆分。业务逻辑零改动。
+// helper。最初是纯物理拆分（业务逻辑零改动），后续在本文件内补了 H2（window
+// tracking 提前到 CAS 之前）+ R5（balanceInsufficient 时 ApiLog.Cost=0）两处
+// 实质修复——这些是 monolith 时代就有的潜在 bug，拆分时一并修。
 
 package proxy
 

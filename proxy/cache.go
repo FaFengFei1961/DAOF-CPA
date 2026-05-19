@@ -134,7 +134,10 @@ func RefreshUserAuth(userID uint) {
 	}
 }
 
-// SyncCacheConfig 钩子：查询 DB，并在并行锁的保护下暴力覆写高速内存池，耗时远 < 2ms
+// SyncCacheConfig 钩子：5 次 SELECT（channels / channel_models / users /
+// sys_configs / access_tokens）+ 解密 / 索引构建，单次锁交换后写回缓存。
+// 实际耗时随 DB 行数线性增长；users / tokens 在 N>1000 量级时建议监控本函数
+// 的调用频率（默认 60s 一次定时刷新），prefer 增量 update 替代全量 rebuild。
 func SyncCacheConfig() {
 	var channels []database.Channel
 	var channelModels []database.ChannelModel

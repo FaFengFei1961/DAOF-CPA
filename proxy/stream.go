@@ -88,7 +88,9 @@ func readReferralPaidSpendRewardConfig() (int64, int64) {
 	return database.NormalizeReferralRewardBPS(bps), database.NormalizeReferralRewardWindowSeconds(windowSeconds)
 }
 
-// truncForLog 把上游 body 截短供服务端日志使用，不让超大错误 body 撑爆 log。
+// getTransport 按 channel.ProxyURL 构造（或返回缓存的）http.Transport。
+// 空 proxyURL → 直接复用进程级 safeTransport（不带 proxy）。带 proxy 时为每个
+// 唯一 proxyURL 缓存一个独立 Transport，避免每请求重新解析。
 func getTransport(proxyURL string) *http.Transport {
 	if proxyURL == "" {
 		return safeTransport
@@ -143,13 +145,6 @@ func newCancelableUpstreamPostRequest(parent context.Context, upstreamURL string
 	}
 	return req, cancel, nil
 }
-
-// estimateTextPrecheckTokens is a fast, conservative text-token estimate.
-// CJK text stays near 1 rune ≈ 1 token; ASCII/code/JSON uses 2 runes ≈ 1 token
-// to avoid treating every English character as a full token in large Codex contexts.
-
-
-
 
 // ChatCompletionProxyHandler intercept and forward OpenAI /v1/chat/completions stream
 func ChatCompletionProxyHandler(c *fiber.Ctx) error {
@@ -619,12 +614,12 @@ func ChatCompletionProxyHandler(c *fiber.Ctx) error {
 			// 保留这个 cancel 给 SSE 路径，确保最后能取消上游连接
 			successfulUpstreamCancel = upstreamCancel
 			MarkChannelSuccess(selectedPath.ChannelID)
-			// fall through to line 718 outer-loop break
+			// 终止 retry：让控制流离开 switch，由后续 `break` 跳出 outer retry-loop
 		case StatusActionClientError:
 			httpResp = resp
 			successfulUpstreamCancel = upstreamCancel
 			releaseChannelProbe(selectedPath.ChannelID)
-			// fall through to line 718 outer-loop break
+			// 终止 retry：让控制流离开 switch，由后续 `break` 跳出 outer retry-loop
 		case StatusActionRateLimit:
 			upstreamCancel()
 			failedChannels[selectedPath.ChannelID] = true
@@ -733,25 +728,15 @@ retryLoopExhausted:
 		return c.Status(lastErrStatus).Send(lastErrResp)
 	}
 
-	// Helper for Atomic Quota Deduction
+	// 计费/审计辅助：CommitTextTurn / RecordManualBillingState / EstimateDeliveredCost
+	// 等顶层函数在 proxy/text_billing.go 实现；handler 内部用薄包装组装上下文。
 	apiErrorType := ""
 	apiErrorMessage := ""
-	// P8.1：原 inner type 提到包级（proxy/text_billing.go）。这里保留 type alias 让闭包
-	// 内部代码无需大规模 rename；后续 P8.3 把闭包整体抽到顶层时直接用包级类型。
 	type manualBillingStateInput = ManualBillingStateInput
 	type deliveredCostEstimate = DeliveredCostEstimate
-	// P8.2：以下 4 个 closure 改为薄包装，把实现委托到 proxy/text_billing.go
-	// 顶层函数。捕获状态（selectedChan / httpResp / user / startTime / modelName）
-	// 只在调用时按需取，handler 仍可在 retry 循环里换 selectedChan/httpResp。
 	selectedChannelTypeForBilling := func() string {
 		return channelTypeOfSelected(selectedChan)
 	}
-	// upstreamRequestID 闭包在 P8.4 后已不需要（RecordManualBillingState /
-	// CommitTextTurn 都直接用顶层 UpstreamRequestID（ctx.UpstreamHeaders, ...））。
-	// P8.3：writeBillingWithRetry / RecordManualBillingState 全部转为调 text_billing.go
-	// 顶层函数；deductQuota 闭包内的 3-retry 还是 inline，P8.4 抽 CommitTextTurn 时一起搬。
-	// P8.3：recordManualBillingState 整段抽到顶层 RecordManualBillingState；
-	// 闭包改为薄包装，组装 CommitTextContext 后委托。
 	buildCommitContext := func() CommitTextContext {
 		var hdr http.Header
 		if httpResp != nil {
@@ -1156,7 +1141,7 @@ retryLoopExhausted:
 			// fix CRITICAL Sprint1-P0-5：上游 SSE 流结束但未给 usage metadata，
 			// 上游已向客户端交付内容，平台必须记账。旧实现 `deductQuota(..., 502, ...)` 走
 			// failedRequest 分支 cost=0 → "免费消耗"。改为写 pending_reconcile，与客户端
-			// 断连路径（line 1779-1801）口径一致：按 deliveredBytes 估算成本供 admin 对账。
+			// 与 CLIENT-DISCONNECT pending_reconcile 路径口径一致：按 deliveredBytes 估算成本供 admin 对账。
 			log.Printf("[BILLING-PENDING] user=%d model=%s stream upstream omitted usage metadata after delivery; recording pending_reconcile (admin reconcile)", user.ID, modelName)
 			apiErrorType = "upstream_unmetered"
 			apiErrorMessage = "upstream stream omitted usage metadata"

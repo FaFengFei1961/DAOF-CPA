@@ -1,7 +1,8 @@
 // Package proxy / video_billing.go
 //
 // M-R6 重构（2026-05-19）：从 video_generation.go 1131 行抽出 billing 相关
-// helper，纯文件物理拆分。业务逻辑零改动。
+// helper。最初是纯物理拆分，后续在本文件内补了 H2 / R5 / SF-H4 三处实质修复
+// （与 image_billing.go 对齐），不再是"零改动"。
 
 package proxy
 

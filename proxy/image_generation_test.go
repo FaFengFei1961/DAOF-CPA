@@ -57,6 +57,7 @@ func setupImageGenerationTest(t *testing.T) *gorm.DB {
 	SysConfigCache = map[string]string{"subscription_engine_fallback_to_quota": "true"}
 	FlushAllSubscriptionCache()
 	t.Cleanup(func() {
+		WaitForRevenueWrites() // SF-H6: 确保异步 revenue 写都完成再 swap DB
 		database.DB = oldDB
 		AuthCache = oldAuth
 		AuthTokenCache = oldAuthTokens

@@ -278,11 +278,18 @@ func loadOrGenerateCacheSecret() []byte {
 		panic(fmt.Sprintf("moderation cache secret unavailable: crypto/rand failed (%v). Set MODERATION_CACHE_SECRET env var or fix the OS RNG source", err))
 	}
 	hexed := hex.EncodeToString(buf)
-	enc, err := utils.Encrypt(hexed)
-	if err == nil {
-		_ = database.DB.Where("key = ?", "moderation_cache_secret").
+	// fix SF-H5 (2026-05-19)：原 `_ = ...Error` 静默丢弃 → cache secret 没落盘，
+	// 重启后所有 cached moderation 结果解密失败。记 log 让 admin 知道这次必须
+	// 手工排查（DB 写权限 / 表锁等）。
+	enc, encErr := utils.Encrypt(hexed)
+	if encErr != nil {
+		log.Printf("[MODERATION-CACHE-SECRET-ENCRYPT-FAIL] new secret generated but cannot encrypt for storage: %v (will use ephemeral; cached results will not survive restart)", encErr)
+	} else {
+		if err := database.DB.Where("key = ?", "moderation_cache_secret").
 			Assign(database.SysConfig{Key: "moderation_cache_secret", Value: enc}).
-			FirstOrCreate(&database.SysConfig{}).Error
+			FirstOrCreate(&database.SysConfig{}).Error; err != nil {
+			log.Printf("[MODERATION-CACHE-SECRET-PERSIST-FAIL] DB write failed for moderation_cache_secret: %v (using ephemeral; cached results will not survive restart, manual reconcile required)", err)
+		}
 		// SysConfigCache 下一次刷新时会读到新值；当前内存 secret 用本地 hexed
 		SysConfigMutex.Lock()
 		SysConfigCache["moderation_cache_secret"] = hexed

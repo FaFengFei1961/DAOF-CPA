@@ -98,11 +98,18 @@ func TestComputeNextRetryAt(t *testing.T) {
 }
 
 func TestIsRefreshing(t *testing.T) {
-	// 测试不能假设进程其它地方没在跑刷新；只测 load 不 panic + 与底层一致
-	want := creditsRefreshing.Load()
-	got := IsRefreshing()
-	if got != want {
-		t.Errorf("IsRefreshing()=%v want %v", got, want)
+	// fix Phase B (2026-05-19)：原断言把"函数返回值"和"函数自己读的底层值"对比，
+	// 永远成立 → 即使 IsRefreshing 实现写反也不会被发现。改为显式 Store 后断言。
+	prev := creditsRefreshing.Load()
+	t.Cleanup(func() { creditsRefreshing.Store(prev) })
+
+	creditsRefreshing.Store(true)
+	if !IsRefreshing() {
+		t.Error("IsRefreshing()=false after Store(true)")
+	}
+	creditsRefreshing.Store(false)
+	if IsRefreshing() {
+		t.Error("IsRefreshing()=true after Store(false)")
 	}
 }
 

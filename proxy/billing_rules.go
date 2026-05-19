@@ -10,6 +10,7 @@ import (
 	"strconv"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"daof-cpa/database"
@@ -333,12 +334,54 @@ func subscriptionRevenueMicroUSD(chargedCostMicroUSD int64, isGranted bool) int6
 // 全部失败时用专用 [BILLING-REVENUE-LOST] 前缀打 log，便于 admin grep + 手工对账。
 // 这是 best-effort 写入，不阻塞主请求；调用方已成功扣费的请求不会因 revenue 写失败而回滚。
 //
+// fix SF-H6 (2026-05-19)：原实现同步阻塞主请求路径，最坏 50+100+200=350ms 重试
+// sleep 会出现在每个成功请求的尾部 → P95 延迟显著恶化。改为 goroutine 后台写。
+// 失败由 subscription_cron.monitorApiLogRevenueOrphans 自动补救（fix D1）。
+//
 // 指数退避基数 50ms × 2^(retry-1)：retry1=50ms / retry2=100ms / retry3=200ms。
-// 总最坏延迟 ~350ms，远短于 SSE 流关闭的网络 RTT 阈值。
+// 现总延迟仍 ~350ms 但不阻塞调用方。
+// revenueWritersWG 跟踪所有 RecordApiLogRevenue 异步写的进行中 goroutine。
+// 测试可调 WaitForRevenueWrites() 强制等所有挂起写完成（避免 DB swap 后写到旧表）。
+var revenueWritersWG sync.WaitGroup
+
+// WaitForRevenueWrites 等待所有 RecordApiLogRevenue 触发的后台 goroutine 完成。
+// 测试期 setup helper 在 t.Cleanup 里调用，避免 DB swap 后 goroutine 写到旧表。
+func WaitForRevenueWrites() {
+	revenueWritersWG.Wait()
+}
+
+// recordApiLogRevenueSync 标识为 true 时 RecordApiLogRevenue 退化为同步执行。
+// 仅测试用：避免 goroutine 跨测试边界写错 DB。production 保持 false（异步）。
+var recordApiLogRevenueSync atomic.Bool
+
+// SetRecordApiLogRevenueSyncForTest 让测试切换同步模式。defer Set(false) 还原。
+func SetRecordApiLogRevenueSyncForTest(sync bool) {
+	recordApiLogRevenueSync.Store(sync)
+}
+
 func RecordApiLogRevenue(apiLogID uint, source string, effectiveMicroUSD int64, subscriptionID uint) {
 	if apiLogID == 0 {
 		return
 	}
+	if recordApiLogRevenueSync.Load() {
+		recordApiLogRevenueAsyncBody(apiLogID, source, effectiveMicroUSD, subscriptionID)
+		return
+	}
+	revenueWritersWG.Add(1)
+	go recordApiLogRevenueAsync(apiLogID, source, effectiveMicroUSD, subscriptionID)
+}
+
+func recordApiLogRevenueAsync(apiLogID uint, source string, effectiveMicroUSD int64, subscriptionID uint) {
+	defer revenueWritersWG.Done()
+	recordApiLogRevenueAsyncBody(apiLogID, source, effectiveMicroUSD, subscriptionID)
+}
+
+func recordApiLogRevenueAsyncBody(apiLogID uint, source string, effectiveMicroUSD int64, subscriptionID uint) {
+	defer func() {
+		if r := recover(); r != nil {
+			log.Printf("[BILLING-REVENUE-PANIC] log_id=%d source=%s: %v", apiLogID, source, r)
+		}
+	}()
 	revenue := database.ApiLogRevenue{
 		ApiLogID:                 apiLogID,
 		RevenueSource:            source,
@@ -346,12 +389,10 @@ func RecordApiLogRevenue(apiLogID uint, source string, effectiveMicroUSD int64, 
 		SubscriptionID:           subscriptionID,
 		RecordedAt:               time.Now(),
 	}
-	// 初次写入
-	err := database.DB.Create(&revenue).Error
-	if err == nil {
+	if err := database.DB.Create(&revenue).Error; err == nil {
 		return
 	}
-	// 3 次重试，指数退避：50ms × 2^(retry-1) = 50 / 100 / 200ms
+	var err error
 	for retry := 1; retry <= 3; retry++ {
 		time.Sleep(time.Duration(50<<(retry-1)) * time.Millisecond)
 		err = database.DB.Create(&revenue).Error
@@ -359,7 +400,7 @@ func RecordApiLogRevenue(apiLogID uint, source string, effectiveMicroUSD int64, 
 			return
 		}
 	}
-	log.Printf("[BILLING-REVENUE-LOST] log_id=%d source=%s effective=%d sub_id=%d write failed after 1+3 retries: %v — manual reconcile required",
+	log.Printf("[BILLING-REVENUE-LOST] log_id=%d source=%s effective=%d sub_id=%d write failed after 1+3 retries: %v — orphan monitor will auto-recover",
 		apiLogID, source, effectiveMicroUSD, subscriptionID, err)
 }
 
