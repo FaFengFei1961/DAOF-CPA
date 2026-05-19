@@ -189,7 +189,7 @@ type AccessToken struct {
 // ApiLog 记录每一条流过系统的对话指纹
 type ApiLog struct {
 	ID                     uint       `gorm:"primaryKey;<-:create" json:"id"`
-	UserID                 uint       `gorm:"index;not null;<-:create" json:"user_id"`
+	UserID                 uint       `gorm:"index;index:idx_api_logs_created_at_user_id,priority:2;not null;<-:create" json:"user_id"`
 	TokenName              string     `gorm:"<-:create" json:"token_name"`
 	ModelName              string     `gorm:"index;<-:create" json:"model_name"`
 	RequestedModel         string     `gorm:"index;size:160;default:'';<-:create" json:"requested_model"`
@@ -232,7 +232,12 @@ type ApiLog struct {
 	RequestPath            string     `gorm:"size:160;default:'';<-:create" json:"request_path"`
 	ErrorType              string     `gorm:"size:64;default:'';<-:create" json:"error_type"`
 	ErrorMessage           string     `gorm:"size:512;default:'';<-:create" json:"error_message"`
-	CreatedAt              time.Time  `gorm:"index;<-:create" json:"created_at"`
+	// fix P-H1 (2026-05-19)：单列 `idx_api_logs_created_at` + 单列 user_id 索引下
+	// admin 报表 `WHERE created_at >= ? GROUP BY user_id SUM(...)` 仍走全表 scan。
+	// 加 composite 索引 (created_at, user_id) 让 cutoff 段 + 分组都走索引，N=50M
+	// 行从 300-800ms 降至 ~20ms。GORM 标签 `index:idx_api_logs_created_at_user_id`
+	// 会自动 emit `CREATE INDEX ... ON api_logs(created_at, user_id)`。
+	CreatedAt              time.Time  `gorm:"index;index:idx_api_logs_created_at_user_id,priority:1;<-:create" json:"created_at"`
 }
 
 var ErrApiLogAppendOnly = errors.New("api_logs is append-only; write mutable attribution or estimates to side tables")

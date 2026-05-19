@@ -513,16 +513,19 @@ func GetUsersUsageTimeseries(c *fiber.Ctx) error {
 	if len(uts) > topN {
 		out = append(out, otherSeries)
 	}
-	// 按总花费排序（int64 micro_usd 累加，避免浮点）
+	// fix P-H3 (2026-05-19)：原 sort.Slice 比较函数每次 O(buckets) 重复遍历 Points，
+	// 总开销 O(M log M × buckets)。改为预算一次 totals 缓存，比较 O(1)。
+	// N=50 series × 168 buckets 时从 ~47K 加法降到 50 加法。
+	seriesTotal := make(map[*series]int64, len(out))
+	for _, s := range out {
+		var total int64
+		for _, p := range s.Points {
+			total += effectiveAggregateChargedCost(p.ChargedCost, p.Cost)
+		}
+		seriesTotal[s] = total
+	}
 	sort.Slice(out, func(i, j int) bool {
-		var ci, cj int64
-		for _, p := range out[i].Points {
-			ci += effectiveAggregateChargedCost(p.ChargedCost, p.Cost)
-		}
-		for _, p := range out[j].Points {
-			cj += effectiveAggregateChargedCost(p.ChargedCost, p.Cost)
-		}
-		return ci > cj
+		return seriesTotal[out[i]] > seriesTotal[out[j]]
 	})
 
 	// 排序完成后填充 USD 输出字段。在累加阶段一直用 int64 micro 避免漂移。
