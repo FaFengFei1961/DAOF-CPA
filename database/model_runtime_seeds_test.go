@@ -81,8 +81,10 @@ func TestSeedModelRuntimeDefaults_ReproducibleFactoryModelPool(t *testing.T) {
 	if err := DB.Where("model_id = ?", "gpt-image-2").First(&imageCatalog).Error; err != nil {
 		t.Fatalf("load gpt image catalog: %v", err)
 	}
-	if !imageCatalog.Supported || !imageCatalog.Public || imageCatalog.Category != ModelCategoryImage {
-		t.Fatalf("gpt-image-2 catalog should now be supported/public: %#v", imageCatalog)
+	// 2026-05-19 业务决策：图片/视频 catalog 默认 Supported=false / Public=false，
+	// handler / pricing 代码仍保留，admin 后续如要重启在 admin UI 切回 Supported=true。
+	if imageCatalog.Supported || imageCatalog.Public || imageCatalog.Category != ModelCategoryImage {
+		t.Fatalf("gpt-image-2 catalog must be Supported=false + Public=false: %#v", imageCatalog)
 	}
 
 	var xaiImage ChannelModel
@@ -107,8 +109,8 @@ func TestSeedModelRuntimeDefaults_ReproducibleFactoryModelPool(t *testing.T) {
 	if err := DB.Where("model_id = ?", "grok-imagine-video").First(&videoCatalog).Error; err != nil {
 		t.Fatalf("load video catalog: %v", err)
 	}
-	if !videoCatalog.Supported || !videoCatalog.Public || videoCatalog.Category != ModelCategoryVideo {
-		t.Fatalf("video catalog should now be supported/public: %#v", videoCatalog)
+	if videoCatalog.Supported || videoCatalog.Public || videoCatalog.Category != ModelCategoryVideo {
+		t.Fatalf("grok-imagine-video catalog must be Supported=false + Public=false: %#v", videoCatalog)
 	}
 
 	// Gemini image runtime via CPA antigravity 路径 DAOF 当前不支持，但为了 admin UI 显示
