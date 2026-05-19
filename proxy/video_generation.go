@@ -564,12 +564,12 @@ func normalizeVideoSizeOptions(raw string) (size string, aspectRatio string, res
 		return defaultVideoSize, defaultVideoAspectRatio, defaultVideoResolution, nil
 	}
 	switch strings.ToLower(size) {
-	case "720x1280", "1024x1792":
+	case "720x1280":
 		return size, "9:16", "720p", nil
-	case "1280x720", "1792x1024":
+	case "1280x720":
 		return size, "16:9", "720p", nil
 	default:
-		return "", "", "", fmt.Errorf("size must be one of 720x1280, 1280x720, 1024x1792, or 1792x1024")
+		return "", "", "", fmt.Errorf("size must be 720x1280 or 1280x720")
 	}
 }
 

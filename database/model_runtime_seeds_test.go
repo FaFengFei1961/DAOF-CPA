@@ -111,19 +111,14 @@ func TestSeedModelRuntimeDefaults_ReproducibleFactoryModelPool(t *testing.T) {
 		t.Fatalf("video catalog should now be supported/public: %#v", videoCatalog)
 	}
 
-	var oldGeminiImage int64
-	if err := DB.Model(&ModelCatalog{}).Where("model_id = ?", "gemini-3.1-flash-image").Count(&oldGeminiImage).Error; err != nil {
-		t.Fatalf("count old gemini image id: %v", err)
+	// Gemini image runtime is not exposed through CLIProxyAPI's /v1/images/*
+	// surface yet, so no Gemini image catalog row should be seeded.
+	var geminiImageCount int64
+	if err := DB.Model(&ModelCatalog{}).Where("provider_key = ? AND category = ?", "google", ModelCategoryImage).Count(&geminiImageCount).Error; err != nil {
+		t.Fatalf("count gemini image catalog rows: %v", err)
 	}
-	if oldGeminiImage != 0 {
-		t.Fatalf("old non-official gemini image id should not be seeded")
-	}
-	var geminiImage ModelCatalog
-	if err := DB.Where("model_id = ?", "gemini-3.1-flash-image-preview").First(&geminiImage).Error; err != nil {
-		t.Fatalf("load official gemini image catalog: %v", err)
-	}
-	if geminiImage.Category != ModelCategoryImage || geminiImage.Supported {
-		t.Fatalf("unexpected gemini image catalog: %#v", geminiImage)
+	if geminiImageCount != 0 {
+		t.Fatalf("gemini image runtime not wired upstream; should not be seeded (got %d rows)", geminiImageCount)
 	}
 
 	var pricingCount int64
