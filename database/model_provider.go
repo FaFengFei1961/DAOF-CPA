@@ -33,20 +33,24 @@ const (
 	EndpointResponsesWebsocket = "/v1/responses/ws"
 )
 
-// AllowedImageEndpoints 是图像类 ChannelModel.AllowedEndpoints 的合法子集。
+// allowedImageEndpoints 是图像类 ChannelModel.AllowedEndpoints 的合法子集。
 // admin 可任意组合开关：generations / edits / Gemini native。Gemini image / Imagen
 // 必须用 EndpointGeminiNative；OpenAI/xAI 图像走 generations/edits；admin 也可让
 // 同一个 model 同时挂多端点（不常见但合法）。
-var AllowedImageEndpoints = []string{EndpointImagesGenerations, EndpointImagesEdits, EndpointGeminiNative}
+//
+// 仅 package-internal：外部代码改 ChannelModel.AllowedEndpoints 应通过 admin
+// API（controller/channel_model.go），那条路径会经 ValidateChannelModelActivation
+// 自动验证。
+var allowedImageEndpoints = []string{EndpointImagesGenerations, EndpointImagesEdits, EndpointGeminiNative}
 
-// AllowedVideoEndpoints 是视频类 ChannelModel.AllowedEndpoints 的合法子集。
-var AllowedVideoEndpoints = []string{EndpointVideosGenerations, EndpointVideosEdits, EndpointVideosExtensions}
+// allowedVideoEndpoints 是视频类 ChannelModel.AllowedEndpoints 的合法子集。
+// 同 allowedImageEndpoints，package-internal。
+var allowedVideoEndpoints = []string{EndpointVideosGenerations, EndpointVideosEdits, EndpointVideosExtensions}
 
-// AllowedTextEndpoints 是文本类 ChannelModel.AllowedEndpoints 的合法子集。
-// text 类一般不强制 endpoint（走 /v1/chat/completions 等通用入口），但 admin 启用
-// Gemini native 时需要标 /v1beta/models 让 DAOF 路由识别；启用 Codex Responses
-// WebSocket（Codex CLI / 桌面端）时需要标 /v1/responses/ws。
-var AllowedTextEndpoints = []string{EndpointGeminiNative, EndpointResponsesWebsocket}
+// 注：text 类没有独立的 endpoint subset 限制——文本走 /v1/chat/completions 等通用
+// 入口，路径由 main.go 直接路由，无需 ChannelModel.AllowedEndpoints 子集校验。
+// admin 启用 Gemini native / Codex WS 时直接挂端点常量 EndpointGeminiNative /
+// EndpointResponsesWebsocket 即可。历史 AllowedTextEndpoints 变量从未被引用，已删除。
 
 var (
 	ErrImageGenerationUnsupported    = errors.New("image generation is not supported by the runtime yet")
@@ -497,7 +501,7 @@ func ValidateChannelModelActivation(cm *ChannelModel) error {
 		if !IsRuntimeVideoModelSupported(cm.ModelID) {
 			return ErrVideoGenerationUnsupported
 		}
-		if !ChannelModelAllowsEndpointsSubset(cm, AllowedVideoEndpoints) {
+		if !ChannelModelAllowsEndpointsSubset(cm, allowedVideoEndpoints) {
 			return ErrVideoModelRequiresEndpoint
 		}
 		if cm.BillingMode != BillingModeVideoSecond {
@@ -518,7 +522,7 @@ func ValidateChannelModelActivation(cm *ChannelModel) error {
 		if !IsRuntimeImageModelSupported(cm.ModelID) {
 			return ErrImageGenerationUnsupported
 		}
-		if !ChannelModelAllowsEndpointsSubset(cm, AllowedImageEndpoints) {
+		if !ChannelModelAllowsEndpointsSubset(cm, allowedImageEndpoints) {
 			return ErrImageModelRequiresEndpoint
 		}
 		switch cm.BillingMode {

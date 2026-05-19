@@ -37,9 +37,9 @@ var SubscriptionSysConfigDefaults = map[string]string{
 	"subscription_expiring_warn_days":    "3",
 	"subscription_expired_grace_seconds": "60",
 
-	// ── ApiLog 自动清理 ──
-	"apilog_retention_days":     "90",   // 保留最近 N 天，0=不清理
-	"apilog_cleanup_batch_size": "5000", // 单次清理的最大行数（避免一次锁表过久）
+	// 注：ApiLog 不做自动清理——必须 append-only 保审计链。
+	// 历史 key apilog_retention_days / apilog_cleanup_batch_size 已彻底移除。
+	// 若未来需要 archival，请新加独立 archive cron + 显式 sysconfig key。
 
 	// ── 三段消费模型默认值（admin 全局配置，影响新用户初始化）──
 	"balance_consume_default_enabled":         "false",   // 余额消费默认关闭（最严策略）

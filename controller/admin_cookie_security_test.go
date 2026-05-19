@@ -99,9 +99,9 @@ func TestGodSetup_BlockedWhenAdminExists(t *testing.T) {
 func TestAdminLogout_RevokesAllSessions(t *testing.T) {
 	setupOAuthControllerTestDB(t)
 	admin := database.User{
-		Username: "legacy_admin",
+		Username: "session_revoke_admin",
 		Role:     "admin",
-		Token:    "sk-legacy-admin",
+		Token:    "sk-session-revoke-admin",
 		Status:   1,
 	}
 	if err := database.DB.Create(&admin).Error; err != nil {

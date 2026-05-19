@@ -10,7 +10,7 @@
 *   **`proxy`（流式并发大动脉引擎）：`79.7%`**
     *   达成原因：重构并新增了深度的 `cache_test.go` 和 `stream_test.go`。覆盖了以下极其苛刻的场景：
         1. 发生限流 (429) 无缝切入备用渠道 (Backend B)。
-        2. 全双工高宽带 SSE (50MB Scanner Limit) 强拆解计算真实扣费的异步回调 `deductQuota` 测试。
+        2. 全双工高宽带 SSE (50MB Scanner Limit) 强拆解计算真实扣费的异步回调 `CommitTextTurn`（P8 后从 stream.go deductQuota 闭包抽到 text_billing.go，SSE/WS 共用）测试。
         3. 内存隔离（AuthCache，ChannelMapCache，RouteCache）针对并发上锁拉取的有效性证明。
 *   **`utils`（安全及编码底层）：`75.0%`**
     *   达成原因：引入对 AES 密钥指纹未存在时创建、随机数生成崩溃等沙箱测试。

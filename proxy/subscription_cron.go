@@ -22,10 +22,9 @@ import (
 )
 
 var (
-	subCronDone                 chan struct{}
-	subCronOnce                 sync.Once
-	subCronStop                 sync.Once
-	apiLogCleanupDisabledLogged bool
+	subCronDone chan struct{}
+	subCronOnce sync.Once
+	subCronStop sync.Once
 )
 
 // StartSubscriptionCron 启动订阅 cron。main.go 启动时调用一次。
@@ -73,7 +72,8 @@ func runSubscriptionCronOnce() {
 	expireSubscriptions()
 	ActivateDueBillingRuleRevisions()
 	notifyExpiringSubscriptions()
-	cleanupOldApiLogs()
+	// 注：ApiLog 不做自动清理——核心审计事实表必须 append-only。
+	// 如未来需 retention，先设计 archive 表 / 文件导出，再实现独立 archival cron。
 	cleanupClosedTickets()
 	cleanupStaleCPACredentials()
 	monitorApiLogRevenueOrphans()
@@ -172,21 +172,6 @@ func cleanupClosedTickets() {
 	// 触达批次上限说明还有更多积压，下一轮会继续清；记录便于运维观察
 	if len(ids) >= ticketCleanupBatchLimit {
 		log.Printf("[TICKET-CRON] batch limit reached (%d), more eligible tickets remain — will continue next tick", ticketCleanupBatchLimit)
-	}
-}
-
-// cleanupOldApiLogs 暂停 ApiLog 物理清理。
-//
-// ApiLog 是核心审计事实表，必须 append-only。旧实现按 retention 直接 DELETE，
-// 会破坏审计链；后续需要先设计 archive table / 文件导出机制，再恢复保留期清理。
-func cleanupOldApiLogs() {
-	retentionDays, _ := strconv.Atoi(getStrConfigStr("apilog_retention_days", "90"))
-	if retentionDays <= 0 {
-		return
-	}
-	if !apiLogCleanupDisabledLogged {
-		apiLogCleanupDisabledLogged = true
-		log.Printf("[SUB-CRON] api_logs cleanup disabled for append-only audit; retention_days=%d ignored until archival is implemented", retentionDays)
 	}
 }
 
