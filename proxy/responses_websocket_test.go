@@ -553,3 +553,74 @@ func TestSelectResponsesWebsocketChannel_WeightedRandomDistribution(t *testing.T
 	}
 }
 
+// TestResponsesWebsocket_FrameRateLimitClosesConnection 固化 SEC-FIX-H2：
+// 单连接超 wsClientFramesPerMinute → 服务端关连接 + 写 rate_limit_exceeded 错误帧。
+func TestResponsesWebsocket_FrameRateLimitClosesConnection(t *testing.T) {
+	db := setupImageGenerationTest(t)
+
+	// 上游 echo server：单纯收帧不算 — 我们只测客户端→上游方向的限流
+	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		upgrader := gorillaws.Upgrader{CheckOrigin: func(r *http.Request) bool { return true }}
+		conn, err := upgrader.Upgrade(w, r, nil)
+		if err != nil {
+			return
+		}
+		defer conn.Close()
+		// 一直 read 直到客户端断开（pumpClientToUpstream 把帧转过来）
+		for {
+			if _, _, err := conn.ReadMessage(); err != nil {
+				return
+			}
+		}
+	}))
+	t.Cleanup(upstream.Close)
+
+	user := database.User{ID: 901, Username: "ws-ratelimit", Token: "sk-ws-ratelimit", Status: 1, Quota: 1_000_000_000, BalanceConsumeEnabled: true}
+	if err := db.Create(&user).Error; err != nil {
+		t.Fatalf("seed user: %v", err)
+	}
+	AuthCache[user.Token] = &user
+
+	ChannelMapCache[171] = &database.Channel{ID: 171, Type: ChannelTypeCLIProxy, BaseURL: upstream.URL, Key: "k", Status: 1}
+	RouteCache["gpt-5-codex"] = []*database.ChannelModel{{
+		ID: 171, ChannelID: 171, ModelID: "gpt-5-codex",
+		ModelCategory:    database.ModelCategoryText,
+		BillingMode:      database.BillingModeToken,
+		AllowedEndpoints: `["/v1/responses/ws"]`,
+		Weight:           1,
+		Status:           1,
+	}}
+
+	base, _ := startFiberWithWebsocket(t)
+	hdr := http.Header{}
+	hdr.Set("Authorization", "Bearer "+user.Token)
+	client, _, err := gorillaws.DefaultDialer.Dial(base+"/v1/responses", hdr)
+	if err != nil {
+		t.Fatalf("dial: %v", err)
+	}
+	defer client.Close()
+
+	// 快速发 wsClientFramesPerMinute+1 帧
+	create := []byte(`{"type":"response.create","model":"gpt-5-codex"}`)
+	closed := false
+	for i := 0; i < wsClientFramesPerMinute+5; i++ {
+		if err := client.WriteMessage(gorillaws.TextMessage, create); err != nil {
+			closed = true
+			break
+		}
+	}
+	// 给服务端反应时间
+	_ = client.SetReadDeadline(time.Now().Add(3 * time.Second))
+	// 期望收到 rate_limit_exceeded 错误帧 或 连接被关
+	mt, payload, err := client.ReadMessage()
+	if err != nil {
+		// 服务端关连接是有效 SEC-FIX-H2 表现
+		closed = true
+	} else if mt == gorillaws.TextMessage && strings.Contains(string(payload), "rate_limit_exceeded") {
+		closed = true
+	}
+	if !closed {
+		t.Errorf("expected rate_limit_exceeded error frame or connection close after %d frames; got msg=%s err=%v", wsClientFramesPerMinute+5, payload, err)
+	}
+}
+

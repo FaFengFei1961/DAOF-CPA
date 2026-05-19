@@ -35,6 +35,7 @@ import (
 	"io"
 	"log"
 	"net/http"
+	"net/url"
 	"strconv"
 	"strings"
 	"time"
@@ -370,8 +371,9 @@ func forwardGeminiListModels(c *fiber.Ctx, user *database.User, token, clientIP 
 		}})
 	}
 	upstreamURL := strings.TrimRight(ch.BaseURL, "/") + database.EndpointGeminiNative
+	// SEC-FIX-M1: ?alt= 值需 url.QueryEscape，防客户端注入额外 query 参数 / 路径 segment
 	if alt := strings.TrimSpace(c.Query("alt")); alt != "" {
-		upstreamURL += "?alt=" + alt
+		upstreamURL += "?alt=" + url.QueryEscape(alt)
 	}
 	upstreamCtx, upstreamCancel := context.WithCancel(c.Context())
 	defer upstreamCancel()
@@ -725,9 +727,11 @@ func callGeminiNativeUpstream(c *fiber.Ctx, modelName string, geminiReq geminiNa
 			last = imageErr(502, "channel_misconfigured", "Gemini native is only supported through CLIProxyAPI channels")
 			continue
 		}
-		urlPath := fmt.Sprintf("%s/%s:%s", strings.TrimRight(ch.BaseURL, "/")+database.EndpointGeminiNative, modelName, geminiReq.Method)
+		// SEC-FIX-M2: modelName 经 DB 白名单校验，但纵深防御加 url.PathEscape；
+		// SEC-FIX-M1: alt 经 url.QueryEscape 防 query 注入
+		urlPath := fmt.Sprintf("%s/%s:%s", strings.TrimRight(ch.BaseURL, "/")+database.EndpointGeminiNative, url.PathEscape(modelName), geminiReq.Method)
 		if geminiReq.Alt != "" {
-			urlPath += "?alt=" + geminiReq.Alt
+			urlPath += "?alt=" + url.QueryEscape(geminiReq.Alt)
 		}
 		upstreamCtx, upstreamCancel := context.WithCancel(c.Context())
 		httpReq, err := http.NewRequestWithContext(upstreamCtx, http.MethodPost, urlPath, bytes.NewReader(body))

@@ -52,7 +52,24 @@ const (
 	wsClientReadLimit      = 16 * 1024 * 1024 // 16MB / frame；与 CPA 上游一致
 	wsCompletedEventType   = "response.completed"
 	wsResponseCreateType   = "response.create"
+	// SEC-FIX-M3：WS session 硬上限，防止 idle 连接长期占用 goroutine + 上游 socket
+	wsMaxSessionDuration = 1 * time.Hour
+	// SEC-FIX-M3：客户端 read idle 上限——5 分钟没收到任何帧（心跳 pong / 业务帧）→ 主动关
+	wsReadIdleTimeout = 5 * time.Minute
+	// SEC-FIX-H2：单 WS 连接每分钟最多接受这么多客户端帧（response.create / append 等）
+	// 60/min ≈ 1/sec，远超合理 Codex CLI / 桌面端使用；超过 → 主动关连接
+	wsClientFramesPerMinute = 60
 )
+
+// SEC-FIX-H1：上游 WS 拨号必须走 safeDialContext，防 channel.BaseURL 经 DNS rebinding
+// 解析到 169.254.169.254（云元数据服务）→ 凭证窃取。gorilla/websocket Dialer 通过
+// NetDialContext 字段允许注入自定义 dialer；这里复用 url_safety.go 同一份防御逻辑。
+var wsUpstreamDialer = &gorillaws.Dialer{
+	NetDialContext: safeDialContext,
+	HandshakeTimeout: wsUpstreamDialTimeout,
+	ReadBufferSize:   4096,
+	WriteBufferSize:  4096,
+}
 
 // Locals keys to pass pre-upgrade state into the upgraded handler.
 const (
@@ -336,7 +353,7 @@ func runResponsesWebsocketBridge(conn *fiberws.Conn) {
 	}
 	conn.SetReadLimit(wsClientReadLimit)
 
-	// 2. 拨号上游
+	// 2. 拨号上游（SEC-FIX-H1：用 wsUpstreamDialer with safeDialContext）
 	dialCtx, dialCancel := context.WithTimeout(context.Background(), wsUpstreamDialTimeout)
 	defer dialCancel()
 	upstreamHeader := http.Header{}
@@ -347,7 +364,7 @@ func runResponsesWebsocketBridge(conn *fiberws.Conn) {
 		}
 	}
 
-	upstreamConn, upstreamResp, err := gorillaws.DefaultDialer.DialContext(dialCtx, upstreamWSURL, upstreamHeader)
+	upstreamConn, upstreamResp, err := wsUpstreamDialer.DialContext(dialCtx, upstreamWSURL, upstreamHeader)
 	if err != nil {
 		status := http.StatusBadGateway
 		body := ""
@@ -362,8 +379,8 @@ func runResponsesWebsocketBridge(conn *fiberws.Conn) {
 	}
 	defer upstreamConn.Close()
 
-	// 3. 双向 pump
-	pumpCtx, pumpCancel := context.WithCancel(context.Background())
+	// 3. 双向 pump（SEC-FIX-M3：会话硬上限 wsMaxSessionDuration，防长期挂连接）
+	pumpCtx, pumpCancel := context.WithTimeout(context.Background(), wsMaxSessionDuration)
 	defer pumpCancel()
 
 	state := &websocketBridgeState{
@@ -424,10 +441,15 @@ type websocketBridgeState struct {
 // pumpClientToUpstream 把客户端帧透传到上游，并提取首个 response.create 的 model。
 func pumpClientToUpstream(ctx context.Context, client *fiberws.Conn, upstream *gorillaws.Conn, state *websocketBridgeState, cancel context.CancelFunc) {
 	defer cancel()
+	// SEC-FIX-H2: 简单 sliding-window 帧限流——超过 wsClientFramesPerMinute 的客户端直接断开。
+	// 用环形数组记最近 N 帧时间戳；新帧来时把超过 1min 的踢掉，再判余量。
+	frameTimestamps := make([]time.Time, 0, wsClientFramesPerMinute+1)
 	for {
 		if ctx.Err() != nil {
 			return
 		}
+		// SEC-FIX-M3: 客户端 read idle 上限——5min 无任何帧 → 触发 timeout 关连接
+		_ = client.SetReadDeadline(time.Now().Add(wsReadIdleTimeout))
 		msgType, payload, err := client.ReadMessage()
 		if err != nil {
 			if !gorillaws.IsCloseError(err, gorillaws.CloseNormalClosure, gorillaws.CloseGoingAway, gorillaws.CloseNoStatusReceived) {
@@ -438,6 +460,27 @@ func pumpClientToUpstream(ctx context.Context, client *fiberws.Conn, upstream *g
 		if msgType != gorillaws.TextMessage && msgType != gorillaws.BinaryMessage {
 			continue
 		}
+
+		// SEC-FIX-H2: per-frame 限流（HTTP limiter 只在升级时计数，升级后帧速率无防御）
+		now := time.Now()
+		cutoff := now.Add(-1 * time.Minute)
+		// 踢掉过期 timestamps
+		trimmed := frameTimestamps[:0]
+		for _, t := range frameTimestamps {
+			if t.After(cutoff) {
+				trimmed = append(trimmed, t)
+			}
+		}
+		frameTimestamps = trimmed
+		if len(frameTimestamps) >= wsClientFramesPerMinute {
+			log.Printf("[WS-CLIENT-IN-RATELIMIT] user=%d exceeded %d frames/min — closing", state.user.ID, wsClientFramesPerMinute)
+			// 礼貌通知客户端再关
+			frame, _ := json.Marshal(fiber.Map{"type": "error", "error": fiber.Map{"type": "rate_limit_exceeded", "message": fmt.Sprintf("frame rate exceeded %d/min", wsClientFramesPerMinute)}})
+			_ = client.SetWriteDeadline(time.Now().Add(wsWriteDeadline))
+			_ = client.WriteMessage(gorillaws.TextMessage, frame)
+			return
+		}
+		frameTimestamps = append(frameTimestamps, now)
 
 		// 嗅探 response.create 的 model 字段（仅用于审计 + pending_reconcile 兜底）
 		eventType := gjson.GetBytes(payload, "type").String()
