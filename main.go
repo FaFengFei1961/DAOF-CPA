@@ -111,6 +111,24 @@ func main() {
 	// 路由树 (Routing)
 	// ===========================
 
+	// LLM 代理入口先按 IP 做粗限流，挡随机 Bearer token 扫描造成的 DB 写入放大。
+	// 阈值故意很高（~83 RPS/IP），避免误伤正常多 agent / CLI 编排；真实用户仍由下方 token 限流约束。
+	llmIPCoarseLimiter := limiter.New(limiter.Config{
+		Max:        5000,
+		Expiration: 1 * time.Minute,
+		KeyGenerator: func(c *fiber.Ctx) string {
+			return "llm-ip-coarse:" + utils.RealClientIP(c)
+		},
+		LimitReached: func(c *fiber.Ctx) error {
+			return c.Status(429).JSON(fiber.Map{
+				"error": fiber.Map{
+					"type":    "rate_limit_exceeded",
+					"message": "Too many requests from this IP. Limit: 5000/min. Please slow down.",
+				},
+			})
+		},
+	})
+
 	// fix CRITICAL C-B1（codex 第二十一轮）：LLM 代理入口（/v1/*）原本无任何限流，
 	// 公开后任何用户的 token 泄漏 / 恶意脚本扫单 / 死循环调用都会瞬间打爆上游网关 + 拖垮 SQLite
 	// 写锁 + 烧账单链路。按 token 优先 + IP 兜底建限流：每个 token 每分钟最多 600 次（~10 RPS），
@@ -137,18 +155,46 @@ func main() {
 		},
 	})
 	// OpenAI 格式代理统一网关
-	app.All("/v1/chat/completions", llmProxyLimiter, proxy.ChatCompletionProxyHandler)
-	app.All("/v1/responses", llmProxyLimiter, proxy.ChatCompletionProxyHandler) // 兼容最新 OpenAI Agentic Responses API
+	app.All("/v1/chat/completions", llmIPCoarseLimiter, llmProxyLimiter, proxy.ChatCompletionProxyHandler)
+	// OpenAI legacy completions（GPT-3.5 之前的 prompt-based API；CPA 仍支持，
+	// DAOF 透传给 ChatCompletionProxyHandler 走同一计费链路）
+	app.Post("/v1/completions", llmIPCoarseLimiter, llmProxyLimiter, proxy.ChatCompletionProxyHandler)
+	// /v1/responses 多协议路由：
+	//   - GET + WebSocket Upgrade 头 → Codex Responses WebSocket v2 桥接（P7）
+	//   - 其他方法 / 普通 GET → OpenAI Agentic Responses API（SSE / 非流）
+	// fiber 不支持单 path 多 method 同时挂不同 handler，所以分两条注册：
+	app.Get("/v1/responses", llmIPCoarseLimiter, llmProxyLimiter, proxy.ResponsesWebsocketProxyHandler)
+	app.Post("/v1/responses", llmIPCoarseLimiter, llmProxyLimiter, proxy.ChatCompletionProxyHandler)
+	app.Post("/v1/responses/compact", llmIPCoarseLimiter, llmProxyLimiter, proxy.ChatCompletionProxyHandler)
+	app.Post("/v1/images/generations", llmIPCoarseLimiter, llmProxyLimiter, proxy.ImageGenerationProxyHandler)
+	app.Post("/v1/images/edits", llmIPCoarseLimiter, llmProxyLimiter, proxy.ImageEditProxyHandler)
+	app.Post("/v1/videos/generations", llmIPCoarseLimiter, llmProxyLimiter, proxy.VideoGenerationProxyHandler)
+	app.Post("/v1/videos/edits", llmIPCoarseLimiter, llmProxyLimiter, proxy.VideoEditProxyHandler)
+	app.Post("/v1/videos/extensions", llmIPCoarseLimiter, llmProxyLimiter, proxy.VideoExtensionProxyHandler)
+	app.Get("/v1/videos/:request_id", llmIPCoarseLimiter, llmProxyLimiter, proxy.VideoRetrieveProxyHandler)
+	// Codex CLI 默认 base_url 兼容（与 /v1/responses 调用同一 handler，让 user 不必
+	// 改 chatgpt_base_url 配置）
+	codexDirect := app.Group("/backend-api/codex", llmIPCoarseLimiter, llmProxyLimiter)
+	// 同 /v1/responses 拆法：GET → WebSocket，POST → SSE
+	codexDirect.Get("/responses", proxy.ResponsesWebsocketProxyHandler)
+	codexDirect.Post("/responses", proxy.ChatCompletionProxyHandler)
+	codexDirect.Post("/responses/compact", proxy.ChatCompletionProxyHandler)
+	// Google Gemini 兼容 API 代理（P6）：generateContent / streamGenerateContent /
+	// countTokens（Imagen 内部走 :predict，CPA 自动翻译为 Gemini 格式）+ listModels
+	// (GET /v1beta/models 无 action 透传 CPA 模型列表)。客户端用 Google AI SDK /
+	// @google/generative-ai 直接调 DAOF；admin 必须在 ChannelModel.AllowedEndpoints
+	// 中加 /v1beta/models 启用对应 model。
+	app.Get("/v1beta/models", llmIPCoarseLimiter, llmProxyLimiter, proxy.GeminiNativeProxyHandler)
+	app.Post("/v1beta/models/*", llmIPCoarseLimiter, llmProxyLimiter, proxy.GeminiNativeProxyHandler)
+	app.Get("/v1beta/models/*", llmIPCoarseLimiter, llmProxyLimiter, proxy.GeminiNativeProxyHandler)
 	// Anthropic 原生 Messages API（Claude Code / Anthropic SDK 默认调用此路径）
-	app.All("/v1/messages", llmProxyLimiter, proxy.ChatCompletionProxyHandler)
+	app.All("/v1/messages", llmIPCoarseLimiter, llmProxyLimiter, proxy.ChatCompletionProxyHandler)
 	// 容错：客户端 base URL 误填为 ".../v1" 时 SDK 会拼出 /v1/v1/messages，仍正确路由
-	app.All("/v1/v1/messages", llmProxyLimiter, proxy.ChatCompletionProxyHandler)
-	app.All("/v1/messages/count_tokens", llmProxyLimiter, proxy.ChatCompletionProxyHandler)
-	app.All("/v1/v1/messages/count_tokens", llmProxyLimiter, proxy.ChatCompletionProxyHandler)
-	// Gemini 原生 Generative Language API（Gemini CLI / Google GenAI SDK）
-	app.All("/v1beta/models/:modelAction", llmProxyLimiter, proxy.ChatCompletionProxyHandler)
-	app.All("/v1/models/:modelAction", llmProxyLimiter, proxy.ChatCompletionProxyHandler)
+	app.All("/v1/v1/messages", llmIPCoarseLimiter, llmProxyLimiter, proxy.ChatCompletionProxyHandler)
+	app.All("/v1/messages/count_tokens", llmIPCoarseLimiter, llmProxyLimiter, proxy.ChatCompletionProxyHandler)
+	app.All("/v1/v1/messages/count_tokens", llmIPCoarseLimiter, llmProxyLimiter, proxy.ChatCompletionProxyHandler)
 	app.Get("/v1/models", controller.GetPublicModels)
+	app.Get("/v1/v1/models", controller.GetPublicModels)
 
 	// 前端控制台 API 占位
 	api := app.Group("/api")
@@ -189,17 +235,22 @@ func main() {
 	api.Post("/auth/complete-risk", middleware.SetupGuard, authLimiter, controller.CompleteRisk)
 	api.Post("/auth/complete-profile", middleware.SetupGuard, authLimiter, controller.CompleteProfile)
 	// Sprint5-M1 浏览器登出：在 Session 表标记 revoked，下次 UserGuard 命中即 401
-	api.Post("/auth/logout", middleware.UserGuard, controller.AuthLogout)
+	// 登出对 banned 用户也必须可达——否则用户根本无法离开账号。
+	api.Post("/auth/logout", middleware.UserGuardAllowBanned, controller.AuthLogout)
 	api.Get("/models", middleware.SetupGuard, controller.GetPublicModels)
 	api.Get("/pricing", middleware.SetupGuard, controller.GetPublicPricing)
 	api.Get("/billing/rules", middleware.SetupGuard, controller.GetPublicBillingRules)
+	api.Get("/billing/rules/history", middleware.SetupGuard, controller.GetPublicBillingRuleHistory)
 
 	// ==========================================
 	// 用户业务私域接口
 	// ==========================================
-	api.Get("/user/me", middleware.UserGuard, controller.GetSelfData)
-	api.Get("/logs", middleware.UserGuard, controller.GetLogs)
-	api.Get("/logs/stats", middleware.UserGuard, controller.GetStats)
+	// 封禁策略：banned 用户只在"业务花钱动作"上被拒（购买套餐 / 创建充值订单 /
+	// 调上游 LLM）；查看自己数据 + 管理自己资料/偏好/token 全部放行，让 banned
+	// 用户能正常浏览、查账、提工单申诉。
+	api.Get("/user/me", middleware.UserGuardAllowBanned, controller.GetSelfData)
+	api.Get("/logs", middleware.UserGuardAllowBanned, controller.GetLogs)
+	api.Get("/logs/stats", middleware.UserGuardAllowBanned, controller.GetStats)
 
 	// i18n API (Public, client needs this to load translations)
 	api.Get("/i18n/locales", controller.GetLocalesList)
@@ -207,10 +258,11 @@ func main() {
 
 	// fix MAJOR Phase 4-codex（第二十四轮）：UserGuard 接受 admin cookie，所有写路由都必须挂 CSRFGuard，
 	// 否则 admin 浏览器 cookie 可被跨源页面诱导写令牌/扣费/退款等。Bearer 鉴权（SDK/CI）免校验。
-	api.Get("/tokens", middleware.UserGuard, controller.GetTokens)
-	api.Post("/tokens", middleware.UserGuard, middleware.CSRFGuard, controller.CreateToken)
-	api.Put("/tokens/:id", middleware.UserGuard, middleware.CSRFGuard, controller.UpdateTokenSettings)
-	api.Delete("/tokens/:id", middleware.UserGuard, middleware.CSRFGuard, controller.DeleteToken)
+	// Token CRUD 对 banned 也放行——管理自己凭证是基础权，且 token 真要调上游时被 LLM 路径拒。
+	api.Get("/tokens", middleware.UserGuardAllowBanned, controller.GetTokens)
+	api.Post("/tokens", middleware.UserGuardAllowBanned, middleware.CSRFGuard, controller.CreateToken)
+	api.Put("/tokens/:id", middleware.UserGuardAllowBanned, middleware.CSRFGuard, controller.UpdateTokenSettings)
+	api.Delete("/tokens/:id", middleware.UserGuardAllowBanned, middleware.CSRFGuard, controller.DeleteToken)
 
 	// ==========================================
 	// Localhost 暗网级管理防线 (LanGuard强制封锁外网)
@@ -254,14 +306,19 @@ func main() {
 	adminApi.Get("/users-usage/events", controller.GetUsersUsageEvents)
 	adminApi.Get("/upstream-account-cost-presets", controller.ListUpstreamAccountCostPresets)
 	adminApi.Get("/upstream-accounts", controller.ListUpstreamAccountCosts)
+	adminApi.Get("/upstream-accounts/candidates", controller.ListUpstreamAccountCandidates)
+	adminApi.Get("/upstream-accounts/stale", controller.ListStaleUpstreamAccountCosts)
 	adminApi.Post("/upstream-accounts", controller.CreateUpstreamAccountCost)
 	adminApi.Post("/upstream-accounts/bulk", controller.BulkUpsertUpstreamAccountCosts)
 	adminApi.Put("/upstream-accounts/:id", controller.UpdateUpstreamAccountCost)
 	adminApi.Delete("/upstream-accounts/:id", controller.DeleteUpstreamAccountCost)
 	adminApi.Get("/upstream-margin", controller.GetUpstreamMarginReport)
+	adminApi.Post("/billing/rules", controller.UpdateBillingRules)
+	adminApi.Post("/billing/rules/revisions/:id/cancel", controller.CancelBillingRuleRevision)
 	adminApi.Post("/users/bulk-quota/preview", controller.BulkAdjustQuotaPreview)
 	adminApi.Post("/users/bulk-quota", controller.BulkAdjustQuota)
 	adminApi.Post("/users/bulk-delete", controller.BulkDeleteUsers)
+	adminApi.Post("/users/:id/offline-topup", controller.AdminCreateOfflineTopup)
 	adminApi.Put("/users/:id", controller.UpdateUser)
 	adminApi.Post("/users/:id/purge", controller.AdminPurgeUser)
 	adminApi.Delete("/users/:id", controller.DeleteUser)
@@ -351,30 +408,33 @@ func main() {
 		},
 	})
 	// fix MAJOR Phase 4-codex（第二十四轮）：购买/取消订阅是 cookie 写路径，必须挂 CSRFGuard
+	// 购买套餐 = 业务花钱动作 → 严拒 banned。
 	api.Post("/subscriptions/purchase", middleware.UserGuard, middleware.CSRFGuard, purchaseLimiter, controller.PurchasePackage)
-	api.Get("/subscriptions/mine", middleware.UserGuard, controller.MySubscriptions)
-	api.Post("/subscriptions/:id/cancel", middleware.UserGuard, middleware.CSRFGuard, purchaseLimiter, controller.CancelSubscription)
+	api.Get("/subscriptions/mine", middleware.UserGuardAllowBanned, controller.MySubscriptions)
+	// 取消订阅对 banned 放行——停掉自己的业务关系是用户基本权利。
+	api.Post("/subscriptions/:id/cancel", middleware.UserGuardAllowBanned, middleware.CSRFGuard, purchaseLimiter, controller.CancelSubscription)
 
 	// 优惠券：用户查询自己的券
-	api.Get("/coupons/my", middleware.UserGuard, controller.MyCoupons)
+	api.Get("/coupons/my", middleware.UserGuardAllowBanned, controller.MyCoupons)
 
 	// 账单流水（统一事实表，覆盖充值/购买/退款/API 扣费等所有金钱进出）
-	api.Get("/billing/mine", middleware.UserGuard, controller.MyBillingEntries)
-	api.Get("/billing/mine/summary", middleware.UserGuard, controller.MyBillingSummary)
-	api.Get("/billing/mine/export", middleware.UserGuard, controller.MyBillingExport)
+	// 账单查询/汇总/导出走 AllowBanned：封禁用户保留"查账"权（合规可追溯）。
+	api.Get("/billing/mine", middleware.UserGuardAllowBanned, controller.MyBillingEntries)
+	api.Get("/billing/mine/summary", middleware.UserGuardAllowBanned, controller.MyBillingSummary)
+	api.Get("/billing/mine/export", middleware.UserGuardAllowBanned, controller.MyBillingExport)
 
-	// 站内通知
-	api.Get("/notifications", middleware.UserGuard, controller.MyNotifications)
-	api.Post("/notifications/:id/read", middleware.UserGuard, middleware.CSRFGuard, controller.MarkNotificationRead)
-	api.Post("/notifications/read-all", middleware.UserGuard, middleware.CSRFGuard, controller.MarkAllNotificationsRead)
+	// 站内通知——查看 + 标已读对 banned 都放行（管理自己消息流，无业务动作）。
+	api.Get("/notifications", middleware.UserGuardAllowBanned, controller.MyNotifications)
+	api.Post("/notifications/:id/read", middleware.UserGuardAllowBanned, middleware.CSRFGuard, controller.MarkNotificationRead)
+	api.Post("/notifications/read-all", middleware.UserGuardAllowBanned, middleware.CSRFGuard, controller.MarkAllNotificationsRead)
 
-	// 用户通知偏好
-	api.Get("/notifications/preference", middleware.UserGuard, controller.GetMyNotificationPreference)
-	api.Put("/notifications/preference", middleware.UserGuard, middleware.CSRFGuard, controller.UpdateMyNotificationPreference)
+	// 用户通知偏好——查看 + 修改对 banned 放行（用户自身资料）。
+	api.Get("/notifications/preference", middleware.UserGuardAllowBanned, controller.GetMyNotificationPreference)
+	api.Put("/notifications/preference", middleware.UserGuardAllowBanned, middleware.CSRFGuard, controller.UpdateMyNotificationPreference)
 
-	// 用户余额消费控制（三段消费模型第 3 段）
-	api.Get("/balance-consume/preference", middleware.UserGuard, controller.GetMyBalanceConsumePreference)
-	api.Put("/balance-consume/preference", middleware.UserGuard, middleware.CSRFGuard, controller.UpdateMyBalanceConsumePreference)
+	// 用户余额消费控制（三段消费模型第 3 段）——查看 + 修改对 banned 放行（自身偏好）。
+	api.Get("/balance-consume/preference", middleware.UserGuardAllowBanned, controller.GetMyBalanceConsumePreference)
+	api.Put("/balance-consume/preference", middleware.UserGuardAllowBanned, middleware.CSRFGuard, controller.UpdateMyBalanceConsumePreference)
 
 	// 工单系统（用户↔admin 多轮会话；关闭后 15 天 cron 清除）
 	//
@@ -422,8 +482,9 @@ func main() {
 			return c.Status(429).JSON(fiber.Map{"success": false, "message_code": "ERR_TOO_MANY_REQUESTS"})
 		},
 	})
-	api.Post("/tickets", middleware.UserGuard, middleware.CSRFGuard, ticketLimiter, controller.CreateTicket)
-	api.Get("/tickets/mine", middleware.UserGuard, controller.MyTickets)
+	// 工单全套用 AllowBanned 变体：封禁就是用工单申诉的唯一通道，必须可达。
+	api.Post("/tickets", middleware.UserGuardAllowBanned, middleware.CSRFGuard, ticketLimiter, controller.CreateTicket)
+	api.Get("/tickets/mine", middleware.UserGuardAllowBanned, controller.MyTickets)
 	api.Get("/tickets/:id", ticketReadLimiter, controller.GetTicket) // 双角色（GET 无 CSRF 风险）
 	// fix CRITICAL C22-A1（codex 第二十二轮）：双角色 POST 路由原本无任何 CSRF 防护，
 	// admin cookie 可被跨源页面诱导写入工单。挂 CSRFGuard：Bearer 请求免校验（SDK/CI），
@@ -438,12 +499,13 @@ func main() {
 	// ==========================================
 	// 余额充值（易付通 V2 RSA 协议）
 	// ==========================================
-	// 用户接口：UserGuard
-	api.Get("/topup/options", middleware.UserGuard, controller.GetTopupOptions)
+	// 用户接口：查询 banned 放行（让用户看到充值页面 UI），创建订单严拒 banned。
+	api.Get("/topup/options", middleware.UserGuardAllowBanned, controller.GetTopupOptions)
 	// fix HIGH H19-1（codex 第十九轮）：充值下单与套餐购买同等敏感（生成订单 + 调易付通），
 	// 复用 purchaseLimiter（每用户每分钟 6 次）防止失误点击/恶意刷单/误扣攻击。
+	// 创建充值订单 = 业务花钱动作 → 严拒 banned。
 	api.Post("/topup/create", middleware.UserGuard, middleware.CSRFGuard, purchaseLimiter, controller.CreateTopup)
-	api.Get("/topup/mine", middleware.UserGuard, controller.MyTopupOrders)
+	api.Get("/topup/mine", middleware.UserGuardAllowBanned, controller.MyTopupOrders)
 
 	// 公开回调：易付通服务器从公网 GET 过来。**绝对不能加任何 guard**——
 	// 否则用户付了钱但回调被拦，导致本地加额度失败、易付通持续重试堆积。
@@ -501,6 +563,7 @@ func main() {
 		},
 	})
 	adminApi.Get("/topup/orders", controller.AdminListTopupOrders)
+	adminApi.Post("/topup/orders/:id/mark-paid", refundLimiter, controller.AdminMarkTopupPaid)
 	adminApi.Post("/topup/orders/:id/refund", refundLimiter, controller.AdminRefundTopup)
 
 	// admin 账单：按用户查任意账单（嵌入 UserManagement 详情面板）

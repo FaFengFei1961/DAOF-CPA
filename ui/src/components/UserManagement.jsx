@@ -1,6 +1,6 @@
 import React, { useState, useEffect, useMemo, useRef } from 'react';
 import { useTranslation } from 'react-i18next';
-import { Users, Edit2, Trash2, X, RefreshCw, Search, History, Filter, ShieldAlert, Key, CheckCircle2, Plus, Minus, Equal, AlertTriangle, Receipt, Ticket } from 'lucide-react';
+import { Users, Edit2, Trash2, X, RefreshCw, Search, History, Filter, ShieldAlert, Key, CheckCircle2, Plus, Minus, Equal, AlertTriangle, Receipt, Ticket, Banknote } from 'lucide-react';
 import AdminUserCouponsModal from './AdminUserCouponsModal';
 import { useCurrency } from '../context/CurrencyContext';
 import toast from 'react-hot-toast';
@@ -21,7 +21,7 @@ const UserManagement = () => {
     const [modalConfig, setModalConfig] = useState({ isOpen: false, data: null });
 
     // modal form state
-    const [formData, setFormData] = useState({ id: null, username: '', role: 'user', quota: 1.0, status: 1, ban_reason: '' });
+    const [formData, setFormData] = useState({ id: null, username: '', role: 'user', quota: 1.0, paid_quota: 0, status: 1, ban_reason: '' });
 
     // list queries
     const [searchQuery, setSearchQuery] = useState('');
@@ -35,6 +35,17 @@ const UserManagement = () => {
     const [logModal, setLogModal] = useState({ isOpen: false, user: null, logs: [], loading: false });
     const [billsModal, setBillsModal] = useState({ isOpen: false, user: null });
     const [couponsModal, setCouponsModal] = useState({ isOpen: false, user: null });
+    const [offlineTopupModal, setOfflineTopupModal] = useState({
+        isOpen: false,
+        user: null,
+        amountUsd: '',
+        moneyRmb: '',
+        paymentMethod: 'wechat',
+        externalRef: '',
+        reason: '',
+        confirmed: false,
+    });
+    const [offlineTopupSaving, setOfflineTopupSaving] = useState(false);
 
     // Bulk selection state.
     const [selectedIds, setSelectedIds] = useState(() => new Set());
@@ -45,6 +56,16 @@ const UserManagement = () => {
     // Align modal ESC and backdrop behavior with AdminUserBills.
     const closeLogModal = () => setLogModal({ isOpen: false, user: null, logs: [] });
     const closeBulkModal = () => setBulkModal({ isOpen: false, mode: 'add', amount: '' });
+    const closeOfflineTopupModal = () => setOfflineTopupModal({
+        isOpen: false,
+        user: null,
+        amountUsd: '',
+        moneyRmb: '',
+        paymentMethod: 'wechat',
+        externalRef: '',
+        reason: '',
+        confirmed: false,
+    });
     // Define closeEditModal referenced by the edit modal.
     const closeEditModal = () => setModalConfig({ isOpen: false, data: null });
     // fix CRITICAL C-F1 (gemini round 21): modal refs make the focus traps effective.
@@ -52,9 +73,12 @@ const UserManagement = () => {
     const bulkModalRef = useRef(null);
     const editModalRef = useRef(null);
     const editCloseBtnRef = useRef(null);
+    const offlineTopupModalRef = useRef(null);
+    const offlineTopupCloseBtnRef = useRef(null);
     const { onBackdropClick: onLogBackdropClick } = useModalA11y(logModal.isOpen, closeLogModal, undefined, logModalRef);
     const { onBackdropClick: onBulkBackdropClick } = useModalA11y(bulkModal.isOpen, closeBulkModal, undefined, bulkModalRef);
     const { onBackdropClick: onEditBackdropClick } = useModalA11y(modalConfig.isOpen, closeEditModal, editCloseBtnRef, editModalRef);
+    const { onBackdropClick: onOfflineTopupBackdropClick } = useModalA11y(offlineTopupModal.isOpen, closeOfflineTopupModal, offlineTopupCloseBtnRef, offlineTopupModalRef);
 
     const selectableUsers = useMemo(() => users.filter(u => u.role !== 'admin'), [users]);
     const allSelected = selectableUsers.length > 0 && selectableUsers.every(u => selectedIds.has(u.id));
@@ -76,6 +100,18 @@ const UserManagement = () => {
     };
 
     const clearSelection = () => setSelectedIds(new Set());
+
+    const toDisplayAmount = (usdValue) => {
+        const value = Number(usdValue) || 0;
+        return displayCurrency === 'CNY' ? value * exchangeRate : value;
+    };
+
+    const fromDisplayAmount = (displayValue) => {
+        const value = Number(displayValue) || 0;
+        return displayCurrency === 'CNY' ? value / exchangeRate : value;
+    };
+
+    const quotaBelowPaidFloor = Number(formData.quota || 0) < Number(formData.paid_quota || 0);
 
     const openBulkModal = (mode) => {
         if (selectedIds.size === 0) return;
@@ -184,8 +220,76 @@ const UserManagement = () => {
 
     // Project is not live; remove the stale add mode because users self-register through OAuth/SMS.
     const handleOpenModal = (user) => {
-        setFormData({ id: user.id, username: user.username, role: user.role, quota: user.quota, status: user.status, ban_reason: user.ban_reason || '' });
+        setFormData({
+            id: user.id,
+            username: user.username,
+            role: user.role,
+            quota: user.quota,
+            paid_quota: user.paid_quota || 0,
+            status: user.status,
+            ban_reason: user.ban_reason || '',
+        });
         setModalConfig({ isOpen: true, data: user });
+    };
+
+    const openOfflineTopupModal = (user) => {
+        setOfflineTopupModal({
+            isOpen: true,
+            user,
+            amountUsd: '',
+            moneyRmb: '',
+            paymentMethod: 'wechat',
+            externalRef: '',
+            reason: '',
+            confirmed: false,
+        });
+    };
+
+    const submitOfflineTopup = async (e) => {
+        e.preventDefault();
+        const amountUsd = parseFloat(offlineTopupModal.amountUsd);
+        const moneyRmb = parseFloat(offlineTopupModal.moneyRmb);
+        if (!offlineTopupModal.confirmed) {
+            toast.error(t('USER_MGMT.OFFLINE_TOPUP_CONFIRM_REQUIRED', '请先确认已真实收款'));
+            return;
+        }
+        if (!Number.isFinite(amountUsd) || amountUsd <= 0) {
+            toast.error(t('USER_MGMT.OFFLINE_TOPUP_AMOUNT_INVALID', '请输入有效的入账 USD 额度'));
+            return;
+        }
+        if (!Number.isFinite(moneyRmb) || moneyRmb <= 0) {
+            toast.error(t('USER_MGMT.OFFLINE_TOPUP_MONEY_INVALID', '请输入有效的实际收款人民币金额'));
+            return;
+        }
+        if (!offlineTopupModal.externalRef.trim()) {
+            toast.error(t('USER_MGMT.OFFLINE_TOPUP_REF_REQUIRED', '请填写线下收款凭证号'));
+            return;
+        }
+        setOfflineTopupSaving(true);
+        try {
+            const data = await authFetch(`/api/admin/users/${offlineTopupModal.user.id}/offline-topup`, {
+                method: 'POST',
+                body: {
+                    amount_usd: amountUsd,
+                    money_fen: Math.round(moneyRmb * 100),
+                    currency_original: 'CNY',
+                    payment_method: offlineTopupModal.paymentMethod,
+                    external_trade_ref: offlineTopupModal.externalRef.trim(),
+                    reason: offlineTopupModal.reason.trim(),
+                },
+            });
+            if (data.success) {
+                toast.success(t('USER_MGMT.OFFLINE_TOPUP_OK', '线下收款已入账'));
+                closeOfflineTopupModal();
+                fetchUsers();
+            } else {
+                toast.error((data.message_code ? t('API.' + data.message_code) : data.message) || t('USER_MGMT.OFFLINE_TOPUP_FAIL', '线下收款入账失败'));
+            }
+        } catch {
+            toast.error(t('USER_MGMT.OFFLINE_TOPUP_FAIL', '线下收款入账失败'));
+        } finally {
+            setOfflineTopupSaving(false);
+        }
     };
 
     const handleSubmit = async (e) => {
@@ -394,7 +498,24 @@ const UserManagement = () => {
                             mono: true,
                             render: u => u.role === 'admin'
                                 ? <span className="text-fuchsia-400 font-bold tracking-widest text-lg">∞</span>
-                                : <span className={u.quota > 0 ? "text-success" : "text-on-surface-variant"}>{formatCurrency(u.quota, 2)}</span>
+                                : (() => {
+                                    const total = Number(u.quota || 0);
+                                    const paid = Number(u.paid_quota || 0);
+                                    const bonus = Math.max(0, total - paid);
+                                    return (
+                                        <div className="flex flex-col gap-1">
+                                            <span className={total > 0 ? "text-success" : "text-on-surface-variant"}>{formatCurrency(total, 2)}</span>
+                                            <span className="text-[11px] text-on-surface-variant">
+                                                {t('USER_MGMT.SELF_FUNDED_BALANCE', '自充')} {formatCurrency(paid, 2)}
+                                            </span>
+                                            {bonus > 0 && (
+                                                <span className="text-[11px] text-primary/80">
+                                                    {t('USER_MGMT.BONUS_BALANCE', '赠送')} {formatCurrency(bonus, 2)}
+                                                </span>
+                                            )}
+                                        </div>
+                                    );
+                                })()
                         },
                         {
                             key: 'status',
@@ -433,6 +554,14 @@ const UserManagement = () => {
                                         <>
                                             <button onClick={(e) => { e.stopPropagation(); handleOpenModal(u); }} className="text-on-surface-variant hover:text-primary tooltip" aria-label={t('USER_MGMT.EDIT_TOOLTIP')} title={t('USER_MGMT.EDIT_TOOLTIP')}>
                                                 <Edit2 size={16} />
+                                            </button>
+                                            <button
+                                                onClick={(e) => { e.stopPropagation(); openOfflineTopupModal(u); }}
+                                                className="text-on-surface-variant hover:text-success tooltip"
+                                                aria-label={t('USER_MGMT.OFFLINE_TOPUP_TOOLTIP', '线下收款入账')}
+                                                title={t('USER_MGMT.OFFLINE_TOPUP_TOOLTIP', '线下收款入账')}
+                                            >
+                                                <Banknote size={16} />
                                             </button>
                                             <button onClick={(e) => { e.stopPropagation(); handleDelete(u.id); }} className="text-on-surface-variant hover:text-error" aria-label={t('USER_MGMT.DELETE_TOOLTIP')} title={t('USER_MGMT.DELETE_TOOLTIP')}>
                                                 <Trash2 size={16} />
@@ -501,6 +630,7 @@ const UserManagement = () => {
                                                           log.action_type === 'UPDATE_TOKEN' ? t('USER_MGMT.ACTION_UPDATE_TOKEN', '✏️ 修改 API 令牌') :
                                                           log.action_type === 'DELETE_TOKEN' ? t('USER_MGMT.ACTION_DELETE_TOKEN', '🗑️ 删除 API 令牌') :
                                                           log.action_type === 'BULK_QUOTA' ? t('USER_MGMT.ACTION_BULK_QUOTA', '💰 批量调整额度') :
+                                                          log.action_type === 'OFFLINE_TOPUP' ? t('USER_MGMT.ACTION_OFFLINE_TOPUP', '线下收款入账') :
                                                           log.action_type === 'BULK_HARD_DELETE' ? t('USER_MGMT.ACTION_BULK_HARD_DELETE', '☢️ 物理抹除') :
                                                           log.action_type === 'ADMIN_LOGIN' ? t('USER_MGMT.ACTION_ADMIN_LOGIN', '🛡️ 管理员登录') :
                                                           log.action_type === 'ADMIN_LOGIN_FAIL' ? t('USER_MGMT.ACTION_ADMIN_LOGIN_FAIL', '⚠️ 管理员登录失败') :
@@ -548,6 +678,13 @@ const UserManagement = () => {
                                                                             amount: formatCurrency(Number(c.amount), 2),
                                                                         });
                                                                     }
+                                                                    if (c.type === 'OFFLINE_TOPUP') return t('USER_MGMT.LOG_OFFLINE_TOPUP', '线下收款入账 → 用户 [{{target}}] 入账 {{amount}}，自充余额 {{oldPaid}} → {{newPaid}}，凭证 [{{ref}}]', {
+                                                                        target: c.target,
+                                                                        amount: formatCurrency(Number(c.amount), 2),
+                                                                        oldPaid: formatCurrency(Number(c.old_paid_quota) || 0, 2),
+                                                                        newPaid: formatCurrency(Number(c.new_paid_quota) || 0, 2),
+                                                                        ref: c.external_trade_ref || '',
+                                                                    });
                                                                     if (c.type === 'BULK_HARD_DELETE') return t('USER_MGMT.LOG_BULK_HARD_DELETE', '物理抹除用户 [{{target}}]（ID {{id}}{{extra}}）', {
                                                                         target: c.target,
                                                                         id: c.user_id,
@@ -595,6 +732,135 @@ const UserManagement = () => {
                 </div>
             )}
 
+            {/* Offline top-up modal */}
+            {offlineTopupModal.isOpen && (
+                <div
+                    ref={offlineTopupModalRef}
+                    role="dialog"
+                    aria-modal="true"
+                    aria-labelledby="offline-topup-modal-title"
+                    onClick={onOfflineTopupBackdropClick}
+                    className="fixed inset-0 z-[60] flex items-center justify-center p-4 bg-black/70 backdrop-blur-md animate-in fade-in"
+                >
+                    <div className="relative w-full max-w-md bg-surface-container border border-outline-variant rounded-overlay shadow-2xl shadow-black/40 p-6">
+                        <button type="button" ref={offlineTopupCloseBtnRef} onClick={closeOfflineTopupModal} className="absolute top-4 right-4 text-on-surface-variant hover:text-white" aria-label={t('COMMON.CLOSE', '关闭')}>
+                            <X size={18} />
+                        </button>
+                        <h2 id="offline-topup-modal-title" className="text-xl font-bold text-on-surface mb-2 flex items-center gap-2">
+                            <Banknote size={19} className="text-success" />
+                            {t('USER_MGMT.OFFLINE_TOPUP_TITLE', '线下收款入账')}
+                        </h2>
+                        <p className="text-xs text-on-surface-variant mb-5">
+                            {t('USER_MGMT.OFFLINE_TOPUP_DESC', '用于微信好友转账、支付宝转账、银行转账等真实收款。入账后会同时增加余额和自充余额，并写入用户账单。')}
+                        </p>
+                        <form onSubmit={submitOfflineTopup} className="flex flex-col gap-4">
+                            <div className="rounded-control bg-surface-container-high border border-outline-variant px-3 py-2 text-sm text-on-surface">
+                                <span className="text-on-surface-variant">{t('USER_MGMT.OFFLINE_TOPUP_USER', '目标用户')}</span>
+                                <span className="ml-2 font-medium">{offlineTopupModal.user?.username}</span>
+                                <span className="ml-2 text-xs text-on-surface-variant">#{offlineTopupModal.user?.id}</span>
+                            </div>
+
+                            <label className="flex items-start gap-2 text-xs text-on-surface-variant">
+                                <input
+                                    type="checkbox"
+                                    checked={offlineTopupModal.confirmed}
+                                    onChange={(e) => setOfflineTopupModal(prev => ({ ...prev, confirmed: e.target.checked }))}
+                                    className="mt-0.5 accent-primary"
+                                />
+                                <span>{t('USER_MGMT.OFFLINE_TOPUP_CONFIRM', '我已确认这笔线下款项真实到账，且凭证号可用于对账')}</span>
+                            </label>
+
+                            <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                                <div className="flex flex-col gap-1.5">
+                                    <label htmlFor="offline-topup-money-rmb" className="text-xs font-semibold text-on-surface-variant ml-1">
+                                        {t('USER_MGMT.OFFLINE_TOPUP_MONEY_RMB', '实际收款 RMB')}
+                                    </label>
+                                    <input
+                                        id="offline-topup-money-rmb"
+                                        type="number"
+                                        step="0.01"
+                                        min="0.01"
+                                        value={offlineTopupModal.moneyRmb}
+                                        onChange={(e) => setOfflineTopupModal(prev => ({ ...prev, moneyRmb: e.target.value }))}
+                                        placeholder="70.00"
+                                        className="w-full h-10 bg-surface-container-high border border-outline rounded-control px-3 text-sm text-on-surface focus:border-primary outline-none font-mono"
+                                    />
+                                </div>
+                                <div className="flex flex-col gap-1.5">
+                                    <label htmlFor="offline-topup-amount-usd" className="text-xs font-semibold text-on-surface-variant ml-1">
+                                        {t('USER_MGMT.OFFLINE_TOPUP_AMOUNT_USD', '入账额度 USD')}
+                                    </label>
+                                    <input
+                                        id="offline-topup-amount-usd"
+                                        type="number"
+                                        step="0.000001"
+                                        min="0.000001"
+                                        value={offlineTopupModal.amountUsd}
+                                        onChange={(e) => setOfflineTopupModal(prev => ({ ...prev, amountUsd: e.target.value }))}
+                                        placeholder={exchangeRate > 0 && offlineTopupModal.moneyRmb ? (Number(offlineTopupModal.moneyRmb) / exchangeRate).toFixed(6) : '10.000000'}
+                                        className="w-full h-10 bg-surface-container-high border border-outline rounded-control px-3 text-sm text-on-surface focus:border-primary outline-none font-mono"
+                                    />
+                                </div>
+                            </div>
+
+                            <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                                <div className="flex flex-col gap-1.5">
+                                    <label htmlFor="offline-topup-method" className="text-xs font-semibold text-on-surface-variant ml-1">
+                                        {t('USER_MGMT.OFFLINE_TOPUP_METHOD', '收款方式')}
+                                    </label>
+                                    <select
+                                        id="offline-topup-method"
+                                        value={offlineTopupModal.paymentMethod}
+                                        onChange={(e) => setOfflineTopupModal(prev => ({ ...prev, paymentMethod: e.target.value }))}
+                                        className="w-full h-10 bg-surface-container-high border border-outline rounded-control px-3 text-sm text-on-surface focus:border-primary outline-none"
+                                    >
+                                        <option value="wechat">{t('USER_MGMT.OFFLINE_METHOD_WECHAT', '微信转账')}</option>
+                                        <option value="alipay">{t('USER_MGMT.OFFLINE_METHOD_ALIPAY', '支付宝转账')}</option>
+                                        <option value="bank">{t('USER_MGMT.OFFLINE_METHOD_BANK', '银行转账')}</option>
+                                        <option value="paypal">{t('USER_MGMT.OFFLINE_METHOD_PAYPAL', 'PayPal')}</option>
+                                        <option value="other">{t('USER_MGMT.OFFLINE_METHOD_OTHER', '其他')}</option>
+                                    </select>
+                                </div>
+                                <div className="flex flex-col gap-1.5">
+                                    <label htmlFor="offline-topup-ref" className="text-xs font-semibold text-on-surface-variant ml-1">
+                                        {t('USER_MGMT.OFFLINE_TOPUP_REF', '收款凭证号')}
+                                    </label>
+                                    <input
+                                        id="offline-topup-ref"
+                                        value={offlineTopupModal.externalRef}
+                                        onChange={(e) => setOfflineTopupModal(prev => ({ ...prev, externalRef: e.target.value }))}
+                                        placeholder={t('USER_MGMT.OFFLINE_TOPUP_REF_PLACEHOLDER', '微信/支付宝/银行流水号')}
+                                        className="w-full h-10 bg-surface-container-high border border-outline rounded-control px-3 text-sm text-on-surface focus:border-primary outline-none"
+                                    />
+                                </div>
+                            </div>
+
+                            <div className="flex flex-col gap-1.5">
+                                <label htmlFor="offline-topup-reason" className="text-xs font-semibold text-on-surface-variant ml-1">
+                                    {t('USER_MGMT.OFFLINE_TOPUP_REASON', '备注')}
+                                </label>
+                                <textarea
+                                    id="offline-topup-reason"
+                                    value={offlineTopupModal.reason}
+                                    onChange={(e) => setOfflineTopupModal(prev => ({ ...prev, reason: e.target.value }))}
+                                    rows={2}
+                                    placeholder={t('USER_MGMT.OFFLINE_TOPUP_REASON_PLACEHOLDER', '例如：微信好友转账，人工核验后入账')}
+                                    className="w-full bg-surface-container-high border border-outline rounded-control p-3 text-sm text-on-surface focus:border-primary outline-none placeholder:text-on-surface-variant"
+                                />
+                            </div>
+
+                            <button
+                                type="submit"
+                                disabled={offlineTopupSaving || !offlineTopupModal.confirmed}
+                                className="w-full h-10 mt-2 bg-success text-white font-medium rounded-control hover:opacity-90 disabled:opacity-40"
+                            >
+                                {offlineTopupSaving ? t('USER_MGMT.OFFLINE_TOPUP_PROCESSING', '入账中...') : t('USER_MGMT.OFFLINE_TOPUP_SUBMIT', '确认入账')}
+                            </button>
+                        </form>
+                    </div>
+                </div>
+            )}
+
             {/* Edit modal */}
             {modalConfig.isOpen && (
                 <div
@@ -629,11 +895,21 @@ const UserManagement = () => {
                                     <label htmlFor="user-mgmt-quota" className="text-xs font-semibold text-on-surface-variant ml-1">{t('USER_MGMT.MODAL_QUOTA')} {displayCurrency === 'CNY' ? '(￥)' : '($)'}</label>
                                     <input
                                         id="user-mgmt-quota"
-                                        type="number" required step="0.001" min="0"
-                                        value={displayCurrency === 'CNY' ? (formData.quota * exchangeRate).toFixed(2) : formData.quota}
-                                        onChange={e => setFormData({...formData, quota: (parseFloat(e.target.value) || 0) / (displayCurrency === 'CNY' ? exchangeRate : 1)})}
-                                        className="w-full h-10 bg-surface-container-high border border-outline rounded-control px-3 text-sm text-on-surface focus:border-primary outline-none"
+                                        type="number" required step="0.001" min={toDisplayAmount(formData.paid_quota)}
+                                        value={displayCurrency === 'CNY' ? toDisplayAmount(formData.quota).toFixed(2) : formData.quota}
+                                        onChange={e => setFormData({...formData, quota: fromDisplayAmount(e.target.value)})}
+                                        onBlur={() => {
+                                            if (Number(formData.quota || 0) < Number(formData.paid_quota || 0)) {
+                                                setFormData(prev => ({ ...prev, quota: prev.paid_quota || 0 }));
+                                            }
+                                        }}
+                                        className={`w-full h-10 bg-surface-container-high border rounded-control px-3 text-sm text-on-surface focus:border-primary outline-none ${quotaBelowPaidFloor ? 'border-error' : 'border-outline'}`}
                                     />
+                                    <p className={`text-[11px] ml-1 ${quotaBelowPaidFloor ? 'text-error' : 'text-on-surface-variant'}`}>
+                                        {t('USER_MGMT.MIN_QUOTA_HINT', '最低可设置为自充余额 {{amount}}；普通调额只会扣减赠送/奖励余额。', {
+                                            amount: formatCurrency(formData.paid_quota || 0, 2),
+                                        })}
+                                    </p>
                                 </div>
                                 <div className="flex flex-col gap-1.5 flex-1">
                                     <label htmlFor="user-mgmt-status" className="text-xs font-semibold text-on-surface-variant ml-1">{t('USER_MGMT.MODAL_STATUS')}</label>
@@ -664,7 +940,7 @@ const UserManagement = () => {
                                 </div>
                             )}
 
-                            <button type="submit" className="w-full h-10 mt-4 bg-gradient-to-r from-blue-600 to-cyan-500 text-on-surface font-medium rounded-control hover:opacity-90 -opacity">
+                            <button type="submit" disabled={quotaBelowPaidFloor} className="w-full h-10 mt-4 bg-gradient-to-r from-blue-600 to-cyan-500 text-on-surface font-medium rounded-control hover:opacity-90 disabled:opacity-40 -opacity">
                                 {t('USER_MGMT.BTN_SUBMIT')}
                             </button>
                         </form>
@@ -715,7 +991,13 @@ const UserManagement = () => {
                             {bulkModal.mode === 'sub' && (
                                 <p className="text-xs text-warning/80 flex items-start gap-1.5 mt-1">
                                     <AlertTriangle size={12} className="mt-0.5 shrink-0" />
-                                    {t('USER_MGMT.BULK_SUB_HINT', '扣减后若额度低于 0，将自动 clamp 到 0，不会变成负数。')}
+                                    {t('USER_MGMT.BULK_SUB_HINT', '扣减会优先消耗赠送/奖励余额；若触及自充余额，将停在自充余额保护线。')}
+                                </p>
+                            )}
+                            {bulkModal.mode === 'set' && (
+                                <p className="text-xs text-on-surface-variant flex items-start gap-1.5 mt-1">
+                                    <AlertTriangle size={12} className="mt-0.5 shrink-0" />
+                                    {t('USER_MGMT.BULK_SET_HINT', '设为定值时，低于用户自充余额的记录会被后端拒绝。')}
                                 </p>
                             )}
                         </div>

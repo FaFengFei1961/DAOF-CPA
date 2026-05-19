@@ -9,6 +9,7 @@ const FIELDS = [
   { key: 'yifut_gateway',              label: 'FIELD_GATEWAY',          type: 'text' },
   { key: 'yifut_merchant_private_key', label: 'FIELD_PRIVATE_KEY',      type: 'pem-secret', hint: 'FIELD_PRIVATE_KEY_HINT' },
   { key: 'yifut_platform_public_key',  label: 'FIELD_PUBLIC_KEY',       type: 'pem',        hint: 'FIELD_PUBLIC_KEY_HINT' },
+  { key: 'yifut_notify_allowed_cidrs', label: 'FIELD_NOTIFY_CIDRS',     type: 'textarea',   hint: 'FIELD_NOTIFY_CIDRS_HINT' },
   { key: 'yifut_enabled_methods',      label: 'FIELD_ENABLED_METHODS',  type: 'methods' },
   // Sprint4-M3: amounts are stored as integer fen; admin enters fen directly to avoid floats.
   { key: 'yifut_preset_amounts_fen',   label: 'FIELD_PRESETS',          type: 'text', hint: 'FIELD_PRESETS_FEN_HINT' },
@@ -104,7 +105,7 @@ const AdminPaymentChannels = () => {
 
       <section className="bg-surface-container-high border border-outline-variant rounded-overlay p-6 grid grid-cols-1 md:grid-cols-2 gap-4">
         {FIELDS.map(f => {
-          const fullWidth = f.type === 'methods' || f.type === 'pem' || f.type === 'pem-secret' || f.key === 'yifut_gateway';
+          const fullWidth = f.type === 'methods' || f.type === 'pem' || f.type === 'pem-secret' || f.type === 'textarea' || f.key === 'yifut_gateway';
           const isPEM = f.type === 'pem' || f.type === 'pem-secret';
           const isSecretPEM = f.type === 'pem-secret';
           const fieldId = `pay-channel-${f.key}`;
@@ -150,6 +151,22 @@ const AdminPaymentChannels = () => {
                       </button>
                     )}
                   </div>
+                </div>
+              ) : f.type === 'textarea' ? (
+                <div className="space-y-1">
+                  <textarea
+                    id={fieldId}
+                    rows={3}
+                    value={values[f.key] || ''}
+                    onChange={e => setValues({ ...values, [f.key]: e.target.value })}
+                    placeholder="1.2.3.4/32,5.6.7.0/24"
+                    className="w-full bg-surface-container border border-outline rounded-control px-3 py-2 text-sm text-on-surface focus:border-primary outline-none font-mono resize-y"
+                  />
+                  {f.hint && (
+                    <span className="text-[11px] text-on-surface-variant">
+                      {t(`PAY_ADMIN.${f.hint}`)}
+                    </span>
+                  )}
                 </div>
               ) : (
                 <div className="relative">

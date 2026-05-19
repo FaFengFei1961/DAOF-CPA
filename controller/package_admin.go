@@ -4,7 +4,6 @@
 package controller
 
 import (
-	"encoding/json"
 	"errors"
 	"fmt"
 	"log"
@@ -27,7 +26,6 @@ import (
 // 破坏额度守恒。修复：必须 finite + (0, 100] 范围内，非法直接 400 而非静默 fallback。
 const MaxQuantityMultiplier = 100.0
 
-var errDeprecatedRequestField = errors.New("deprecated request field")
 var errInvalidProductType = errors.New("product_type only supports subscription")
 var errPackageCostFloorInvalid = errors.New("package cost_floor invalid")
 var errReorderStaleID = errors.New("reorder contains stale id")
@@ -414,7 +412,6 @@ type packagePayloadJSON struct {
 	ExtraConfig          string           `json:"extra_config"`
 	PlanIDs              []uint           `json:"plan_ids"`
 	PlanMultipliers      []float64        `json:"plan_multipliers"`
-	DeprecatedBonus      *json.RawMessage `json:"bonus_balance_usd"`
 }
 
 // parsePackagePayload 解析 admin POST/PUT 套餐 body。
@@ -422,9 +419,6 @@ func parsePackagePayload(c *fiber.Ctx) (createPackagePayload, error) {
 	var raw packagePayloadJSON
 	if err := c.BodyParser(&raw); err != nil {
 		return createPackagePayload{}, err
-	}
-	if raw.DeprecatedBonus != nil {
-		return createPackagePayload{}, fmt.Errorf("%w: bonus_balance_usd", errDeprecatedRequestField)
 	}
 	productType := strings.TrimSpace(raw.ProductType)
 	if productType == "" {
@@ -468,13 +462,6 @@ func parsePackagePayload(c *fiber.Ctx) (createPackagePayload, error) {
 func CreatePackage(c *fiber.Ctx) error {
 	payload, perr := parsePackagePayload(c)
 	if perr != nil {
-		if errors.Is(perr, errDeprecatedRequestField) {
-			return c.Status(400).JSON(fiber.Map{
-				"success":      false,
-				"message":      perr.Error(),
-				"message_code": "ERR_DEPRECATED_FIELD",
-			})
-		}
 		return c.Status(400).JSON(fiber.Map{"success": false, "message_code": "ERR_PARSE_PAYLOAD"})
 	}
 	if payload.Name == "" {
@@ -542,13 +529,6 @@ func UpdatePackage(c *fiber.Ctx) error {
 	}
 	payload, perr := parsePackagePayload(c)
 	if perr != nil {
-		if errors.Is(perr, errDeprecatedRequestField) {
-			return c.Status(400).JSON(fiber.Map{
-				"success":      false,
-				"message":      perr.Error(),
-				"message_code": "ERR_DEPRECATED_FIELD",
-			})
-		}
 		return c.Status(400).JSON(fiber.Map{"success": false, "message_code": "ERR_PARSE_PAYLOAD"})
 	}
 	// fix Minor（codex 第五轮）：UpdatePackage 同样校验 price/period/active 上限的边界

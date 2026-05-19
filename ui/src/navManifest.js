@@ -15,8 +15,9 @@ import {
 } from 'lucide-react';
 
 // ─── User-side ───────────────────────────────────────────────────
-// Phase 8：删"产品中心"入口（套餐购买已合并到仪表盘首页）。/upgrade 路由
-// 保留兼容深链接（NotificationCenter action_url 等可能跳过来）。
+// 套餐购买入口合并到仪表盘首页（BrowsePackagesModal）——sidebar 不再设"产品中心"。
+// 封禁状态下 sidebar 全部菜单保留可见：banned 只禁"业务写动作"（充值 / 购买 /
+// 调 API），不影响浏览查看。具体写动作由后端按端点粒度 403，前端 sidebar 不再 filter。
 export const userNav = [
   { id: 'dashboard', path: '/',         icon: Home,         labelKey: 'MENU.DASHBOARD', labelFallback: '仪表盘' },
   { id: 'tokens',    path: '/tokens',   icon: KeySquare,    labelKey: 'MENU.TOKENS',    labelFallback: 'API 令牌' },
@@ -61,7 +62,7 @@ export const adminNav = [
       { id: 'quota_plans',     standalone: true, path: '/admin/quota-plans',  icon: Layers,     labelKey: 'SETTINGS.TAB_QUOTA_PLANS',labelFallback: '配额计划库' },
       { id: 'packages',        standalone: true, path: '/admin/packages',     icon: PackageIcon,labelKey: 'SETTINGS.TAB_PACKAGES',   labelFallback: '销售套餐' },
       { id: 'coupons',         standalone: true, path: '/admin/coupons',      icon: PackageIcon,labelKey: 'SETTINGS.TAB_COUPONS',    labelFallback: '优惠券模板' },
-      { id: 'finance',         standalone: true, path: '/admin/finance',      icon: ShieldAlert,labelKey: 'SETTINGS.TAB_FINANCE',    labelFallback: '财务工作区' },
+      { id: 'finance',         standalone: true, path: '/admin/finance',      matchPrefix: true, icon: ShieldAlert,labelKey: 'SETTINGS.TAB_FINANCE',    labelFallback: '财务工作区' },
     ],
   },
   {

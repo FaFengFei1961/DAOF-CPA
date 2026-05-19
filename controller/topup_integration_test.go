@@ -1,6 +1,9 @@
 package controller
 
 import (
+	"io"
+	"net/http/httptest"
+	"net/url"
 	"testing"
 	"time"
 
@@ -74,11 +77,11 @@ func TestSafeExchangeRateRmbPerUsdMicros_Defaults(t *testing.T) {
 // TestUsdMicroFromFenAndRate 验证 fen → micro_usd 整数转换的 0 偏差性质。
 func TestUsdMicroFromFenAndRate(t *testing.T) {
 	cases := []struct {
-		name     string
-		fen      int64
-		rate     int64
-		wantOK   bool
-		wantUsd  int64
+		name    string
+		fen     int64
+		rate    int64
+		wantOK  bool
+		wantUsd int64
 	}{
 		// 精确边界：¥72 / 7.2 = $10 整除
 		{"exact ¥72 → $10", 7200, 7_200_000, true, 10_000_000},
@@ -256,13 +259,13 @@ func TestYifutNotify_DuplicateCallback(t *testing.T) {
 	user := seedTestUser(t, 0)
 
 	order := database.TopupOrder{
-		OutTradeNo:           "tp_dup_test",
-		UserID:               user.ID,
-		MoneyRMB:             7200,                      // ¥72.00 = 7200 fen
-		AmountUSD:            10 * database.MicroPerUSD, // $10
+		OutTradeNo:                  "tp_dup_test",
+		UserID:                      user.ID,
+		MoneyRMB:                    7200,                      // ¥72.00 = 7200 fen
+		AmountUSD:                   10 * database.MicroPerUSD, // $10
 		ExchangeRateRmbPerUsdMicros: 7_200_000,
-		Status:               "paid", // already paid
-		PaidAt:               ptrTime(time.Now()),
+		Status:                      "paid", // already paid
+		PaidAt:                      ptrTime(time.Now()),
 	}
 	database.DB.Create(&order)
 
@@ -285,14 +288,107 @@ func TestYifutNotify_MoneyMismatch(t *testing.T) {
 	user := seedTestUser(t, 0)
 
 	database.DB.Create(&database.TopupOrder{
-		OutTradeNo:           "tp_mismatch",
-		UserID:               user.ID,
-		MoneyRMB:             7200,                      // ¥72.00 = 7200 fen
-		AmountUSD:            10 * database.MicroPerUSD, // $10
+		OutTradeNo:                  "tp_mismatch",
+		UserID:                      user.ID,
+		MoneyRMB:                    7200,                      // ¥72.00 = 7200 fen
+		AmountUSD:                   10 * database.MicroPerUSD, // $10
 		ExchangeRateRmbPerUsdMicros: 7_200_000,
-		Status:               "created",
+		Status:                      "created",
 	})
 
+}
+
+func TestYifutNotify_SuccessCreditsQuotaPaidQuotaAndBilling(t *testing.T) {
+	setupSubTestDB(t)
+	privPEM, pubPEM := genTestRSAPair(t)
+	configureYifutForTest(t, "1234567890", privPEM, pubPEM)
+
+	user := seedTestUser(t, 0)
+	order := database.TopupOrder{
+		OutTradeNo:                  "tp_notify_success",
+		UserID:                      user.ID,
+		PayType:                     "alipay",
+		MoneyRMB:                    7200,
+		AmountUSD:                   10 * database.MicroPerUSD,
+		ExchangeRateRmbPerUsdMicros: 7_200_000,
+		Status:                      "created",
+	}
+	if err := database.DB.Create(&order).Error; err != nil {
+		t.Fatalf("seed order: %v", err)
+	}
+
+	params := map[string]string{
+		"pid":          "1234567890",
+		"out_trade_no": order.OutTradeNo,
+		"money":        "72.00",
+		"trade_status": "TRADE_SUCCESS",
+		"timestamp":    itoaUint(uint(time.Now().Unix())),
+		"trade_no":     "yf_trade_success_1",
+		"api_trade_no": "api_trade_success_1",
+		"sign_type":    "RSA",
+	}
+	params["sign"] = signWithPlatformKey(t, params, privPEM)
+
+	app := fiber.New(fiber.Config{DisableStartupMessage: true})
+	app.Get("/notify", YifutNotify)
+	req := httptest.NewRequest("GET", "/notify?"+encodeYifutNotifyParams(params), nil)
+	resp, err := app.Test(req, -1)
+	if err != nil {
+		t.Fatalf("app.Test: %v", err)
+	}
+	defer resp.Body.Close()
+	body, _ := io.ReadAll(resp.Body)
+	if resp.StatusCode != 200 || string(body) != "success" {
+		t.Fatalf("notify expected 200/success got %d/%q", resp.StatusCode, string(body))
+	}
+
+	var freshUser database.User
+	if err := database.DB.First(&freshUser, user.ID).Error; err != nil {
+		t.Fatalf("reload user: %v", err)
+	}
+	if freshUser.Quota != 10*database.MicroPerUSD || freshUser.PaidQuota != 10*database.MicroPerUSD {
+		t.Fatalf("quota/paid_quota=%d/%d, want 10 USD each", freshUser.Quota, freshUser.PaidQuota)
+	}
+
+	var freshOrder database.TopupOrder
+	if err := database.DB.First(&freshOrder, order.ID).Error; err != nil {
+		t.Fatalf("reload order: %v", err)
+	}
+	if freshOrder.Status != "paid" || freshOrder.PaidAt == nil {
+		t.Fatalf("unexpected order status/paid_at: %+v", freshOrder)
+	}
+	if freshOrder.TradeNo != "yf_trade_success_1" || freshOrder.ApiTradeNo != "api_trade_success_1" {
+		t.Fatalf("unexpected trade refs: trade_no=%q api_trade_no=%q", freshOrder.TradeNo, freshOrder.ApiTradeNo)
+	}
+
+	var bill database.BillingEntry
+	if err := database.DB.Where("user_id = ? AND entry_type = ?", user.ID, database.BillingTypeTopup).First(&bill).Error; err != nil {
+		t.Fatalf("topup billing missing: %v", err)
+	}
+	if bill.AmountUSD != 10*database.MicroPerUSD ||
+		bill.BalanceAfterUSD != 10*database.MicroPerUSD ||
+		bill.RelatedType != "topup_order" ||
+		bill.RelatedID != order.ID ||
+		bill.CurrencyOriginal != "CNY" ||
+		bill.AmountOriginal != 7200 {
+		t.Fatalf("unexpected billing entry: %+v", bill)
+	}
+
+	var receipt database.PaymentWebhookReceipt
+	if err := database.DB.Where("provider = ? AND out_trade_no = ? AND status = ?", "yifut", order.OutTradeNo, "accepted").First(&receipt).Error; err != nil {
+		t.Fatalf("webhook receipt missing: %v", err)
+	}
+	if receipt.Nonce == "" || receipt.SignatureHash == "" {
+		t.Fatalf("webhook receipt missing nonce/signature hash: %+v", receipt)
+	}
+}
+
+func encodeYifutNotifyParams(params map[string]string) string {
+	q := url.Values{}
+	for k, v := range params {
+		q.Set(k, v)
+	}
+	return q.Encode()
 }
 
 // ─── MyTopupOrders ───────────────────────────────────────────────────
@@ -304,12 +400,12 @@ func TestMyTopupOrders_Pagination(t *testing.T) {
 
 	for i := 0; i < 5; i++ {
 		database.DB.Create(&database.TopupOrder{
-			OutTradeNo:           "tp_page_" + itoaUint(uint(i)),
-			UserID:               user.ID,
-			MoneyRMB:             1000,      // ¥10 = 1000 fen
-			AmountUSD:            1_390_000, // $1.39 = 1_390_000 micro_usd
+			OutTradeNo:                  "tp_page_" + itoaUint(uint(i)),
+			UserID:                      user.ID,
+			MoneyRMB:                    1000,      // ¥10 = 1000 fen
+			AmountUSD:                   1_390_000, // $1.39 = 1_390_000 micro_usd
 			ExchangeRateRmbPerUsdMicros: 7_200_000,
-			Status:               "paid",
+			Status:                      "paid",
 		})
 	}
 
@@ -370,6 +466,101 @@ func TestAdminListTopupOrders_StatusFilter(t *testing.T) {
 	}
 }
 
+func TestAdminMarkTopupPaid_CreditsQuotaAndPaidQuota(t *testing.T) {
+	setupSubTestDB(t)
+	admin := seedAdminUser(t)
+	user := seedTestUser(t, 0)
+	app := newAdminTopupTestApp(admin)
+
+	order := database.TopupOrder{
+		OutTradeNo:                  "tp_manual_paid",
+		UserID:                      user.ID,
+		PayType:                     "alipay",
+		MoneyRMB:                    7200,
+		AmountUSD:                   10 * database.MicroPerUSD,
+		ExchangeRateRmbPerUsdMicros: 7_200_000,
+		Status:                      "created",
+	}
+	if err := database.DB.Create(&order).Error; err != nil {
+		t.Fatalf("seed order: %v", err)
+	}
+
+	code, resp := doJSON(t, app, "POST",
+		"/admin/topup/orders/"+itoaUint(order.ID)+"/mark-paid",
+		map[string]any{"external_trade_ref": "yifut-paid-ref-1", "reason": "notify missed"})
+	if code != 200 {
+		t.Fatalf("expected 200 got %d body=%v", code, resp)
+	}
+
+	var freshUser database.User
+	if err := database.DB.First(&freshUser, user.ID).Error; err != nil {
+		t.Fatalf("reload user: %v", err)
+	}
+	if freshUser.Quota != 10*database.MicroPerUSD || freshUser.PaidQuota != 10*database.MicroPerUSD {
+		t.Fatalf("quota/paid_quota=%d/%d, want 10 USD each", freshUser.Quota, freshUser.PaidQuota)
+	}
+
+	var freshOrder database.TopupOrder
+	if err := database.DB.First(&freshOrder, order.ID).Error; err != nil {
+		t.Fatalf("reload order: %v", err)
+	}
+	if freshOrder.Status != "paid" || freshOrder.TradeNo != "yifut-paid-ref-1" || freshOrder.PaidAt == nil {
+		t.Fatalf("unexpected order after mark-paid: %+v", freshOrder)
+	}
+
+	var bill database.BillingEntry
+	if err := database.DB.Where("user_id = ? AND entry_type = ?", user.ID, database.BillingTypeTopup).First(&bill).Error; err != nil {
+		t.Fatalf("topup billing missing: %v", err)
+	}
+	if bill.AmountUSD != 10*database.MicroPerUSD || bill.RelatedType != "topup_order" || bill.RelatedID != order.ID {
+		t.Fatalf("unexpected billing entry: %+v", bill)
+	}
+
+	var receipt database.PaymentWebhookReceipt
+	if err := database.DB.Where("provider = ? AND nonce = ?", manualPaidReceiptProvider, "yifut-paid-ref-1").First(&receipt).Error; err != nil {
+		t.Fatalf("manual receipt missing: %v", err)
+	}
+}
+
+func TestAdminMarkTopupPaid_DuplicateExternalRefRejected(t *testing.T) {
+	setupSubTestDB(t)
+	admin := seedAdminUser(t)
+	user := seedTestUser(t, 0)
+	app := newAdminTopupTestApp(admin)
+
+	orders := []database.TopupOrder{
+		{OutTradeNo: "tp_manual_dup_1", UserID: user.ID, PayType: "alipay", MoneyRMB: 7200, AmountUSD: 10 * database.MicroPerUSD, ExchangeRateRmbPerUsdMicros: 7_200_000, Status: "created"},
+		{OutTradeNo: "tp_manual_dup_2", UserID: user.ID, PayType: "alipay", MoneyRMB: 3600, AmountUSD: 5 * database.MicroPerUSD, ExchangeRateRmbPerUsdMicros: 7_200_000, Status: "created"},
+	}
+	if err := database.DB.Create(&orders).Error; err != nil {
+		t.Fatalf("seed orders: %v", err)
+	}
+
+	code, resp := doJSON(t, app, "POST",
+		"/admin/topup/orders/"+itoaUint(orders[0].ID)+"/mark-paid",
+		map[string]any{"external_trade_ref": "same-paid-ref"})
+	if code != 200 {
+		t.Fatalf("first mark-paid expected 200 got %d body=%v", code, resp)
+	}
+	code, resp = doJSON(t, app, "POST",
+		"/admin/topup/orders/"+itoaUint(orders[1].ID)+"/mark-paid",
+		map[string]any{"external_trade_ref": "same-paid-ref"})
+	if code != 409 || resp["message_code"] != "ERR_TOPUP_MANUAL_REF_DUPLICATE" {
+		t.Fatalf("duplicate ref expected 409/ERR_TOPUP_MANUAL_REF_DUPLICATE got %d body=%v", code, resp)
+	}
+
+	var freshUser database.User
+	database.DB.First(&freshUser, user.ID)
+	if freshUser.Quota != 10*database.MicroPerUSD || freshUser.PaidQuota != 10*database.MicroPerUSD {
+		t.Fatalf("duplicate ref should not credit second order, got quota/paid=%d/%d", freshUser.Quota, freshUser.PaidQuota)
+	}
+	var second database.TopupOrder
+	database.DB.First(&second, orders[1].ID)
+	if second.Status != "created" {
+		t.Fatalf("second order status=%q, want created", second.Status)
+	}
+}
+
 // ─── AdminRefundTopup 额外场景 ───────────────────────────────────────
 
 func TestAdminRefund_UsesPersistedAmountWhenExchangeRateRmbPerUsdMicrosCorrupted(t *testing.T) {
@@ -379,12 +570,12 @@ func TestAdminRefund_UsesPersistedAmountWhenExchangeRateRmbPerUsdMicrosCorrupted
 	app := newAdminTopupTestApp(admin)
 
 	order := database.TopupOrder{
-		OutTradeNo:           "tp_bad_rate",
-		UserID:               user.ID,
-		MoneyRMB:             7200,
-		AmountUSD:            10 * database.MicroPerUSD,
+		OutTradeNo:                  "tp_bad_rate",
+		UserID:                      user.ID,
+		MoneyRMB:                    7200,
+		AmountUSD:                   10 * database.MicroPerUSD,
 		ExchangeRateRmbPerUsdMicros: 0, // corrupted
-		Status:               "paid",
+		Status:                      "paid",
 	}
 	database.DB.Create(&order)
 

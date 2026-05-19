@@ -37,20 +37,21 @@ var (
 )
 
 type cpaUsageQueueRecord struct {
-	Provider  string         `json:"provider"`
-	Model     string         `json:"model"`
-	Alias     string         `json:"alias"`
-	Endpoint  string         `json:"endpoint"`
-	AuthType  string         `json:"auth_type"`
-	APIKey    string         `json:"api_key"`
-	RequestID string         `json:"request_id"`
-	Timestamp time.Time      `json:"timestamp"`
-	LatencyMs int64          `json:"latency_ms"`
-	Source    string         `json:"source"`
-	AuthIndex string         `json:"auth_index"`
-	Tokens    cpaUsageTokens `json:"tokens"`
-	Failed    bool           `json:"failed"`
-	Fail      cpaUsageFail   `json:"fail"`
+	Provider        string         `json:"provider"`
+	Model           string         `json:"model"`
+	Alias           string         `json:"alias"`
+	Endpoint        string         `json:"endpoint"`
+	AuthType        string         `json:"auth_type"`
+	APIKey          string         `json:"api_key"`
+	RequestID       string         `json:"request_id"`
+	Timestamp       time.Time      `json:"timestamp"`
+	LatencyMs       int64          `json:"latency_ms"`
+	Source          string         `json:"source"`
+	AuthIndex       string         `json:"auth_index"`
+	ResponseHeaders http.Header    `json:"response_headers"`
+	Tokens          cpaUsageTokens `json:"tokens"`
+	Failed          bool           `json:"failed"`
+	Fail            cpaUsageFail   `json:"fail"`
 }
 
 type cpaUsageTokens struct {
@@ -73,6 +74,7 @@ type CLIProxyUsageSyncResult struct {
 	Stored    int `json:"stored"`
 	Matched   int `json:"matched"`
 	Unmatched int `json:"unmatched"`
+	Ignored   int `json:"ignored"`
 }
 
 // StartCLIProxyUsageSyncCron 定时拉取 CPA usage queue。
@@ -333,9 +335,21 @@ func storeAndMatchCLIProxyUsageRecords(records []cpaUsageQueueRecord) (CLIProxyU
 	}
 	result.Stored = len(usageRecords)
 
+	platformKeyHashes, err := loadPlatformCLIProxyAPIKeyHashes()
+	if err != nil {
+		return result, err
+	}
+
 	for i := range usageRecords {
 		rec := usageRecords[i]
 		err := database.DB.Transaction(func(tx *gorm.DB) error {
+			if ignored, reason := usageRecordIgnoredByAPIKey(rec.APIKeyHash, platformKeyHashes); ignored {
+				result.Ignored++
+				return tx.Model(&rec).Updates(map[string]any{
+					"match_status": "ignored",
+					"match_reason": trimForDB(reason, 255),
+				}).Error
+			}
 			matched, reason, err := matchUpstreamUsageRecordTx(tx, &rec)
 			if err != nil {
 				return err
@@ -355,6 +369,39 @@ func storeAndMatchCLIProxyUsageRecords(records []cpaUsageQueueRecord) (CLIProxyU
 		}
 	}
 	return result, nil
+}
+
+func loadPlatformCLIProxyAPIKeyHashes() (map[string]struct{}, error) {
+	out := map[string]struct{}{}
+	if !database.DB.Migrator().HasTable(&database.Channel{}) {
+		return out, nil
+	}
+
+	var channels []database.Channel
+	if err := database.DB.
+		Where("type = ? AND status = ? AND key <> ?", proxy.ChannelTypeCLIProxy, 1, "").
+		Find(&channels).Error; err != nil {
+		return nil, fmt.Errorf("load platform cliproxy channel keys: %w", err)
+	}
+	for _, ch := range channels {
+		if h := proxy.HashTokenForLog(ch.Key); h != "" {
+			out[h] = struct{}{}
+		}
+	}
+	return out, nil
+}
+
+func usageRecordIgnoredByAPIKey(apiKeyHash string, platformKeyHashes map[string]struct{}) (bool, string) {
+	if len(platformKeyHashes) == 0 {
+		return false, ""
+	}
+	if strings.TrimSpace(apiKeyHash) == "" {
+		return true, "missing_api_key_hash"
+	}
+	if _, ok := platformKeyHashes[apiKeyHash]; !ok {
+		return true, "ignored_non_platform_key"
+	}
+	return false, ""
 }
 
 func convertCPAUsageRecord(raw cpaUsageQueueRecord) database.UpstreamUsageRecord {
@@ -383,12 +430,54 @@ func convertCPAUsageRecord(raw cpaUsageQueueRecord) database.UpstreamUsageRecord
 		TotalTokens:         safeInt(raw.Tokens.TotalTokens),
 		Failed:              raw.Failed,
 		Status:              status,
+		ResponseHeadersJSON: encodeUsageResponseHeaders(raw.ResponseHeaders),
 		// fix CRITICAL（多模型审计第二十五轮）：上游 4xx/5xx 响应体里常含 Bearer / api_key /
 		// JWT 等凭据（如 401 unauthorized 通常会回显 token 前缀）。原实现仅截断不脱敏，
 		// 直接持久化到 DB 形成泄漏面。必须先经 SanitizeErrorMessage 过滤再截断。
 		FailBody:    trimForDB(proxy.SanitizeErrorMessage(raw.Fail.Body, 512), 512),
 		MatchStatus: "pending",
 	}
+}
+
+func encodeUsageResponseHeaders(headers http.Header) string {
+	if len(headers) == 0 {
+		return ""
+	}
+	out := http.Header{}
+	for name, values := range headers {
+		key := http.CanonicalHeaderKey(strings.TrimSpace(name))
+		if key == "" || usageResponseHeaderSensitive(key) {
+			continue
+		}
+		for _, value := range values {
+			value = strings.TrimSpace(proxy.SanitizeErrorMessage(value, 512))
+			if value == "" {
+				continue
+			}
+			out.Add(key, trimForDB(value, 512))
+		}
+	}
+	if len(out) == 0 {
+		return ""
+	}
+	payload, err := json.Marshal(out)
+	if err != nil {
+		return ""
+	}
+	return trimForDB(string(payload), 8192)
+}
+
+func usageResponseHeaderSensitive(name string) bool {
+	n := strings.ToLower(strings.TrimSpace(name))
+	if n == "" {
+		return true
+	}
+	for _, marker := range []string{"authorization", "cookie", "token", "api-key", "apikey", "secret", "credential", "session"} {
+		if strings.Contains(n, marker) {
+			return true
+		}
+	}
+	return false
 }
 
 func matchUpstreamUsageRecordTx(tx *gorm.DB, rec *database.UpstreamUsageRecord) (bool, string, error) {

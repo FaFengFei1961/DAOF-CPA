@@ -24,8 +24,8 @@ import (
 // 同时 swap 两个 map，比旧"取两次锁"更短的临界区。
 var (
 	// ChannelMapCache + RouteCache 共享 gatewayMutex，保证跨 cache 读取一致性
-	ChannelMapCache map[uint]*database.Channel             // key: channel_id
-	RouteCache      map[string][]*database.ChannelModel    // key: model_name
+	ChannelMapCache map[uint]*database.Channel          // key: channel_id
+	RouteCache      map[string][]*database.ChannelModel // key: model_name
 	gatewayMutex    sync.RWMutex
 
 	// AuthCache + AuthTokenCache 共享 authSnapshotMutex
@@ -186,8 +186,13 @@ func SyncCacheConfig() {
 	newRouteMap := make(map[string][]*database.ChannelModel)
 	for i := range channelModels {
 		chm := &channelModels[i]
+		database.NormalizeChannelModelMetadata(chm)
 		if err := database.ValidateChannelModelPricing(chm); err != nil {
 			log.Printf("[CACHE] QUARANTINE channel_model id=%d model=%q price validation failed: %v", chm.ID, chm.ModelID, err)
+			continue
+		}
+		if err := database.ValidateChannelModelActivation(chm); err != nil {
+			log.Printf("[CACHE] QUARANTINE channel_model id=%d model=%q activation validation failed: %v", chm.ID, chm.ModelID, err)
 			continue
 		}
 		// 只有该信道存活时，这个模型挂载才有意义

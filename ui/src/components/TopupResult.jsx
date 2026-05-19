@@ -34,7 +34,7 @@ const TopupResult = () => {
       case 'sign_invalid':
         return {
           icon: <AlertTriangle size={56} className="text-error" />,
-          title: t('TOPUP.RESULT.SIGN_INVALID', '回调签名异常，请联系客服'),
+          title: t('TOPUP.RESULT.SIGN_INVALID', '回调签名异常，请提交工单'),
           tone: 'border-error/30',
         };
       default:
@@ -60,8 +60,11 @@ const TopupResult = () => {
 
         {status === 'success' && (
           <div className="grid grid-cols-1 sm:grid-cols-3 gap-3 mb-8 text-left">
+            {/* fix P3（codex review verify-r7）：原 navigate('/') 让已订阅用户进 dashboard 后看不到
+                浏览套餐入口（modal 只在空订阅状态弹）。改用 ?openBrowse=store query 与 /upgrade?pane=store
+                compat 路径对齐，MySubscriptions 检测后自动弹 BrowsePackagesModal。 */}
             <button
-              onClick={() => navigate('/upgrade')}
+              onClick={() => navigate('/?openBrowse=store')}
               className="fl-card p-4 hover:border-primary/50 hover:bg-primary/5 transition group"
             >
               <div className="font-semibold text-sm group-hover:text-primary mb-1">{t('TOPUP.RESULT.ACTION_SUBSCRIBE', '立刻订阅套餐')}</div>
@@ -98,7 +101,7 @@ const TopupResult = () => {
               onClick={() => navigate('/tickets')}
               className="h-10 px-6 bg-surface-container border border-outline rounded-control text-sm font-semibold hover:border-primary hover:text-primary transition"
             >
-              {t('TOPUP.RESULT.CONTACT_SUPPORT', '联系客服')}
+              {t('TOPUP.RESULT.CONTACT_SUPPORT', '提交工单')}
             </button>
           </div>
         )}

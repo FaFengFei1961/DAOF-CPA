@@ -200,9 +200,14 @@ const AdminSubscriptions = () => {
 
     setRefundingId(sub.id);
     try {
+      // fix CRITICAL（codex money-unit）：后端 adminRefundSubscriptionRequest 只接受
+      // `amount_micro_usd` int64，注释明确"金额入口使用 int64 micro_usd，禁止 USD float"。
+      // 旧前端发 `amount_usd` (USD float) → 后端 req.AmountMicroUSD=0 → 全部退款请求被拒
+      // (ERR_REFUND_AMOUNT_INVALID)。Math.round 防 float 精度引入小数 fen。
+      const amountMicroUSD = Math.round(amount * 1e6);
       const json = await authFetch(`/api/admin/subscriptions/${sub.id}/refund`, {
         method: 'POST',
-        body: { amount_usd: amount, reason: String(reason || t('ADMIN_SUBS.REASON_DEFAULT', '协商退款')) },
+        body: { amount_micro_usd: amountMicroUSD, reason: String(reason || t('ADMIN_SUBS.REASON_DEFAULT', '协商退款')) },
       });
       if (json.success) {
         toast.success(t('ADMIN_SUBS.REFUND_OK', '已退款 ${{amount}}', { amount: amount.toFixed(2) }));

@@ -504,13 +504,13 @@ const Tickets = () => {
         <div className="fl-card p-16 text-center">
           <MessageSquare size={36} className="mx-auto mb-3 text-on-surface-variant/50" />
           <p className="text-on-surface font-semibold mb-1">{t('TICKETS.EMPTY_TITLE', '暂无工单')}</p>
-          <p className="text-on-surface-variant text-sm mb-4">{t('TICKETS.EMPTY_DESC', '有任何问题可以随时联系客服')}</p>
+          <p className="text-on-surface-variant text-sm mb-4">{t('TICKETS.EMPTY_DESC', '有任何问题可以随时提交工单')}</p>
           <button
             type="button"
             onClick={() => setView('create')}
             className="h-9 px-4 bg-primary text-on-primary rounded-control text-sm font-semibold hover:brightness-110 active:scale-[0.98] transition"
           >
-            {t('TICKETS.CONTACT_SUPPORT', '联系客服')}
+            {t('TICKETS.CONTACT_SUPPORT', '提交工单')}
           </button>
         </div>
       ) : (

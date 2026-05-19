@@ -25,6 +25,7 @@ func newAdminTopupTestApp(admin *database.User) *fiber.App {
 	})
 	app.Use(middleware.AdminGuard)
 	app.Post("/admin/topup/orders/:id/refund", AdminRefundTopup)
+	app.Post("/admin/topup/orders/:id/mark-paid", AdminMarkTopupPaid)
 	return app
 }
 
@@ -35,12 +36,12 @@ func seedPaidTopupOrder(t *testing.T, userID uint, rmb float64) *database.TopupO
 	rmbFen, _ := database.RMBToFen(rmb)
 	amountMicro, _ := database.USDToMicro(round2(rmb / 7.2))
 	o := database.TopupOrder{
-		OutTradeNo:           "tp_test_" + itoaUint(userID),
-		UserID:               userID,
-		MoneyRMB:             rmbFen,
-		AmountUSD:            amountMicro,
+		OutTradeNo:                  "tp_test_" + itoaUint(userID),
+		UserID:                      userID,
+		MoneyRMB:                    rmbFen,
+		AmountUSD:                   amountMicro,
 		ExchangeRateRmbPerUsdMicros: 7_200_000, // ¥7.2 = $1
-		Status:               "paid",
+		Status:                      "paid",
 	}
 	if err := database.DB.Create(&o).Error; err != nil {
 		t.Fatalf("seed topup: %v", err)
@@ -221,6 +222,37 @@ func TestSecurity_TopupRefund_NonReclaimSkipsCheck(t *testing.T) {
 	database.DB.First(&u, user.ID)
 	if u.Quota != 0 {
 		t.Errorf("non-reclaim refund must NOT change user quota; got %d", u.Quota)
+	}
+}
+
+func TestSecurity_TopupRefund_NonReclaimReclassifiesPaidQuotaAsCompensation(t *testing.T) {
+	setupSubTestDB(t)
+	admin := seedAdminUser(t)
+	user := seedTestUser(t, 10)
+	if err := database.DB.Model(&database.User{}).
+		Where("id = ?", user.ID).
+		Update("paid_quota", 10*database.MicroPerUSD).Error; err != nil {
+		t.Fatalf("seed paid quota: %v", err)
+	}
+	app := newAdminTopupTestApp(admin)
+	order := seedPaidTopupOrder(t, user.ID, 72.0)
+
+	code, resp := doJSON(t, app, "POST",
+		"/admin/topup/orders/"+itoaUint(order.ID)+"/refund",
+		map[string]any{"reclaim_quota": false, "external_refund_ref": "rext_nonreclaim_paid"})
+	if code != 200 {
+		t.Fatalf("expected 200, got %d body=%v", code, resp)
+	}
+
+	var fresh database.User
+	if err := database.DB.First(&fresh, user.ID).Error; err != nil {
+		t.Fatalf("load user: %v", err)
+	}
+	if fresh.Quota != 10*database.MicroPerUSD {
+		t.Fatalf("non-reclaim refund should keep quota=%d, got %d", 10*database.MicroPerUSD, fresh.Quota)
+	}
+	if fresh.PaidQuota != 0 {
+		t.Fatalf("refunded-but-retained balance must stop being paid quota, got %d", fresh.PaidQuota)
 	}
 }
 

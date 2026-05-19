@@ -474,6 +474,9 @@
   /* Combo — 青蓝，跨产品组合 */
   --brand-combo: 14 165 233;         /* #0EA5E9 */
   --brand-combo-soft: 2 132 199;     /* #0284C7 */
+  /* xAI — 暖黄，Grok / xAI 标识 */
+  --brand-xai: 250 204 21;           /* #FACC15 */
+  --brand-xai-soft: 202 138 4;       /* #CA8A04 */
   /* Other — 中性灰 */
   --brand-other: 148 163 184;        /* #94A3B8 */
   --brand-other-soft: 100 116 139;   /* #64748B */
@@ -497,5 +500,6 @@
 .fl-brand-chip[data-brand="codex"]   { --brand: var(--brand-codex); }
 .fl-brand-chip[data-brand="gemini"]  { --brand: var(--brand-gemini); }
 .fl-brand-chip[data-brand="combo"]   { --brand: var(--brand-combo); }
+.fl-brand-chip[data-brand="xai"]     { --brand: var(--brand-xai); }
 .fl-brand-chip[data-brand="other"]   { --brand: var(--brand-other); }
 

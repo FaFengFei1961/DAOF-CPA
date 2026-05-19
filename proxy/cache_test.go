@@ -26,7 +26,15 @@ func TestSyncCacheConfig(t *testing.T) {
 	// Insert mock data；BaseURL 必须通过 ValidateChannelURL（http/https + 有 host），
 	// 否则会被 SyncCacheConfig 隔离不进缓存
 	database.DB.Create(&database.Channel{ID: 1, Type: "openai", BaseURL: "https://example.com", Key: "sk-c", Status: 1})
-	database.DB.Create(&database.ChannelModel{ChannelID: 1, ModelID: "gpt-mock", Status: 1})
+	database.DB.Create(&database.ChannelModel{
+		ChannelID:               1,
+		ModelID:                 "gpt-mock",
+		Status:                  1,
+		InputPricePicoPerToken:  database.PicoPerTokenPerUSDPerMTok,
+		OutputPricePicoPerToken: database.PicoPerTokenPerUSDPerMTok,
+		ModerationFailMode:      "closed",
+		ModerationLevel:         "moderation",
+	})
 	database.DB.Create(&database.User{ID: 1, Username: "cachetest", Token: "parent-token", Status: 1})
 	database.DB.Create(&database.AccessToken{UserID: 1, Key: "child-token", Status: 1})
 	// Sys config skips encrypt for fast test

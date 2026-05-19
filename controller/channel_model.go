@@ -62,6 +62,10 @@ var allowedModerationFailModes = map[string]bool{
 type channelModelPayload struct {
 	ModelID                            string `json:"model_id"`
 	DisplayName                        string `json:"display_name"`
+	OfficialModelID                    string `json:"official_model_id"`
+	ModelCategory                      string `json:"model_category"`
+	BillingMode                        string `json:"billing_mode"`
+	AllowedEndpoints                   string `json:"allowed_endpoints"`
 	InputPricePicoPerToken             int64  `json:"input_price_pico_per_token"`
 	OutputPricePicoPerToken            int64  `json:"output_price_pico_per_token"`
 	CachedInputPricePicoPerToken       int64  `json:"cached_input_price_pico_per_token"`
@@ -84,6 +88,10 @@ type channelModelResponse struct {
 	ChannelID                          uint      `json:"channel_id"`
 	ModelID                            string    `json:"model_id"`
 	DisplayName                        string    `json:"display_name"`
+	OfficialModelID                    string    `json:"official_model_id"`
+	ModelCategory                      string    `json:"model_category"`
+	BillingMode                        string    `json:"billing_mode"`
+	AllowedEndpoints                   string    `json:"allowed_endpoints"`
 	InputPricePicoPerToken             int64     `json:"input_price_pico_per_token"`
 	OutputPricePicoPerToken            int64     `json:"output_price_pico_per_token"`
 	CachedInputPricePicoPerToken       int64     `json:"cached_input_price_pico_per_token"`
@@ -99,6 +107,8 @@ type channelModelResponse struct {
 	EndpointPolicy                     string    `json:"endpoint_policy"`
 	ModerationLevel                    string    `json:"moderation_level"`
 	ModerationFailMode                 string    `json:"moderation_fail_mode"`
+	MinImagePrice                      float64   `json:"min_image_price"`
+	MinVideoSecondPrice                float64   `json:"min_video_second_price"`
 	CreatedAt                          time.Time `json:"created_at"`
 	UpdatedAt                          time.Time `json:"updated_at"`
 }
@@ -107,6 +117,10 @@ func (p channelModelPayload) toChannelModel() (database.ChannelModel, error) {
 	model := database.ChannelModel{
 		ModelID:                            p.ModelID,
 		DisplayName:                        p.DisplayName,
+		OfficialModelID:                    p.OfficialModelID,
+		ModelCategory:                      p.ModelCategory,
+		BillingMode:                        p.BillingMode,
+		AllowedEndpoints:                   p.AllowedEndpoints,
 		InputPricePicoPerToken:             p.InputPricePicoPerToken,
 		OutputPricePicoPerToken:            p.OutputPricePicoPerToken,
 		CachedInputPricePicoPerToken:       p.CachedInputPricePicoPerToken,
@@ -126,6 +140,7 @@ func (p channelModelPayload) toChannelModel() (database.ChannelModel, error) {
 	if err := database.ValidateChannelModelPricing(&model); err != nil {
 		return database.ChannelModel{}, err
 	}
+	database.NormalizeChannelModelMetadata(&model)
 	return model, nil
 }
 
@@ -135,6 +150,10 @@ func newChannelModelResponse(cm database.ChannelModel) channelModelResponse {
 		ChannelID:                          cm.ChannelID,
 		ModelID:                            cm.ModelID,
 		DisplayName:                        cm.DisplayName,
+		OfficialModelID:                    cm.OfficialModelID,
+		ModelCategory:                      database.NormalizeModelCategory(cm.ModelCategory, cm.ModelID),
+		BillingMode:                        database.NormalizeBillingMode(cm.BillingMode, cm.ModelCategory),
+		AllowedEndpoints:                   cm.AllowedEndpoints,
 		InputPricePicoPerToken:             cm.InputPricePicoPerToken,
 		OutputPricePicoPerToken:            cm.OutputPricePicoPerToken,
 		CachedInputPricePicoPerToken:       cm.CachedInputPricePicoPerToken,
@@ -155,12 +174,136 @@ func newChannelModelResponse(cm database.ChannelModel) channelModelResponse {
 	}
 }
 
+func attachMediaPriceSummaries(rows []channelModelResponse) []channelModelResponse {
+	if len(rows) == 0 {
+		return rows
+	}
+	if database.DB == nil || !database.DB.Migrator().HasTable(&database.ModelPricingRule{}) {
+		return rows
+	}
+	modelIDs := make([]string, 0, len(rows))
+	seen := map[string]bool{}
+	for _, row := range rows {
+		if row.ModelID == "" || seen[row.ModelID] {
+			continue
+		}
+		seen[row.ModelID] = true
+		modelIDs = append(modelIDs, row.ModelID)
+	}
+	if len(modelIDs) == 0 {
+		return rows
+	}
+
+	type priceSummary struct {
+		ModelID             string  `gorm:"column:model_id"`
+		MinImagePrice       float64 `gorm:"column:min_image_price"`
+		MinVideoSecondPrice float64 `gorm:"column:min_video_second_price"`
+	}
+	var summaries []priceSummary
+	if err := database.DB.Model(&database.ModelPricingRule{}).
+		Select(`model_id,
+			COALESCE(MIN(CASE WHEN unit = 'image' AND direction = 'output' AND price_micro_usd > 0 THEN price_micro_usd END), 0) / 1000000.0 as min_image_price,
+			COALESCE(MIN(CASE WHEN unit = 'video_second' AND direction = 'output' AND price_micro_usd > 0 THEN price_micro_usd END), 0) / 1000000.0 as min_video_second_price`).
+		Where("model_id IN ?", modelIDs).
+		Group("model_id").
+		Scan(&summaries).Error; err != nil {
+		log.Printf("Load media price summaries failed: %v", err)
+		return rows
+	}
+	byID := map[string]priceSummary{}
+	for _, summary := range summaries {
+		byID[summary.ModelID] = summary
+	}
+	for i := range rows {
+		if summary, ok := byID[rows[i].ModelID]; ok {
+			rows[i].MinImagePrice = summary.MinImagePrice
+			rows[i].MinVideoSecondPrice = summary.MinVideoSecondPrice
+		}
+	}
+	return rows
+}
+
 func newChannelModelResponses(models []database.ChannelModel) []channelModelResponse {
 	out := make([]channelModelResponse, 0, len(models))
 	for _, model := range models {
 		out = append(out, newChannelModelResponse(model))
 	}
 	return out
+}
+
+func applyCatalogDefaultsToChannelModel(cm *database.ChannelModel) {
+	if cm == nil || database.DB == nil || strings.TrimSpace(cm.ModelID) == "" {
+		return
+	}
+	if database.DB.Migrator().HasTable(&database.ModelCatalog{}) {
+		var catalog database.ModelCatalog
+		if err := database.DB.Where("model_id = ? OR official_model_id = ?", cm.ModelID, cm.ModelID).First(&catalog).Error; err == nil {
+			if strings.TrimSpace(cm.DisplayName) == "" {
+				cm.DisplayName = firstNonEmptyString(catalog.DisplayName, cm.ModelID)
+			}
+			if strings.TrimSpace(cm.OfficialModelID) == "" {
+				cm.OfficialModelID = firstNonEmptyString(catalog.OfficialModelID, cm.ModelID)
+			}
+			if strings.TrimSpace(cm.ModelCategory) == "" {
+				cm.ModelCategory = database.NormalizeModelCategory(catalog.Category, cm.ModelID)
+			}
+			if strings.TrimSpace(cm.BillingMode) == "" {
+				cm.BillingMode = database.NormalizeBillingMode(catalog.BillingMode, cm.ModelCategory)
+			}
+		}
+	}
+	database.NormalizeChannelModelMetadata(cm)
+
+	if !database.DB.Migrator().HasTable(&database.ModelPricingRule{}) {
+		return
+	}
+	var rules []database.ModelPricingRule
+	if err := database.DB.Where("(model_id = ? OR official_model_id = ?) AND unit = ?", cm.ModelID, cm.OfficialModelID, "token").
+		Order("context_min_tokens asc").
+		Find(&rules).Error; err != nil {
+		return
+	}
+	for _, rule := range rules {
+		if rule.ContextMinTokens <= 0 {
+			if cm.InputPricePicoPerToken == 0 {
+				cm.InputPricePicoPerToken = rule.InputPricePicoPerToken
+			}
+			if cm.OutputPricePicoPerToken == 0 {
+				cm.OutputPricePicoPerToken = rule.OutputPricePicoPerToken
+			}
+			if cm.CachedInputPricePicoPerToken == 0 {
+				cm.CachedInputPricePicoPerToken = rule.CachedInputPricePicoPerToken
+			}
+			if cm.CacheWriteInputPricePicoPerToken == 0 {
+				cm.CacheWriteInputPricePicoPerToken = rule.CacheWriteInputPricePicoPerToken
+			}
+			if cm.CacheWrite1hInputPricePicoPerToken == 0 {
+				cm.CacheWrite1hInputPricePicoPerToken = rule.CacheWrite1hInputPricePicoPerToken
+			}
+			continue
+		}
+		if cm.ContextPriceThreshold == 0 {
+			cm.ContextPriceThreshold = rule.ContextMinTokens
+		}
+		if cm.HighInputPricePicoPerToken == 0 {
+			cm.HighInputPricePicoPerToken = rule.InputPricePicoPerToken
+		}
+		if cm.HighCachedInputPricePicoPerToken == 0 {
+			cm.HighCachedInputPricePicoPerToken = rule.CachedInputPricePicoPerToken
+		}
+		if cm.HighOutputPricePicoPerToken == 0 {
+			cm.HighOutputPricePicoPerToken = rule.OutputPricePicoPerToken
+		}
+	}
+}
+
+func firstNonEmptyString(values ...string) string {
+	for _, value := range values {
+		if strings.TrimSpace(value) != "" {
+			return strings.TrimSpace(value)
+		}
+	}
+	return ""
 }
 
 // validateChannelModelEndpointPolicy 校验并规范化模型端点兼容策略。
@@ -224,14 +367,6 @@ func validateChannelModelModeration(cm *database.ChannelModel, ch *database.Chan
 			"moderation_fail_mode 取值非法（允许：open / closed）"
 	}
 
-	// OpenAI/Codex-family 模型一律实装内容审查。这里按 model_id 判定，而不是按
-	// channel.Type 判定：openai 通道类型也承载 DeepSeek/国产/自部署等 OpenAI-compatible
-	// 模型，不能误伤到整个兼容协议族。
-	if database.IsOpenAIModelID(cm.ModelID) {
-		level = database.OpenAIModelModerationLevel
-		failMode = database.OpenAIModelModerationFailMode
-	}
-
 	// fix CRITICAL R23-C3（codex 审查）：官方渠道下"打开了审核但配 fail_mode=open"等同于
 	// 没开审 —— 审核 API 不可达时 prompt 直接透传到官方 key 引发封号。强制策略：
 	//   - level=off → 必须 confirm（与之前一致）
@@ -284,7 +419,8 @@ func GetPublicModels(c *fiber.Ctx) error {
 	var uniqueModels []string
 	if err := database.DB.Model(&database.ChannelModel{}).
 		Joins("JOIN channels ON channels.id = channel_models.channel_id").
-		Where("channel_models.status = ? AND channels.status = ?", 1, 1).
+		Where("channel_models.status = ? AND channels.status = ? AND (channel_models.model_category = ? OR channel_models.model_category = '' OR channel_models.model_category IS NULL)",
+			1, 1, database.ModelCategoryText).
 		Distinct("channel_models.model_id").
 		Order("channel_models.model_id ASC").
 		Pluck("channel_models.model_id", &uniqueModels).Error; err != nil {
@@ -306,6 +442,9 @@ func GetPublicModels(c *fiber.Ctx) error {
 
 	var dataList []OpenAIModel
 	for _, m := range uniqueModels {
+		if database.InferModelCategory(m) != database.ModelCategoryText {
+			continue
+		}
 		dataList = append(dataList, OpenAIModel{
 			ID:      m,
 			Object:  "model",
@@ -324,11 +463,15 @@ func GetPublicModels(c *fiber.Ctx) error {
 func GetPublicPricing(c *fiber.Ctx) error {
 	type PricingResult struct {
 		ModelID              string  `gorm:"column:model_id" json:"model_id"`
+		ModelCategory        string  `gorm:"column:model_category" json:"model_category"`
+		BillingMode          string  `gorm:"column:billing_mode" json:"billing_mode"`
 		MinInputPrice        float64 `gorm:"column:min_input_price" json:"min_input_price"`
 		MinOutputPrice       float64 `gorm:"column:min_output_price" json:"min_output_price"`
 		MinCachePrice        float64 `gorm:"column:min_cache_price" json:"min_cache_price"`
 		MinCacheWritePrice   float64 `gorm:"column:min_cache_write_price" json:"min_cache_write_price"`
 		MinCacheWrite1hPrice float64 `gorm:"column:min_cache_write_1h_price" json:"min_cache_write_1h_price"`
+		MinImagePrice        float64 `gorm:"column:min_image_price" json:"min_image_price"`
+		MinVideoSecondPrice  float64 `gorm:"column:min_video_second_price" json:"min_video_second_price"`
 		ContextThreshold     int     `gorm:"column:context_threshold" json:"context_threshold"`
 		MinHighInPrice       float64 `gorm:"column:min_high_in_price" json:"min_high_in_price"`
 		MinHighCachePrice    float64 `gorm:"column:min_high_cache_price" json:"min_high_cache_price"`
@@ -339,17 +482,22 @@ func GetPublicPricing(c *fiber.Ctx) error {
 	var results []PricingResult
 	if err := database.DB.Model(&database.ChannelModel{}).
 		Joins("JOIN channels ON channels.id = channel_models.channel_id").
-		Select(`model_id,
-			COALESCE(MIN(NULLIF(input_price_pico_per_token, 0)), 0) / 1000000000.0 as min_input_price,
-			COALESCE(MIN(NULLIF(output_price_pico_per_token, 0)), 0) / 1000000000.0 as min_output_price,
-			COALESCE(MIN(NULLIF(cached_input_price_pico_per_token, 0)), 0) / 1000000000.0 as min_cache_price,
-			COALESCE(MIN(NULLIF(cache_write_input_price_pico_per_token, 0)), 0) / 1000000000.0 as min_cache_write_price,
-			COALESCE(MIN(NULLIF(cache_write_1h_input_price_pico_per_token, 0)), 0) / 1000000000.0 as min_cache_write_1h_price,
-			MAX(context_price_threshold) as context_threshold,
-			COALESCE(MIN(NULLIF(high_input_price_pico_per_token, 0)), 0) / 1000000000.0 as min_high_in_price,
-			COALESCE(MIN(NULLIF(high_cached_input_price_pico_per_token, 0)), 0) / 1000000000.0 as min_high_cache_price,
-			COALESCE(MIN(NULLIF(high_output_price_pico_per_token, 0)), 0) / 1000000000.0 as min_high_out_price,
-			MAX(max_context_length) as max_context_length`).
+		Joins("LEFT JOIN model_pricing_rules ON (model_pricing_rules.model_id = channel_models.model_id OR model_pricing_rules.official_model_id = channel_models.official_model_id)").
+		Select(`channel_models.model_id as model_id,
+			COALESCE(MAX(NULLIF(channel_models.model_category, '')), 'text') as model_category,
+			COALESCE(MAX(NULLIF(channel_models.billing_mode, '')), 'token') as billing_mode,
+			COALESCE(MIN(NULLIF(channel_models.input_price_pico_per_token, 0)), 0) / 1000000000.0 as min_input_price,
+			COALESCE(MIN(NULLIF(channel_models.output_price_pico_per_token, 0)), 0) / 1000000000.0 as min_output_price,
+			COALESCE(MIN(NULLIF(channel_models.cached_input_price_pico_per_token, 0)), 0) / 1000000000.0 as min_cache_price,
+			COALESCE(MIN(NULLIF(channel_models.cache_write_input_price_pico_per_token, 0)), 0) / 1000000000.0 as min_cache_write_price,
+			COALESCE(MIN(NULLIF(channel_models.cache_write_1h_input_price_pico_per_token, 0)), 0) / 1000000000.0 as min_cache_write_1h_price,
+			COALESCE(MIN(CASE WHEN model_pricing_rules.unit = 'image' AND model_pricing_rules.direction = 'output' AND model_pricing_rules.price_micro_usd > 0 THEN model_pricing_rules.price_micro_usd END), 0) / 1000000.0 as min_image_price,
+			COALESCE(MIN(CASE WHEN model_pricing_rules.unit = 'video_second' AND model_pricing_rules.direction = 'output' AND model_pricing_rules.price_micro_usd > 0 THEN model_pricing_rules.price_micro_usd END), 0) / 1000000.0 as min_video_second_price,
+			MAX(channel_models.context_price_threshold) as context_threshold,
+			COALESCE(MIN(NULLIF(channel_models.high_input_price_pico_per_token, 0)), 0) / 1000000000.0 as min_high_in_price,
+			COALESCE(MIN(NULLIF(channel_models.high_cached_input_price_pico_per_token, 0)), 0) / 1000000000.0 as min_high_cache_price,
+			COALESCE(MIN(NULLIF(channel_models.high_output_price_pico_per_token, 0)), 0) / 1000000000.0 as min_high_out_price,
+			MAX(channel_models.max_context_length) as max_context_length`).
 		Where("channel_models.status = ? AND channels.status = ?", 1, 1).
 		Group("channel_models.model_id").
 		Scan(&results).Error; err != nil {
@@ -387,7 +535,7 @@ func GetModelsByChannel(c *fiber.Ctx) error {
 
 	return c.JSON(fiber.Map{
 		"success": true,
-		"data":    newChannelModelResponses(models),
+		"data":    attachMediaPriceSummaries(newChannelModelResponses(models)),
 	})
 }
 
@@ -427,6 +575,10 @@ func AddChannelModel(c *fiber.Ctx) error {
 			"message":      "ModelID is required required to bind a price matrix",
 		})
 	}
+	applyCatalogDefaultsToChannelModel(&body)
+	if body.Status == 0 {
+		body.Status = 2
+	}
 
 	// 加载渠道用于审核字段校验（官方 host 检测）
 	var ch database.Channel
@@ -458,6 +610,13 @@ func AddChannelModel(c *fiber.Ctx) error {
 		return c.Status(400).JSON(fiber.Map{
 			"success":      false,
 			"message_code": "ERR_INVALID_LIMIT",
+			"message":      err.Error(),
+		})
+	}
+	if err := database.ValidateChannelModelActivation(&body); err != nil {
+		return c.Status(400).JSON(fiber.Map{
+			"success":      false,
+			"message_code": "ERR_MODEL_NOT_SUPPORTED",
 			"message":      err.Error(),
 		})
 	}
@@ -526,9 +685,22 @@ func UpdateChannelModel(c *fiber.Ctx) error {
 			"message":      "Target channel model binding completely lost in DB",
 		})
 	}
+	rawBody := c.Body()
 
 	// 允许任意字段的灵活调价覆盖（仅限合法的覆盖模式）
 	chm.DisplayName = body.DisplayName
+	if gjson.GetBytes(rawBody, "official_model_id").Exists() {
+		chm.OfficialModelID = body.OfficialModelID
+	}
+	if gjson.GetBytes(rawBody, "model_category").Exists() {
+		chm.ModelCategory = body.ModelCategory
+	}
+	if gjson.GetBytes(rawBody, "billing_mode").Exists() {
+		chm.BillingMode = body.BillingMode
+	}
+	if gjson.GetBytes(rawBody, "allowed_endpoints").Exists() {
+		chm.AllowedEndpoints = body.AllowedEndpoints
+	}
 	chm.InputPricePicoPerToken = body.InputPricePicoPerToken
 	chm.OutputPricePicoPerToken = body.OutputPricePicoPerToken
 	chm.CachedInputPricePicoPerToken = body.CachedInputPricePicoPerToken
@@ -548,7 +720,6 @@ func UpdateChannelModel(c *fiber.Ctx) error {
 
 	// fix CRITICAL R23：审核字段校验（更新路径）
 	// 仅当请求体显式包含 moderation_level 才更新（gjson 探测原始字段是否出现，避免 zero-value 覆盖）
-	rawBody := c.Body()
 	if gjson.GetBytes(rawBody, "endpoint_policy").Exists() {
 		chm.EndpointPolicy = body.EndpointPolicy
 	}
@@ -585,6 +756,13 @@ func UpdateChannelModel(c *fiber.Ctx) error {
 		return c.Status(400).JSON(fiber.Map{
 			"success":      false,
 			"message_code": "ERR_INVALID_LIMIT",
+			"message":      err.Error(),
+		})
+	}
+	if err := database.ValidateChannelModelActivation(&chm); err != nil {
+		return c.Status(400).JSON(fiber.Map{
+			"success":      false,
+			"message_code": "ERR_MODEL_NOT_SUPPORTED",
 			"message":      err.Error(),
 		})
 	}
@@ -785,21 +963,27 @@ func AddChannelModelsBatch(c *fiber.Ctx) error {
 
 	var toInsert []database.ChannelModel
 	for _, m := range payload.Models {
-		level := defaultLevel
-		failMode := defaultFailMode
-		if database.IsOpenAIModelID(m) {
-			level = database.OpenAIModelModerationLevel
-			failMode = database.OpenAIModelModerationFailMode
+		modelLevel := defaultLevel
+		modelFailMode := defaultFailMode
+		if database.IsOpenAIGPTTextModelID(m) {
+			modelLevel = "moderation"
+			modelFailMode = "closed"
 		}
-		toInsert = append(toInsert, database.ChannelModel{
+		row := database.ChannelModel{
 			ChannelID:          uint(channelID),
 			ModelID:            m,
 			DisplayName:        m,
+			OfficialModelID:    m,
+			ModelCategory:      database.InferModelCategory(m),
+			BillingMode:        database.NormalizeBillingMode("", database.InferModelCategory(m)),
+			AllowedEndpoints:   database.DefaultAllowedEndpointsForCategory(database.InferModelCategory(m)),
 			Weight:             1,
-			Status:             1,
-			ModerationLevel:    level,
-			ModerationFailMode: failMode,
-		})
+			Status:             2,
+			ModerationLevel:    modelLevel,
+			ModerationFailMode: modelFailMode,
+		}
+		applyCatalogDefaultsToChannelModel(&row)
+		toInsert = append(toInsert, row)
 	}
 	modelIDs := make([]string, 0, len(toInsert))
 	for _, m := range toInsert {

@@ -1,6 +1,6 @@
 import React, { useMemo, useState } from 'react';
 import { useTranslation } from 'react-i18next';
-import { Activity, Eye, EyeOff, KeyRound, ShieldAlert } from 'lucide-react';
+import { Activity, Eye, EyeOff, KeyRound, RefreshCw, ShieldAlert } from 'lucide-react';
 import toast from 'react-hot-toast';
 import { PageContainer, PageHeader, FormRow } from '../../../components/ui';
 import TextInput from '../../../components/ui/TextInput';
@@ -11,6 +11,11 @@ import { authFetch } from '../../../utils/authFetch';
 import { SaveBar } from './_AdminFormPrimitives';
 
 const SYNC_CONFIG_DEFAULTS = {
+  // 号池额度采集器
+  credits_refresh_interval: '15',
+  credits_max_retries: '3',
+  credits_retry_interval: '5',
+  // CLIProxy 用量同步
   moderation_cliproxy_api_key: '',
   cpa_project_id_refresh_seconds: '86400',
   proxy_tls_skip_verify: 'false',
@@ -55,6 +60,8 @@ const SyncPage = () => {
   const { configs, handleChange, refetch } = useAdminConfigs();
   const [mask, toggleMask] = useMaskState();
   const [saving, setSaving] = useState(false);
+  const [syncingUsage, setSyncingUsage] = useState(false);
+  const [usageSyncResult, setUsageSyncResult] = useState(null);
 
   const values = useMemo(() => Object.fromEntries(
     Object.entries(SYNC_CONFIG_DEFAULTS).map(([key, fallback]) => [key, configs[key] ?? fallback]),
@@ -62,6 +69,9 @@ const SyncPage = () => {
 
   const validate = () => {
     const checks = [
+      ['credits_refresh_interval', 1, 1440, 'ADMIN_SYS.SYNC.VALIDATION.COLLECTOR_REFRESH'],
+      ['credits_max_retries', 0, 100, 'ADMIN_SYS.SYNC.VALIDATION.COLLECTOR_RETRIES'],
+      ['credits_retry_interval', 1, 1440, 'ADMIN_SYS.SYNC.VALIDATION.COLLECTOR_RETRY_INTERVAL'],
       ['cpa_project_id_refresh_seconds', 300, 31536000, 'ADMIN_SYS.SYNC.VALIDATION.PROJECT_REFRESH'],
       ['cliproxy_usage_sync_interval_seconds', 10, 3600, 'ADMIN_SYS.SYNC.VALIDATION.SYNC_INTERVAL'],
       ['cliproxy_usage_sync_batch_size', 1, 1000, 'ADMIN_SYS.SYNC.VALIDATION.SYNC_BATCH'],
@@ -107,6 +117,40 @@ const SyncPage = () => {
     }
   };
 
+  const syncUsageNow = async () => {
+    const count = parseInt(values.cliproxy_usage_sync_batch_size, 10);
+    if (Number.isNaN(count) || count < 1 || count > 1000) {
+      toast.error(t('ADMIN_SYS.SYNC.VALIDATION.SYNC_BATCH'));
+      return;
+    }
+    setSyncingUsage(true);
+    try {
+      const data = await authFetch(`/api/admin/cliproxy/usage/sync?count=${count}`, {
+        method: 'POST',
+      });
+      if (data.success) {
+        const result = data.data || {};
+        setUsageSyncResult(result);
+        toast.success(t('ADMIN_SYS.SYNC.MANUAL_SYNC_OK', {
+          fetched: result.fetched ?? 0,
+          stored: result.stored ?? 0,
+          matched: result.matched ?? 0,
+          unmatched: result.unmatched ?? 0,
+          ignored: result.ignored ?? 0,
+        }));
+      } else {
+        toast.error(
+          (data.message_code ? t(`API.${data.message_code}`) : data.message)
+          || t('ADMIN_SYS.SYNC.MANUAL_SYNC_FAIL'),
+        );
+      }
+    } catch {
+      toast.error(t('ADMIN_SYS.SYNC.MANUAL_SYNC_FAIL'));
+    } finally {
+      setSyncingUsage(false);
+    }
+  };
+
   return (
     <PageContainer>
       <PageHeader
@@ -116,6 +160,55 @@ const SyncPage = () => {
       />
 
       <div className="space-y-6">
+        <FormRow.Group
+          title={t('ADMIN_SYS.SYNC.COLLECTOR_GROUP_TITLE')}
+          sub={t('ADMIN_SYS.SYNC.COLLECTOR_GROUP_DESC')}
+        >
+          <FormRow
+            label={t('ADMIN_SYS.SYNC.COLLECTOR_REFRESH_LABEL')}
+            hint={t('ADMIN_SYS.SYNC.COLLECTOR_REFRESH_HINT')}
+            htmlFor="credits_refresh_interval"
+          >
+            <NumberInput
+              id="credits_refresh_interval"
+              min="1"
+              max="1440"
+              unit={t('ADMIN_SYS.UNIT.MINUTES')}
+              value={values.credits_refresh_interval}
+              onChange={(value) => handleChange('credits_refresh_interval', value)}
+            />
+          </FormRow>
+          <FormRow
+            label={t('ADMIN_SYS.SYNC.COLLECTOR_RETRIES_LABEL')}
+            hint={t('ADMIN_SYS.SYNC.COLLECTOR_RETRIES_HINT')}
+            htmlFor="credits_max_retries"
+          >
+            <NumberInput
+              id="credits_max_retries"
+              min="0"
+              max="100"
+              unit={t('ADMIN_SYS.UNIT.TIMES')}
+              value={values.credits_max_retries}
+              onChange={(value) => handleChange('credits_max_retries', value)}
+            />
+          </FormRow>
+          <FormRow
+            label={t('ADMIN_SYS.SYNC.COLLECTOR_RETRY_INTERVAL_LABEL')}
+            hint={t('ADMIN_SYS.SYNC.COLLECTOR_RETRY_INTERVAL_HINT')}
+            htmlFor="credits_retry_interval"
+            last
+          >
+            <NumberInput
+              id="credits_retry_interval"
+              min="1"
+              max="1440"
+              unit={t('ADMIN_SYS.UNIT.MINUTES')}
+              value={values.credits_retry_interval}
+              onChange={(value) => handleChange('credits_retry_interval', value)}
+            />
+          </FormRow>
+        </FormRow.Group>
+
         <FormRow.Group
           title={t('ADMIN_SYS.SYNC.USAGE_GROUP_TITLE')}
           sub={t('ADMIN_SYS.SYNC.USAGE_GROUP_DESC')}
@@ -130,6 +223,28 @@ const SyncPage = () => {
               checked={toBool(values.cliproxy_usage_sync_enabled)}
               onChange={(value) => handleChange('cliproxy_usage_sync_enabled', value)}
             />
+          </FormRow>
+          <FormRow
+            label={t('ADMIN_SYS.SYNC.MANUAL_SYNC_LABEL')}
+            hint={usageSyncResult
+              ? t('ADMIN_SYS.SYNC.MANUAL_SYNC_LAST', {
+                  fetched: usageSyncResult.fetched ?? 0,
+                  stored: usageSyncResult.stored ?? 0,
+                  matched: usageSyncResult.matched ?? 0,
+                  unmatched: usageSyncResult.unmatched ?? 0,
+                  ignored: usageSyncResult.ignored ?? 0,
+                })
+              : t('ADMIN_SYS.SYNC.MANUAL_SYNC_HINT')}
+          >
+            <button
+              type="button"
+              onClick={syncUsageNow}
+              disabled={syncingUsage}
+              className="inline-flex items-center justify-center gap-2 px-4 py-2 rounded-overlay border border-primary/40 bg-primary/15 text-primary hover:bg-primary/25 disabled:opacity-60 disabled:cursor-not-allowed min-w-[128px]"
+            >
+              <RefreshCw size={16} className={syncingUsage ? 'animate-spin' : ''} />
+              {syncingUsage ? t('ADMIN_SYS.SYNC.MANUAL_SYNC_RUNNING') : t('ADMIN_SYS.SYNC.MANUAL_SYNC_BUTTON')}
+            </button>
           </FormRow>
           <FormRow
             label={t('ADMIN_SYS.SYNC.INTERVAL_LABEL')}

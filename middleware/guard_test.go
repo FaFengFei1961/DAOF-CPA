@@ -194,7 +194,7 @@ func TestSetupGuard(t *testing.T) {
 	}
 
 	// 3. Admin is at default state — case2 SQL 错误未缓存（admin 不存在不写状态），需再次失效以重评估
-	database.DB.Create(&database.User{Username: "root", Role: "admin", PasswordHash: utils.GenerateHash("123456")})
+	database.DB.Create(&database.User{Username: "root", Role: "admin", PasswordHash: utils.GenerateHashForTest("123456")})
 	InvalidateSetupGuardCache()
 	resp3, err := app.Test(httptest.NewRequest("GET", "/", nil), timeoutMs)
 	if err != nil {

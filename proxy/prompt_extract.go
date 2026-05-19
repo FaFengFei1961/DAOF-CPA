@@ -128,6 +128,7 @@ func ExtractPromptText(srcFormat string, body []byte) (PromptExtractResult, erro
 	switch srcFormat {
 	case "openai", "OpenAI", "FormatOpenAI", "":
 		// OpenAI ChatCompletion / Responses 共用入口（先走 ChatCompletion，再扩展 Responses 字段）
+		parts = appendImageGenerationPrompt(body, parts)
 		parts, images = extractOpenAI(body, parts, images)
 		// Responses API 字段（input/instructions/function_call_output）
 		parts, images = extractOpenAIResponses(body, parts, images)
@@ -137,10 +138,12 @@ func ExtractPromptText(srcFormat string, body []byte) (PromptExtractResult, erro
 		parts, images = extractGemini(body, parts, images)
 	case "codex", "Codex", "FormatCodex":
 		// Codex 走 OpenAI 兼容格式
+		parts = appendImageGenerationPrompt(body, parts)
 		parts, images = extractOpenAI(body, parts, images)
 		parts, images = extractOpenAIResponses(body, parts, images)
 	default:
 		// 未知格式：尽力按 OpenAI 通用结构提取
+		parts = appendImageGenerationPrompt(body, parts)
 		parts, images = extractOpenAI(body, parts, images)
 	}
 
@@ -181,6 +184,7 @@ func ExtractModerationSegments(srcFormat string, body []byte) (ModerationReview,
 
 	switch srcFormat {
 	case "openai", "OpenAI", "FormatOpenAI", "":
+		segments = appendImageGenerationPromptSegment(body, segments)
 		segments, images = extractOpenAISegments(body, segments, images)
 		segments, images = extractOpenAIResponsesSegments(body, segments, images)
 	case "anthropic", "Anthropic", "FormatClaude":
@@ -188,9 +192,11 @@ func ExtractModerationSegments(srcFormat string, body []byte) (ModerationReview,
 	case "gemini", "Gemini", "FormatGemini", "FormatGeminiCLI":
 		segments, images = extractGeminiSegments(body, segments, images)
 	case "codex", "Codex", "FormatCodex":
+		segments = appendImageGenerationPromptSegment(body, segments)
 		segments, images = extractOpenAISegments(body, segments, images)
 		segments, images = extractOpenAIResponsesSegments(body, segments, images)
 	default:
+		segments = appendImageGenerationPromptSegment(body, segments)
 		segments, images = extractOpenAISegments(body, segments, images)
 		segments, images = extractOpenAIResponsesSegments(body, segments, images)
 	}
@@ -200,6 +206,27 @@ func ExtractModerationSegments(srcFormat string, body []byte) (ModerationReview,
 		ImageURLs:  images,
 		HasContent: len(segments) > 0 || len(images) > 0,
 	}, nil
+}
+
+func appendImageGenerationPrompt(body []byte, parts []string) []string {
+	prompt := strings.TrimSpace(gjson.GetBytes(body, "prompt").String())
+	if prompt != "" {
+		parts = append(parts, prompt)
+	}
+	return parts
+}
+
+func appendImageGenerationPromptSegment(body []byte, segments []ModerationSegment) []ModerationSegment {
+	prompt := strings.TrimSpace(gjson.GetBytes(body, "prompt").String())
+	if prompt != "" {
+		segments = append(segments, ModerationSegment{
+			Kind: SegmentUserMessage,
+			Role: "user",
+			Path: "prompt",
+			Text: prompt,
+		})
+	}
+	return segments
 }
 
 func (r ModerationReview) ResultForKinds(kinds ...ModerationSegmentKind) PromptExtractResult {

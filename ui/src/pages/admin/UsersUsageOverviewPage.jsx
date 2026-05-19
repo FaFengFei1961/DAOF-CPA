@@ -26,12 +26,16 @@ import {
 } from './shared';
 
 const SORTS = [
-  { value: 'cost_desc',        label: '花费 ↓' },
+  { value: 'cost_desc',        label: '扣减 ↓' },
   { value: 'requests_desc',    label: '请求数 ↓' },
   { value: 'tokens_desc',      label: 'Token ↓' },
   { value: 'last_active_desc', label: '最近活跃 ↓' },
   { value: 'username_asc',     label: '用户名 A→Z' },
 ];
+
+const rawCostOf = (row) => Number(row?.raw_cost ?? row?.total_cost ?? row?.cost ?? 0) || 0;
+const chargedCostOf = (row) => Number(row?.charged_cost ?? row?.total_charged_cost ?? row?.total_cost ?? row?.cost ?? 0) || 0;
+const costsDiffer = (raw, charged) => Math.abs(Number(raw || 0) - Number(charged || 0)) > 0.0000005;
 
 const UsersUsageOverviewPage = () => {
   const navigate = useNavigate();
@@ -104,7 +108,7 @@ const UsersUsageOverviewPage = () => {
         const p = s.points[i] || {};
         if (chartMetric === 'requests') row[key] = p.requests || 0;
         else if (chartMetric === 'tokens') row[key] = p.tokens || 0;
-        else if (chartMetric === 'cost')  row[key] = p.cost || 0;
+        else if (chartMetric === 'cost')  row[key] = chargedCostOf(p);
       });
       return row;
     });
@@ -137,9 +141,18 @@ const UsersUsageOverviewPage = () => {
       );
     } },
     { key: 'tokens',    header: 'Token', align: 'right', render: u => formatTokens(u.total_tokens || 0) },
-    { key: 'cost',      header: '花费', align: 'right', render: u => (
-      <span className="font-mono text-primary">{formatMeterCost(u.total_cost || 0)}</span>
-    ) },
+    { key: 'cost',      header: '扣减', align: 'right', render: u => {
+      const raw = rawCostOf(u);
+      const charged = chargedCostOf(u);
+      return (
+        <div className="font-mono leading-tight">
+          <div className="text-primary">{formatMeterCost(charged)}</div>
+          {costsDiffer(raw, charged) && (
+            <div className="text-[10px] text-on-surface-variant">raw {formatMeterCost(raw)}</div>
+          )}
+        </div>
+      );
+    } },
     { key: 'last',      header: '最近活跃', align: 'right', render: u => (
       <span className="text-xs text-on-surface-variant">{formatRelativeTime(u.last_active_at)}</span>
     ) },
@@ -178,7 +191,7 @@ const UsersUsageOverviewPage = () => {
     <PageContainer>
       <PageHeader
         title="用户用量大盘"
-        sub="按用户聚合的请求 / Token / 花费 / 失败率 + 用户趋势。点击行跳转事件审计页查看明细。"
+        sub="按用户聚合的请求 / Token / 扣减 / 失败率 + 用户趋势。点击行跳转事件审计页查看明细。"
         actions={headerActions}
       />
 
@@ -211,8 +224,11 @@ const UsersUsageOverviewPage = () => {
           icon={Coins}
           iconColor="text-warning"
           iconBg="bg-warning/10"
-          label="总花费"
-          value={formatMeterCost(summary.total_cost ?? 0)}
+          label="总扣减"
+          value={formatMeterCost(summary.total_charged_cost ?? summary.total_cost ?? 0)}
+          sub={costsDiffer(summary.total_cost, summary.total_charged_cost ?? summary.total_cost)
+            ? `raw ${formatMeterCost(summary.total_cost ?? 0)}`
+            : undefined}
         />
       </div>
 
@@ -237,7 +253,7 @@ const UsersUsageOverviewPage = () => {
             {[
               { v: 'requests', l: '请求' },
               { v: 'tokens',   l: 'Token' },
-              { v: 'cost',     l: '花费' },
+              { v: 'cost',     l: '扣减' },
             ].map(({ v, l }) => (
               <button
                 key={v}

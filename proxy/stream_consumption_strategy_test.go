@@ -29,6 +29,7 @@ func setupConsumptionStrategyDB(t *testing.T) {
 	}
 	if err := db.AutoMigrate(
 		&database.User{}, &database.ApiLog{}, &database.BillingEntry{},
+		&database.ApiLogRevenue{},
 		&database.UserSubscription{}, &database.SubscriptionUsage{},
 		&database.Channel{}, &database.ChannelModel{},
 		&database.QuotaPlan{}, &database.Package{}, &database.PackagePlan{},
@@ -45,6 +46,7 @@ func setupConsumptionStrategyDB(t *testing.T) {
 
 	oldConfig := replaceSysConfigForTest(map[string]string{
 		"subscription_engine_fallback_to_quota": "true",
+		BillingModelWeightsConfigKey:            `[{"pattern":"claude-opus-*","weight":3.5},{"pattern":"*","weight":1}]`,
 	})
 	t.Cleanup(func() {
 		replaceSysConfigForTest(oldConfig)

@@ -26,7 +26,6 @@ const ADMIN_PASS = process.env.DAOF_ADMIN_PASS || '';
 const PUBLIC_PAGES = [
   { name: 'dashboard',     path: '/' },
   { name: 'pricing',       path: '/pricing' },
-  { name: 'upgrade',       path: '/upgrade' },
   { name: 'topup-result',  path: '/topup-result' },
 ];
 

@@ -141,19 +141,19 @@ const ContentModerationGlobals = ({ configs, handleChange }) => {
             >
                 <FormRow
                     label={t('MODERATION.IMAGE_POLICY', 'image_url 处理')}
-                    hint={t('MODERATION.IMAGE_POLICY_HINT', '智能审核第一版不直接审核外部 image_url。当前推荐 reject；skip 只适合确认上游自带安全拦截的模型。')}
+                    hint={t('MODERATION.IMAGE_POLICY_HINT', '智能审核第一版不直接审核外部 image_url。GPT 等多模态模型推荐 skip；高风险直连模型可改为 reject。')}
                     htmlFor="mod-image-policy"
                     last
                 >
                     <Select
                         id="mod-image-policy"
-                        value={configs.moderation_image_policy || 'submit'}
+                        value={configs.moderation_image_policy || 'skip'}
                         onChange={e => handleChange('moderation_image_policy', e.target.value)}
                         className="w-full"
                         options={[
                             {value: 'submit', label: t('MODERATION.IMAGE_SUBMIT', 'submit — 预留，当前按审核不可达处理')}, 
-                            {value: 'skip', label: t('MODERATION.IMAGE_SKIP', 'skip — 跳过图片')}, 
-                            {value: 'reject', label: t('MODERATION.IMAGE_REJECT', 'reject — 直接拒绝（推荐）')}
+                            {value: 'skip', label: t('MODERATION.IMAGE_SKIP', 'skip — 跳过图片（推荐多模态模型）')},
+                            {value: 'reject', label: t('MODERATION.IMAGE_REJECT', 'reject — 直接拒绝（最保守）')}
                         ]} 
                     />
                 </FormRow>

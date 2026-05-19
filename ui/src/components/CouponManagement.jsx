@@ -17,7 +17,7 @@ const EMPTY_TEMPLATE = {
   name: '',
   description: '',
   discount_type: 'fixed_price',
-  discount_value: 0,
+  discount_value: 0.01,
   package_ids: '', // JSON array string like "[1,2,3]", or "" for all.
   valid_days: 0,
   enabled: true,
@@ -82,8 +82,8 @@ const CouponManagement = () => {
       toast.error(t('COUPON.NAME_REQUIRED', '名称必填'));
       return;
     }
-    if (editing.discount_value < 0) {
-      toast.error(t('COUPON.VALUE_NEGATIVE', '优惠金额不能为负'));
+    if (!Number.isFinite(Number(editing.discount_value)) || Number(editing.discount_value) <= 0) {
+      toast.error(t('COUPON.VALUE_POSITIVE', '券价必须大于 0'));
       return;
     }
     if (editing.valid_days < 0) {
@@ -266,8 +266,8 @@ const CouponManagement = () => {
                   <label htmlFor="ct-value" className="block text-xs font-medium text-on-surface-variant mb-1">
                     {t('COUPON.FIELD_VALUE', '券价 (USD)')}
                   </label>
-                  <input id="ct-value" type="number" min="0" step="0.01" value={editing.discount_value}
-                    onChange={(e) => updateField('discount_value', parseFloat(e.target.value) || 0)}
+                  <input id="ct-value" type="number" min="0.01" step="0.01" value={editing.discount_value}
+                    onChange={(e) => updateField('discount_value', e.target.value === '' ? '' : parseFloat(e.target.value))}
                     className="w-full bg-surface-container-high border border-outline rounded-control px-3 py-2 text-on-surface" />
                 </div>
               </div>

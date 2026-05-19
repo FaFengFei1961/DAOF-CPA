@@ -33,6 +33,7 @@ import (
 
 var errCouponInvalid = errors.New("coupon invalid")
 var errCouponNotApplicable = errors.New("coupon not applicable to this package")
+var errCouponFixedPriceNonPositive = errors.New("coupon fixed_price must be positive")
 var errCouponFixedPriceBelowPackageCostFloor = errors.New("coupon fixed_price below package cost_floor")
 var errCouponSnapshotBelowCostFloor = errors.New("coupon snapshot fixed_price below package cost_floor")
 
@@ -85,6 +86,9 @@ const MessageCodeCouponFixedPriceBelowPackageCostFloor = "ERR_COUPON_FIXED_PRICE
 const MessageCodeCouponSnapshotBelowCostFloor = "ERR_COUPON_SNAPSHOT_BELOW_COST_FLOOR"
 
 func couponTemplateValidationMessageCode(err error) string {
+	if errors.Is(err, errCouponFixedPriceNonPositive) {
+		return "ERR_COUPON_FIXED_PRICE_NON_POSITIVE"
+	}
 	if errors.Is(err, errCouponFixedPriceBelowPackageCostFloor) {
 		return MessageCodeCouponFixedPriceBelowPackageCostFloor
 	}
@@ -159,10 +163,10 @@ func validateTemplate(t *database.CouponTemplate) error {
 	if t.DiscountType != "fixed_price" {
 		return fmt.Errorf("discount_type 当前仅支持 fixed_price")
 	}
-	if t.DiscountValue < 0 {
-		return fmt.Errorf("discount_value 必须 ≥ 0")
+	if t.DiscountValue <= 0 {
+		return fmt.Errorf("%w: fixed_price 必须大于 0；若需赠送服务请走赠送订阅路径", errCouponFixedPriceNonPositive)
 	}
-	// fix CRITICAL Sprint3-M5 P0-2：禁止 fixed_price = 0 / 过低
+	// fix CRITICAL Sprint3-M5 P0-2：禁止 fixed_price = 0 / 过低。
 	if t.DiscountType == "fixed_price" && t.DiscountValue < couponMinFixedPriceMicroUSD {
 		return fmt.Errorf("fixed_price 不能低于 %d micro_usd（$%.4f）；若需赠送服务请走赠送订阅路径",
 			couponMinFixedPriceMicroUSD, float64(couponMinFixedPriceMicroUSD)/1_000_000)
@@ -219,6 +223,11 @@ func lockAndApplyCoupon(tx *gorm.DB, userID, couponID uint, pkg *database.Packag
 		return nil, errCouponNotApplicable
 	}
 	if coupon.SnapshotType == "fixed_price" {
+		if coupon.SnapshotValue <= 0 {
+			log.Printf("[COUPON] blocked coupon %d for package %d: non-positive snapshot fixed_price=%d",
+				coupon.ID, pkg.ID, coupon.SnapshotValue)
+			return nil, errCouponInvalid
+		}
 		effectiveLowerBound := couponPackageEffectiveLowerBoundMicroUSD(pkg)
 		if effectiveLowerBound > 0 && coupon.SnapshotValue < effectiveLowerBound {
 			log.Printf("[COUPON] blocked coupon %d for package %d: snapshot fixed_price=%d below effective lower bound=%d",

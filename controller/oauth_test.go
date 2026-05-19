@@ -102,6 +102,64 @@ func setOAuthSysConfigForTest(t *testing.T) {
 	})
 }
 
+func TestGetPublicConfigIncludesReferralIncentives(t *testing.T) {
+	proxy.SysConfigMutex.Lock()
+	old := proxy.SysConfigCache
+	proxy.SysConfigCache = map[string]string{
+		"server_address": "https://dao.example.test",
+		"signup_bonus":   "2500000",
+		"referrer_bonus": "750000",
+		"referee_bonus":  "125000",
+		database.ReferralPaidSpendRewardBPSConfigKey:           "888",
+		database.ReferralPaidSpendRewardWindowSecondsConfigKey: "604800",
+	}
+	proxy.SysConfigMutex.Unlock()
+	t.Cleanup(func() {
+		proxy.SysConfigMutex.Lock()
+		proxy.SysConfigCache = old
+		proxy.SysConfigMutex.Unlock()
+	})
+
+	app := fiber.New(fiber.Config{DisableStartupMessage: true})
+	app.Get("/public-config", GetPublicConfig)
+	resp, err := app.Test(httptest.NewRequest(http.MethodGet, "/public-config", nil))
+	if err != nil {
+		t.Fatalf("public config request: %v", err)
+	}
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("status=%d", resp.StatusCode)
+	}
+	var body struct {
+		Success            bool              `json:"success"`
+		ServerAddress      string            `json:"server_address"`
+		ReferralIncentives map[string]string `json:"referral_incentives"`
+	}
+	if err := json.NewDecoder(resp.Body).Decode(&body); err != nil {
+		t.Fatalf("decode response: %v", err)
+	}
+	if !body.Success {
+		t.Fatalf("success=false")
+	}
+	if body.ServerAddress != "https://dao.example.test" {
+		t.Fatalf("server_address=%q", body.ServerAddress)
+	}
+	if got := body.ReferralIncentives["signup_bonus_micro_usd"]; got != "2500000" {
+		t.Fatalf("signup_bonus_micro_usd=%q", got)
+	}
+	if got := body.ReferralIncentives["referrer_bonus_micro_usd"]; got != "750000" {
+		t.Fatalf("referrer_bonus_micro_usd=%q", got)
+	}
+	if got := body.ReferralIncentives["referee_bonus_micro_usd"]; got != "125000" {
+		t.Fatalf("referee_bonus_micro_usd=%q", got)
+	}
+	if got := body.ReferralIncentives["paid_spend_reward_bps"]; got != "888" {
+		t.Fatalf("paid_spend_reward_bps=%q", got)
+	}
+	if got := body.ReferralIncentives["reward_window_seconds"]; got != "604800" {
+		t.Fatalf("reward_window_seconds=%q", got)
+	}
+}
+
 func prepareOAuthStateForTest(t *testing.T) (state, verifier string) {
 	t.Helper()
 	app := fiber.New(fiber.Config{DisableStartupMessage: true})
@@ -297,11 +355,10 @@ func TestCompleteProfile_UsesBalanceConsumeDefaultLimitMicroUSD(t *testing.T) {
 	proxy.SysConfigMutex.Lock()
 	old := proxy.SysConfigCache
 	proxy.SysConfigCache = map[string]string{
-		"signup_bonus":                             "0",
-		"balance_consume_default_enabled":          "true",
-		balanceConsumeDefaultLimitMicroUSDKey:      "1234567",
-		"balance_consume_default_window_secs":      "86400",
-		deprecatedBalanceConsumeDefaultLimitUSDKey: "99.99",
+		"signup_bonus":                        "0",
+		"balance_consume_default_enabled":     "true",
+		balanceConsumeDefaultLimitMicroUSDKey: "1234567",
+		"balance_consume_default_window_secs": "86400",
 	}
 	proxy.SysConfigMutex.Unlock()
 	t.Cleanup(func() {

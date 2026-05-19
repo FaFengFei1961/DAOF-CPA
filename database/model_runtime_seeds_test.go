@@ -1,0 +1,594 @@
+package database
+
+import (
+	"testing"
+
+	"gorm.io/driver/sqlite"
+	"gorm.io/gorm"
+)
+
+func TestSeedModelRuntimeDefaults_ReproducibleFactoryModelPool(t *testing.T) {
+	db, err := gorm.Open(sqlite.Open("file::memory:?cache=private"), &gorm.Config{})
+	if err != nil {
+		t.Fatalf("open sqlite: %v", err)
+	}
+	oldDB := DB
+	DB = db
+	t.Cleanup(func() { DB = oldDB })
+
+	if err := DB.AutoMigrate(&Channel{}, &ChannelModel{}, &ModelCatalog{}, &ModelPricingRule{}, &ApiLogUsageLine{}); err != nil {
+		t.Fatalf("migrate: %v", err)
+	}
+
+	SeedModelRuntimeDefaults()
+	SeedModelRuntimeDefaults()
+
+	var channelCount int64
+	if err := DB.Model(&Channel{}).Where("name = ?", "CLIProxyAPI Local").Count(&channelCount).Error; err != nil {
+		t.Fatalf("count channel: %v", err)
+	}
+	if channelCount != 1 {
+		t.Fatalf("default channel count=%d want 1", channelCount)
+	}
+
+	var ch Channel
+	if err := DB.Where("name = ?", "CLIProxyAPI Local").First(&ch).Error; err != nil {
+		t.Fatalf("load default channel: %v", err)
+	}
+	if ch.Status != 2 || ch.Type != "cliproxy" || ch.BaseURL != "http://127.0.0.1:8317" {
+		t.Fatalf("unexpected default channel: %#v", ch)
+	}
+
+	var gpt ChannelModel
+	if err := DB.Where("channel_id = ? AND model_id = ?", ch.ID, "gpt-5.5").First(&gpt).Error; err != nil {
+		t.Fatalf("load gpt seed: %v", err)
+	}
+	if gpt.Status != 1 || gpt.ModelCategory != ModelCategoryText || gpt.BillingMode != BillingModeToken {
+		t.Fatalf("unexpected gpt runtime metadata: %#v", gpt)
+	}
+	if gpt.InputPricePicoPerToken != 5*PicoPerTokenPerUSDPerMTok ||
+		gpt.OutputPricePicoPerToken != 30*PicoPerTokenPerUSDPerMTok ||
+		gpt.EndpointPolicy != EndpointPolicyNoChatNonStream {
+		t.Fatalf("unexpected gpt pricing/policy: %#v", gpt)
+	}
+
+	var opus41 ChannelModel
+	if err := DB.Where("channel_id = ? AND model_id = ?", ch.ID, "claude-opus-4-1-20250805").First(&opus41).Error; err != nil {
+		t.Fatalf("load opus 4.1 seed: %v", err)
+	}
+	if opus41.InputPricePicoPerToken != 15*PicoPerTokenPerUSDPerMTok ||
+		opus41.OutputPricePicoPerToken != 75*PicoPerTokenPerUSDPerMTok ||
+		opus41.CachedInputPricePicoPerToken != 1500*PicoPerTokenPerUSDPerMTok/1000 {
+		t.Fatalf("unexpected opus 4.1 legacy pricing: %#v", opus41)
+	}
+
+	var grok ChannelModel
+	if err := DB.Where("channel_id = ? AND model_id = ?", ch.ID, "grok-4.3").First(&grok).Error; err != nil {
+		t.Fatalf("load grok seed: %v", err)
+	}
+	if grok.ContextPriceThreshold != 0 || grok.HighInputPricePicoPerToken != 0 || grok.HighOutputPricePicoPerToken != 0 {
+		t.Fatalf("xAI seed should not invent a high-context tier without public exact prices: %#v", grok)
+	}
+
+	var image ChannelModel
+	if err := DB.Where("channel_id = ? AND model_id = ?", ch.ID, "gpt-image-2").First(&image).Error; err != nil {
+		t.Fatalf("load image seed: %v", err)
+	}
+	if image.Status != 2 || image.ModelCategory != ModelCategoryImage || image.BillingMode != BillingModeToken {
+		t.Fatalf("token-billed image model should be preseeded disabled and token-billed: %#v", image)
+	}
+	var imageCatalog ModelCatalog
+	if err := DB.Where("model_id = ?", "gpt-image-2").First(&imageCatalog).Error; err != nil {
+		t.Fatalf("load gpt image catalog: %v", err)
+	}
+	if !imageCatalog.Supported || !imageCatalog.Public || imageCatalog.Category != ModelCategoryImage {
+		t.Fatalf("gpt-image-2 catalog should now be supported/public: %#v", imageCatalog)
+	}
+
+	var xaiImage ChannelModel
+	if err := DB.Where("channel_id = ? AND model_id = ?", ch.ID, "grok-imagine-image").First(&xaiImage).Error; err != nil {
+		t.Fatalf("load xai image seed: %v", err)
+	}
+	if xaiImage.Status != 2 || xaiImage.ModelCategory != ModelCategoryImage || xaiImage.BillingMode != BillingModeImage {
+		t.Fatalf("xAI image model should be preseeded disabled and image-billed: %#v", xaiImage)
+	}
+
+	var video ChannelModel
+	if err := DB.Where("channel_id = ? AND model_id = ?", ch.ID, "grok-imagine-video").First(&video).Error; err != nil {
+		t.Fatalf("load video seed: %v", err)
+	}
+	if video.Status != 2 || video.ModelCategory != ModelCategoryVideo || video.BillingMode != BillingModeVideoSecond {
+		t.Fatalf("video model should be preseeded disabled and video-second billed: %#v", video)
+	}
+	if video.AllowedEndpoints != `["/v1/videos/generations"]` {
+		t.Fatalf("video default endpoint too broad: %q", video.AllowedEndpoints)
+	}
+	var videoCatalog ModelCatalog
+	if err := DB.Where("model_id = ?", "grok-imagine-video").First(&videoCatalog).Error; err != nil {
+		t.Fatalf("load video catalog: %v", err)
+	}
+	if !videoCatalog.Supported || !videoCatalog.Public || videoCatalog.Category != ModelCategoryVideo {
+		t.Fatalf("video catalog should now be supported/public: %#v", videoCatalog)
+	}
+
+	// Gemini image runtime via CPA antigravity 路径 DAOF 当前不支持，但为了 admin UI 显示
+	// 完整的 CPA 暴露列表，仍 seed catalog row——必须 Supported=false 且 DefaultEnabled=false，
+	// admin 启用前会被 ValidateChannelModelActivation 拒绝（IsRuntimeImageModelSupported 返 false）。
+	var geminiImageCatalogs []ModelCatalog
+	if err := DB.Where("provider_key = ? AND category = ?", "google", ModelCategoryImage).Find(&geminiImageCatalogs).Error; err != nil {
+		t.Fatalf("load gemini image catalog rows: %v", err)
+	}
+	for _, c := range geminiImageCatalogs {
+		if c.Supported {
+			t.Fatalf("gemini image catalog %q must keep Supported=false until CPA exposes via /v1/images/*", c.ModelID)
+		}
+		if c.DefaultEnabled {
+			t.Fatalf("gemini image catalog %q must keep DefaultEnabled=false", c.ModelID)
+		}
+	}
+
+	var pricingCount int64
+	if err := DB.Model(&ModelPricingRule{}).Where("pricing_version = ?", DefaultModelPricingVersion).Count(&pricingCount).Error; err != nil {
+		t.Fatalf("count pricing rules: %v", err)
+	}
+	if pricingCount == 0 {
+		t.Fatal("expected seeded pricing rules")
+	}
+	var distinctRuleKeys int64
+	if err := DB.Model(&ModelPricingRule{}).Distinct("rule_key").Count(&distinctRuleKeys).Error; err != nil {
+		t.Fatalf("count distinct pricing rule keys: %v", err)
+	}
+	if pricingCount != distinctRuleKeys {
+		t.Fatalf("pricing seed should be idempotent: rows=%d distinct_rule_keys=%d", pricingCount, distinctRuleKeys)
+	}
+
+	var codexRule ModelPricingRule
+	if err := DB.Where("model_id = ? AND unit = ?", "gpt-5.3-codex", "token").First(&codexRule).Error; err != nil {
+		t.Fatalf("load codex pricing rule: %v", err)
+	}
+	if codexRule.OfficialStatus != "official_exact" || codexRule.InputPricePicoPerToken != 1750*PicoPerTokenPerUSDPerMTok/1000 {
+		t.Fatalf("unexpected codex pricing rule: %#v", codexRule)
+	}
+}
+
+func TestValidateChannelModelActivation_BlocksUnsupportedMediaAndUnpricedText(t *testing.T) {
+	db, err := gorm.Open(sqlite.Open("file::memory:?cache=private"), &gorm.Config{})
+	if err != nil {
+		t.Fatalf("open sqlite: %v", err)
+	}
+	oldDB := DB
+	DB = db
+	t.Cleanup(func() { DB = oldDB })
+	if err := DB.AutoMigrate(&ModelPricingRule{}); err != nil {
+		t.Fatalf("migrate: %v", err)
+	}
+
+	image := ChannelModel{ModelID: "gpt-image-2", BillingMode: BillingModeToken, Status: 1}
+	if err := ValidateChannelModelActivation(&image); err != ErrImageModelRequiresPricing {
+		t.Fatalf("token image activation err=%v want %v", err, ErrImageModelRequiresPricing)
+	}
+	image.InputPricePicoPerToken = 5 * PicoPerTokenPerUSDPerMTok
+	image.OutputPricePicoPerToken = 30 * PicoPerTokenPerUSDPerMTok
+	image.CachedInputPricePicoPerToken = 125 * PicoPerTokenPerUSDPerMTok / 100
+	if err := ValidateChannelModelActivation(&image); err != nil {
+		t.Fatalf("priced token image activation should pass: %v", err)
+	}
+
+	xaiImage := ChannelModel{ModelID: "grok-imagine-image", Status: 1}
+	if err := ValidateChannelModelActivation(&xaiImage); err != ErrImageModelRequiresPricing {
+		t.Fatalf("unpriced xai image activation err=%v want %v", err, ErrImageModelRequiresPricing)
+	}
+	if err := DB.Create(&ModelPricingRule{
+		RuleKey:         "test|grok-imagine-image|image|output|1k",
+		PricingVersion:  "test",
+		ProviderKey:     "xai",
+		ModelID:         "grok-imagine-image",
+		OfficialModelID: "grok-imagine-image",
+		BillingMode:     BillingModeImage,
+		Unit:            "image",
+		Direction:       "output",
+		Resolution:      "1K",
+		PriceMicroUSD:   20_000,
+	}).Error; err != nil {
+		t.Fatalf("seed image pricing: %v", err)
+	}
+	if err := ValidateChannelModelActivation(&xaiImage); err != nil {
+		t.Fatalf("priced xai image activation should pass: %v", err)
+	}
+
+	video := ChannelModel{ModelID: "grok-imagine-video", Status: 1}
+	if err := ValidateChannelModelActivation(&video); err != ErrVideoModelRequiresPricing {
+		t.Fatalf("unpriced video activation err=%v want %v", err, ErrVideoModelRequiresPricing)
+	}
+	if err := DB.Create(&ModelPricingRule{
+		RuleKey:         "test|grok-imagine-video|video_second|output|720p",
+		PricingVersion:  "test",
+		ProviderKey:     "xai",
+		ModelID:         "grok-imagine-video",
+		OfficialModelID: "grok-imagine-video",
+		BillingMode:     BillingModeVideoSecond,
+		Unit:            "video_second",
+		Direction:       "output",
+		Resolution:      "720p",
+		PriceMicroUSD:   70_000,
+	}).Error; err != nil {
+		t.Fatalf("seed video pricing: %v", err)
+	}
+	if err := ValidateChannelModelActivation(&video); err != nil {
+		t.Fatalf("priced video activation should pass: %v", err)
+	}
+
+	text := ChannelModel{ModelID: "gpt-5.5", Status: 1}
+	if err := ValidateChannelModelActivation(&text); err != ErrTextModelRequiresTokenPricing {
+		t.Fatalf("unpriced text activation err=%v want %v", err, ErrTextModelRequiresTokenPricing)
+	}
+
+	text.InputPricePicoPerToken = PicoPerTokenPerUSDPerMTok
+	if err := ValidateChannelModelActivation(&text); err != nil {
+		t.Fatalf("priced text activation should pass: %v", err)
+	}
+}
+
+func TestSeedModelRuntimeDefaults_TotalCount(t *testing.T) {
+	db, err := gorm.Open(sqlite.Open("file::memory:?cache=private"), &gorm.Config{})
+	if err != nil {
+		t.Fatalf("open sqlite: %v", err)
+	}
+	oldDB := DB
+	DB = db
+	t.Cleanup(func() { DB = oldDB })
+	if err := DB.AutoMigrate(&Channel{}, &ChannelModel{}, &ModelCatalog{}, &ModelPricingRule{}); err != nil {
+		t.Fatalf("migrate: %v", err)
+	}
+	SeedModelRuntimeDefaults()
+
+	// DAOF seed 总数 = 59：
+	//   - 38 个对齐 CPA registry（含已确认 pricing 的内置 + 17 个 alias_or_unofficial）
+	//   - 4 个 DAOF 内置但不在 CPA registry/models.json（gpt-image-2 + grok-imagine-* 通过
+	//     CPA client_models 暴露，不在 registry/models.json）
+	//   - 17 个 alias_or_unofficial（user 2026-05-19 决策：把 CPA registry 暴露的全部补进
+	//     seed，admin UI 显示完整列表，启用前由 admin 手填 pricing 并切 Supported=true）
+	//
+	// 当 CPA registry 变化或 admin 完善某个 alias 的 pricing 后，需要同步更新此断言。
+	const expectedSeedCount = int64(59)
+	var got int64
+	if err := DB.Model(&ModelCatalog{}).Count(&got).Error; err != nil {
+		t.Fatalf("count catalog: %v", err)
+	}
+	if got != expectedSeedCount {
+		t.Fatalf("seed catalog count=%d want %d", got, expectedSeedCount)
+	}
+
+	// 锁定 17 个 alias_or_unofficial 模型必须 Supported=false + DefaultEnabled=false +
+	// OfficialStatus=alias_or_unofficial（admin 启用前手动确认 pricing + 切 Supported=true）。
+	uncommitted := []string{
+		// Anthropic alias
+		"claude-opus-4-6-thinking",
+		// OpenAI alias
+		"gpt-5.3-codex-spark", "gpt-oss-120b-medium",
+		// Gemini text alias
+		"gemini-3-flash", "gemini-3-pro-low", "gemini-3-pro-high", "gemini-3-pro-preview",
+		"gemini-flash-latest", "gemini-flash-lite-latest", "gemini-pro-agent",
+		"gemini-3.1-pro-low", "gemini-pro-latest",
+		// Gemini image (CPA antigravity / generateContent 路径，DAOF /v1/images/* 当前不接通)
+		"gemini-3.1-flash-image", "gemini-3.1-flash-image-preview",
+		"gemini-2.5-flash-image", "gemini-3-pro-image-preview",
+		// Google Imagen (CPA Vertex executor 路径，DAOF 不接通)
+		"imagen-3.0-fast-generate-001", "imagen-3.0-generate-002",
+		"imagen-4.0-fast-generate-001", "imagen-4.0-generate-001", "imagen-4.0-ultra-generate-001",
+		// xAI alias
+		"grok-3-mini", "grok-3-mini-fast",
+		// Moonshot Kimi
+		"kimi-k2", "kimi-k2-thinking", "kimi-k2.5", "kimi-k2.6",
+	}
+	for _, id := range uncommitted {
+		var cat ModelCatalog
+		if err := DB.Where("model_id = ?", id).First(&cat).Error; err != nil {
+			t.Fatalf("alias model %q missing from seed: %v", id, err)
+		}
+		if cat.Supported {
+			t.Fatalf("alias model %q must keep Supported=false until pricing is confirmed", id)
+		}
+		if cat.DefaultEnabled {
+			t.Fatalf("alias model %q must keep DefaultEnabled=false", id)
+		}
+		if cat.OfficialStatus != "alias_or_unofficial" {
+			t.Fatalf("alias model %q official_status=%q want alias_or_unofficial", id, cat.OfficialStatus)
+		}
+	}
+}
+
+func TestValidateChannelModelActivation_EditsRequiresInputPricing(t *testing.T) {
+	db, err := gorm.Open(sqlite.Open("file::memory:?cache=private"), &gorm.Config{})
+	if err != nil {
+		t.Fatalf("open sqlite: %v", err)
+	}
+	oldDB := DB
+	DB = db
+	t.Cleanup(func() { DB = oldDB })
+	if err := DB.AutoMigrate(&ModelPricingRule{}); err != nil {
+		t.Fatalf("migrate: %v", err)
+	}
+
+	cm := &ChannelModel{
+		ModelID:          "grok-imagine-image-quality",
+		Status:           1,
+		ModelCategory:    ModelCategoryImage,
+		BillingMode:      BillingModeImage,
+		AllowedEndpoints: `["/v1/images/generations","/v1/images/edits"]`,
+	}
+	// 仅 output pricing：edits 启用应被拒绝
+	if err := DB.Create(&ModelPricingRule{
+		RuleKey: "test-out-1k", PricingVersion: "test",
+		ProviderKey: "xai", ModelID: cm.ModelID, OfficialModelID: cm.ModelID,
+		BillingMode: BillingModeImage, Unit: "image", Direction: "output",
+		Resolution: "1K", PriceMicroUSD: 50_000,
+	}).Error; err != nil {
+		t.Fatalf("seed output pricing: %v", err)
+	}
+	if err := ValidateChannelModelActivation(cm); err != ErrImageEditMissingInputPricing {
+		t.Fatalf("err=%v want ErrImageEditMissingInputPricing", err)
+	}
+
+	// 加 input pricing 后激活成功
+	if err := DB.Create(&ModelPricingRule{
+		RuleKey: "test-in", PricingVersion: "test",
+		ProviderKey: "xai", ModelID: cm.ModelID, OfficialModelID: cm.ModelID,
+		BillingMode: BillingModeImage, Unit: "image", Direction: "input",
+		PriceMicroUSD: 10_000,
+	}).Error; err != nil {
+		t.Fatalf("seed input pricing: %v", err)
+	}
+	if err := ValidateChannelModelActivation(cm); err != nil {
+		t.Fatalf("activation with input+output pricing should pass: %v", err)
+	}
+
+	// 仅 generations 时不要求 input pricing：移除 input rule，预期仍激活成功
+	if err := DB.Where("rule_key = ?", "test-in").Delete(&ModelPricingRule{}).Error; err != nil {
+		t.Fatalf("delete input pricing: %v", err)
+	}
+	cm.AllowedEndpoints = `["/v1/images/generations"]`
+	if err := ValidateChannelModelActivation(cm); err != nil {
+		t.Fatalf("generations-only activation without input pricing should still pass: %v", err)
+	}
+}
+
+func TestValidateChannelModelActivation_RejectsForeignImageEndpoint(t *testing.T) {
+	db, err := gorm.Open(sqlite.Open("file::memory:?cache=private"), &gorm.Config{})
+	if err != nil {
+		t.Fatalf("open sqlite: %v", err)
+	}
+	oldDB := DB
+	DB = db
+	t.Cleanup(func() { DB = oldDB })
+	if err := DB.AutoMigrate(&ModelPricingRule{}); err != nil {
+		t.Fatalf("migrate: %v", err)
+	}
+	if err := DB.Create(&ModelPricingRule{
+		RuleKey: "test-out", PricingVersion: "test",
+		ProviderKey: "xai", ModelID: "grok-imagine-image-quality", OfficialModelID: "grok-imagine-image-quality",
+		BillingMode: BillingModeImage, Unit: "image", Direction: "output",
+		Resolution: "1K", PriceMicroUSD: 50_000,
+	}).Error; err != nil {
+		t.Fatalf("seed: %v", err)
+	}
+	cm := &ChannelModel{
+		ModelID:          "grok-imagine-image-quality",
+		Status:           1,
+		ModelCategory:    ModelCategoryImage,
+		BillingMode:      BillingModeImage,
+		AllowedEndpoints: `["/v1/images/generations","/v1/images/extensions"]`,
+	}
+	if err := ValidateChannelModelActivation(cm); err != ErrImageModelRequiresEndpoint {
+		t.Fatalf("err=%v want ErrImageModelRequiresEndpoint (extensions not in image whitelist)", err)
+	}
+}
+
+func TestValidateChannelModelActivation_VideoEditsRequiresInputPricing(t *testing.T) {
+	db, err := gorm.Open(sqlite.Open("file::memory:?cache=private"), &gorm.Config{})
+	if err != nil {
+		t.Fatalf("open sqlite: %v", err)
+	}
+	oldDB := DB
+	DB = db
+	t.Cleanup(func() { DB = oldDB })
+	if err := DB.AutoMigrate(&ModelPricingRule{}); err != nil {
+		t.Fatalf("migrate: %v", err)
+	}
+
+	cm := &ChannelModel{
+		ModelID:          "grok-imagine-video",
+		Status:           1,
+		ModelCategory:    ModelCategoryVideo,
+		BillingMode:      BillingModeVideoSecond,
+		AllowedEndpoints: `["/v1/videos/generations","/v1/videos/edits"]`,
+	}
+	if err := DB.Create(&ModelPricingRule{
+		RuleKey: "video-test-out", PricingVersion: "test",
+		ProviderKey: "xai", ModelID: cm.ModelID, OfficialModelID: cm.ModelID,
+		BillingMode: BillingModeVideoSecond, Unit: "video_second", Direction: "output",
+		Resolution: "720p", PriceMicroUSD: 70_000,
+	}).Error; err != nil {
+		t.Fatalf("seed output pricing: %v", err)
+	}
+	if err := ValidateChannelModelActivation(cm); err != ErrVideoEditMissingInputPricing {
+		t.Fatalf("err=%v want ErrVideoEditMissingInputPricing", err)
+	}
+	// 加 input pricing 后 OK
+	if err := DB.Create(&ModelPricingRule{
+		RuleKey: "video-test-in", PricingVersion: "test",
+		ProviderKey: "xai", ModelID: cm.ModelID, OfficialModelID: cm.ModelID,
+		BillingMode: BillingModeVideoSecond, Unit: "video_second", Direction: "input",
+		PriceMicroUSD: 10_000,
+	}).Error; err != nil {
+		t.Fatalf("seed input pricing: %v", err)
+	}
+	if err := ValidateChannelModelActivation(cm); err != nil {
+		t.Fatalf("activation with both directions should pass: %v", err)
+	}
+	// extensions 同样要求 input pricing
+	if err := DB.Where("rule_key = ?", "video-test-in").Delete(&ModelPricingRule{}).Error; err != nil {
+		t.Fatalf("delete input pricing: %v", err)
+	}
+	cm.AllowedEndpoints = `["/v1/videos/generations","/v1/videos/extensions"]`
+	if err := ValidateChannelModelActivation(cm); err != ErrVideoEditMissingInputPricing {
+		t.Fatalf("extensions also requires input pricing: err=%v", err)
+	}
+}
+
+func TestCanonicalRuntimeImageModel_AcceptsAdminRegisteredThirdParty(t *testing.T) {
+	db, err := gorm.Open(sqlite.Open("file::memory:?cache=private"), &gorm.Config{})
+	if err != nil {
+		t.Fatalf("open sqlite: %v", err)
+	}
+	oldDB := DB
+	DB = db
+	t.Cleanup(func() { DB = oldDB })
+	if err := DB.AutoMigrate(&ModelCatalog{}); err != nil {
+		t.Fatalf("migrate: %v", err)
+	}
+
+	// 1. 未注册：拒绝
+	if _, ok := CanonicalRuntimeImageModel("sd-3.5-large"); ok {
+		t.Fatalf("unregistered model should be rejected before admin adds catalog row")
+	}
+
+	// 2. admin 加 catalog row（Supported=true）：接受
+	if err := DB.Create(&ModelCatalog{
+		ProviderKey: "fal", ProviderName: "fal.ai",
+		ModelID: "sd-3.5-large", DisplayName: "Stable Diffusion 3.5 Large",
+		Category: ModelCategoryImage, BillingMode: BillingModeImage,
+		Supported: true,
+	}).Error; err != nil {
+		t.Fatalf("seed catalog: %v", err)
+	}
+	got, ok := CanonicalRuntimeImageModel("sd-3.5-large")
+	if !ok || got != "sd-3.5-large" {
+		t.Fatalf("CanonicalRuntimeImageModel=(%q,%v) want sd-3.5-large/true after admin registration", got, ok)
+	}
+
+	// 3. 客户端带前缀也能命中（剥前缀查 base）
+	got, ok = CanonicalRuntimeImageModel("fal/sd-3.5-large")
+	if !ok || got != "sd-3.5-large" {
+		t.Fatalf("prefixed client model lookup=(%q,%v) want sd-3.5-large/true", got, ok)
+	}
+
+	// 4. admin 直接用带前缀注册也支持
+	if err := DB.Create(&ModelCatalog{
+		ProviderKey: "replicate", ProviderName: "Replicate",
+		ModelID: "replicate/flux-1.1", DisplayName: "FLUX 1.1",
+		Category: ModelCategoryImage, BillingMode: BillingModeImage,
+		Supported: true,
+	}).Error; err != nil {
+		t.Fatalf("seed prefixed catalog: %v", err)
+	}
+	got, ok = CanonicalRuntimeImageModel("replicate/flux-1.1")
+	if !ok || got != "replicate/flux-1.1" {
+		t.Fatalf("admin-registered prefixed model=(%q,%v) want replicate/flux-1.1/true", got, ok)
+	}
+
+	// 5. Supported=false：仍拒绝（admin 软关 model 时立即生效）
+	if err := DB.Create(&ModelCatalog{
+		ProviderKey: "fal", ProviderName: "fal.ai",
+		ModelID: "unsupported-model", DisplayName: "Disabled",
+		Category: ModelCategoryImage, BillingMode: BillingModeImage,
+		Supported: false,
+	}).Error; err != nil {
+		t.Fatalf("seed unsupported: %v", err)
+	}
+	if _, ok := CanonicalRuntimeImageModel("unsupported-model"); ok {
+		t.Fatalf("Supported=false catalog row should be rejected")
+	}
+
+	// 6. 静态白名单仍优先（fast path）— 内置模型即使不在 DB 也工作
+	if _, ok := CanonicalRuntimeImageModel("gpt-image-2"); !ok {
+		t.Fatalf("static built-in gpt-image-2 must work even without catalog row")
+	}
+}
+
+func TestIsRuntimeTokenBilledImageModel_RespectsAdminBillingMode(t *testing.T) {
+	db, err := gorm.Open(sqlite.Open("file::memory:?cache=private"), &gorm.Config{})
+	if err != nil {
+		t.Fatalf("open sqlite: %v", err)
+	}
+	oldDB := DB
+	DB = db
+	t.Cleanup(func() { DB = oldDB })
+	if err := DB.AutoMigrate(&ModelCatalog{}); err != nil {
+		t.Fatalf("migrate: %v", err)
+	}
+
+	// 内置 gpt-image-2 → token-billed（static fast path，即使无 DB row）
+	if !IsRuntimeTokenBilledImageModel("gpt-image-2") {
+		t.Fatalf("built-in gpt-image-2 must be token-billed via static fast path")
+	}
+
+	// admin 注册 token-billed 第三方 image model
+	if err := DB.Create(&ModelCatalog{
+		ProviderKey: "openai", ProviderName: "OpenAI compat",
+		ModelID: "gpt-image-3-preview", DisplayName: "GPT Image 3 Preview",
+		Category: ModelCategoryImage, BillingMode: BillingModeToken,
+		Supported: true,
+	}).Error; err != nil {
+		t.Fatalf("seed token-billed: %v", err)
+	}
+	if !IsRuntimeTokenBilledImageModel("gpt-image-3-preview") {
+		t.Fatalf("admin-registered token-billed model should be detected via DB")
+	}
+
+	// admin 注册 image-billed（per-image）第三方
+	if err := DB.Create(&ModelCatalog{
+		ProviderKey: "fal", ProviderName: "fal.ai",
+		ModelID: "sdxl", DisplayName: "SDXL",
+		Category: ModelCategoryImage, BillingMode: BillingModeImage,
+		Supported: true,
+	}).Error; err != nil {
+		t.Fatalf("seed image-billed: %v", err)
+	}
+	if IsRuntimeTokenBilledImageModel("sdxl") {
+		t.Fatalf("admin-registered image-billed model must NOT report token-billed")
+	}
+}
+
+func TestCanonicalRuntimeImageModel_AllowsCLIProxyPrefixes(t *testing.T) {
+	for _, in := range []string{
+		"grok-imagine-image",
+		"xai/grok-imagine-image",
+		"x-ai/grok-imagine-image",
+		"grok/grok-imagine-image",
+	} {
+		got, ok := CanonicalRuntimeImageModel(in)
+		if !ok || got != "grok-imagine-image" {
+			t.Fatalf("CanonicalRuntimeImageModel(%q)=(%q,%v), want grok-imagine-image,true", in, got, ok)
+		}
+	}
+	if got, ok := CanonicalRuntimeImageModel("codex/grok-imagine-image"); ok || got != "" {
+		t.Fatalf("codex prefix should be rejected, got (%q,%v)", got, ok)
+	}
+	for _, in := range []string{"gpt-image-2", "openai/gpt-image-2"} {
+		got, ok := CanonicalRuntimeImageModel(in)
+		if !ok || got != "gpt-image-2" {
+			t.Fatalf("CanonicalRuntimeImageModel(%q)=(%q,%v), want gpt-image-2,true", in, got, ok)
+		}
+	}
+	if got, ok := CanonicalRuntimeImageModel("codex/gpt-image-2"); ok || got != "" {
+		t.Fatalf("codex-prefixed gpt-image-2 should be rejected, got (%q,%v)", got, ok)
+	}
+}
+
+func TestCanonicalRuntimeVideoModel_AllowsCLIProxyPrefixes(t *testing.T) {
+	for _, in := range []string{
+		"grok-imagine-video",
+		"xai/grok-imagine-video",
+		"x-ai/grok-imagine-video",
+		"grok/grok-imagine-video",
+	} {
+		got, ok := CanonicalRuntimeVideoModel(in)
+		if !ok || got != "grok-imagine-video" {
+			t.Fatalf("CanonicalRuntimeVideoModel(%q)=(%q,%v), want grok-imagine-video,true", in, got, ok)
+		}
+	}
+	if got, ok := CanonicalRuntimeVideoModel("codex/grok-imagine-video"); ok || got != "" {
+		t.Fatalf("codex prefix should be rejected, got (%q,%v)", got, ok)
+	}
+}

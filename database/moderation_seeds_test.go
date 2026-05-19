@@ -252,6 +252,12 @@ func TestSeedModerationDefaults_MergesKeywordBaselineOnce(t *testing.T) {
 	if got := readDecryptedSysConfig(t, "moderation_autoban_safety_version"); got != ModerationAutobanSafetyVersion {
 		t.Fatalf("moderation_autoban_safety_version=%q want %q", got, ModerationAutobanSafetyVersion)
 	}
+	if got := readDecryptedSysConfig(t, "moderation_image_policy"); got != "skip" {
+		t.Fatalf("moderation_image_policy=%q want skip", got)
+	}
+	if got := readDecryptedSysConfig(t, "moderation_image_policy_default_version"); got != moderationImagePolicyDefaultVersion {
+		t.Fatalf("moderation_image_policy_default_version=%q want %q", got, moderationImagePolicyDefaultVersion)
+	}
 	var riskRules []map[string]any
 	if err := json.Unmarshal([]byte(readDecryptedSysConfig(t, "moderation_risk_rules")), &riskRules); err != nil {
 		t.Fatalf("risk rules invalid JSON: %v", err)
@@ -313,6 +319,32 @@ func TestSeedModerationDefaults_PreservesCustomAutobanThresholds(t *testing.T) {
 	}
 }
 
+func TestSeedModerationDefaults_MigratesOldRejectImagePolicyToSkip(t *testing.T) {
+	setupModerationSeedTestDB(t)
+	seedEncryptedSysConfig(t, "moderation_image_policy", "reject")
+
+	SeedModerationDefaults()
+
+	if got := readDecryptedSysConfig(t, "moderation_image_policy"); got != "skip" {
+		t.Fatalf("moderation_image_policy=%q want skip", got)
+	}
+	if got := readDecryptedSysConfig(t, "moderation_image_policy_default_version"); got != moderationImagePolicyDefaultVersion {
+		t.Fatalf("moderation_image_policy_default_version=%q want %q", got, moderationImagePolicyDefaultVersion)
+	}
+}
+
+func TestSeedModerationDefaults_PreservesCustomImagePolicyAfterMigrationMarker(t *testing.T) {
+	setupModerationSeedTestDB(t)
+	seedEncryptedSysConfig(t, "moderation_image_policy", "reject")
+	seedEncryptedSysConfig(t, "moderation_image_policy_default_version", moderationImagePolicyDefaultVersion)
+
+	SeedModerationDefaults()
+
+	if got := readDecryptedSysConfig(t, "moderation_image_policy"); got != "reject" {
+		t.Fatalf("custom moderation_image_policy=%q want reject", got)
+	}
+}
+
 func TestSeedModerationDefaults_EnforcesCLIProxyProviderAndPrunesGeminiConfig(t *testing.T) {
 	setupModerationSeedTestDB(t)
 	seedEncryptedSysConfig(t, "moderation_provider", "gemini_cpa")
@@ -367,7 +399,27 @@ func TestIsOpenAIModelID(t *testing.T) {
 	}
 }
 
-func TestEnforceOpenAIModelModerationDefaults(t *testing.T) {
+func TestIsOpenAIGPTTextModelID(t *testing.T) {
+	cases := []struct {
+		model string
+		want  bool
+	}{
+		{"gpt-5.5", true},
+		{"openai/gpt-5.4", true},
+		{"chatgpt-4o-latest", true},
+		{"gpt-image-2", false},
+		{"codex-auto-review", false},
+		{"o3-mini", false},
+		{"claude-sonnet-4-6", false},
+	}
+	for _, tc := range cases {
+		if got := IsOpenAIGPTTextModelID(tc.model); got != tc.want {
+			t.Fatalf("IsOpenAIGPTTextModelID(%q)=%v want %v", tc.model, got, tc.want)
+		}
+	}
+}
+
+func TestEnforceModelEndpointDefaultsDoesNotRewriteModeration(t *testing.T) {
 	setupModerationSeedTestDB(t)
 	if err := DB.AutoMigrate(&ChannelModel{}); err != nil {
 		t.Fatalf("migrate channel_models: %v", err)
@@ -383,28 +435,62 @@ func TestEnforceOpenAIModelModerationDefaults(t *testing.T) {
 		t.Fatalf("seed channel_models: %v", err)
 	}
 
-	EnforceOpenAIModelModerationDefaults()
+	EnforceModelEndpointDefaults()
 
 	var after []ChannelModel
 	if err := DB.Order("id").Find(&after).Error; err != nil {
 		t.Fatalf("read channel_models: %v", err)
 	}
-	for _, row := range after {
-		if IsOpenAIModelID(row.ModelID) {
-			if row.ModerationLevel != OpenAIModelModerationLevel || row.ModerationFailMode != OpenAIModelModerationFailMode {
-				t.Fatalf("%s moderation=%s/%s want %s/%s",
-					row.ModelID, row.ModerationLevel, row.ModerationFailMode,
-					OpenAIModelModerationLevel, OpenAIModelModerationFailMode)
-			}
-			if row.ModelID == "gpt-5.5" && row.EndpointPolicy != EndpointPolicyNoChatNonStream {
-				t.Fatalf("gpt-5.5 endpoint_policy=%s want %s", row.EndpointPolicy, EndpointPolicyNoChatNonStream)
-			}
-			continue
+	for i, row := range after {
+		want := rows[i]
+		if row.ModerationLevel != want.ModerationLevel || row.ModerationFailMode != want.ModerationFailMode {
+			t.Fatalf("%s moderation=%s/%s want original %s/%s",
+				row.ModelID, row.ModerationLevel, row.ModerationFailMode,
+				want.ModerationLevel, want.ModerationFailMode)
 		}
-		if row.ModerationLevel != "off" || row.ModerationFailMode != "open" {
-			t.Fatalf("non-OpenAI model %s should remain off/open, got %s/%s",
-				row.ModelID, row.ModerationLevel, row.ModerationFailMode)
+		if row.ModelID == "gpt-5.5" && row.EndpointPolicy != EndpointPolicyNoChatNonStream {
+			t.Fatalf("gpt-5.5 endpoint_policy=%s want %s", row.EndpointPolicy, EndpointPolicyNoChatNonStream)
 		}
+	}
+}
+
+func TestEnforceOpenAIGPTModerationDefaultsMigratesOldKeywordSeed(t *testing.T) {
+	setupModerationSeedTestDB(t)
+	if err := DB.AutoMigrate(&ChannelModel{}); err != nil {
+		t.Fatalf("migrate channel_models: %v", err)
+	}
+	rows := []ChannelModel{
+		{ModelID: "gpt-5.4-mini", ModerationLevel: "keyword", ModerationFailMode: "closed", Status: 1},
+		{ModelID: "gpt-5.5", ModerationLevel: "strict", ModerationFailMode: "closed", Status: 1},
+		{ModelID: "gpt-image-2", ModerationLevel: "keyword", ModerationFailMode: "closed", Status: 2},
+		{ModelID: "codex-auto-review", ModerationLevel: "keyword", ModerationFailMode: "closed", Status: 1},
+		{ModelID: "claude-sonnet-4-6", ModerationLevel: "keyword", ModerationFailMode: "closed", Status: 1},
+	}
+	if err := DB.Create(&rows).Error; err != nil {
+		t.Fatalf("seed channel_models: %v", err)
+	}
+
+	EnforceOpenAIGPTModerationDefaults()
+
+	var after []ChannelModel
+	if err := DB.Order("id").Find(&after).Error; err != nil {
+		t.Fatalf("read channel_models: %v", err)
+	}
+	assertModeration := func(idx int, level, failMode string) {
+		t.Helper()
+		if after[idx].ModerationLevel != level || after[idx].ModerationFailMode != failMode {
+			t.Fatalf("%s moderation=%s/%s want %s/%s",
+				after[idx].ModelID, after[idx].ModerationLevel, after[idx].ModerationFailMode, level, failMode)
+		}
+	}
+	assertModeration(0, "moderation", "closed")
+	assertModeration(1, "strict", "closed")
+	assertModeration(2, "keyword", "closed")
+	assertModeration(3, "keyword", "closed")
+	assertModeration(4, "keyword", "closed")
+
+	if got := readDecryptedSysConfig(t, "openai_gpt_moderation_default_version"); got != openAIGPTModerationDefaultVersion {
+		t.Fatalf("openai_gpt_moderation_default_version=%q want %q", got, openAIGPTModerationDefaultVersion)
 	}
 }
 

@@ -103,7 +103,7 @@ func TestUserStatus_OnlyRejectsStatusTwo(t *testing.T) {
 		}
 	})
 
-	t.Run("oauth existing user rejects status two", func(t *testing.T) {
+	t.Run("oauth existing user status two gets appeal session", func(t *testing.T) {
 		setupOAuthControllerTestDB(t)
 		setOAuthSysConfigForTest(t)
 		user := database.User{Username: "oauth_status2", GithubID: "12345", Role: "user", Token: "sk-oauth-status2", Status: 1}
@@ -119,20 +119,45 @@ func TestUserStatus_OnlyRejectsStatusTwo(t *testing.T) {
 		app := fiber.New(fiber.Config{DisableStartupMessage: true})
 		app.Post("/callback", GithubCallback)
 		resp := postGithubCallback(t, app, "code-ok", state)
-		if resp.StatusCode != http.StatusForbidden {
-			t.Fatalf("callback status=%d, want 403", resp.StatusCode)
+		if resp.StatusCode != http.StatusOK {
+			t.Fatalf("callback status=%d, want 200", resp.StatusCode)
 		}
 		var got map[string]any
 		if err := json.NewDecoder(resp.Body).Decode(&got); err != nil {
 			t.Fatalf("decode body: %v", err)
 		}
-		if got["message_code"] != "ERR_BANNED" {
-			t.Fatalf("message_code=%v, want ERR_BANNED", got["message_code"])
+		if got["success"] != true {
+			t.Fatalf("success=%v, want true", got["success"])
+		}
+		if got["account_status"] != float64(2) {
+			t.Fatalf("account_status=%v, want 2", got["account_status"])
+		}
+		sessionID, ok := got["session_id"].(string)
+		if !ok || !database.IsSessionID(sessionID) {
+			t.Fatalf("session_id=%v, want browser session", got["session_id"])
 		}
 		var sessions int64
 		database.DB.Model(&database.UserSession{}).Count(&sessions)
-		if sessions != 0 {
-			t.Fatalf("sessions=%d, want 0", sessions)
+		if sessions != 1 {
+			t.Fatalf("sessions=%d, want 1", sessions)
+		}
+
+		guardApp := fiber.New(fiber.Config{DisableStartupMessage: true})
+		guardApp.Use(middleware.UserGuardAllowBanned)
+		guardApp.Get("/appeal", func(c *fiber.Ctx) error {
+			if c.Locals("user_banned") != true {
+				t.Fatalf("user_banned local=%v, want true", c.Locals("user_banned"))
+			}
+			return c.SendStatus(http.StatusNoContent)
+		})
+		req := httptest.NewRequest(http.MethodGet, "/appeal", nil)
+		req.Header.Set("Authorization", "Bearer "+sessionID)
+		appealResp, err := guardApp.Test(req)
+		if err != nil {
+			t.Fatalf("appeal request: %v", err)
+		}
+		if appealResp.StatusCode != http.StatusNoContent {
+			t.Fatalf("appeal status=%d, want 204", appealResp.StatusCode)
 		}
 	})
 

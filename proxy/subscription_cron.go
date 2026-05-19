@@ -71,10 +71,47 @@ func runSubscriptionCronOnce() {
 	}()
 
 	expireSubscriptions()
+	ActivateDueBillingRuleRevisions()
 	notifyExpiringSubscriptions()
 	cleanupOldApiLogs()
 	cleanupClosedTickets()
 	cleanupStaleCPACredentials()
+	monitorApiLogRevenueOrphans()
+}
+
+// monitorApiLogRevenueOrphans 周期检查"ApiLog 主表写成功但 ApiLogRevenue 侧表写失败"
+// 的孤儿行。这是 codex audit-integrity 发现的 silent failure：RecordApiLogRevenue 失败
+// 仅 log，没有 reconcile 机制——加 metric 监控让 admin 第一时间察觉。
+//
+// fix P3（codex review verify-r4）：原实现把所有"成功 + cost>0 但无 revenue"的 api_log 都当
+// 孤儿，但 pending_reconcile / unmetered 路径**故意**不写 revenue（没收到钱）→ 误报噪声。
+// JOIN billing_entries 只对真有 subscription/balance 计费的请求告警。
+//
+// 只扫最近 1 小时内的孤儿（避免百万行级历史 api_log 拖死 SQLite）。
+func monitorApiLogRevenueOrphans() {
+	if !database.DB.Migrator().HasTable(&database.ApiLog{}) || !database.DB.Migrator().HasTable(&database.ApiLogRevenue{}) || !database.DB.Migrator().HasTable(&database.BillingEntry{}) {
+		return
+	}
+	cutoff := time.Now().Add(-1 * time.Hour)
+	var orphanCount int64
+	err := database.DB.Raw(`SELECT COUNT(*) FROM api_logs a
+		INNER JOIN billing_entries be
+			ON be.related_type = 'api_log' AND be.related_id = a.id
+			AND be.entry_type IN (?, ?)
+		LEFT JOIN api_log_revenues r ON r.api_log_id = a.id
+		WHERE a.created_at >= ?
+		  AND a.status >= 200 AND a.status < 400
+		  AND r.id IS NULL`,
+		database.BillingTypeApiUsageSub, database.BillingTypeApiConsumeBalance, cutoff,
+	).Scan(&orphanCount).Error
+	if err != nil {
+		log.Printf("[REVENUE-ORPHAN-MONITOR] query failed: %v", err)
+		return
+	}
+	if orphanCount > 0 {
+		log.Printf("[REVENUE-ORPHAN-MONITOR] 最近 1 小时内 %d 个 api_logs（已写 BillingEntry 但无 revenue 侧表行）—— RecordApiLogRevenue 重试 4 次仍失败，需 admin 排查",
+			orphanCount)
+	}
 }
 
 // cleanupStaleCPACredentials 物理删除已软删（disabled=true）超过 30 天且本地未再见到的 CPA 凭证缓存。

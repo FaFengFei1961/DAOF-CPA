@@ -28,6 +28,7 @@ type StatDataPoint struct {
 	CacheWriteTokens int    `json:"cache_write_tokens"`
 	ReasoningTokens  int    `json:"reasoning_tokens"`
 	Cost             int64  `json:"-"` // micro_usd; JSON 输出由 MarshalJSON 转 USD float
+	ChargedCost      int64  `json:"-"` // micro_usd; 订阅扣减口径，JSON 输出为 USD float
 	LatencyTotal     int64  `json:"-"`
 }
 
@@ -35,38 +36,68 @@ func (p StatDataPoint) MarshalJSON() ([]byte, error) {
 	type alias StatDataPoint
 	return json.Marshal(&struct {
 		*alias
-		Cost float64 `json:"cost"`
-	}{alias: (*alias)(&p), Cost: database.MicroToUSD(p.Cost)})
+		Cost        float64 `json:"cost"`
+		RawCost     float64 `json:"raw_cost"`
+		ChargedCost float64 `json:"charged_cost"`
+	}{
+		alias:       (*alias)(&p),
+		Cost:        database.MicroToUSD(p.Cost),
+		RawCost:     database.MicroToUSD(p.Cost),
+		ChargedCost: database.MicroToUSD(effectiveAggregateChargedCost(p.ChargedCost, p.Cost)),
+	})
 }
 
 type TokenStatRow struct {
-	TokenName string `json:"token_name"`
-	Reqs      int    `json:"reqs"`
-	Tokens    int    `json:"tokens"`
-	Cost      int64  `json:"-"` // micro_usd
+	TokenName   string `json:"token_name"`
+	Reqs        int    `json:"reqs"`
+	Tokens      int    `json:"tokens"`
+	Cost        int64  `json:"-"` // micro_usd
+	ChargedCost int64  `json:"-"` // micro_usd
 }
 
 func (r TokenStatRow) MarshalJSON() ([]byte, error) {
 	type alias TokenStatRow
 	return json.Marshal(&struct {
 		*alias
-		Cost float64 `json:"cost"`
-	}{alias: (*alias)(&r), Cost: database.MicroToUSD(r.Cost)})
+		Cost        float64 `json:"cost"`
+		RawCost     float64 `json:"raw_cost"`
+		ChargedCost float64 `json:"charged_cost"`
+	}{
+		alias:       (*alias)(&r),
+		Cost:        database.MicroToUSD(r.Cost),
+		RawCost:     database.MicroToUSD(r.Cost),
+		ChargedCost: database.MicroToUSD(effectiveAggregateChargedCost(r.ChargedCost, r.Cost)),
+	})
 }
 
 type ModelStatRow struct {
-	ModelName string `json:"model_name"`
-	Reqs      int    `json:"reqs"`
-	Tokens    int    `json:"tokens"`
-	Cost      int64  `json:"-"` // micro_usd
+	ModelName   string `json:"model_name"`
+	Reqs        int    `json:"reqs"`
+	Tokens      int    `json:"tokens"`
+	Cost        int64  `json:"-"` // micro_usd
+	ChargedCost int64  `json:"-"` // micro_usd
 }
 
 func (r ModelStatRow) MarshalJSON() ([]byte, error) {
 	type alias ModelStatRow
 	return json.Marshal(&struct {
 		*alias
-		Cost float64 `json:"cost"`
-	}{alias: (*alias)(&r), Cost: database.MicroToUSD(r.Cost)})
+		Cost        float64 `json:"cost"`
+		RawCost     float64 `json:"raw_cost"`
+		ChargedCost float64 `json:"charged_cost"`
+	}{
+		alias:       (*alias)(&r),
+		Cost:        database.MicroToUSD(r.Cost),
+		RawCost:     database.MicroToUSD(r.Cost),
+		ChargedCost: database.MicroToUSD(effectiveAggregateChargedCost(r.ChargedCost, r.Cost)),
+	})
+}
+
+func effectiveAggregateChargedCost(chargedCost, rawCost int64) int64 {
+	if chargedCost == 0 && rawCost > 0 {
+		return rawCost
+	}
+	return chargedCost
 }
 
 func GetStats(c *fiber.Ctx) error {
@@ -113,6 +144,7 @@ func GetStats(c *fiber.Ctx) error {
 			COALESCE(SUM(cache_write_tokens), 0) as cache_write_tokens,
 			COALESCE(SUM(reasoning_tokens), 0) as reasoning_tokens,
 			COALESCE(SUM(cost), 0) as cost,
+			COALESCE(SUM(CASE WHEN charged_cost > 0 THEN charged_cost ELSE cost END), 0) as charged_cost,
 			COALESCE(SUM(latency), 0) as latency_total`, dateFormat).
 		Where("user_id = ? AND created_at >= ?", user.ID, startDate).
 		Group("date, model_name").
@@ -125,7 +157,11 @@ func GetStats(c *fiber.Ctx) error {
 	// 2. Token stats: grouped by token_name (令牌来源)
 	var tokenStats []TokenStatRow
 	if err := database.DB.Model(&database.ApiLog{}).
-		Select("token_name, COUNT(id) as reqs, SUM(prompt_tokens + completion_tokens) as tokens, SUM(cost) as cost").
+		Select(`token_name,
+			COUNT(id) as reqs,
+			SUM(prompt_tokens + completion_tokens) as tokens,
+			SUM(cost) as cost,
+			COALESCE(SUM(CASE WHEN charged_cost > 0 THEN charged_cost ELSE cost END), 0) as charged_cost`).
 		Where("user_id = ? AND created_at >= ?", user.ID, startDate).
 		Group("token_name").
 		Order("reqs DESC").
@@ -137,7 +173,11 @@ func GetStats(c *fiber.Ctx) error {
 	// 3. Model stats: grouped by model_name
 	var modelStats []ModelStatRow
 	if err := database.DB.Model(&database.ApiLog{}).
-		Select("model_name, COUNT(id) as reqs, SUM(prompt_tokens + completion_tokens) as tokens, SUM(cost) as cost").
+		Select(`model_name,
+			COUNT(id) as reqs,
+			SUM(prompt_tokens + completion_tokens) as tokens,
+			SUM(cost) as cost,
+			COALESCE(SUM(CASE WHEN charged_cost > 0 THEN charged_cost ELSE cost END), 0) as charged_cost`).
 		Where("user_id = ? AND created_at >= ?", user.ID, startDate).
 		Group("model_name").
 		Order("reqs DESC").
@@ -173,6 +213,7 @@ func GetStats(c *fiber.Ctx) error {
 	totalCacheWrite := 0
 	totalReasoning := 0
 	var totalCostMicro int64 // 累加 int64 micro_usd 避免浮点误差
+	var totalChargedCostMicro int64
 	var totalLatencyMs int64
 
 	for _, p := range chartData {
@@ -184,6 +225,7 @@ func GetStats(c *fiber.Ctx) error {
 		totalCacheWrite += p.CacheWriteTokens
 		totalReasoning += p.ReasoningTokens
 		totalCostMicro += p.Cost
+		totalChargedCostMicro += effectiveAggregateChargedCost(p.ChargedCost, p.Cost)
 		totalLatencyMs += p.LatencyTotal
 	}
 	avgLatencySeconds := 0.0
@@ -218,17 +260,18 @@ func GetStats(c *fiber.Ctx) error {
 		"success": true,
 		"data": map[string]interface{}{
 			"summary": map[string]interface{}{
-				"totalReqs":       totalReqs,
-				"successReqs":     successReqs,
-				"failedReqs":      failedReqs,
-				"totalTokens":     totalTokens,
-				"totalCached":     totalCached,
-				"totalCacheWrite": totalCacheWrite,
-				"totalReasoning":  totalReasoning,
-				"totalCost":       database.MicroToUSD(totalCostMicro),
-				"avgLatency":      avgLatencySeconds,
-				"rpm":             rpm,
-				"tpm":             tpm,
+				"totalReqs":        totalReqs,
+				"successReqs":      successReqs,
+				"failedReqs":       failedReqs,
+				"totalTokens":      totalTokens,
+				"totalCached":      totalCached,
+				"totalCacheWrite":  totalCacheWrite,
+				"totalReasoning":   totalReasoning,
+				"totalCost":        database.MicroToUSD(totalCostMicro),
+				"totalChargedCost": database.MicroToUSD(totalChargedCostMicro),
+				"avgLatency":       avgLatencySeconds,
+				"rpm":              rpm,
+				"tpm":              tpm,
 			},
 			"chart_data":  chartData,
 			"token_stats": tokenStats,
@@ -237,7 +280,7 @@ func GetStats(c *fiber.Ctx) error {
 				// fix CRITICAL（多模型审计第二十五轮）：用户侧 recent_logs 也走 PublicApiLog
 				// 白名单，不能直接序列化 []database.ApiLog（避免 platform_cost_estimate /
 				// upstream_* 字段泄漏到普通用户）。
-				"logs":  database.ApiLogsToPublic(recentLogs),
+				"logs":  database.ApiLogsToPublicWithUsageLines(recentLogs),
 				"total": logsTotal,
 				"page":  page,
 				"limit": limit,

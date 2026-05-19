@@ -5,6 +5,7 @@ import { AreaChart, Area, LineChart, Line, XAxis, YAxis, CartesianGrid, Tooltip,
 import { useCurrency } from '../context/CurrencyContext';
 import { HealthMonitor } from './HealthMonitor';
 import { authFetch } from '../utils/authFetch';
+import { formatUsageLine, formatUsageLinesSummary, usageLinesOf } from '../utils/usageLines';
 
 const CHART_COLORS = ['#3b82f6', '#10b981', '#f59e0b', '#ef4444', '#8b5cf6', '#ec4899', '#06b6d4', '#f97316', '#14b8a6'];
 const STATS_CACHE_TTL_MS = 30000;
@@ -85,6 +86,29 @@ const formatLatency = (ms) => {
     return `${m}m${s}s`;
 };
 
+const rawCostOf = (row) => Number(row?.raw_cost ?? row?.cost ?? 0) || 0;
+const chargedCostOf = (row) => Number(row?.charged_cost ?? row?.total_charged_cost ?? row?.cost ?? 0) || 0;
+const costsDiffer = (raw, charged) => Math.abs(Number(raw || 0) - Number(charged || 0)) > 0.0000005;
+
+const UsageLinesCell = ({ row, formatMeterCost }) => {
+    const lines = usageLinesOf(row);
+    if (!lines.length) {
+        return <span className="text-outline">-</span>;
+    }
+    return (
+        <div className="space-y-1 max-w-[260px]">
+            {lines.slice(0, 2).map((line) => (
+                <div key={line.id || `${line.unit}-${line.direction}-${line.quantity}`} className="text-[11px] text-on-surface-variant font-mono leading-tight truncate" title={formatUsageLine(line, formatMeterCost)}>
+                    {formatUsageLine(line, formatMeterCost)}
+                </div>
+            ))}
+            {lines.length > 2 && (
+                <div className="text-[10px] text-outline">+{lines.length - 2}</div>
+            )}
+        </div>
+    );
+};
+
 /* ═══════════════ Sortable Table Header ═══════════════ */
 const SortHeader = ({ label, sortKey, currentSort, onSort }) => {
     const active = currentSort.key === sortKey;
@@ -149,6 +173,29 @@ const StatisticsDash = ({ isAdmin = false, isAuthenticated = true }) => {
     const [tokenSort, setTokenSort] = useState({ key: 'reqs', dir: 'desc' });
     const [modelSort, setModelSort] = useState({ key: 'reqs', dir: 'desc' });
     const formatMeterCost = useCallback((value) => formatCurrencyFixed(Number(value || 0), 3), [formatCurrencyFixed]);
+    const renderCostPair = useCallback((row, { showWeight = false } = {}) => {
+        const raw = rawCostOf(row);
+        const charged = chargedCostOf(row);
+        const weight = Number(row?.model_weight || 1);
+        const health = Number(row?.health_multiplier || 1);
+        const multiplier = weight * health;
+        const hasMultiplier = Math.abs(multiplier - 1) > 0.000001;
+        return (
+            <div className="font-mono leading-tight">
+                <div className="text-on-surface">{formatMeterCost(charged)}</div>
+                {costsDiffer(raw, charged) && (
+                    <div className="text-[10px] text-on-surface-variant whitespace-nowrap">
+                        {t('STATS.RAW_COST_SHORT', 'raw')} {formatMeterCost(raw)}
+                    </div>
+                )}
+                {showWeight && hasMultiplier && (
+                    <div className="text-[10px] text-primary whitespace-nowrap">
+                        ×{multiplier.toFixed(2)}
+                    </div>
+                )}
+            </div>
+        );
+    }, [formatMeterCost, t]);
 
     const fetchStats = useCallback(async ({ force = false } = {}) => {
         const requestId = ++fetchSeqRef.current;
@@ -299,10 +346,11 @@ const StatisticsDash = ({ isAdmin = false, isAuthenticated = true }) => {
         raw.forEach(r => {
             const mn = r.model_name || 'unknown';
             modelsSet.add(mn);
-            if (!timeMap[r.date]) timeMap[r.date] = { date: r.date, reqs: 0, tokens: 0, cost: 0, prompt_tokens: 0, completion_tokens: 0, cached_tokens: 0, cache_write_tokens: 0, reasoning_tokens: 0, models: {} };
+            if (!timeMap[r.date]) timeMap[r.date] = { date: r.date, reqs: 0, tokens: 0, cost: 0, charged_cost: 0, prompt_tokens: 0, completion_tokens: 0, cached_tokens: 0, cache_write_tokens: 0, reasoning_tokens: 0, models: {} };
             timeMap[r.date].reqs += r.reqs;
             timeMap[r.date].tokens += r.tokens;
-            timeMap[r.date].cost += r.cost;
+            timeMap[r.date].cost += rawCostOf(r);
+            timeMap[r.date].charged_cost += chargedCostOf(r);
             timeMap[r.date].prompt_tokens += (r.prompt_tokens || 0);
             timeMap[r.date].completion_tokens += (r.completion_tokens || 0);
             timeMap[r.date].cached_tokens += (r.cached_tokens || 0);
@@ -330,8 +378,8 @@ const StatisticsDash = ({ isAdmin = false, isAuthenticated = true }) => {
         const sortedDates = Array.from(mergedSet).sort();
 
         const gData = sortedDates.map(d => {
-            const row = timeMap[d] || { reqs: 0, tokens: 0, cost: 0, prompt_tokens: 0, completion_tokens: 0, cached_tokens: 0, cache_write_tokens: 0, reasoning_tokens: 0 };
-            return { date: d, reqs: row.reqs, tokens: row.tokens, cost: row.cost, prompt_tokens: row.prompt_tokens, completion_tokens: row.completion_tokens, cached_tokens: row.cached_tokens, cache_write_tokens: row.cache_write_tokens, reasoning_tokens: row.reasoning_tokens };
+            const row = timeMap[d] || { reqs: 0, tokens: 0, cost: 0, charged_cost: 0, prompt_tokens: 0, completion_tokens: 0, cached_tokens: 0, cache_write_tokens: 0, reasoning_tokens: 0 };
+            return { date: d, reqs: row.reqs, tokens: row.tokens, cost: row.cost, charged_cost: row.charged_cost, prompt_tokens: row.prompt_tokens, completion_tokens: row.completion_tokens, cached_tokens: row.cached_tokens, cache_write_tokens: row.cache_write_tokens, reasoning_tokens: row.reasoning_tokens };
         });
         const mData = sortedDates.map(d => {
             const point = { date: d };
@@ -352,7 +400,11 @@ const StatisticsDash = ({ isAdmin = false, isAuthenticated = true }) => {
 
     /* ── Sorted token stats ── */
     const sortedTokenStats = useMemo(() => {
-        const list = [...(stats?.token_stats || [])];
+        const list = [...(stats?.token_stats || [])].map(r => ({
+            ...r,
+            raw_cost: rawCostOf(r),
+            charged_cost: chargedCostOf(r),
+        }));
         const { key, dir } = tokenSort;
         list.sort((a, b) => {
             const diff = key === 'token_name' ? a.token_name.localeCompare(b.token_name) : a[key] - b[key];
@@ -363,7 +415,11 @@ const StatisticsDash = ({ isAdmin = false, isAuthenticated = true }) => {
 
     /* ── Sorted model stats ── */
     const sortedModelStats = useMemo(() => {
-        const list = [...(stats?.model_stats || [])];
+        const list = [...(stats?.model_stats || [])].map(r => ({
+            ...r,
+            raw_cost: rawCostOf(r),
+            charged_cost: chargedCostOf(r),
+        }));
         const { key, dir } = modelSort;
         list.sort((a, b) => {
             const diff = key === 'model_name' ? a.model_name.localeCompare(b.model_name) : a[key] - b[key];
@@ -437,11 +493,17 @@ const StatisticsDash = ({ isAdmin = false, isAuthenticated = true }) => {
             t('STATS.CACHE_WRITE_5M_TOKENS', '缓存写5mTokens'),
             t('STATS.CACHE_WRITE_1H_TOKENS', '缓存写1hTokens'),
             t('STATS.REASONING_TOKENS', '思考Tokens'),
-            t('STATS.COST_USD', '花费($)'),
+            t('STATS.MEDIA_USAGE', '媒体用量'),
+            t('STATS.RAW_COST_USD', '原始成本($)'),
+            t('STATS.CHARGED_COST_USD', '套餐扣减($)'),
+            t('STATS.MODEL_WEIGHT', '模型权重'),
+            t('STATS.BILLING_RULES_VERSION', '规则版本'),
         ];
         const rows = logs.map(l => [
             l.created_at, l.model_name, l.token_name,
-            l.prompt_tokens, l.completion_tokens, l.cached_tokens || 0, l.cache_write_tokens || 0, l.cache_write_5m_tokens || 0, l.cache_write_1h_tokens || 0, l.reasoning_tokens || 0, l.cost
+            l.prompt_tokens, l.completion_tokens, l.cached_tokens || 0, l.cache_write_tokens || 0, l.cache_write_5m_tokens || 0, l.cache_write_1h_tokens || 0, l.reasoning_tokens || 0,
+            formatUsageLinesSummary(l, formatMeterCost),
+            rawCostOf(l), chargedCostOf(l), l.model_weight || 1, l.billing_rules_version || ''
         ].map(v => `"${String(v ?? '').replace(/"/g, '""')}"`).join(','));
         const csv = [header.join(','), ...rows].join('\n');
         const blob = new Blob([csv], { type: 'text/csv;charset=utf-8' });
@@ -534,10 +596,17 @@ const StatisticsDash = ({ isAdmin = false, isAuthenticated = true }) => {
                     data={globalData} dataKey="tokens" color="#f97316" icon={Zap} bgClass="bg-warning/5"
                 />
                 <StatCard
-                    title={t('STATS.COST')}
-                    value={formatMeterCost(summary.totalCost)}
-                    metaNode={<span className="text-xs text-on-surface-variant opacity-70">{t('STATS.COST_DESC')}</span>}
-                    data={globalData} dataKey="cost" color="#f59e0b" icon={Coins} bgClass="bg-warning/5"
+                    title={t('STATS.CHARGED_COST')}
+                    value={formatMeterCost(summary.totalChargedCost ?? summary.total_charged_cost ?? summary.totalCost)}
+                    metaNode={(
+                        <div className="text-xs text-on-surface-variant opacity-70">
+                            <div>{t('STATS.CHARGED_COST_DESC')}</div>
+                            {costsDiffer(summary.totalCost, summary.totalChargedCost ?? summary.total_charged_cost ?? summary.totalCost) && (
+                                <div>{t('STATS.RAW_COST_SHORT', 'raw')} {formatMeterCost(summary.totalCost)}</div>
+                            )}
+                        </div>
+                    )}
+                    data={globalData} dataKey="charged_cost" color="#f59e0b" icon={Coins} bgClass="bg-warning/5"
                 />
             </div>
 
@@ -632,7 +701,7 @@ const StatisticsDash = ({ isAdmin = false, isAuthenticated = true }) => {
 
                 <div className="bg-surface border border-outline-variant rounded-overlay p-6 ">
                     <div className="flex justify-between items-center mb-6">
-                        <h3 className="text-sm font-semibold text-on-surface-variant">{t('STATS.COST_CHART', '花费统计')}</h3>
+                        <h3 className="text-sm font-semibold text-on-surface-variant">{t('STATS.COST_CHART', '扣减统计')}</h3>
                     </div>
                     <div className="w-full h-[300px]">
                         <ResponsiveContainer width="100%" height="100%">
@@ -641,7 +710,8 @@ const StatisticsDash = ({ isAdmin = false, isAuthenticated = true }) => {
                                 <XAxis dataKey="date" stroke="#6b7280" fontSize={10} tickMargin={10} minTickGap={20} />
                                 <YAxis stroke="#6b7280" fontSize={10} tickCount={6} axisLine={false} tickLine={false} tickFormatter={formatMeterCost} />
                                 <Tooltip content={<CustomTooltip formatValue={formatMeterCost} />} />
-                                <Line isAnimationActive={false} type="monotone" dataKey="cost" name={t('STATS.COST_SERIES', '花费')} stroke="#f59e0b" strokeWidth={2} dot={{ r: 2, fill: '#f59e0b', strokeWidth: 0 }} activeDot={{ r: 4, strokeWidth: 0 }} />
+                                <Line isAnimationActive={false} type="monotone" dataKey="charged_cost" name={t('STATS.CHARGED_COST_SERIES', '套餐扣减')} stroke="#f59e0b" strokeWidth={2} dot={{ r: 2, fill: '#f59e0b', strokeWidth: 0 }} activeDot={{ r: 4, strokeWidth: 0 }} />
+                                <Line isAnimationActive={false} type="monotone" dataKey="cost" name={t('STATS.RAW_COST_SERIES', '原始成本')} stroke="#94a3b8" strokeWidth={1.5} strokeDasharray="4 4" dot={false} activeDot={{ r: 3, strokeWidth: 0 }} />
                             </LineChart>
                         </ResponsiveContainer>
                     </div>
@@ -660,7 +730,7 @@ const StatisticsDash = ({ isAdmin = false, isAuthenticated = true }) => {
                                     <SortHeader label={t('STATS.TOKEN_SOURCE')} sortKey="token_name" currentSort={tokenSort} onSort={(k) => handleSort(setTokenSort, tokenSort, k)} />
                                     <SortHeader label={t('STATS.REQUESTS_COUNT')} sortKey="reqs" currentSort={tokenSort} onSort={(k) => handleSort(setTokenSort, tokenSort, k)} />
                                     <SortHeader label={t('STATS.TOKENS_COUNT')} sortKey="tokens" currentSort={tokenSort} onSort={(k) => handleSort(setTokenSort, tokenSort, k)} />
-                                    <SortHeader label={t('STATS.COST')} sortKey="cost" currentSort={tokenSort} onSort={(k) => handleSort(setTokenSort, tokenSort, k)} />
+                                    <SortHeader label={t('STATS.CHARGED_COST')} sortKey="charged_cost" currentSort={tokenSort} onSort={(k) => handleSort(setTokenSort, tokenSort, k)} />
                                 </tr></thead>
                                 <tbody>
                                     {sortedTokenStats.map((row, i) => (
@@ -668,7 +738,7 @@ const StatisticsDash = ({ isAdmin = false, isAuthenticated = true }) => {
                                             <td className="px-4 py-3 text-xs text-on-surface-variant font-mono">{row.token_name || '-'}</td>
                                             <td className="px-4 py-3 text-xs text-on-surface">{row.reqs.toLocaleString()}</td>
                                             <td className="px-4 py-3 text-xs text-on-surface">{formatTokens(row.tokens)}</td>
-                                            <td className="px-4 py-3 text-xs text-on-surface">{formatMeterCost(row.cost)}</td>
+                                            <td className="px-4 py-3 text-xs text-on-surface">{renderCostPair(row)}</td>
                                         </tr>
                                     ))}
                                 </tbody>
@@ -689,7 +759,7 @@ const StatisticsDash = ({ isAdmin = false, isAuthenticated = true }) => {
                                     <SortHeader label={t('STATS.MODEL_NAME')} sortKey="model_name" currentSort={modelSort} onSort={(k) => handleSort(setModelSort, modelSort, k)} />
                                     <SortHeader label={t('STATS.REQUESTS_COUNT')} sortKey="reqs" currentSort={modelSort} onSort={(k) => handleSort(setModelSort, modelSort, k)} />
                                     <SortHeader label={t('STATS.TOKENS_COUNT')} sortKey="tokens" currentSort={modelSort} onSort={(k) => handleSort(setModelSort, modelSort, k)} />
-                                    <SortHeader label={t('STATS.COST')} sortKey="cost" currentSort={modelSort} onSort={(k) => handleSort(setModelSort, modelSort, k)} />
+                                    <SortHeader label={t('STATS.CHARGED_COST')} sortKey="charged_cost" currentSort={modelSort} onSort={(k) => handleSort(setModelSort, modelSort, k)} />
                                 </tr></thead>
                                 <tbody>
                                     {sortedModelStats.map((row, i) => (
@@ -697,7 +767,7 @@ const StatisticsDash = ({ isAdmin = false, isAuthenticated = true }) => {
                                             <td className="px-4 py-3 text-xs text-on-surface-variant font-mono">{row.model_name || '-'}</td>
                                             <td className="px-4 py-3 text-xs text-on-surface">{row.reqs.toLocaleString()}</td>
                                             <td className="px-4 py-3 text-xs text-on-surface">{formatTokens(row.tokens)}</td>
-                                            <td className="px-4 py-3 text-xs text-on-surface">{formatMeterCost(row.cost)}</td>
+                                            <td className="px-4 py-3 text-xs text-on-surface">{renderCostPair(row)}</td>
                                         </tr>
                                     ))}
                                 </tbody>
@@ -741,7 +811,7 @@ const StatisticsDash = ({ isAdmin = false, isAuthenticated = true }) => {
 
                 {filteredLogs.length > 0 ? (
                     <div className="overflow-x-auto">
-                        <table className="w-full min-w-[900px]">
+                        <table className="w-full min-w-[1040px]">
                             <thead><tr className="border-b border-outline-variant">
                                 <th className="text-left px-4 py-3 text-xs font-semibold text-on-surface-variant whitespace-nowrap">{t('STATS.TIMESTAMP')}</th>
                                 <th className="text-left px-4 py-3 text-xs font-semibold text-on-surface-variant whitespace-nowrap">{t('STATS.STATUS', '结果')}</th>
@@ -754,8 +824,9 @@ const StatisticsDash = ({ isAdmin = false, isAuthenticated = true }) => {
                                 <th className="text-left px-4 py-3 text-xs font-semibold text-on-surface-variant whitespace-nowrap">{t('STATS.REASONING_TOKENS')}</th>
                                 <th className="text-left px-4 py-3 text-xs font-semibold text-on-surface-variant whitespace-nowrap" title={t('STATS.USAGE_METADATA_HINT', '来自 usage metadata，不是本平台会话缓存')}>{t('STATS.CACHED_TOKENS', '缓存读 Tokens')}</th>
                                 <th className="text-left px-4 py-3 text-xs font-semibold text-on-surface-variant whitespace-nowrap" title={t('STATS.USAGE_METADATA_HINT', '来自 usage metadata，不是本平台会话缓存')}>{t('STATS.CACHE_WRITE_TOKENS', '缓存写 Tokens')}</th>
+                                <th className="text-left px-4 py-3 text-xs font-semibold text-on-surface-variant whitespace-nowrap">{t('STATS.MEDIA_USAGE', '媒体用量')}</th>
                                 <th className="text-left px-4 py-3 text-xs font-semibold text-on-surface-variant whitespace-nowrap">{t('STATS.TOTAL_TOKENS', '总Token数')}</th>
-                                <th className="text-left px-4 py-3 text-xs font-semibold text-on-surface-variant whitespace-nowrap">{t('STATS.COST')}</th>
+                                <th className="text-left px-4 py-3 text-xs font-semibold text-on-surface-variant whitespace-nowrap">{t('STATS.CHARGED_COST')}</th>
                             </tr></thead>
                             <tbody>
                                 {paginatedLogs.map((log) => (
@@ -782,8 +853,9 @@ const StatisticsDash = ({ isAdmin = false, isAuthenticated = true }) => {
                                                 </div>
                                             )}
                                         </td>
+                                        <td className="px-4 py-3 text-xs text-on-surface"><UsageLinesCell row={log} formatMeterCost={formatMeterCost} /></td>
                                         <td className="px-4 py-3 text-xs text-on-surface font-mono">{((log.prompt_tokens || 0) + (log.completion_tokens || 0)).toLocaleString()}</td>
-                                        <td className="px-4 py-3 text-xs text-on-surface">{formatMeterCost(log.cost)}</td>
+                                        <td className="px-4 py-3 text-xs text-on-surface">{renderCostPair(log, { showWeight: true })}</td>
                                     </tr>
                                 ))}
                             </tbody>

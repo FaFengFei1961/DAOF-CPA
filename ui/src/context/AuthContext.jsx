@@ -62,12 +62,18 @@ export const AuthProvider = ({ children }) => {
 
   // token 存活校验 + admin cookie 校验 + 30s 轮询
   useEffect(() => {
-    const triggerBan = (data) => setBanAlert({
-      isOpen: true,
-      reason: data.ban_reason ||
-        (data.message ? data.message.replace('账户被封禁', '').replace('理由：', '').trim() : ''),
-      message: data.message || '',
-    });
+    const triggerBan = (data) => {
+      // 本 session 已展示过封禁 modal 就不再重弹——封禁是稳定状态，
+      // 用户关掉 modal 后我们让 token 继续有效让他能走 /tickets 申诉。
+      // 30s 轮询每次拉到 status=2 都重弹的话用户没法离开此页。
+      if (sessionStorage.getItem('daof_ban_acked') === '1') return;
+      setBanAlert({
+        isOpen: true,
+        reason: data.ban_reason ||
+          (data.message ? data.message.replace('账户被封禁', '').replace('理由：', '').trim() : ''),
+        message: data.message || '',
+      });
+    };
 
     const verifyUserToken = async (token) => {
       try {
@@ -75,7 +81,16 @@ export const AuthProvider = ({ children }) => {
         const data = await res.json();
         if (data.success) {
           setProfile(data.data);
+          // 后端 UserGuardAllowBanned 让封禁用户也能拉到 profile，profile.status=2 时
+          // 弹封禁横幅但保留登录态，让用户能走 /tickets 申诉。
+          if (data.data && data.data.status === 2 && !banAlert.isOpen) {
+            triggerBan({
+              ban_reason: data.data.ban_reason || '',
+              message: '账户被封禁',
+            });
+          }
         } else {
+          // 真 401 / 其它失败才清 token；封禁不在此路径（success=true + status=2）
           localStorage.removeItem('daof_token');
           setIsAuthenticated(false);
           if (res.status === 401 || data.message_code === 'ERR_BANNED' ||
@@ -178,6 +193,8 @@ export const AuthProvider = ({ children }) => {
 
   // ─── BanAlert 控制 ────────────────────────────────────────
   const closeBan = useCallback(() => {
+    // 本 session 标记 acked，30s 轮询不再自动重弹（用户已经看过提示）。
+    sessionStorage.setItem('daof_ban_acked', '1');
     setBanAlert({ isOpen: false, reason: '', message: '' });
   }, []);
 

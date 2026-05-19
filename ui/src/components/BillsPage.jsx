@@ -111,8 +111,48 @@ const buildDefaultBillingQuery = (extra = {}) => {
   return params.toString();
 };
 
-const getBillingListCacheKey = (authKey, qs) => `billing:list:v3:${authKey}:${qs}`;
+const getBillingListCacheKey = (authKey, qs) => `billing:list:v4:${authKey}:${qs}`;
 const getBillingSummaryCacheKey = (authKey, qs) => `billing:summary:${authKey}:${qs}`;
+
+const formatEstimateCurrency = (n, formatCurrency) => {
+  const value = Number(n || 0);
+  if (!Number.isFinite(value)) return formatCurrency ? formatCurrency(0, 2) : '$0.00';
+  if (formatCurrency) return formatCurrency(value, Math.abs(value) >= 1 ? 4 : 6);
+  const decimals = Math.abs(value) >= 1 ? 4 : 6;
+  return `$${value.toFixed(decimals).replace(/0+$/, '').replace(/\.$/, '.00')}`;
+};
+
+const getPendingEstimateValues = (entry) => ({
+  raw: Number(entry.estimated_raw_cost_usd || 0),
+  charged: Number(entry.estimated_charged_cost_usd || 0),
+  reconcile: Number(entry.estimated_reconcile_cost_usd || entry.estimated_cost_usd || 0),
+});
+
+export const PendingCostBreakdown = ({ entry, t, formatCurrency }) => {
+  const values = getPendingEstimateValues(entry);
+  if (entry.entry_type !== 'api_usage_pending_reconcile' || (!values.raw && !values.charged && !values.reconcile)) {
+    return null;
+  }
+  return (
+    <div className="mt-1 flex flex-wrap gap-x-3 gap-y-1 text-[11px] text-on-surface/55">
+      {values.raw > 0 && (
+        <span>
+          {t('BILL.EST_RAW_COST', '预估上游成本')} {formatEstimateCurrency(values.raw, formatCurrency)}
+        </span>
+      )}
+      {values.charged > 0 && (
+        <span>
+          {t('BILL.EST_CHARGED_COST', '预估订阅扣减')} {formatEstimateCurrency(values.charged, formatCurrency)}
+        </span>
+      )}
+      {values.reconcile > 0 && (
+        <span>
+          {t('BILL.EST_RECONCILE_COST', '补扣参考')} {formatEstimateCurrency(values.reconcile, formatCurrency)}
+        </span>
+      )}
+    </div>
+  );
+};
 
 const BillsPage = () => {
   const { t } = useTranslation();
@@ -461,9 +501,24 @@ const BillRow = ({ entry, t, formatCurrency, onReconcile }) => {
   const Icon = meta.icon;
   const label = getBillingTypeLabel(entry.entry_type, t);
   const isUsage = meta.direction === 'usage';
-  const amountText = isUsage
-    ? (entry.tokens_total > 0 ? `${entry.tokens_total.toLocaleString()} tok` : '—')
-    : formatSignedCurrency(entry.amount_usd, formatCurrency, 2);
+  const isPending = entry.entry_type === 'api_usage_pending_reconcile';
+  const pendingValues = getPendingEstimateValues(entry);
+  let amountText = formatSignedCurrency(entry.amount_usd, formatCurrency, 2);
+  if (isUsage) {
+    amountText = entry.tokens_total > 0 ? `${entry.tokens_total.toLocaleString()} tok` : '—';
+  } else if (isPending && pendingValues.reconcile > 0) {
+    amountText = formatEstimateCurrency(pendingValues.reconcile, formatCurrency);
+  }
+  let amountClass = 'text-on-surface/60';
+  if (isPending) {
+    amountClass = 'text-warning';
+  } else if (isUsage) {
+    amountClass = 'text-on-surface/60';
+  } else if (entry.amount_usd > 0) {
+    amountClass = 'text-success';
+  } else if (entry.amount_usd < 0) {
+    amountClass = 'text-error';
+  }
   const description = formatBillingDescription(entry, formatCurrency, t);
   const canReconcile = Boolean(onReconcile) && RECONCILABLE_BILLING_STATES.has(entry.billing_state);
 
@@ -489,18 +544,11 @@ const BillRow = ({ entry, t, formatCurrency, onReconcile }) => {
             </span>
           )}
         </div>
+        <PendingCostBreakdown entry={entry} t={t} formatCurrency={formatCurrency} />
         <div className="text-xs text-on-surface/40">{fmtTime(entry.occurred_at)}</div>
       </div>
       <div className="text-right shrink-0">
-        <div className={`text-sm font-semibold ${
-          isUsage
-            ? 'text-on-surface/60'
-            : entry.amount_usd > 0
-              ? 'text-success'
-              : entry.amount_usd < 0
-                ? 'text-error'
-                : 'text-on-surface/60'
-        }`}>
+        <div className={`text-sm font-semibold ${amountClass}`}>
           {amountText}
         </div>
         <div className="mt-1 flex justify-end">
@@ -538,7 +586,7 @@ const BillingStateBadge = ({ state, t }) => {
   );
 };
 
-const ReconcileBillingModal = ({ entry, t, onClose, onSuccess }) => {
+export const ReconcileBillingModal = ({ entry, t, onClose, onSuccess }) => {
   const [result, setResult] = useState('absorbed');
   const [note, setNote] = useState('');
   const [submitting, setSubmitting] = useState(false);
@@ -610,6 +658,7 @@ const ReconcileBillingModal = ({ entry, t, onClose, onSuccess }) => {
         </div>
 
         <div className="p-5 space-y-4">
+          <PendingCostBreakdown entry={entry} t={t} />
           <label className="block">
             <span className="block text-sm font-medium text-on-surface mb-1.5">
               {t('BILL.RECONCILE_RESULT_LABEL', '对账结果')}

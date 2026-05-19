@@ -3,6 +3,7 @@ package controller
 import (
 	"fmt"
 	"log"
+	"net"
 	"strconv"
 	"strings"
 
@@ -100,8 +101,7 @@ const (
 	moderationAutobanMinWindowSeconds     = 60
 	moderationAutobanMaxWindowSeconds     = 365 * 24 * 60 * 60
 
-	balanceConsumeDefaultLimitMicroUSDKey      = "balance_consume_default_limit_micro_usd"
-	deprecatedBalanceConsumeDefaultLimitUSDKey = "balance_consume_default_limit_usd"
+	balanceConsumeDefaultLimitMicroUSDKey = "balance_consume_default_limit_micro_usd"
 )
 
 func validateSysConfigPayload(payload map[string]string) (string, string, bool) {
@@ -138,6 +138,18 @@ func validateSysConfigPayload(payload map[string]string) (string, string, bool) 
 		window, err := strconv.ParseInt(strings.TrimSpace(raw), 10, 64)
 		if err != nil || window < balanceConsumeDefaultMinWindowSeconds || window > balanceConsumeDefaultMaxWindowSeconds {
 			return "ERR_WINDOW_INVALID", "balance_consume_default_window_secs 必须在 60 秒到 365 天之间", false
+		}
+	}
+	if raw, ok := payload[database.ReferralPaidSpendRewardBPSConfigKey]; ok {
+		bps, err := strconv.ParseInt(strings.TrimSpace(raw), 10, 64)
+		if err != nil || bps < 0 || bps > 10_000 {
+			return "ERR_INVALID_PARAMS", "referral_paid_spend_reward_bps 必须是 0-10000 之间的整数（100 = 1%）", false
+		}
+	}
+	if raw, ok := payload[database.ReferralPaidSpendRewardWindowSecondsConfigKey]; ok {
+		window, err := strconv.ParseInt(strings.TrimSpace(raw), 10, 64)
+		if err != nil || window < 60 || window > balanceConsumeDefaultMaxWindowSeconds {
+			return "ERR_INVALID_PARAMS", "referral_paid_spend_reward_window_seconds 必须在 60 秒到 365 天之间", false
 		}
 	}
 
@@ -215,6 +227,17 @@ func validateSysConfigPayload(payload map[string]string) (string, string, bool) 
 	if raw, ok := payload["upstream_account_cost_presets_json"]; ok {
 		if _, err := parseUpstreamAccountCostPresets(raw); err != nil {
 			return "ERR_INVALID_JSON", "upstream_account_cost_presets_json JSON 或规则格式不合法: " + err.Error(), false
+		}
+	}
+	if raw, ok := payload["yifut_notify_allowed_cidrs"]; ok {
+		for _, part := range strings.Split(raw, ",") {
+			cidr := strings.TrimSpace(part)
+			if cidr == "" {
+				continue
+			}
+			if _, _, err := net.ParseCIDR(cidr); err != nil {
+				return "ERR_INVALID_CIDR", "yifut_notify_allowed_cidrs 必须是 CIDR 列表，例如 1.2.3.4/32 或 1.2.3.0/24", false
+			}
 		}
 	}
 
@@ -320,10 +343,6 @@ func BatchUpdateSysConfigs(c *fiber.Ctx) error {
 		return c.Status(400).JSON(fiber.Map{"success": false, "message": "请求参数解析失败", "message_code": "ERR_PARSE_PAYLOAD"})
 	}
 	allowEmpty := c.Query("allow_empty") == "1"
-	if _, ok := payload[deprecatedBalanceConsumeDefaultLimitUSDKey]; ok {
-		log.Printf("[SYSCONFIG] WARN deprecated key %q ignored; use %q", deprecatedBalanceConsumeDefaultLimitUSDKey, balanceConsumeDefaultLimitMicroUSDKey)
-		delete(payload, deprecatedBalanceConsumeDefaultLimitUSDKey)
-	}
 	if code, msg, ok := validateSysConfigPayload(payload); !ok {
 		return c.Status(400).JSON(fiber.Map{"success": false, "message": msg, "message_code": code})
 	}
@@ -355,9 +374,6 @@ func BatchUpdateSysConfigs(c *fiber.Ctx) error {
 	updated := 0
 	moderationSecretChanged := false
 	err := database.DB.Transaction(func(tx *gorm.DB) error {
-		if err := tx.Where("key = ?", deprecatedBalanceConsumeDefaultLimitUSDKey).Delete(&database.SysConfig{}).Error; err != nil {
-			return fmt.Errorf("delete deprecated %s: %w", deprecatedBalanceConsumeDefaultLimitUSDKey, err)
-		}
 		for k, v := range payload {
 			if v == "" && !allowEmpty && !isClearableEmptyConfigKey(k) {
 				continue // 默认：空值视为未修改

@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useState } from 'react';
 
-const CACHE_KEY = 'daof_public_pricing_v2';
+const CACHE_KEY = 'daof_public_pricing_v3';
 const CACHE_TTL_MS = 5 * 60 * 1000;
 const CACHE_EVENT = 'daof-public-pricing-updated';
 

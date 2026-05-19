@@ -208,7 +208,13 @@ func getSubscriptionCacheTTL() time.Duration {
 	return time.Duration(n) * time.Second
 }
 
-// jsonUnmarshalSafe 简单包装，便于将来切换到更快的解析器（如 sonic）
+// jsonUnmarshalSafe 解码 snapshot JSON 到 map[string]any。
+//
+// fix HIGH（codex money-unit）：原 json.Unmarshal 会把所有数字解析为 float64（Go JSON 默认），
+// 导致 LimitValueMicroUSD 这种 int64 micro_usd 字段超过 2^53（~9e15 = ~9 兆 USD）时精度丢失。
+// 用 Decoder.UseNumber() 让数字保持 json.Number 原始字符串，int64FromAny 显式解析回 int64。
 func jsonUnmarshalSafe(s string, out any) error {
-	return json.Unmarshal([]byte(s), out)
+	dec := json.NewDecoder(strings.NewReader(s))
+	dec.UseNumber()
+	return dec.Decode(out)
 }

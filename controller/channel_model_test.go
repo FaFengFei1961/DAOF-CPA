@@ -203,7 +203,7 @@ func TestValidateChannelModelModeration_DefaultsWhenEmpty(t *testing.T) {
 	}
 }
 
-func TestValidateChannelModelModeration_OpenAIModelForcedStrictClosed(t *testing.T) {
+func TestValidateChannelModelModeration_OpenAICompatibleRelayEditable(t *testing.T) {
 	thirdParty := &database.Channel{Type: "openai", BaseURL: "https://relay.example.com"}
 	cm := database.ChannelModel{
 		ModelID:            "gpt-5.4-mini",
@@ -212,12 +212,10 @@ func TestValidateChannelModelModeration_OpenAIModelForcedStrictClosed(t *testing
 	}
 	status, _, _ := validateChannelModelModeration(&cm, thirdParty, true)
 	if status != 0 {
-		t.Fatalf("OpenAI-family model should normalize instead of reject, got %d", status)
+		t.Fatalf("OpenAI-compatible relay model should be editable, got %d", status)
 	}
-	if cm.ModerationLevel != database.OpenAIModelModerationLevel || cm.ModerationFailMode != database.OpenAIModelModerationFailMode {
-		t.Fatalf("moderation=%s/%s want %s/%s",
-			cm.ModerationLevel, cm.ModerationFailMode,
-			database.OpenAIModelModerationLevel, database.OpenAIModelModerationFailMode)
+	if cm.ModerationLevel != "off" || cm.ModerationFailMode != "open" {
+		t.Fatalf("moderation=%s/%s want off/open", cm.ModerationLevel, cm.ModerationFailMode)
 	}
 }
 
@@ -333,5 +331,37 @@ func TestAddChannelModelsBatch_DuplicateConflict(t *testing.T) {
 	}
 	if count != 2 {
 		t.Fatalf("channel model count=%d want 2", count)
+	}
+}
+
+func TestAddChannelModelsBatch_DefaultsGPTTextModelsToSmartModeration(t *testing.T) {
+	app := initializeMegaTestDB()
+	if err := database.DB.Create(&database.Channel{ID: 23, Name: "cliproxy", Key: "x", Type: "cliproxy", Status: 1}).Error; err != nil {
+		t.Fatalf("seed channel: %v", err)
+	}
+
+	resp := sendRequest(app, http.MethodPost, "/api/admin/channels/23/batch_models", map[string]any{
+		"models": []string{"gpt-5.5", "gpt-image-2", "claude-sonnet-4-6"},
+	}, "")
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("status=%d want %d", resp.StatusCode, http.StatusOK)
+	}
+
+	var rows []database.ChannelModel
+	if err := database.DB.Where("channel_id = ?", 23).Order("model_id").Find(&rows).Error; err != nil {
+		t.Fatalf("read models: %v", err)
+	}
+	got := map[string]database.ChannelModel{}
+	for _, row := range rows {
+		got[row.ModelID] = row
+	}
+	if got["gpt-5.5"].ModerationLevel != "moderation" || got["gpt-5.5"].ModerationFailMode != "closed" {
+		t.Fatalf("gpt-5.5 moderation=%s/%s want moderation/closed", got["gpt-5.5"].ModerationLevel, got["gpt-5.5"].ModerationFailMode)
+	}
+	if got["gpt-image-2"].ModerationLevel != "off" || got["gpt-image-2"].ModerationFailMode != "open" {
+		t.Fatalf("gpt-image-2 moderation=%s/%s want off/open", got["gpt-image-2"].ModerationLevel, got["gpt-image-2"].ModerationFailMode)
+	}
+	if got["claude-sonnet-4-6"].ModerationLevel != "off" || got["claude-sonnet-4-6"].ModerationFailMode != "open" {
+		t.Fatalf("claude moderation=%s/%s want off/open", got["claude-sonnet-4-6"].ModerationLevel, got["claude-sonnet-4-6"].ModerationFailMode)
 	}
 }

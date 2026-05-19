@@ -45,8 +45,6 @@ type adminGrantPayload struct {
 	Quantity     *int   `json:"quantity"`
 	Reason       string `json:"reason"`                  // 必填，进 OperationLog + BillingEntry.Description
 	ValidSeconds *int64 `json:"valid_seconds,omitempty"` // 可选：自定义有效期（秒）
-	// DeprecatedApplyBonus 显式拒绝旧协议字段，而不是静默忽略。
-	DeprecatedApplyBonus *json.RawMessage `json:"apply_bonus"`
 }
 
 const (
@@ -81,13 +79,6 @@ func AdminGrantSubscription(c *fiber.Ctx) error {
 	var req adminGrantPayload
 	if err := c.BodyParser(&req); err != nil {
 		return c.Status(400).JSON(fiber.Map{"success": false, "message_code": "ERR_PARSE_PAYLOAD"})
-	}
-	if req.DeprecatedApplyBonus != nil {
-		return c.Status(400).JSON(fiber.Map{
-			"success":      false,
-			"message":      "apply_bonus 已移除",
-			"message_code": "ERR_DEPRECATED_FIELD",
-		})
 	}
 	// ─── 输入校验 ──────────────────────────────────────────────
 	if req.UserID == 0 || req.PackageID == 0 {

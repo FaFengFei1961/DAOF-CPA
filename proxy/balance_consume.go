@@ -129,7 +129,13 @@ func CheckBalanceConsumeAllowed(user *database.User, deltaMicroUSD int64) bool {
 		now.Sub(*user.BalanceConsumeWindowStartAt).Seconds() > float64(user.BalanceConsumeWindowSeconds) {
 		return deltaMicroUSD <= user.BalanceConsumeLimitUSD
 	}
-	return user.BalanceConsumedInWindow+deltaMicroUSD <= user.BalanceConsumeLimitUSD
+	// fix MEDIUM（codex money-unit）：裸 int64 加法在接近 MaxInt64 时溢出环绕到负数 →
+	// 大额累加会被误判为"未超限"。改用 CheckedAddInt64：溢出视为已超限（拒绝放行）。
+	sum, ok := database.CheckedAddInt64(user.BalanceConsumedInWindow, deltaMicroUSD)
+	if !ok {
+		return false
+	}
+	return sum <= user.BalanceConsumeLimitUSD
 }
 
 // GetBalanceConsumeStatus 给前端展示用的状态聚合（含预测的下次重置时间）

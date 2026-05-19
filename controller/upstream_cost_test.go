@@ -21,12 +21,13 @@ func setupUpstreamCostTestDB(t *testing.T) *fiber.App {
 	if err != nil {
 		t.Fatalf("open sqlite: %v", err)
 	}
-	if err := db.AutoMigrate(&database.ApiLog{}, &database.ApiLogAttribution{}, &database.ApiLogCostEstimate{}, &database.UpstreamAccountCost{}); err != nil {
+	if err := db.AutoMigrate(&database.ApiLog{}, &database.ApiLogAttribution{}, &database.ApiLogCostEstimate{}, &database.ApiLogRevenue{}, &database.UpstreamAccountCost{}, &database.CPACredential{}); err != nil {
 		t.Fatalf("migrate: %v", err)
 	}
 	database.DB = db
 	app := fiber.New()
 	app.Get("/api/admin/upstream-account-cost-presets", ListUpstreamAccountCostPresets)
+	app.Get("/api/admin/upstream-accounts/candidates", ListUpstreamAccountCandidates)
 	app.Post("/api/admin/upstream-accounts", CreateUpstreamAccountCost)
 	app.Post("/api/admin/upstream-accounts/bulk", BulkUpsertUpstreamAccountCosts)
 	app.Put("/api/admin/upstream-accounts/:id", UpdateUpstreamAccountCost)
@@ -106,6 +107,102 @@ func TestUpstreamCost_WriteMonthlyCostUSD(t *testing.T) {
 	}
 }
 
+func TestListUpstreamAccountCandidatesIncludesNoRequestCredentials(t *testing.T) {
+	app := setupUpstreamCostTestDB(t)
+	now := time.Now()
+	creds := []database.CPACredential{
+		{
+			AuthID:           "auth-no-requests",
+			FileName:         "claude-a.json",
+			Provider:         "claude",
+			Email:            "claude-a@example.com",
+			Status:           "active",
+			LastSeenAt:       now,
+			LastDownloadedAt: now,
+		},
+		{
+			AuthID:           "auth-configured",
+			FileName:         "codex-pro.json",
+			Provider:         "codex",
+			Email:            "codex@example.com",
+			Status:           "active",
+			LastSeenAt:       now,
+			LastDownloadedAt: now,
+		},
+	}
+	if err := database.DB.Create(&creds).Error; err != nil {
+		t.Fatalf("seed cpa credentials: %v", err)
+	}
+	if err := database.DB.Create(&database.UpstreamAccountCost{
+		Provider:                    "codex",
+		AuthIndex:                   "auth-configured",
+		Label:                       "Codex Pro",
+		PlanName:                    "ChatGPT Pro",
+		MonthlyCostUSD:              200 * database.MicroPerUSD,
+		EstimatedMonthlyCapacityUSD: 1000 * database.MicroPerUSD,
+		Active:                      true,
+	}).Error; err != nil {
+		t.Fatalf("seed account cost: %v", err)
+	}
+
+	resp, err := app.Test(httptest.NewRequest("GET", "/api/admin/upstream-accounts/candidates", nil))
+	if err != nil {
+		t.Fatalf("list candidates: %v", err)
+	}
+	if resp.StatusCode != 200 {
+		t.Fatalf("candidate status=%d", resp.StatusCode)
+	}
+	var decoded struct {
+		Success bool `json:"success"`
+		Data    []struct {
+			Provider                    string  `json:"provider"`
+			AuthIndex                   string  `json:"auth_index"`
+			Email                       string  `json:"email"`
+			AccountConfigured           bool    `json:"account_configured"`
+			AccountActive               bool    `json:"account_active"`
+			MonthlyCostUSD              float64 `json:"monthly_cost_usd"`
+			EstimatedMonthlyCapacityUSD float64 `json:"estimated_monthly_capacity_usd"`
+		} `json:"data"`
+	}
+	if err := json.NewDecoder(resp.Body).Decode(&decoded); err != nil {
+		t.Fatalf("decode candidates: %v", err)
+	}
+	if !decoded.Success || len(decoded.Data) != 2 {
+		t.Fatalf("unexpected candidates response: %+v", decoded)
+	}
+	byAuth := map[string]struct {
+		Provider                    string
+		Email                       string
+		AccountConfigured           bool
+		AccountActive               bool
+		MonthlyCostUSD              float64
+		EstimatedMonthlyCapacityUSD float64
+	}{}
+	for _, row := range decoded.Data {
+		byAuth[row.AuthIndex] = struct {
+			Provider                    string
+			Email                       string
+			AccountConfigured           bool
+			AccountActive               bool
+			MonthlyCostUSD              float64
+			EstimatedMonthlyCapacityUSD float64
+		}{
+			Provider:                    row.Provider,
+			Email:                       row.Email,
+			AccountConfigured:           row.AccountConfigured,
+			AccountActive:               row.AccountActive,
+			MonthlyCostUSD:              row.MonthlyCostUSD,
+			EstimatedMonthlyCapacityUSD: row.EstimatedMonthlyCapacityUSD,
+		}
+	}
+	if row, ok := byAuth["auth-no-requests"]; !ok || row.Provider != "claude" || row.Email != "claude-a@example.com" || row.AccountConfigured {
+		t.Fatalf("no-request credential missing or unexpectedly configured: %+v ok=%v", row, ok)
+	}
+	if row, ok := byAuth["auth-configured"]; !ok || row.Provider != "codex" || !row.AccountConfigured || !row.AccountActive || row.MonthlyCostUSD != 200 || row.EstimatedMonthlyCapacityUSD != 1000 {
+		t.Fatalf("configured credential missing cost config: %+v ok=%v", row, ok)
+	}
+}
+
 func replaceSysConfigCacheForUpstreamCostTest(next map[string]string) map[string]string {
 	proxy.SysConfigMutex.Lock()
 	defer proxy.SysConfigMutex.Unlock()
@@ -117,7 +214,7 @@ func replaceSysConfigCacheForUpstreamCostTest(next map[string]string) map[string
 func TestUpstreamMarginReportUsesAccountCostCapacity(t *testing.T) {
 	app := setupUpstreamCostTestDB(t)
 	now := time.Now()
-	if err := database.DB.Create(&database.ApiLog{
+	apiLog := database.ApiLog{
 		UserID:            1,
 		ModelName:         "gpt-5.5",
 		UpstreamProvider:  "codex",
@@ -129,8 +226,18 @@ func TestUpstreamMarginReportUsesAccountCostCapacity(t *testing.T) {
 		ChargedCost:       150 * database.MicroPerUSD,
 		Status:            200,
 		CreatedAt:         now,
-	}).Error; err != nil {
+	}
+	if err := database.DB.Create(&apiLog).Error; err != nil {
 		t.Fatalf("seed api log: %v", err)
+	}
+	// 该请求由订阅扣减：营收 = chargedCost = 150 USD
+	if err := database.DB.Create(&database.ApiLogRevenue{
+		ApiLogID:                 apiLog.ID,
+		RevenueSource:            database.RevenueSourceSubscription,
+		EffectiveRevenueMicroUSD: 150 * database.MicroPerUSD,
+		RecordedAt:               now,
+	}).Error; err != nil {
+		t.Fatalf("seed api log revenue: %v", err)
 	}
 
 	payload := map[string]any{
@@ -167,7 +274,9 @@ func TestUpstreamMarginReportUsesAccountCostCapacity(t *testing.T) {
 				AuthIndex               string  `json:"auth_index"`
 				AccountConfigured       bool    `json:"account_configured"`
 				RawCostUSD              float64 `json:"raw_cost_usd"`
-				ChargedCostUSD          float64 `json:"charged_cost_usd"`
+				SubscriptionRevenueUSD  float64 `json:"subscription_revenue_usd"`
+				BalanceRevenueUSD       float64 `json:"balance_revenue_usd"`
+				TotalRevenueUSD         float64 `json:"total_revenue_usd"`
 				PlatformCostEstimateUSD float64 `json:"platform_cost_estimate_usd"`
 				GrossMarginUSD          float64 `json:"gross_margin_usd"`
 				CostBasis               string  `json:"cost_basis"`
@@ -184,7 +293,11 @@ func TestUpstreamMarginReportUsesAccountCostCapacity(t *testing.T) {
 	if row.Provider != "codex" || row.AuthIndex != "acct-1" || !row.AccountConfigured {
 		t.Fatalf("bad row identity/config: %+v", row)
 	}
-	if row.RawCostUSD != 100 || row.ChargedCostUSD != 150 || row.PlatformCostEstimateUSD != 10 || row.GrossMarginUSD != 140 {
+	// 订阅收入 150、余额收入 0、平台成本 = 100 × 20 / 200 = 10、毛利 = 150 - 10 = 140
+	if row.RawCostUSD != 100 || row.SubscriptionRevenueUSD != 150 || row.BalanceRevenueUSD != 0 || row.TotalRevenueUSD != 150 {
+		t.Fatalf("bad revenue split: %+v", row)
+	}
+	if row.PlatformCostEstimateUSD != 10 || row.GrossMarginUSD != 140 {
 		t.Fatalf("bad margin math: %+v", row)
 	}
 	if row.CostBasis != "account_capacity" {

@@ -9,26 +9,29 @@ import (
 // BillingEntryView is the public billing wire contract.
 // Internal DB fields keep int64 micro_usd/fen; HTTP responses expose human units.
 type BillingEntryView struct {
-	ID                   uint      `json:"id"`
-	UserID               uint      `json:"user_id"`
-	OccurredAt           time.Time `json:"occurred_at"`
-	EntryType            string    `json:"entry_type"`
-	BillingState         string    `json:"billing_state"`
-	AmountUSD            float64   `json:"amount_usd"`
-	BalanceAfterUSD      float64   `json:"balance_after_usd"`
-	RelatedType          string    `json:"related_type"`
-	RelatedID            uint      `json:"related_id"`
-	ModelName            string    `json:"model_name,omitempty"`
-	TokensTotal          int       `json:"tokens_total,omitempty"`
-	RequestID            string    `json:"request_id,omitempty"`
-	DeliveredBytes       int64     `json:"delivered_bytes,omitempty"`
-	EstimatedInputTokens int       `json:"estimated_input_tokens,omitempty"`
-	EstimatedCostUSD     float64   `json:"estimated_cost_usd,omitempty"`
-	SourceSubscriptionID *uint     `json:"source_subscription_id,omitempty"`
-	Description          string    `json:"description"`
-	CurrencyOriginal     string    `json:"currency_original,omitempty"`
-	AmountOriginal       float64   `json:"amount_original,omitempty"`
-	CreatedAt            time.Time `json:"created_at"`
+	ID                        uint      `json:"id"`
+	UserID                    uint      `json:"user_id"`
+	OccurredAt                time.Time `json:"occurred_at"`
+	EntryType                 string    `json:"entry_type"`
+	BillingState              string    `json:"billing_state"`
+	AmountUSD                 float64   `json:"amount_usd"`
+	BalanceAfterUSD           float64   `json:"balance_after_usd"`
+	RelatedType               string    `json:"related_type"`
+	RelatedID                 uint      `json:"related_id"`
+	ModelName                 string    `json:"model_name,omitempty"`
+	TokensTotal               int       `json:"tokens_total,omitempty"`
+	RequestID                 string    `json:"request_id,omitempty"`
+	DeliveredBytes            int64     `json:"delivered_bytes,omitempty"`
+	EstimatedInputTokens      int       `json:"estimated_input_tokens,omitempty"`
+	EstimatedCostUSD          float64   `json:"estimated_cost_usd,omitempty"`
+	EstimatedRawCostUSD       float64   `json:"estimated_raw_cost_usd,omitempty"`
+	EstimatedChargedCostUSD   float64   `json:"estimated_charged_cost_usd,omitempty"`
+	EstimatedReconcileCostUSD float64   `json:"estimated_reconcile_cost_usd,omitempty"`
+	SourceSubscriptionID      *uint     `json:"source_subscription_id,omitempty"`
+	Description               string    `json:"description"`
+	CurrencyOriginal          string    `json:"currency_original,omitempty"`
+	AmountOriginal            float64   `json:"amount_original,omitempty"`
+	CreatedAt                 time.Time `json:"created_at"`
 }
 
 // TopupOrderView is the public topup order wire contract.
@@ -117,26 +120,27 @@ func billingEntryViewFrom(b database.BillingEntry) BillingEntryView {
 		amountOriginal = fenToRMBFloat(b.AmountOriginal)
 	}
 	return BillingEntryView{
-		ID:                   b.ID,
-		UserID:               b.UserID,
-		OccurredAt:           b.OccurredAt,
-		EntryType:            b.EntryType,
-		BillingState:         b.BillingState,
-		AmountUSD:            microUSDToFloat(b.AmountUSD),
-		BalanceAfterUSD:      microUSDToFloat(b.BalanceAfterUSD),
-		RelatedType:          b.RelatedType,
-		RelatedID:            b.RelatedID,
-		ModelName:            b.ModelName,
-		TokensTotal:          b.TokensTotal,
-		RequestID:            b.RequestID,
-		DeliveredBytes:       b.DeliveredBytes,
-		EstimatedInputTokens: b.EstimatedInputTokens,
-		EstimatedCostUSD:     microUSDToFloat(b.EstimatedCostUSD),
-		SourceSubscriptionID: b.SourceSubscriptionID,
-		Description:          b.Description,
-		CurrencyOriginal:     b.CurrencyOriginal,
-		AmountOriginal:       amountOriginal,
-		CreatedAt:            b.CreatedAt,
+		ID:                        b.ID,
+		UserID:                    b.UserID,
+		OccurredAt:                b.OccurredAt,
+		EntryType:                 b.EntryType,
+		BillingState:              b.BillingState,
+		AmountUSD:                 microUSDToFloat(b.AmountUSD),
+		BalanceAfterUSD:           microUSDToFloat(b.BalanceAfterUSD),
+		RelatedType:               b.RelatedType,
+		RelatedID:                 b.RelatedID,
+		ModelName:                 b.ModelName,
+		TokensTotal:               b.TokensTotal,
+		RequestID:                 b.RequestID,
+		DeliveredBytes:            b.DeliveredBytes,
+		EstimatedInputTokens:      b.EstimatedInputTokens,
+		EstimatedCostUSD:          microUSDToFloat(b.EstimatedCostUSD),
+		EstimatedReconcileCostUSD: database.MicroToUSD(b.EstimatedCostUSD),
+		SourceSubscriptionID:      b.SourceSubscriptionID,
+		Description:               b.Description,
+		CurrencyOriginal:          b.CurrencyOriginal,
+		AmountOriginal:            amountOriginal,
+		CreatedAt:                 b.CreatedAt,
 	}
 }
 

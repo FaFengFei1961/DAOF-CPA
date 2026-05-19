@@ -72,6 +72,15 @@ ui/test-results/
 *.zip
 *.tar.gz
 
+# ─── 旧项目迁移分析产物（含已部署 SysConfig 快照，可能解密后含敏感字段）─
+# codex review verify-final P1：这些是一次性迁移分析脚本的产物，不能进版本库。
+scripts/diff_old_vs_default.py
+scripts/dump_old_config.py
+scripts/export_old_channels.py
+scripts/inspect_old_db.py
+scripts/old_config_export.json
+scripts/old_channels_export.json
+
 # ─── 本机启动脚本（含本地路径，按需各人不同） ─────────
 start.ps1
 start.local.ps1

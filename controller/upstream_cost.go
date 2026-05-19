@@ -67,6 +67,26 @@ type upstreamAccountCostOut struct {
 	UpdatedAt                        time.Time `json:"updated_at"`
 }
 
+type upstreamAccountCandidateRow struct {
+	Provider                    string     `json:"provider"`
+	AuthIndex                   string     `json:"auth_index"`
+	AuthType                    string     `json:"auth_type"`
+	FileName                    string     `json:"file_name"`
+	Email                       string     `json:"email"`
+	CredentialStatus            string     `json:"credential_status"`
+	CredentialDisabled          bool       `json:"credential_disabled"`
+	LastSeenAt                  *time.Time `json:"last_seen_at,omitempty"`
+	LastDownloadedAt            *time.Time `json:"last_downloaded_at,omitempty"`
+	AccountID                   uint       `json:"account_id"`
+	AccountConfigured           bool       `json:"account_configured"`
+	AccountActive               bool       `json:"account_active"`
+	Label                       string     `json:"label"`
+	PlanName                    string     `json:"plan_name"`
+	MonthlyCostUSD              float64    `json:"monthly_cost_usd"`
+	EstimatedMonthlyCapacityUSD float64    `json:"estimated_monthly_capacity_usd"`
+	Notes                       string     `json:"notes"`
+}
+
 type upstreamAccountCostPreset struct {
 	ID                          string  `json:"id"`
 	Label                       string  `json:"label"`
@@ -93,6 +113,83 @@ func ListUpstreamAccountCosts(c *fiber.Ctx) error {
 	out := make([]upstreamAccountCostOut, 0, len(rows))
 	for _, row := range rows {
 		out = append(out, upstreamAccountCostToOut(row))
+	}
+	return c.JSON(fiber.Map{"success": true, "data": out})
+}
+
+// ListUpstreamAccountCandidates returns all CPA credentials with their optional
+// local cost config. This is intentionally driven by cpa_credentials rather
+// than api_logs, so admins can configure account cost before the first request.
+func ListUpstreamAccountCandidates(c *fiber.Ctx) error {
+	type joinedRow struct {
+		Provider                  string
+		AuthIndex                 string
+		AuthType                  string
+		FileName                  string
+		Email                     string
+		CredentialStatus          string
+		CredentialDisabled        bool
+		LastSeenAt                time.Time
+		LastDownloadedAt          time.Time
+		AccountID                 uint
+		AccountActive             bool
+		Label                     string
+		PlanName                  string
+		MonthlyCostMicroUSD       int64
+		EstimatedCapacityMicroUSD int64
+		Notes                     string
+	}
+
+	var rows []joinedRow
+	if err := database.DB.Table("cpa_credentials AS cc").
+		Select(`LOWER(TRIM(cc.provider)) AS provider,
+			cc.auth_id AS auth_index,
+			COALESCE(uac.auth_type, '') AS auth_type,
+			cc.file_name,
+			cc.email,
+			cc.status AS credential_status,
+			cc.disabled AS credential_disabled,
+			cc.last_seen_at,
+			cc.last_downloaded_at,
+			COALESCE(uac.id, 0) AS account_id,
+			COALESCE(uac.active, false) AS account_active,
+			COALESCE(uac.label, '') AS label,
+			COALESCE(uac.plan_name, '') AS plan_name,
+			COALESCE(uac.monthly_cost_usd, 0) AS monthly_cost_micro_usd,
+			COALESCE(uac.estimated_monthly_capacity_usd, 0) AS estimated_capacity_micro_usd,
+			COALESCE(uac.notes, '') AS notes`).
+		Joins(`LEFT JOIN upstream_account_costs AS uac
+			ON uac.provider = LOWER(TRIM(cc.provider))
+			AND uac.auth_index = cc.auth_id`).
+		Order("cc.disabled ASC, LOWER(TRIM(cc.provider)) ASC, cc.email ASC, cc.file_name ASC, cc.auth_id ASC").
+		Scan(&rows).Error; err != nil {
+		log.Printf("[UPSTREAM-COST] list candidates failed: %v", err)
+		return c.Status(http.StatusInternalServerError).JSON(fiber.Map{"success": false, "message_code": "ERR_DB_QUERY"})
+	}
+
+	out := make([]upstreamAccountCandidateRow, 0, len(rows))
+	for _, r := range rows {
+		lastSeenAt := r.LastSeenAt
+		lastDownloadedAt := r.LastDownloadedAt
+		out = append(out, upstreamAccountCandidateRow{
+			Provider:                    normalizeCostProvider(r.Provider),
+			AuthIndex:                   strings.TrimSpace(r.AuthIndex),
+			AuthType:                    strings.TrimSpace(r.AuthType),
+			FileName:                    strings.TrimSpace(r.FileName),
+			Email:                       strings.TrimSpace(r.Email),
+			CredentialStatus:            strings.TrimSpace(r.CredentialStatus),
+			CredentialDisabled:          r.CredentialDisabled,
+			LastSeenAt:                  &lastSeenAt,
+			LastDownloadedAt:            &lastDownloadedAt,
+			AccountID:                   r.AccountID,
+			AccountConfigured:           r.AccountID > 0,
+			AccountActive:               r.AccountID > 0 && r.AccountActive,
+			Label:                       strings.TrimSpace(r.Label),
+			PlanName:                    strings.TrimSpace(r.PlanName),
+			MonthlyCostUSD:              database.MicroToUSD(r.MonthlyCostMicroUSD),
+			EstimatedMonthlyCapacityUSD: database.MicroToUSD(r.EstimatedCapacityMicroUSD),
+			Notes:                       strings.TrimSpace(r.Notes),
+		})
 	}
 	return c.JSON(fiber.Map{"success": true, "data": out})
 }
@@ -312,16 +409,18 @@ func DeleteUpstreamAccountCost(c *fiber.Ctx) error {
 }
 
 type upstreamMarginAggRow struct {
-	Provider           string
-	AuthIndex          string
-	AuthType           string
-	Requests           int64
-	FailedRequests     int64
-	InputTokens        int64
-	OutputTokens       int64
-	RawCost            int64
-	ChargedCost        int64
-	StoredPlatformCost int64
+	Provider            string
+	AuthIndex           string
+	AuthType            string
+	Requests            int64
+	FailedRequests      int64
+	InputTokens         int64
+	OutputTokens        int64
+	RawCost             int64
+	SubscriptionRevenue int64 // ApiLogRevenue.effective_revenue WHERE revenue_source='subscription'
+	BalanceRevenue      int64 // ApiLogRevenue.effective_revenue WHERE revenue_source='balance'
+	TotalRevenue        int64 // = SubscriptionRevenue + BalanceRevenue
+	StoredPlatformCost  int64 // ApiLogCostEstimate.platform_cost_micro_usd
 }
 
 type upstreamMarginRow struct {
@@ -330,6 +429,7 @@ type upstreamMarginRow struct {
 	AuthType                    string  `json:"auth_type"`
 	Label                       string  `json:"label"`
 	PlanName                    string  `json:"plan_name"`
+	AccountID                   uint    `json:"account_id"` // 0 = 未配置；> 0 = UpstreamAccountCost.ID，前端用于 delete 操作
 	AccountConfigured           bool    `json:"account_configured"`
 	AccountActive               bool    `json:"account_active"`
 	Requests                    int64   `json:"requests"`
@@ -337,7 +437,9 @@ type upstreamMarginRow struct {
 	InputTokens                 int64   `json:"input_tokens"`
 	OutputTokens                int64   `json:"output_tokens"`
 	RawCostUSD                  float64 `json:"raw_cost_usd"`
-	ChargedCostUSD              float64 `json:"charged_cost_usd"`
+	SubscriptionRevenueUSD      float64 `json:"subscription_revenue_usd"` // 订阅扣减口径
+	BalanceRevenueUSD           float64 `json:"balance_revenue_usd"`      // 余额扣减口径（= raw 1:1）
+	TotalRevenueUSD             float64 `json:"total_revenue_usd"`        // 真实从用户拿到的钱（毛利分子）
 	PlatformCostEstimateUSD     float64 `json:"platform_cost_estimate_usd"`
 	GrossMarginUSD              float64 `json:"gross_margin_usd"`
 	GrossMarginRate             float64 `json:"gross_margin_rate"`
@@ -361,6 +463,7 @@ func GetUpstreamMarginReport(c *fiber.Ctx) error {
 	if err := q.
 		Joins("LEFT JOIN api_log_attributions ala ON ala.api_log_id = api_logs.id").
 		Joins("LEFT JOIN api_log_cost_estimates ace ON ace.api_log_id = api_logs.id").
+		Joins("LEFT JOIN api_log_revenues alr ON alr.api_log_id = api_logs.id").
 		Select(`CASE
 			WHEN ala.upstream_provider IS NOT NULL AND ala.upstream_provider <> '' THEN ala.upstream_provider
 			WHEN api_logs.upstream_provider IS NOT NULL AND api_logs.upstream_provider <> '' THEN api_logs.upstream_provider
@@ -373,11 +476,10 @@ func GetUpstreamMarginReport(c *fiber.Ctx) error {
 		COALESCE(SUM(api_logs.prompt_tokens), 0) AS input_tokens,
 		COALESCE(SUM(api_logs.completion_tokens), 0) AS output_tokens,
 		COALESCE(SUM(api_logs.cost), 0) AS raw_cost,
-		COALESCE(SUM(CASE WHEN api_logs.charged_cost = 0 AND api_logs.cost > 0 THEN api_logs.cost ELSE api_logs.charged_cost END), 0) AS charged_cost,
-		COALESCE(SUM(CASE
-			WHEN ace.platform_cost_micro_usd IS NOT NULL AND ace.platform_cost_micro_usd > 0 THEN ace.platform_cost_micro_usd
-			ELSE api_logs.platform_cost_estimate
-		END), 0) AS stored_platform_cost`).
+		COALESCE(SUM(CASE WHEN alr.revenue_source = 'subscription' THEN alr.effective_revenue_micro_usd ELSE 0 END), 0) AS subscription_revenue,
+		COALESCE(SUM(CASE WHEN alr.revenue_source = 'balance'      THEN alr.effective_revenue_micro_usd ELSE 0 END), 0) AS balance_revenue,
+		COALESCE(SUM(alr.effective_revenue_micro_usd), 0) AS total_revenue,
+		COALESCE(SUM(CASE WHEN ace.platform_cost_micro_usd IS NULL THEN api_logs.cost ELSE ace.platform_cost_micro_usd END), 0) AS stored_platform_cost`).
 		Group("provider, auth_index, auth_type").
 		Order("raw_cost DESC").
 		Scan(&rows).Error; err != nil {
@@ -392,14 +494,14 @@ func GetUpstreamMarginReport(c *fiber.Ctx) error {
 	}
 	windowDays := marginReportWindowDays(period, cutoff)
 	out := make([]upstreamMarginRow, 0, len(rows))
-	var totalRaw, totalCharged, totalPlatform, totalRequests, totalFailed int64
+	var totalRaw, totalSubRevenue, totalBalRevenue, totalRevenue, totalPlatform, totalRequests, totalFailed int64
 	configuredRequests := int64(0)
 	for _, r := range rows {
 		provider := normalizeCostProvider(r.Provider)
 		authIndex := strings.TrimSpace(r.AuthIndex)
 		acct, configured := accounts[accountCostKey(provider, authIndex)]
 		platformCost, costBasis := estimatePlatformCostForAggregate(r.RawCost, r.StoredPlatformCost, acct, configured)
-		gross := r.ChargedCost - platformCost
+		gross := r.TotalRevenue - platformCost
 		proratedCapacity := proratedCapacityMicro(acct.EstimatedMonthlyCapacityUSD, windowDays)
 		utilization := 0.0
 		if proratedCapacity > 0 {
@@ -409,7 +511,9 @@ func GetUpstreamMarginReport(c *fiber.Ctx) error {
 			configuredRequests += r.Requests
 		}
 		totalRaw += r.RawCost
-		totalCharged += r.ChargedCost
+		totalSubRevenue += r.SubscriptionRevenue
+		totalBalRevenue += r.BalanceRevenue
+		totalRevenue += r.TotalRevenue
 		totalPlatform += platformCost
 		totalRequests += r.Requests
 		totalFailed += r.FailedRequests
@@ -419,6 +523,7 @@ func GetUpstreamMarginReport(c *fiber.Ctx) error {
 			AuthType:                    firstNonEmpty(r.AuthType, acct.AuthType),
 			Label:                       acct.Label,
 			PlanName:                    acct.PlanName,
+			AccountID:                   acct.ID,
 			AccountConfigured:           configured,
 			AccountActive:               configured && acct.Active,
 			Requests:                    r.Requests,
@@ -426,10 +531,12 @@ func GetUpstreamMarginReport(c *fiber.Ctx) error {
 			InputTokens:                 r.InputTokens,
 			OutputTokens:                r.OutputTokens,
 			RawCostUSD:                  database.MicroToUSD(r.RawCost),
-			ChargedCostUSD:              database.MicroToUSD(r.ChargedCost),
+			SubscriptionRevenueUSD:      database.MicroToUSD(r.SubscriptionRevenue),
+			BalanceRevenueUSD:           database.MicroToUSD(r.BalanceRevenue),
+			TotalRevenueUSD:             database.MicroToUSD(r.TotalRevenue),
 			PlatformCostEstimateUSD:     database.MicroToUSD(platformCost),
 			GrossMarginUSD:              database.MicroToUSD(gross),
-			GrossMarginRate:             marginRate(gross, r.ChargedCost),
+			GrossMarginRate:             marginRate(gross, r.TotalRevenue),
 			MonthlyCostUSD:              database.MicroToUSD(acct.MonthlyCostUSD),
 			EstimatedMonthlyCapacityUSD: database.MicroToUSD(acct.EstimatedMonthlyCapacityUSD),
 			ProratedCapacityUSD:         database.MicroToUSD(proratedCapacity),
@@ -454,10 +561,12 @@ func GetUpstreamMarginReport(c *fiber.Ctx) error {
 				"requests":                     totalRequests,
 				"failed_requests":              totalFailed,
 				"raw_cost_usd":                 database.MicroToUSD(totalRaw),
-				"charged_cost_usd":             database.MicroToUSD(totalCharged),
+				"subscription_revenue_usd":     database.MicroToUSD(totalSubRevenue),
+				"balance_revenue_usd":          database.MicroToUSD(totalBalRevenue),
+				"total_revenue_usd":            database.MicroToUSD(totalRevenue),
 				"platform_cost_estimate_usd":   database.MicroToUSD(totalPlatform),
-				"gross_margin_usd":             database.MicroToUSD(totalCharged - totalPlatform),
-				"gross_margin_rate":            marginRate(totalCharged-totalPlatform, totalCharged),
+				"gross_margin_usd":             database.MicroToUSD(totalRevenue - totalPlatform),
+				"gross_margin_rate":            marginRate(totalRevenue-totalPlatform, totalRevenue),
 				"configured_request_ratio":     ratio(configuredRequests, totalRequests),
 				"unconfigured_request_count":   totalRequests - configuredRequests,
 				"configured_account_row_count": configuredAccountRows(out),
@@ -465,6 +574,100 @@ func GetUpstreamMarginReport(c *fiber.Ctx) error {
 			"rows": out,
 		},
 	})
+}
+
+// staleUpstreamAccountRow 表示一条"本地配置过但 CPA 那边已删/失效"的孤儿配置。
+type staleUpstreamAccountRow struct {
+	ID                          uint       `json:"id"`
+	Provider                    string     `json:"provider"`
+	AuthIndex                   string     `json:"auth_index"`
+	Label                       string     `json:"label"`
+	PlanName                    string     `json:"plan_name"`
+	MonthlyCostUSD              float64    `json:"monthly_cost_usd"`
+	EstimatedMonthlyCapacityUSD float64    `json:"estimated_monthly_capacity_usd"`
+	Active                      bool       `json:"active"`
+	Notes                       string     `json:"notes"`
+	StaleReason                 string     `json:"stale_reason"` // not_in_cpa | cpa_disabled | cpa_unseen_7d
+	CPALastSeenAt               *time.Time `json:"cpa_last_seen_at,omitempty"`
+	CPADisabled                 bool       `json:"cpa_disabled"`
+	CreatedAt                   time.Time  `json:"created_at"`
+	UpdatedAt                   time.Time  `json:"updated_at"`
+}
+
+// ListStaleUpstreamAccountCosts 列出"本地 UpstreamAccountCost 配置过但 CPA 端已消失/失效"
+// 的孤儿配置，便于 admin 清理。
+//
+// 对账 key：UpstreamAccountCost.auth_index == CPACredential.auth_id。
+// 三类 stale：
+//   - not_in_cpa     : CPACredential 中找不到匹配 auth_id（CPA 那边已彻底删除）
+//   - cpa_disabled   : CPACredential 标记 disabled=true（CPA 那边软禁用）
+//   - cpa_unseen_7d  : CPACredential 的 last_seen_at < now-7d（一周以上没出现在 CPA 清单）
+func ListStaleUpstreamAccountCosts(c *fiber.Ctx) error {
+	type joinedRow struct {
+		ID                          uint
+		Provider                    string
+		AuthIndex                   string
+		Label                       string
+		PlanName                    string
+		MonthlyCostUSD              int64
+		EstimatedMonthlyCapacityUSD int64
+		Active                      bool
+		Notes                       string
+		CreatedAt                   time.Time
+		UpdatedAt                   time.Time
+		CPAAuthID                   *string
+		CPADisabled                 *bool
+		CPALastSeenAt               *time.Time
+	}
+	var rows []joinedRow
+	if err := database.DB.Table("upstream_account_costs AS uac").
+		Select(`uac.id, uac.provider, uac.auth_index, uac.label, uac.plan_name,
+			uac.monthly_cost_usd, uac.estimated_monthly_capacity_usd, uac.active, uac.notes,
+			uac.created_at, uac.updated_at,
+			cc.auth_id AS cpa_auth_id, cc.disabled AS cpa_disabled, cc.last_seen_at AS cpa_last_seen_at`).
+		Joins("LEFT JOIN cpa_credentials cc ON cc.auth_id = uac.auth_index").
+		Order("uac.provider ASC, uac.auth_index ASC").
+		Scan(&rows).Error; err != nil {
+		log.Printf("[UPSTREAM-STALE] query failed: %v", err)
+		return c.Status(http.StatusInternalServerError).JSON(fiber.Map{"success": false, "message_code": "ERR_DB_QUERY"})
+	}
+
+	staleCutoff := time.Now().Add(-7 * 24 * time.Hour)
+	out := make([]staleUpstreamAccountRow, 0)
+	for _, r := range rows {
+		reason := ""
+		if r.CPAAuthID == nil {
+			reason = "not_in_cpa"
+		} else if r.CPADisabled != nil && *r.CPADisabled {
+			reason = "cpa_disabled"
+		} else if r.CPALastSeenAt != nil && r.CPALastSeenAt.Before(staleCutoff) {
+			reason = "cpa_unseen_7d"
+		}
+		if reason == "" {
+			continue
+		}
+		disabled := false
+		if r.CPADisabled != nil {
+			disabled = *r.CPADisabled
+		}
+		out = append(out, staleUpstreamAccountRow{
+			ID:                          r.ID,
+			Provider:                    r.Provider,
+			AuthIndex:                   r.AuthIndex,
+			Label:                       r.Label,
+			PlanName:                    r.PlanName,
+			MonthlyCostUSD:              database.MicroToUSD(r.MonthlyCostUSD),
+			EstimatedMonthlyCapacityUSD: database.MicroToUSD(r.EstimatedMonthlyCapacityUSD),
+			Active:                      r.Active,
+			Notes:                       r.Notes,
+			StaleReason:                 reason,
+			CPALastSeenAt:               r.CPALastSeenAt,
+			CPADisabled:                 disabled,
+			CreatedAt:                   r.CreatedAt,
+			UpdatedAt:                   r.UpdatedAt,
+		})
+	}
+	return c.JSON(fiber.Map{"success": true, "data": out})
 }
 
 func parseUpstreamAccountCostPayload(c *fiber.Ctx) (upstreamAccountCostPayload, bool) {

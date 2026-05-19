@@ -1,18 +1,27 @@
 import React, { Suspense } from 'react';
-import { Outlet, useLocation } from 'react-router-dom';
+import { Navigate, Outlet, useLocation } from 'react-router-dom';
 import { useTranslation } from 'react-i18next';
 import TopBar from '../components/TopBar';
 import UserSidebar from './UserSidebar';
 import MobileBottomNav from './MobileBottomNav';
+import BannedBanner from './BannedBanner';
 import { useAuth } from '../context/AuthContext';
 
 /**
  * User-facing layout with sidebar, top bar, mobile navigation, and outlet.
+ *
+ * admin 模式 (isAdmin=true) 严格屏蔽用户视图：后端 UserGuard 只认 Bearer
+ * 不认 admin cookie（防 CSRF + 横向越权），所以 admin 访问任何用户域 endpoint
+ * 都会 401。前端这里整段重定向到 /admin/，避免 toast 满天飞 + 误以为 UI 坏了。
  */
 const UserShell = () => {
   const { t } = useTranslation();
   const { isAuthenticated, isAdmin, profile, openLogin } = useAuth();
   const location = useLocation();
+
+  if (isAdmin) {
+    return <Navigate to="/admin" replace />;
+  }
 
   return (
     <div className="min-h-screen bg-surface text-on-surface flex font-sans animate-in fade-in duration-500">
@@ -27,6 +36,7 @@ const UserShell = () => {
       <UserSidebar />
 
       <div className="flex-1 min-w-0 lg:ml-60 flex flex-col h-screen overflow-y-auto pb-20 lg:pb-8">
+        <BannedBanner />
         <TopBar
           isAuthenticated={isAuthenticated}
           isAdmin={isAdmin}

@@ -114,10 +114,12 @@ func AdminReconcileBillingEntry(c *fiber.Ctx) error {
 	}
 
 	var (
-		reconcileID  uint
-		adjustEntry  database.BillingEntry
-		adjustExists bool
+		reconcileID    uint
+		adjustEntry    database.BillingEntry
+		adjustExists   bool
+		referralReward database.ReferralPaidSpendRewardResult
 	)
+	referralRewardBPS, referralRewardWindowSeconds := readReferralPaidSpendRewardConfig()
 
 	txErr := database.DB.Transaction(func(tx *gorm.DB) error {
 		// 锁住目标用户的所有相关操作（购买/退款/扣费等都走 lockUserForUpdate 同一路径）
@@ -174,6 +176,22 @@ func AdminReconcileBillingEntry(c *fiber.Ctx) error {
 				return fmt.Errorf("insert admin_adjust entry: %w", err)
 			}
 			adjustExists = true
+
+			reward, err := database.ApplyReferralPaidSpendRewardTx(
+				tx,
+				fresh.UserID,
+				fresh.EstimatedCostUSD,
+				referralRewardBPS,
+				referralRewardWindowSeconds,
+				fresh.OccurredAt,
+				"billing_entry",
+				fresh.ID,
+				fmt.Sprintf("对账补扣 · %s", fresh.ModelName),
+			)
+			if err != nil {
+				return fmt.Errorf("apply referral spend reward: %w", err)
+			}
+			referralReward = reward
 		}
 
 		// 写 reconciliation 行（unique on billing_entry_id 兜底）
@@ -200,14 +218,14 @@ func AdminReconcileBillingEntry(c *fiber.Ctx) error {
 
 		// OperationLog 审计
 		auditDetails, _ := json.Marshal(map[string]any{
-			"type":                       "BILLING_RECONCILE",
-			"admin_id":                   op.ID,
-			"billing_entry_id":           fresh.ID,
-			"reconcile_id":               reconcile.ID,
-			"result":                     req.Result,
-			"estimated_cost_micro_usd":   fresh.EstimatedCostUSD,
-			"adjustment_billing_id":     reconcile.AdjustmentBillingEntryID,
-			"note":                       note,
+			"type":                     "BILLING_RECONCILE",
+			"admin_id":                 op.ID,
+			"billing_entry_id":         fresh.ID,
+			"reconcile_id":             reconcile.ID,
+			"result":                   req.Result,
+			"estimated_cost_micro_usd": fresh.EstimatedCostUSD,
+			"adjustment_billing_id":    reconcile.AdjustmentBillingEntryID,
+			"note":                     note,
 		})
 		return LogOperationByTx(tx, op.ID, fresh.UserID, "admin", "BILLING_RECONCILE", c.IP(), string(auditDetails))
 	})
@@ -235,6 +253,9 @@ func AdminReconcileBillingEntry(c *fiber.Ctx) error {
 	// 余额变更后刷新用户 auth cache
 	if adjustExists {
 		proxy.RefreshUserAuth(entry.UserID)
+		if referralReward.ReferrerID != 0 && referralReward.RewardMicroUSD > 0 {
+			proxy.RefreshUserAuth(referralReward.ReferrerID)
+		}
 	}
 
 	log.Printf("[BILLING-RECONCILE] OK entry=%d admin=%d result=%s reconcile_id=%d adjust_entry=%d",

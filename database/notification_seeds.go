@@ -34,7 +34,7 @@ var NotificationSysConfigDefaults = map[string]string{
 	"notif_topup_refund_title": "退款已发起",
 	"notif_topup_refund_body":  "「{package_name}」 {amount} {currency}，已原路退回，若 24 小时内未收到退款，请提交工单处理。",
 	"notif_security_ban_title": "您的账户已被限制",
-	"notif_security_ban_body":  "原因：{reason}。如有疑问请联系客服。",
+	"notif_security_ban_body":  "原因：{reason}。如有疑问请提交工单。",
 
 	// ── 偏好缓存 TTL（秒）──
 	"notif_pref_cache_ttl_seconds": "600",

@@ -30,14 +30,18 @@ const DEFAULT_CONFIGS = {
   reg_strategy: 'dynamic',
   reg_ip_limit: '3',
   max_users: '0',
-  signup_bonus: '1',
+  // 三个 bonus 字段持久化层是 micro_usd 整数字符串（与后端 readMicroUSDConfig 对齐）。
+  // 1000000 = $1。RiskPage 通过 UsdAmountInput 在 admin 输入/显示时换算。
+  signup_bonus: '1000000',
   referrer_bonus: '0',
   referee_bonus: '0',
+  referral_paid_spend_reward_bps: '0',
+  referral_paid_spend_reward_window_seconds: '2592000',
   signup_coupon_template_id: '0',
   server_address: '',
   exchange_rate_rmb_per_usd_micros: '',
   balance_consume_default_enabled: 'false',
-  balance_consume_default_limit_usd: '0',
+  balance_consume_default_limit_micro_usd: '0',
   balance_consume_default_window_secs: '2592000',
   cliproxy_url: '',
   cliproxy_key: '',
@@ -48,7 +52,7 @@ const DEFAULT_CONFIGS = {
   moderation_cliproxy_model: 'gpt-5.4-mini',
   moderation_threshold: '0.8',
   moderation_api_timeout_seconds: '15',
-  moderation_image_policy: 'reject',
+  moderation_image_policy: 'skip',
   moderation_autoban_enabled: 'false',
   moderation_autoban_keyword_threshold: '1',
   moderation_autoban_policy_threshold: '0',
@@ -81,16 +85,29 @@ const validateConfigs = (cfg) => {
       errors.push('新用户余额消费默认开关必须是 true/false');
     }
   }
-  if (cfg.balance_consume_default_limit_usd !== undefined) {
-    const limit = parseFloat(cfg.balance_consume_default_limit_usd);
-    if (Number.isNaN(limit) || !Number.isFinite(limit) || limit < 0) {
-      errors.push('新用户余额消费默认限额必须 ≥ 0');
+  if (cfg.balance_consume_default_limit_micro_usd !== undefined) {
+    // micro_usd 整数字符串校验（与后端 sysconfig.go:130 校验语义一致）
+    const limit = parseInt(cfg.balance_consume_default_limit_micro_usd, 10);
+    if (Number.isNaN(limit) || limit < 0) {
+      errors.push('新用户余额消费默认限额必须 ≥ 0（micro_usd 整数）');
     }
   }
   if (cfg.balance_consume_default_window_secs !== undefined) {
     const w = parseInt(cfg.balance_consume_default_window_secs, 10);
     if (Number.isNaN(w) || w < 60 || w > 365 * 24 * 60 * 60) {
       errors.push('新用户余额消费默认窗口必须在 60 秒到 365 天之间');
+    }
+  }
+  if (cfg.referral_paid_spend_reward_bps !== undefined) {
+    const bps = parseInt(cfg.referral_paid_spend_reward_bps, 10);
+    if (Number.isNaN(bps) || bps < 0 || bps > 10000) {
+      errors.push('拉新消费返佣比例必须在 0% 到 100% 之间');
+    }
+  }
+  if (cfg.referral_paid_spend_reward_window_seconds !== undefined) {
+    const seconds = parseInt(cfg.referral_paid_spend_reward_window_seconds, 10);
+    if (Number.isNaN(seconds) || seconds < 60 || seconds > 365 * 24 * 60 * 60) {
+      errors.push('拉新消费返佣有效期必须在 1 分钟到 365 天之间');
     }
   }
   if (cfg.moderation_autoban_enabled !== undefined) {

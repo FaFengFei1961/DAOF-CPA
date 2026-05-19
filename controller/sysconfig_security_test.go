@@ -232,6 +232,28 @@ func TestSecurity_ValidateSysConfigPayload_UpstreamAccountCostPresets(t *testing
 	}
 }
 
+func TestSecurity_ValidateSysConfigPayload_YifutNotifyCIDRs(t *testing.T) {
+	cases := []struct {
+		name string
+		raw  string
+		code string
+		ok   bool
+	}{
+		{name: "empty disables allowlist", raw: "", ok: true},
+		{name: "valid mixed cidrs", raw: "1.2.3.4/32, 5.6.7.0/24,2001:db8::/32", ok: true},
+		{name: "bare ip rejected", raw: "1.2.3.4", code: "ERR_INVALID_CIDR"},
+		{name: "invalid token rejected", raw: "1.2.3.0/24,not-a-cidr", code: "ERR_INVALID_CIDR"},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			code, _, ok := validateSysConfigPayload(map[string]string{"yifut_notify_allowed_cidrs": tc.raw})
+			if ok != tc.ok || code != tc.code {
+				t.Fatalf("validateSysConfigPayload() code=%q ok=%v, want code=%q ok=%v", code, ok, tc.code, tc.ok)
+			}
+		})
+	}
+}
+
 func TestSecurity_ValidateSysConfigPayload_SignupCouponTemplate(t *testing.T) {
 	setupSubTestDB(t)
 

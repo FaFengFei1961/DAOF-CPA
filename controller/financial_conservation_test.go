@@ -148,34 +148,37 @@ func TestConservation_Purchase(t *testing.T) {
 	}
 }
 
-// TestConservation_PurchaseWithFreeCoupon 零价套餐免费券购买：实付 0
-// → ΔQuota = 0; billing 总和 = 0
-func TestConservation_PurchaseWithFreeCoupon(t *testing.T) {
+// TestConservation_PurchaseWithCoupon 按券后实付价购买：
+// 套餐原价 $10，固定价券 $3 → ΔQuota = -3; billing 总和 = -3。
+func TestConservation_PurchaseWithCoupon(t *testing.T) {
 	setupSubTestDB(t)
 	user := seedTestUser(t, 100)
 	pkg := seedPackage(t, func(p *database.Package) {
-		p.PriceAmount = 0
+		p.PriceAmount = 10 * database.MicroPerUSD
+		p.CostFloorMicroUSD = 3 * database.MicroPerUSD
 	})
 
-	freeCoupon := database.UserCoupon{
-		UserID: user.ID, Code: "CP-conservation-free", Status: "available",
-		SnapshotType: "fixed_price", SnapshotValue: 0, // 免费券
+	coupon := database.UserCoupon{
+		UserID: user.ID, Code: "CP-conservation-net-paid", Status: "available",
+		SnapshotType: "fixed_price", SnapshotValue: 3 * database.MicroPerUSD,
+		SnapshotPackageIDs: "[" + itoaUint(pkg.ID) + "]",
 	}
-	database.DB.Create(&freeCoupon)
+	database.DB.Create(&coupon)
 
 	app := newTestApp(user)
 	beforeMicro, atTime := snapshotUser(t, user.ID)
 
 	code, _ := doJSON(t, app, "POST", "/purchase", map[string]any{
-		"package_id": pkg.ID, "quantity": 1, "coupon_id": freeCoupon.ID,
+		"package_id": pkg.ID, "quantity": 1, "coupon_id": coupon.ID,
 	})
 	if code != 200 {
-		t.Fatalf("purchase with free coupon: %d", code)
+		t.Fatalf("purchase with coupon: %d", code)
 	}
 
-	delta := assertConservation(t, user.ID, beforeMicro, atTime, "free-coupon-purchase")
-	if delta != 0 {
-		t.Errorf("expected delta=0 (free coupon), got %d", delta)
+	delta := assertConservation(t, user.ID, beforeMicro, atTime, "coupon-purchase")
+	want := int64(-3 * database.MicroPerUSD)
+	if delta != want {
+		t.Errorf("expected delta=%d (coupon net paid), got %d", want, delta)
 	}
 }
 

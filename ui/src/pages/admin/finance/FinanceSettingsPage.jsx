@@ -2,6 +2,7 @@ import React from 'react';
 import { useTranslation } from 'react-i18next';
 import { Wallet } from 'lucide-react';
 import { Section } from '../../../components/ui';
+import UsdAmountInput from '../../../components/ui/UsdAmountInput';
 import { useAdminConfigs } from '../../../hooks/useAdminConfigs';
 import { SaveBar } from '../system/_AdminFormPrimitives';
 
@@ -75,16 +76,14 @@ const FinanceSettingsPage = () => {
             <span className="text-xs font-medium text-on-surface-variant">
               {t('ADMIN_FINANCE.SETTINGS.BALANCE_DEFAULT_LIMIT')}
             </span>
-            <div className="relative">
-              <span className="absolute left-3 top-2.5 text-on-surface-variant text-sm pointer-events-none">$</span>
-              <input
-                type="number" min="0" step="0.01"
-                value={configs.balance_consume_default_limit_usd ?? '0'}
-                onChange={(e) => handleChange('balance_consume_default_limit_usd', e.target.value)}
-                placeholder="0"
-                className="w-full bg-surface-container-high border border-outline rounded-control pl-7 pr-3 py-2 text-on-surface outline-none text-right focus:border-primary"
-              />
-            </div>
+            {/* key 用后端权威的 micro_usd 版本——旧 *_usd key 已被 sysconfig.go 显式忽略 */}
+            <UsdAmountInput
+              microValue={configs.balance_consume_default_limit_micro_usd}
+              microDefault="0"
+              onMicroChange={(micro) => handleChange('balance_consume_default_limit_micro_usd', micro)}
+              placeholder="0"
+              widthClass="w-full"
+            />
             <span className="text-[11px] text-on-surface-variant">
               {t('ADMIN_FINANCE.SETTINGS.BALANCE_DEFAULT_LIMIT_HINT')}
             </span>

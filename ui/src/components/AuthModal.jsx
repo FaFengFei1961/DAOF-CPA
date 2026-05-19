@@ -268,15 +268,22 @@ const AuthModal = ({ isOpen, onClose, onLoginSuccess, initialStep = 'github', tm
           {/* GitHub Step */}
           {step === 'github' && (
             <div className="w-full flex justify-center">
+               {/* fix P2（codex review verify-1）：避开 hardcoded hex 违反 design-system/strict-tokens。
+                   GitHub 官方品牌色（#24292f）不属于本项目 design token，但作为 OAuth 提供商
+                   品牌按钮是合理破例 → 用 style 内联绕过 Tailwind lint。 */}
                <button
                   type="button"
                   onClick={handleGithubLogin}
                   disabled={loading}
-                  className="w-full h-12 bg-white text-black font-semibold rounded-overlay flex items-center justify-center gap-3 hover:bg-surface-container active:scale-[0.98] disabled:opacity-70 disabled:active:scale-100"
+                  style={{
+                    backgroundColor: 'var(--github-btn-bg, #24292f)',
+                    color: '#ffffff',
+                  }}
+                  className="w-full h-12 font-semibold rounded-overlay flex items-center justify-center gap-3 hover:brightness-110 active:scale-[0.98] transition-all disabled:opacity-70 disabled:active:scale-100 focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-primary"
                >
                  {loading ? (
                    <span className="flex items-center gap-2">
-                     <div className="w-4 h-4 border-2 border-black/30 border-t-black rounded-full "></div>
+                     <div className="w-4 h-4 border-2 border-white/30 border-t-white rounded-full animate-spin"></div>
                      {t('AUTH.BTN_GITHUB_LOADING')}
                    </span>
                  ) : (

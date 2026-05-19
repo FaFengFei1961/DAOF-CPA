@@ -40,6 +40,30 @@ func GenerateHash(password string) string {
 	return string(hashed)
 }
 
+// GenerateHashForTest 是测试专用 bcrypt helper。固定 cost=bcrypt.MinCost (=4)，
+// 单次约 1ms（vs 生产 GenerateHash 的 ~250ms）。
+//
+// 为什么独立函数而非降低 BcryptCost：
+//   - BcryptCost=12 是生产安全要求；不允许通过 var/env 注入降级，避免误配置
+//     在生产环境暴露弱 hash
+//   - 函数名后缀 ForTest 让 code review 能立即识别误用
+//   - bcrypt.CompareHashAndPassword 是 cost-agnostic（从 hash 字符串前缀读 cost），
+//     所以测试用 cost=4 生成的 hash 在 handler 里 CheckHash 也以 ~1ms 验证完成
+//
+// 调用约束：**仅允许 _test.go 文件调用**。生产代码（含 controller / database /
+// middleware / proxy）必须使用 GenerateHash。
+//
+// 测试收益：bcrypt setup + 验证从 ~500ms 降到 ~5ms，race detector 模式下也稳定
+// 落在 Fiber app.Test 默认 1000ms 超时窗口内。
+func GenerateHashForTest(password string) string {
+	hashed, err := bcrypt.GenerateFromPassword([]byte(password), bcrypt.MinCost)
+	if err != nil {
+		log.Printf("[HASH-TEST] bcrypt failed (password too long?): %v", err)
+		return ""
+	}
+	return string(hashed)
+}
+
 // CheckHash 用 bcrypt 做恒定时间比较。空 hash 一律拒绝。
 func CheckHash(password, storedHash string) bool {
 	if storedHash == "" {

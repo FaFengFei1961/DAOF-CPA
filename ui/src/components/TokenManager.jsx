@@ -4,6 +4,7 @@ import { Key, Plus, Copy, Trash2, CheckCircle2, Activity, ShieldAlert, Power, Cl
 import { useCurrency } from '../context/CurrencyContext';
 import toast from 'react-hot-toast';
 import { useConfirm } from '../context/ConfirmContext';
+import { useAuth } from '../context/AuthContext';
 import { authFetch, readAuthState } from '../utils/authFetch';
 import { isPageCacheFresh, readPageCache, writePageCache } from '../utils/pageCache';
 import { StorePage } from './store/StorePrimitives';
@@ -44,13 +45,15 @@ const tokenApiMessage = (code, t) => {
 
 const TokenManager = ({ isAuthenticated }) => {
     const confirm = useConfirm();
+    const { isAuthenticated: contextAuthenticated } = useAuth();
+    const effectiveIsAuthenticated = isAuthenticated ?? contextAuthenticated;
     const { t } = useTranslation();
     const { formatCurrency } = useCurrency();
     const newTokenNameRef = useRef(null);
-    const tokenCacheKey = useMemo(getTokenCacheKey, [isAuthenticated]);
+    const tokenCacheKey = useMemo(getTokenCacheKey, [effectiveIsAuthenticated]);
     const [tokens, setTokens] = useState(() => readPageCache(tokenCacheKey) || []);
     // Avoid a loading card for signed-out users; RequireAuth already owns that state.
-    const [loadingTokens, setLoadingTokens] = useState(() => isAuthenticated && !readPageCache(tokenCacheKey));
+    const [loadingTokens, setLoadingTokens] = useState(() => effectiveIsAuthenticated && !readPageCache(tokenCacheKey));
     const [isCreating, setIsCreating] = useState(false);
     const [newTokenName, setNewTokenName] = useState('');
     const [editingTokenId, setEditingTokenId] = useState(null);
@@ -61,7 +64,7 @@ const TokenManager = ({ isAuthenticated }) => {
     const [editingExpiry, setEditingExpiry] = useState('');
 
     const fetchTokens = useCallback(async ({ force = false } = {}) => {
-        if (!isAuthenticated) {
+        if (!effectiveIsAuthenticated) {
             setTokens([]);
             setLoadingTokens(false);
             return;
@@ -88,31 +91,41 @@ const TokenManager = ({ isAuthenticated }) => {
         } finally {
             setLoadingTokens(false);
         }
-    }, [isAuthenticated, t, tokenCacheKey]);
+    }, [effectiveIsAuthenticated, t, tokenCacheKey]);
 
     useEffect(() => {
-        if (isAuthenticated) {
+        if (effectiveIsAuthenticated) {
             fetchTokens();
         }
-    }, [isAuthenticated, fetchTokens]);
+    }, [effectiveIsAuthenticated, fetchTokens]);
 
     const handleCreateToken = async () => {
         if (isCreating) return;
         setIsCreating(true);
         try {
+            // fix CRITICAL（codex money-unit）：后端 CreateTokenPayload 读 `quota_limit_usd` (USD float)。
+            // 旧前端发 `quota_limit` 字段名 → 后端 BodyParser 收不到 → req.QuotaLimitUSD=0 → 无限额漏洞。
             const data = await authFetch('/api/tokens', {
                 method: 'POST',
                 body: {
                     name: newTokenName.trim() || t('TOKEN_MGMT.UNTITLED_TOKEN'),
-                    quota_limit: newQuotaLimit ? parseFloat(newQuotaLimit) : 0,
+                    quota_limit_usd: newQuotaLimit ? parseFloat(newQuotaLimit) : 0,
                     expired_at: newExpiredAt ? new Date(newExpiredAt).toISOString() : null
                 }
             });
             if (data.success) {
+                if (data.data) {
+                    setTokens(prev => {
+                        const withoutDuplicate = prev.filter(token => token.id !== data.data.id);
+                        const nextTokens = [data.data, ...withoutDuplicate];
+                        writePageCache(tokenCacheKey, nextTokens);
+                        return nextTokens;
+                    });
+                }
                 setNewTokenName('');
                 setNewQuotaLimit('');
                 setNewExpiredAt('');
-                fetchTokens({ force: true });
+                await fetchTokens({ force: true });
                 toast.success(t('TOKEN_MGMT.CREATE_OK', '令牌已创建'));
             } else {
                 toast.error(tokenApiMessage(data.message_code, t) || data.message || t('TOKEN_MGMT.CREATE_FAIL', '创建失败'));
@@ -142,6 +155,9 @@ const TokenManager = ({ isAuthenticated }) => {
     };
 
     const handleEditName = (token) => {
+        // fix P1（codex review verify-r6）：后端 AccessToken.MarshalJSON 已把 QuotaLimit / UsedQuota
+        // 从 int64 micro_usd 转成 USD float（见 database/marshaling.go:46-57）。
+        // 前端不应再 / 1e6，否则 $10 会显示为 $0.00001。
         setEditingTokenId(token.id);
         setEditingName(token.name);
         setEditingQuota(token.quota_limit > 0 ? token.quota_limit.toString() : '');
@@ -157,6 +173,7 @@ const TokenManager = ({ isAuthenticated }) => {
 
         if (!trimmed) return;
 
+        // parsedQuota 是 admin 输入的 USD float；后端 MarshalJSON 也输出 USD float，optimistic UI 直接用 USD。
         const parsedQuota = editingQuota ? parseFloat(editingQuota) : 0;
         const parsedExpiry = editingExpiry ? new Date(editingExpiry).toISOString() : null;
 
@@ -164,9 +181,10 @@ const TokenManager = ({ isAuthenticated }) => {
         setTokens(prev => prev.map(t => t.id === id ? { ...t, name: trimmed, quota_limit: parsedQuota, expired_at: parsedExpiry } : t));
 
         try {
+            // fix CRITICAL（codex money-unit）：后端 UpdateTokenPayload 读 `quota_limit_usd`，旧前端发 `quota_limit` → 后端忽略。
             const data = await authFetch(`/api/tokens/${id}`, {
                 method: 'PUT',
-                body: { name: trimmed, quota_limit: parsedQuota, expired_at: parsedExpiry, clear_expiry: !parsedExpiry }
+                body: { name: trimmed, quota_limit_usd: parsedQuota, expired_at: parsedExpiry, clear_expiry: !parsedExpiry }
             });
             if (data.success) {
                 fetchTokens({ force: true });
@@ -353,7 +371,8 @@ const TokenManager = ({ isAuthenticated }) => {
                                             />
                                         ) : (
                                             <div className="flex items-center gap-1">
-                                                <span>{formatCurrency(token.used_quota, 3)}</span>
+                                                {/* 后端 AccessToken.MarshalJSON 已转 USD float，formatCurrency 直接用。 */}
+                                                <span>{formatCurrency(token.used_quota || 0, 3)}</span>
                                                 {token.quota_limit > 0 && <span className="text-xs text-outline-variant">/ {formatCurrency(token.quota_limit, 3)}</span>}
                                             </div>
                                         )}

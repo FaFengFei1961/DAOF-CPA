@@ -2,6 +2,8 @@ package controller
 
 import (
 	"context"
+	"errors"
+	"strings"
 	"testing"
 	"time"
 
@@ -51,6 +53,11 @@ func TestApiLog_AttributionViaSideTable(t *testing.T) {
 		RequestID: "req-1",
 		Timestamp: start,
 		LatencyMs: 1500,
+		ResponseHeaders: map[string][]string{
+			"X-Request-Id":  {"upstream-req-1"},
+			"Set-Cookie":    {"secret-cookie"},
+			"Authorization": {"Bearer should-not-persist"},
+		},
 		Tokens: cpaUsageTokens{
 			InputTokens:     100,
 			OutputTokens:    20,
@@ -81,6 +88,93 @@ func TestApiLog_AttributionViaSideTable(t *testing.T) {
 	if usage.MatchedApiLogID != apiLog.ID || usage.MatchStatus != "matched" {
 		t.Fatalf("usage match = id:%d status:%q", usage.MatchedApiLogID, usage.MatchStatus)
 	}
+	if !strings.Contains(usage.ResponseHeadersJSON, "upstream-req-1") {
+		t.Fatalf("response headers evidence missing: %s", usage.ResponseHeadersJSON)
+	}
+	if strings.Contains(strings.ToLower(usage.ResponseHeadersJSON), "cookie") || strings.Contains(strings.ToLower(usage.ResponseHeadersJSON), "bearer") {
+		t.Fatalf("sensitive response headers persisted: %s", usage.ResponseHeadersJSON)
+	}
+}
+
+func TestCLIProxyUsageSync_OnlyMatchesPlatformChannelAPIKey(t *testing.T) {
+	var err error
+	database.DB, err = gorm.Open(sqlite.Open("file:cliproxy_usage_sync_platform_key?mode=memory&cache=shared"), &gorm.Config{})
+	if err != nil {
+		t.Fatalf("open db: %v", err)
+	}
+	if err := database.DB.AutoMigrate(&database.Channel{}, &database.ApiLog{}, &database.ApiLogAttribution{}, &database.ApiLogCostEstimate{}, &database.UpstreamUsageRecord{}); err != nil {
+		t.Fatalf("migrate: %v", err)
+	}
+	if err := database.DB.Create(&database.Channel{
+		Type:   "cliproxy",
+		Name:   "platform-cpa",
+		Key:    "platform-key",
+		Status: 1,
+	}).Error; err != nil {
+		t.Fatalf("create platform channel: %v", err)
+	}
+
+	start := time.Date(2026, 5, 13, 10, 0, 0, 0, time.UTC)
+	apiLog := database.ApiLog{
+		UserID:           1,
+		ModelName:        "gpt-5.5",
+		RequestedModel:   "gpt-5.5",
+		ServedModel:      "gpt-5.5",
+		PromptTokens:     100,
+		CompletionTokens: 20,
+		Status:           200,
+		RequestPath:      "/v1/responses",
+		CreatedAt:        start.Add(1500 * time.Millisecond),
+	}
+	if err := database.DB.Create(&apiLog).Error; err != nil {
+		t.Fatalf("create api log: %v", err)
+	}
+
+	baseUsage := cpaUsageQueueRecord{
+		Provider:  "openai",
+		Model:     "gpt-5.5",
+		Alias:     "gpt-5.5",
+		Endpoint:  "POST /v1/responses",
+		AuthType:  "oauth",
+		AuthIndex: "auth-index-1",
+		Timestamp: start,
+		LatencyMs: 1500,
+		Tokens: cpaUsageTokens{
+			InputTokens:  100,
+			OutputTokens: 20,
+			TotalTokens:  120,
+		},
+	}
+	personalUsage := baseUsage
+	personalUsage.APIKey = "personal-key"
+	personalUsage.RequestID = "req-personal"
+	platformUsage := baseUsage
+	platformUsage.APIKey = "platform-key"
+	platformUsage.RequestID = "req-platform"
+
+	result, err := storeAndMatchCLIProxyUsageRecords([]cpaUsageQueueRecord{personalUsage, platformUsage})
+	if err != nil {
+		t.Fatalf("sync: %v", err)
+	}
+	if result.Fetched != 2 || result.Stored != 2 || result.Matched != 1 || result.Unmatched != 0 || result.Ignored != 1 {
+		t.Fatalf("unexpected result: %+v", result)
+	}
+
+	var ignored database.UpstreamUsageRecord
+	if err := database.DB.Where("request_id = ?", "req-personal").First(&ignored).Error; err != nil {
+		t.Fatalf("read personal usage: %v", err)
+	}
+	if ignored.MatchStatus != "ignored" || ignored.MatchReason != "ignored_non_platform_key" || ignored.MatchedApiLogID != 0 {
+		t.Fatalf("personal usage status=%q reason=%q matched=%d", ignored.MatchStatus, ignored.MatchReason, ignored.MatchedApiLogID)
+	}
+
+	var matched database.UpstreamUsageRecord
+	if err := database.DB.Where("request_id = ?", "req-platform").First(&matched).Error; err != nil {
+		t.Fatalf("read platform usage: %v", err)
+	}
+	if matched.MatchStatus != "matched" || matched.MatchedApiLogID != apiLog.ID {
+		t.Fatalf("platform usage status=%q matched=%d want %d", matched.MatchStatus, matched.MatchedApiLogID, apiLog.ID)
+	}
 }
 
 func TestApiLog_NoUpdate(t *testing.T) {
@@ -105,8 +199,10 @@ func TestApiLog_NoUpdate(t *testing.T) {
 	}
 
 	res := database.DB.Model(&database.ApiLog{}).Where("id = ?", row.ID).Update("cost", int64(200))
-	if res.Error != nil {
-		t.Fatalf("update error: %v", res.Error)
+	// fix HIGH（codex audit-integrity）：ApiLog.BeforeUpdate 改为 return ErrApiLogAppendOnly。
+	// 期望 Update 报错（loud reject），与侧表（ApiLogAttribution/CostEstimate/Revenue）一致。
+	if !errors.Is(res.Error, database.ErrApiLogAppendOnly) {
+		t.Fatalf("update error=%v want ErrApiLogAppendOnly", res.Error)
 	}
 	if res.RowsAffected != 0 {
 		t.Fatalf("update rows=%d want 0", res.RowsAffected)
@@ -142,8 +238,8 @@ func TestApiLog_NoDelete(t *testing.T) {
 	}
 
 	res := database.DB.Unscoped().Where("id = ?", row.ID).Delete(&database.ApiLog{})
-	if res.Error != nil {
-		t.Fatalf("delete error: %v", res.Error)
+	if !errors.Is(res.Error, database.ErrApiLogAppendOnly) {
+		t.Fatalf("delete error=%v want ErrApiLogAppendOnly", res.Error)
 	}
 	if res.RowsAffected != 0 {
 		t.Fatalf("delete rows=%d want 0", res.RowsAffected)

@@ -1,6 +1,7 @@
 package database
 
 import (
+	"encoding/json"
 	"fmt"
 	"log"
 	"math"
@@ -71,7 +72,9 @@ func InitDB() {
 	// 初始化并迁移基础数据表
 	err = DB.AutoMigrate(
 		&User{}, &Channel{}, &ChannelModel{}, &SysConfig{}, &AccessToken{}, &ApiLog{},
-		&ApiLogAttribution{}, &ApiLogCostEstimate{}, &UpstreamUsageRecord{}, &OperationLog{},
+		&ApiLogAttribution{}, &ApiLogCostEstimate{}, &ApiLogRevenue{}, &ApiLogUsageLine{}, &MediaGenerationJob{}, &UpstreamUsageRecord{}, &OperationLog{},
+		// 模型目录 + 官方价格快照（文本 token / 图片 / 未来视频）
+		&ModelCatalog{}, &ModelPricingRule{},
 		// 套餐订阅系统
 		&QuotaPlan{}, &Package{}, &PackagePlan{},
 		&UserSubscription{}, &SubscriptionUsage{}, &Notification{},
@@ -87,6 +90,8 @@ func InitDB() {
 		&UpstreamAccountCost{},
 		// 账单流水（统一事实表，所有金钱进出落库）+ 对账事实表（Sprint5-M8 状态机闭环）
 		&BillingEntry{}, &BillingReconciliation{},
+		// 计费规则历史公示快照（append-only，用户侧可查历史版本）
+		&BillingRuleRevision{}, &BillingRuleRevisionCancellation{},
 		// 优惠券系统（admin 创建模板 → 发给用户 → 购买时使用）
 		&CouponTemplate{}, &UserCoupon{},
 		// Sprint5-M6 分布式锁（cliproxy_usage_sync 单实例化）+ Sprint5-M1 浏览器 session（OAuth + Logout 真吊销）
@@ -96,16 +101,26 @@ func InitDB() {
 		log.Fatalf("数据库结构自动迁移失败: %v", err)
 	}
 
+	// 平台运行级默认 SysConfig：站点、OAuth/SMS 占位、CLIProxy、本机采集、熔断与缓存。
+	SeedPlatformDefaults()
+	// 模型目录 / 官方价格 / 默认本地 CLIProxy 渠道模板。重置后可复现出厂模型池。
+	SeedModelRuntimeDefaults()
 	// 套餐订阅系统：写入默认 SysConfig（不覆盖已存在的）
 	SeedSubscriptionDefaults()
+	// 计费规则历史：老库第一次升级时补一条当前规则快照，后续 admin 保存会追加版本。
+	SeedCurrentBillingRuleRevision()
+	// 计费规则当前活跃版本元数据：老库升级时从历史快照补 published_at / effective_at / revision_id。
+	SeedBillingRuleActiveMetadata()
 	// 通知增强系统：写入用户偏好默认值
 	SeedNotificationDefaults()
 	// 充值系统：写入易付通默认配置
 	SeedTopupDefaults()
 	// 内容审核系统：写入 CPA 模型池 / 关键字 / 阈值等全局共享配置
 	SeedModerationDefaults()
-	// OpenAI/Codex-family 模型统一强制开启 strict + closed 内容审核。
-	EnforceOpenAIModelModerationDefaults()
+	// 模型级端点策略默认值（例如 gpt-5.5 的非流式 chat 兼容性保护）。
+	EnforceModelEndpointDefaults()
+	// GPT 系列默认用智能审核二判，避免 keyword-only 误杀正常安全/凭证配置咨询。
+	EnforceOpenAIGPTModerationDefaults()
 
 	// 业务热点查询的联合索引（GORM tag 不支持多列联合，手动建）
 	//
@@ -282,7 +297,233 @@ func InitDB() {
 	// 已有正确值的不动（limit_value_micro_usd > 0）。
 	backfillQuotaPlanLimitMicroUSD()
 
+	// fix CRITICAL（codex review --uncommitted）：backfill api_log_revenues 侧表，
+	// 把"migration 前已落库但没有 revenue 行"的旧 api_logs 一次性补齐。否则跨越迁移点
+	// 的毛利报表周期会显示 total_revenue=0（因为 LEFT JOIN api_log_revenues 全 NULL）。
+	backfillApiLogRevenues()
+
 	log.Println("⚡️ 数据库连接成功，数据库结构迁移完成。")
+}
+
+// backfillApiLogRevenues 一次性把"没有 api_log_revenues 对应行但有真实 BillingEntry 落账"
+// 的旧 api_logs 补写到侧表，让跨越迁移点的毛利报表能查出 revenue。
+//
+// fix P1（codex review verify-1）：原实现 `CASE WHEN charged_cost > 0 THEN charged_cost ELSE cost END`
+// 有两个严重错误：
+//  1. 包含 pending_reconcile 请求（stream.go 故意不写 revenue，因为没收到钱）→ 欠款被算成 revenue
+//  2. balance 路径的 ApiLog.charged_cost > 0 但实际扣的是 cost（rawCost）→ 报表口径错乱
+//
+// 修复：INNER JOIN billing_entries 区分真实计费类型：
+//   - entry_type='api_usage_sub'       → revenue_source=subscription, effective=ApiLog.charged_cost；若命中赠送订阅则 effective=0
+//   - entry_type='api_consume_balance' → revenue_source=balance,      effective=ApiLog.cost (raw)
+//   - 其他类型（pending_reconcile / unmetered / 等）→ 完全跳过（保持 NULL 与正常 RecordApiLogRevenue 路径一致）
+//
+// 幂等：api_log_id 是 uniqueIndex，INSERT OR IGNORE 跳过冲突。
+// 新部署无 BillingEntry 时 INNER JOIN 自然返回 0 行，无副作用。
+func backfillApiLogRevenues() {
+	if !DB.Migrator().HasTable(&ApiLog{}) || !DB.Migrator().HasTable(&ApiLogRevenue{}) || !DB.Migrator().HasTable(&BillingEntry{}) {
+		return
+	}
+	// 按 BillingEntry 类型决定 source + effective：
+	//   subscription：赠送订阅写 0；付费订阅优先用 charged_cost；为 0 时 fallback 到 cost（早期未写 charged_cost 的旧行）
+	//   balance：     走 cost (raw)
+	//
+	// fix P2（codex review verify-final）：原实现对 charged_cost=0 的 api_usage_sub 行直接写 0
+	// → 唯一索引导致 0-revenue 行永久存在 → 旧报表的 subscription revenue 被低估。
+	sql := `INSERT OR IGNORE INTO api_log_revenues
+		(api_log_id, revenue_source, effective_revenue_micro_usd, subscription_id, recorded_at, created_at)
+		SELECT
+			a.id,
+			CASE be.entry_type
+				WHEN ? THEN ?
+				WHEN ? THEN ?
+			END AS revenue_source,
+			CASE be.entry_type
+				WHEN ? THEN CASE
+					WHEN COALESCE(us.is_granted, 0) = 1 THEN 0
+					WHEN a.charged_cost > 0 THEN a.charged_cost
+					ELSE a.cost
+				END
+				WHEN ? THEN a.cost
+			END AS effective,
+			COALESCE(be.source_subscription_id, 0) AS subscription_id,
+			a.created_at AS recorded_at,
+			a.created_at AS created_at
+		FROM api_logs a
+		INNER JOIN billing_entries be
+			ON be.related_type = 'api_log' AND be.related_id = a.id
+			AND be.entry_type IN (?, ?)
+		LEFT JOIN user_subscriptions us
+			ON us.id = be.source_subscription_id
+		LEFT JOIN api_log_revenues r ON r.api_log_id = a.id
+		WHERE r.id IS NULL
+		  AND a.status >= 200 AND a.status < 400`
+	res := DB.Exec(sql,
+		BillingTypeApiUsageSub, RevenueSourceSubscription,
+		BillingTypeApiConsumeBalance, RevenueSourceBalance,
+		BillingTypeApiUsageSub,
+		BillingTypeApiConsumeBalance,
+		BillingTypeApiUsageSub, BillingTypeApiConsumeBalance,
+	)
+	if res.Error != nil {
+		log.Printf("[BACKFILL-REVENUE] failed: %v", res.Error)
+		return
+	}
+	if res.RowsAffected > 0 {
+		log.Printf("[BACKFILL-REVENUE] 补写 %d 行历史 api_log_revenues（按 BillingEntry 区分 subscription/balance）", res.RowsAffected)
+	}
+}
+
+const (
+	billingModelWeightsConfigKey      = "billing_model_weights_json"
+	billingHealthMultipliersConfigKey = "billing_health_multipliers_json"
+	billingRulesVersionConfigKey      = "billing_rules_version"
+	billingRulesPublishedAtConfigKey  = "billing_rules_published_at"
+	billingRulesEffectiveAtConfigKey  = "billing_rules_effective_at"
+	billingRulesRevisionIDConfigKey   = "billing_rules_revision_id"
+)
+
+// SeedCurrentBillingRuleRevision 给升级前已经存在的库补一条当前规则快照。
+//
+// 之后每次 admin 保存规则都会在 controller.UpdateBillingRules 里追加新 revision；
+// 这里仅在历史表为空时运行，避免启动时重复制造版本。
+func SeedCurrentBillingRuleRevision() {
+	if DB == nil || !DB.Migrator().HasTable(&BillingRuleRevision{}) {
+		return
+	}
+	var count int64
+	if err := DB.Model(&BillingRuleRevision{}).Count(&count).Error; err != nil {
+		log.Printf("[BILLING-RULES-HISTORY] count failed: %v", err)
+		return
+	}
+	if count > 0 {
+		return
+	}
+
+	version := readPlainSysConfigForRevision(billingRulesVersionConfigKey, SubscriptionSysConfigDefaults[billingRulesVersionConfigKey])
+	modelJSON := readPlainSysConfigForRevision(billingModelWeightsConfigKey, SubscriptionSysConfigDefaults[billingModelWeightsConfigKey])
+	healthJSON := readPlainSysConfigForRevision(billingHealthMultipliersConfigKey, SubscriptionSysConfigDefaults[billingHealthMultipliersConfigKey])
+	if version == "" || modelJSON == "" || healthJSON == "" {
+		log.Printf("[BILLING-RULES-HISTORY] skip initial revision: incomplete config")
+		return
+	}
+
+	now := time.Now().UTC()
+	rev := BillingRuleRevision{
+		Version:               version,
+		EffectiveSince:        billingRevisionEffectiveSince(version),
+		PublishedAt:           &now,
+		EffectiveAt:           &now,
+		ModelWeightsJSON:      modelJSON,
+		HealthMultipliersJSON: healthJSON,
+		ModelCount:            countBillingRuleJSONArray(modelJSON),
+		HealthCount:           countBillingRuleJSONArray(healthJSON),
+		Source:                "current_backfill",
+	}
+	if err := DB.Create(&rev).Error; err != nil {
+		log.Printf("[BILLING-RULES-HISTORY] create initial revision failed: %v", err)
+		return
+	}
+	log.Printf("[BILLING-RULES-HISTORY] backfilled current billing rules revision %q", version)
+}
+
+func SeedBillingRuleActiveMetadata() {
+	if DB == nil || !DB.Migrator().HasTable(&BillingRuleRevision{}) || !DB.Migrator().HasTable(&SysConfig{}) {
+		return
+	}
+	version := readPlainSysConfigForRevision(billingRulesVersionConfigKey, SubscriptionSysConfigDefaults[billingRulesVersionConfigKey])
+	if version == "" {
+		return
+	}
+	var rev BillingRuleRevision
+	if err := DB.Where("version = ?", version).Order("created_at DESC, id DESC").First(&rev).Error; err != nil {
+		log.Printf("[BILLING-RULES-HISTORY] active metadata backfill skipped: version=%q revision not found: %v", version, err)
+		return
+	}
+	publishedAt := revisionTimeOrFallback(rev.PublishedAt, rev.CreatedAt)
+	effectiveAt := revisionTimeOrFallback(rev.EffectiveAt, rev.CreatedAt)
+	err := DB.Transaction(func(tx *gorm.DB) error {
+		if readPlainSysConfigForRevisionInTx(tx, billingRulesRevisionIDConfigKey) == "" {
+			if err := upsertPlainSysConfigInTx(tx, billingRulesRevisionIDConfigKey, fmt.Sprintf("%d", rev.ID)); err != nil {
+				return err
+			}
+		}
+		if readPlainSysConfigForRevisionInTx(tx, billingRulesPublishedAtConfigKey) == "" && !publishedAt.IsZero() {
+			if err := upsertPlainSysConfigInTx(tx, billingRulesPublishedAtConfigKey, publishedAt.UTC().Format(time.RFC3339)); err != nil {
+				return err
+			}
+		}
+		if readPlainSysConfigForRevisionInTx(tx, billingRulesEffectiveAtConfigKey) == "" && !effectiveAt.IsZero() {
+			if err := upsertPlainSysConfigInTx(tx, billingRulesEffectiveAtConfigKey, effectiveAt.UTC().Format(time.RFC3339)); err != nil {
+				return err
+			}
+		}
+		return nil
+	})
+	if err != nil {
+		log.Printf("[BILLING-RULES-HISTORY] active metadata backfill failed: %v", err)
+	}
+}
+
+func revisionTimeOrFallback(value *time.Time, fallback time.Time) time.Time {
+	if value != nil && !value.IsZero() {
+		return value.UTC()
+	}
+	return fallback.UTC()
+}
+
+func readPlainSysConfigForRevision(key, fallback string) string {
+	var row SysConfig
+	if err := DB.Where("key = ?", key).First(&row).Error; err == nil {
+		plain, decErr := utils.Decrypt(row.Value)
+		if decErr == nil && plain != "" {
+			return plain
+		}
+		if decErr != nil {
+			log.Printf("[BILLING-RULES-HISTORY] decrypt %s failed: %v", key, decErr)
+		}
+	}
+	return fallback
+}
+
+func readPlainSysConfigForRevisionInTx(tx *gorm.DB, key string) string {
+	var row SysConfig
+	if err := tx.Where("key = ?", key).First(&row).Error; err != nil {
+		return ""
+	}
+	plain, err := utils.Decrypt(row.Value)
+	if err != nil {
+		log.Printf("[BILLING-RULES-HISTORY] decrypt %s failed: %v", key, err)
+		return ""
+	}
+	return plain
+}
+
+func countBillingRuleJSONArray(raw string) int {
+	var rows []map[string]any
+	if err := json.Unmarshal([]byte(raw), &rows); err != nil {
+		return 0
+	}
+	return len(rows)
+}
+
+func billingRevisionEffectiveSince(version string) string {
+	if len(version) < 10 {
+		return ""
+	}
+	tail := version[len(version)-10:]
+	if tail[4] != '-' || tail[7] != '-' {
+		return ""
+	}
+	for i, c := range tail {
+		if i == 4 || i == 7 {
+			continue
+		}
+		if c < '0' || c > '9' {
+			return ""
+		}
+	}
+	return tail
 }
 
 func migrateChannelModelFixedPointPricing() {
