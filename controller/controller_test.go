@@ -95,7 +95,9 @@ func initializeMegaTestDB() *fiber.App {
 	app.Post("/api/admin/sys_check", CheckSys)
 	app.Post("/api/admin/login", GodLogin)
 	app.Post("/api/admin/setup", GodSetup)
-	app.Put("/api/admin/credentials", UpdateAdminCredentials)
+	// fix A-M1 (2026-05-19)：production 走 middleware.AdminGuard 注入 admin_user 到
+	// c.Locals；测试必须挂同一守卫，否则 UpdateAdminCredentials 读不到 locals。
+	app.Put("/api/admin/credentials", middleware.AdminGuard, UpdateAdminCredentials)
 
 	// API logs
 	app.Get("/api/logs", middleware.UserGuard, GetLogs)

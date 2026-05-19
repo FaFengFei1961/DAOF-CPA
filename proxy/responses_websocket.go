@@ -182,13 +182,40 @@ func ResponsesWebsocketProxyHandler(c *fiber.Ctx) error {
 	c.Locals(wsLocalsStartTime, startTime)
 	c.Locals(wsLocalsAuthHeader, authHeader)
 
+	// fix C-M1 (2026-05-19)：原 fiberws.Config 默认接受所有 Origin；cookie 场景下
+	// 浏览器恶意网站可发起带 cookie 的跨站 WS 劫持。在升级前先校验：
+	//   - 无 Origin header → 非浏览器客户端（SDK / Bearer auth），放行
+	//   - 有 Origin → 必须命中 DAOF_CORS_ALLOWED_ORIGINS 白名单，否则 403
+	if origin := strings.TrimSpace(c.Get("Origin")); origin != "" && !isAllowedWSOrigin(origin) {
+		log.Printf("[WS-ORIGIN-REJECT] user=%d origin=%q allowed=%q", user.ID, origin, GetCORSAllowedOriginsFn())
+		return c.Status(403).JSON(fiber.Map{"success": false, "message_code": "ERR_WS_ORIGIN_REJECTED", "message": "WebSocket origin not allowed"})
+	}
 	return fiberws.New(runResponsesWebsocketBridge, fiberws.Config{
 		EnableCompression: false,
 		ReadBufferSize:    4096,
 		WriteBufferSize:   4096,
-		// CheckOrigin 默认接受所有来源——与 CPA 上游策略一致；CSRF 风险靠 token
-		// 鉴权拦截，origin 不携带认证语义。
 	})(c)
+}
+
+// isAllowedWSOrigin 判断 Origin header 是否在 main.go 注入的 CORS 白名单内。
+func isAllowedWSOrigin(origin string) bool {
+	raw := strings.TrimSpace(GetCORSAllowedOriginsFn())
+	if raw == "" {
+		return false
+	}
+	originLower := strings.ToLower(strings.TrimSpace(origin))
+	for _, candidate := range strings.Split(raw, ",") {
+		if strings.ToLower(strings.TrimSpace(candidate)) == originLower {
+			return true
+		}
+	}
+	return false
+}
+
+// GetCORSAllowedOriginsFn 由 main.go 在启动时注入，避免 proxy 包对 main 包的反向依赖。
+// 返回 DAOF_CORS_ALLOWED_ORIGINS 环境变量或默认值。
+var GetCORSAllowedOriginsFn = func() string {
+	return "http://localhost:3000, http://127.0.0.1:3000"
 }
 
 // userHasAnyPayCapacity 判断用户是否处于"至少能扣一次费"的状态。

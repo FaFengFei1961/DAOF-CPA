@@ -261,17 +261,15 @@ func UpdateAdminCredentials(c *fiber.Ctx) error {
 		return c.Status(400).JSON(fiber.Map{"success": false, "message": "不能再使用原始代号 'root'，请建立独特的指挥官代号。", "message_code": "ERR_ROOT_ALIAS_FORBIDDEN"})
 	}
 
-	// 提取当前操作者 token（统一 helper）
-	token := middleware.ExtractAdminToken(c)
-	if token == "" {
-		return c.Status(401).JSON(fiber.Map{"success": false, "message": "令牌残损", "message_code": "ERR_TOKEN_CORRUPTED"})
-	}
-
-	var admin database.User
-	// handler 自身拒绝封禁 admin，不依赖 AdminGuard 兜底。
-	if err := database.DB.Where("token = ? AND role = ?", token, "admin").First(&admin).Error; err != nil || admin.Status == 2 {
+	// fix A-M1 (2026-05-19)：AdminGuard 已经把 admin 身份注入到 c.Locals("admin_user")
+	// (验证过 role=admin + status=1 + token 有效)。这里再做一次 DB 查询是多余的，
+	// 在 token rotation race window 里还会和 guard 决策不一致（旧 token 仍在该
+	// handler 看来已失效）。直接读 locals。
+	adminPtr, ok := c.Locals("admin_user").(*database.User)
+	if !ok || adminPtr == nil {
 		return c.Status(401).JSON(fiber.Map{"success": false, "message": "无可查证的高阶身份", "message_code": "ERR_NO_HIGH_LEVEL_IDENTITY"})
 	}
+	admin := *adminPtr
 
 	oldUsername := admin.Username
 	newToken := utils.GenerateRandomToken("sk-daof-root")

@@ -238,8 +238,14 @@ func resolvePeriodCutoff(period string) time.Time {
 		return now.Add(-7 * 24 * time.Hour)
 	case "30d":
 		return now.Add(-30 * 24 * time.Hour)
+	case "all":
+		// fix C-M3 (2026-05-19)：原 default 返回 zero time → 触发无界 SUM 全表扫描
+		// 独占 SQLite write-lock。强制最长回溯 365 天作为"all"的安全替代，避免单
+		// admin 报表请求阻塞所有计费/日志写。需要更长时段查询请用归档脚本。
+		return now.Add(-365 * 24 * time.Hour)
 	default:
-		return time.Time{}
+		// 未知 period 安全回退到 7 天而非"无限制"
+		return now.Add(-7 * 24 * time.Hour)
 	}
 }
 

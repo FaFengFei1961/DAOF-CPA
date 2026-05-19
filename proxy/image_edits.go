@@ -404,11 +404,24 @@ func validateImageEditInputs(req *imageGenerationRequest) error {
 	return nil
 }
 
-// isAcceptableImageURL 仅接受 data: 或 http(s):// 前缀的 URL。SafeTransport 已在出站
-// HTTP 层把内网 / 元数据 IP 拉黑（见 proxy/url_safety.go），http(s) URL 由上游 CPA fetch。
+// isAcceptableImageURL 仅接受 data: 或 http(s):// 前缀的 URL，且 http(s) URL 必须
+// 经 ValidateChannelURL 复校验 host（拒绝 127.0.0.1 / 169.254.169.254 / 私网段 IP /
+// userinfo / 控制字符等）。
+//
+// fix B-M2 (2026-05-19)：原实现仅 prefix 检查，把 `http://169.254.169.254/...` 类
+// URL 透传给上游 CPA，由 CPA 去拉取 → 一旦 CPA 没做 SSRF 防护或被 DNS rebinding
+// 绕过即可命中云元数据。现在 DAOF 入口本地校验，杜绝可疑 URL 进上游 fetch 链路。
 func isAcceptableImageURL(raw string) bool {
-	lower := strings.ToLower(strings.TrimSpace(raw))
-	return strings.HasPrefix(lower, "data:") || strings.HasPrefix(lower, "http://") || strings.HasPrefix(lower, "https://")
+	trimmed := strings.TrimSpace(raw)
+	lower := strings.ToLower(trimmed)
+	if strings.HasPrefix(lower, "data:") {
+		return true
+	}
+	if !strings.HasPrefix(lower, "http://") && !strings.HasPrefix(lower, "https://") {
+		return false
+	}
+	// http(s) → 复用渠道 URL 校验：scheme + host 形式 + IP 黑名单（含云元数据）
+	return ValidateChannelURL(trimmed) == nil
 }
 
 // normalizeGPTImageInputFidelity 校验 gpt-image-2 的 input_fidelity 取值（OpenAI 官方

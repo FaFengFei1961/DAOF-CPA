@@ -15,6 +15,7 @@ import (
 	"strconv"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 	"unicode"
 
@@ -42,6 +43,12 @@ type oauthStateRecord struct {
 var (
 	oauthStateStore       sync.Map // key: state, value: oauthStateRecord
 	oauthStateJanitorOnce sync.Once
+	// fix C-M2 (2026-05-19)：sync.Map 无内置容量限制，攻击者轮换 IP 可写入数万条
+	// 让 cleanupExpiredOAuthStates 的 Range 退化为 O(N) 阻塞。加原子计数器 + 上限
+	// 拒绝新 state 注入。10K 远超合理峰值（同时段 10000 个并发 GitHub OAuth 流），
+	// 触顶说明遭受滥用，直接 503 给客户端 + log 告警。
+	oauthStateCount    int64
+	oauthStateMaxItems int64 = 10000
 
 	githubTokenEndpoint = "https://github.com/login/oauth/access_token"
 	githubUserEndpoint  = "https://api.github.com/user"
@@ -139,6 +146,11 @@ func parseTmpToken(tmpToken string) (string, string, string, error) {
 // PrepareOAuthState 给前端发起 OAuth 之前调用。服务端生成一次性 state 和 PKCE verifier，
 // 只把 state + code_challenge 下发给前端，verifier 留在服务端 5 分钟内存表。
 func PrepareOAuthState(c *fiber.Ctx) error {
+	// fix C-M2：触顶就 503，让 cleanupExpiredOAuthStates 有窗口跑完一轮 GC
+	if atomic.LoadInt64(&oauthStateCount) >= oauthStateMaxItems {
+		log.Printf("[OAUTH-STATE-OVERFLOW] state count >= %d, refusing new", oauthStateMaxItems)
+		return c.Status(503).JSON(fiber.Map{"success": false, "message_code": "ERR_OAUTH_OVERLOAD", "message": "OAuth 服务暂时过载，请稍后重试"})
+	}
 	state, err := randomHex(32)
 	if err != nil {
 		log.Printf("[OAUTH] generate state failed: %v", err)
@@ -181,10 +193,12 @@ func pkceChallenge(verifier string) string {
 
 func storeOAuthState(state, verifier string) {
 	startOAuthStateJanitor()
-	oauthStateStore.Store(state, oauthStateRecord{
+	if _, loaded := oauthStateStore.LoadOrStore(state, oauthStateRecord{
 		CodeVerifier: verifier,
 		ExpiresAt:    time.Now().Add(oauthStateTTL),
-	})
+	}); !loaded {
+		atomic.AddInt64(&oauthStateCount, 1)
+	}
 }
 
 func consumeOAuthState(state string) (string, bool) {
@@ -196,6 +210,7 @@ func consumeOAuthState(state string) (string, bool) {
 	if !ok {
 		return "", false
 	}
+	atomic.AddInt64(&oauthStateCount, -1)
 	record, ok := raw.(oauthStateRecord)
 	if !ok || record.CodeVerifier == "" || time.Now().After(record.ExpiresAt) {
 		return "", false
@@ -219,7 +234,9 @@ func cleanupExpiredOAuthStates(now time.Time) {
 	oauthStateStore.Range(func(key, value any) bool {
 		record, ok := value.(oauthStateRecord)
 		if !ok || now.After(record.ExpiresAt) {
-			oauthStateStore.Delete(key)
+			if _, loaded := oauthStateStore.LoadAndDelete(key); loaded {
+				atomic.AddInt64(&oauthStateCount, -1)
+			}
 		}
 		return true
 	})

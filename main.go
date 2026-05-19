@@ -105,6 +105,8 @@ func main() {
 		AllowMethods:     "GET, POST, HEAD, PUT, DELETE, PATCH",
 		AllowCredentials: true,
 	}))
+	// fix C-M1：注入 CORS 白名单到 proxy 包供 WS Origin 校验复用（避免反向 import）
+	proxy.GetCORSAllowedOriginsFn = getCORSOrigins
 	app.Use(logger.New())
 
 	// ===========================

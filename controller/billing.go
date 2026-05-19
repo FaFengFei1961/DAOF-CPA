@@ -266,7 +266,10 @@ func AdminListUserBilling(c *fiber.Ctx) error {
 func listBillingEntries(c *fiber.Ctx, userID uint, includeInternal bool) error {
 	f, err := parseBillingFilters(c, userID)
 	if err != nil {
-		return c.Status(400).JSON(fiber.Map{"success": false, "message": err.Error(), "message_code": "ERR_INVALID_FILTER"})
+		// fix C-M4 (2026-05-19)：面向用户接口不回显 err.Error()（可能含 SQL 片段 / 内部
+		// 路径），改成固定文案 + 服务端日志。
+		log.Printf("[BILLING-FILTER] parse failed: %v", err)
+		return c.Status(400).JSON(fiber.Map{"success": false, "message": "查询参数非法", "message_code": "ERR_INVALID_FILTER"})
 	}
 	size, _ := strconv.Atoi(c.Query("page_size", "30"))
 	if size < 1 || size > 200 {
@@ -384,7 +387,10 @@ func AdminUserBillingSummary(c *fiber.Ctx) error {
 func billingSummary(c *fiber.Ctx, userID uint, currentBalanceMicroUSD int64) error {
 	f, err := parseBillingFilters(c, userID)
 	if err != nil {
-		return c.Status(400).JSON(fiber.Map{"success": false, "message": err.Error(), "message_code": "ERR_INVALID_FILTER"})
+		// fix C-M4 (2026-05-19)：面向用户接口不回显 err.Error()（可能含 SQL 片段 / 内部
+		// 路径），改成固定文案 + 服务端日志。
+		log.Printf("[BILLING-FILTER] parse failed: %v", err)
+		return c.Status(400).JSON(fiber.Map{"success": false, "message": "查询参数非法", "message_code": "ERR_INVALID_FILTER"})
 	}
 	q := applyBillingFilters(database.DB.Model(&database.BillingEntry{}), f)
 	// fix D4 (2026-05-19)：pending_reconcile / upstream_unmetered 行的 amount_usd=0
@@ -449,7 +455,10 @@ const billingCSVBatchSize = 500
 func exportBillingCSV(c *fiber.Ctx, userID uint, includeInternal bool) error {
 	f, err := parseBillingFilters(c, userID)
 	if err != nil {
-		return c.Status(400).JSON(fiber.Map{"success": false, "message": err.Error(), "message_code": "ERR_INVALID_FILTER"})
+		// fix C-M4 (2026-05-19)：面向用户接口不回显 err.Error()（可能含 SQL 片段 / 内部
+		// 路径），改成固定文案 + 服务端日志。
+		log.Printf("[BILLING-FILTER] parse failed: %v", err)
+		return c.Status(400).JSON(fiber.Map{"success": false, "message": "查询参数非法", "message_code": "ERR_INVALID_FILTER"})
 	}
 
 	c.Set("Content-Type", "text/csv; charset=utf-8")

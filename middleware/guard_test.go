@@ -110,55 +110,9 @@ func TestAdminGuard(t *testing.T) {
 	}
 }
 
-func TestLocalhostGuard(t *testing.T) {
-	app := fiber.New(fiber.Config{
-		ProxyHeader: "X-Test-IP",
-	})
-	app.Use(LocalhostOnly)
-	app.Get("/", func(c *fiber.Ctx) error {
-		return c.SendString("OK")
-	})
-
-	req := httptest.NewRequest("GET", "/", nil)
-	req.Header.Set("X-Test-IP", "8.8.8.8")
-	resp, _ := app.Test(req)
-
-	if resp.StatusCode != 403 {
-		t.Errorf("expected 403, got %d", resp.StatusCode)
-	}
-}
-
-func TestLocalhostMiddleware_LoopbackParsedIP(t *testing.T) {
-	app := fiber.New(fiber.Config{
-		ProxyHeader: "X-Test-IP",
-	})
-	app.Use(LocalhostOnly)
-	app.Get("/", func(c *fiber.Ctx) error {
-		return c.SendString("OK")
-	})
-
-	tests := []struct {
-		name       string
-		ip         string
-		wantStatus int
-	}{
-		{"IPv4Loopback", "127.0.0.1", 200},
-		{"IPv6Loopback", "::1", 200},
-		{"LocalhostHostnameRejected", "localhost", 403},
-		{"PublicIPRejected", "8.8.8.8", 403},
-	}
-
-	for _, tc := range tests {
-		t.Run(tc.name, func(t *testing.T) {
-			req := httptest.NewRequest("GET", "/", nil)
-			req.Header.Set("X-Test-IP", tc.ip)
-			resp, _ := app.Test(req)
-			if resp.StatusCode != tc.wantStatus {
-				t.Fatalf("status=%d want %d", resp.StatusCode, tc.wantStatus)
-			}
-		})
-	}
-}
+// 2026-05-19 A-M2 修复：LocalhostOnly + isLoopbackIP 是死代码（用 c.IP()
+// 而 main.go 路由全用 LanGuard / RealClientIP），已从 middleware/localhost.go
+// 删除。相关测试一并删除。
 
 func TestSetupGuard(t *testing.T) {
 	setupTestDB() // Reinitialize memory DB

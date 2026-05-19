@@ -79,8 +79,9 @@ func SendAliyunSMS(accessKey, accessSecret, signName, templateCode, phone string
 	}
 	httpReq.Header.Set("Content-Type", "application/x-www-form-urlencoded")
 
-	cli := &http.Client{Timeout: 15 * time.Second}
-	resp, err := cli.Do(httpReq)
+	// fix B-M1 (2026-05-19)：用 SafeHTTPClient 防 DNS rebinding 把
+	// dysmsapi.aliyuncs.com 解析到内网 / 云元数据 IP。
+	resp, err := SafeHTTPClient().Do(httpReq)
 	if err != nil {
 		return fmt.Errorf("do req: %w", err)
 	}
