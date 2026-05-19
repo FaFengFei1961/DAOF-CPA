@@ -184,9 +184,13 @@ func main() {
 	// (GET /v1beta/models 无 action 透传 CPA 模型列表)。客户端用 Google AI SDK /
 	// @google/generative-ai 直接调 DAOF；admin 必须在 ChannelModel.AllowedEndpoints
 	// 中加 /v1beta/models 启用对应 model。
+	// S7-1：把 catch-all `*` 改为单段 `:modelAction` 收紧攻击面。
+	// Gemini API 标准路径 `/v1beta/models/<model>:<method>` 模型名不含 `/`，
+	// `:modelAction` 单段 param 已足够，且阻止 `/v1beta/models/foo/bar/...` 多段
+	// 注入。listModels 走第一条无后缀路由。
 	app.Get("/v1beta/models", llmIPCoarseLimiter, llmProxyLimiter, proxy.GeminiNativeProxyHandler)
-	app.Post("/v1beta/models/*", llmIPCoarseLimiter, llmProxyLimiter, proxy.GeminiNativeProxyHandler)
-	app.Get("/v1beta/models/*", llmIPCoarseLimiter, llmProxyLimiter, proxy.GeminiNativeProxyHandler)
+	app.Post("/v1beta/models/:modelAction", llmIPCoarseLimiter, llmProxyLimiter, proxy.GeminiNativeProxyHandler)
+	app.Get("/v1beta/models/:modelAction", llmIPCoarseLimiter, llmProxyLimiter, proxy.GeminiNativeProxyHandler)
 	// Anthropic 原生 Messages API（Claude Code / Anthropic SDK 默认调用此路径）
 	app.All("/v1/messages", llmIPCoarseLimiter, llmProxyLimiter, proxy.ChatCompletionProxyHandler)
 	// 容错：客户端 base URL 误填为 ".../v1" 时 SDK 会拼出 /v1/v1/messages，仍正确路由

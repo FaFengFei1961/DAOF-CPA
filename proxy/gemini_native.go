@@ -410,11 +410,15 @@ func forwardGeminiListModels(c *fiber.Ctx, user *database.User, token, clientIP 
 }
 
 // parseGeminiNativeAction 从 fiber 路由参数解析 "<model>:<method>"。
-// fiber 用 `*` 通配符拿到 catch-all 部分。
+// S7-1 后路由是 `/v1beta/models/:modelAction`，c.Params("modelAction") 拿到单段。
+// 老 `c.Params("*")` 也保留兜底，兼容测试 / 历史 wildcard 注册。
 func parseGeminiNativeAction(c *fiber.Ctx) (geminiNativeRequest, error) {
-	action := c.Params("*")
+	action := c.Params("modelAction")
 	if action == "" {
-		// 兜底：从 URL 推导
+		action = c.Params("*")
+	}
+	if action == "" {
+		// 最终兜底：从 URL 推导（防 fiber 行为变化或路由注册笔误）
 		path := c.Path()
 		idx := strings.Index(path, "/models/")
 		if idx >= 0 {
