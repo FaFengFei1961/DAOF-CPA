@@ -415,19 +415,11 @@ func (g *ModerationGate) rejectRiskRule(result ModerationRiskResult, cfg Moderat
 	return true, rejectBySourceFormat(g.Ctx, g.SrcFormat, ModerationReasonRiskRule, msg, 403)
 }
 
-func (g *ModerationGate) auditRiskScore(result ModerationRiskResult, mode string) {
-	g.auditRiskScoreForSource(result, mode, "user_message")
-}
-
 func (g *ModerationGate) auditRiskScoreForSource(result ModerationRiskResult, mode, source string) {
 	if !result.HasMatches() {
 		return
 	}
 	g.audit(ActionModerationRiskScore, "risk_rule_score", result.PrimaryMatchID(), float64(result.HighestScore), g.riskRuleDetailsForSource(result, mode, source))
-}
-
-func (g *ModerationGate) riskRuleDetails(result ModerationRiskResult, mode string) string {
-	return g.riskRuleDetailsForSource(result, mode, "user_message")
 }
 
 func (g *ModerationGate) riskRuleDetailsForSource(result ModerationRiskResult, mode, source string) string {

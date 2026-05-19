@@ -460,22 +460,3 @@ func billingRuleRevisionEffectiveAt(row database.BillingRuleRevision) *time.Time
 	return nil
 }
 
-func extractEffectiveSinceLocal(version string) string {
-	v := strings.TrimSpace(version)
-	if len(v) < 10 {
-		return ""
-	}
-	tail := v[len(v)-10:]
-	if tail[4] != '-' || tail[7] != '-' {
-		return ""
-	}
-	for i, c := range tail {
-		if i == 4 || i == 7 {
-			continue
-		}
-		if c < '0' || c > '9' {
-			return ""
-		}
-	}
-	return tail
-}

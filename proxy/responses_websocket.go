@@ -59,7 +59,48 @@ const (
 	// SEC-FIX-H2：单 WS 连接每分钟最多接受这么多客户端帧（response.create / append 等）
 	// 60/min ≈ 1/sec，远超合理 Codex CLI / 桌面端使用；超过 → 主动关连接
 	wsClientFramesPerMinute = 60
+	// fix C-L2 (2026-05-19)：单用户同时持有的 WS 连接上限。每个 WS 连接在上游 CPA
+	// 端也保持一个 socket → 一个恶意用户开 N 条连接消耗 N 个上游 socket。5 条对
+	// 正常用户（多设备登录 / 桌面 + 移动端）足够，超过 → 503。
+	wsMaxConnsPerUser = 5
 )
+
+// wsUserConnCount 统计每个用户当前持有的活跃 WS 连接数。升级握手期 +1，
+// runResponsesWebsocketBridge 退出时 -1。读 / 写都用 atomic 操作。
+var (
+	wsUserConnMu    sync.Mutex
+	wsUserConnCount = map[uint]int{}
+)
+
+// wsAtUserConnLimit 仅检查不占位，握手前快速 503 预检用。
+func wsAtUserConnLimit(userID uint) bool {
+	wsUserConnMu.Lock()
+	defer wsUserConnMu.Unlock()
+	return wsUserConnCount[userID] >= wsMaxConnsPerUser
+}
+
+// wsTryReserveUserConn 占位一个连接名额（在 bridge 内调用，避免升级失败时泄漏）。
+// 返回 true 表示已占位，调用方退出时必须配对调用 wsReleaseUserConn。
+func wsTryReserveUserConn(userID uint) bool {
+	wsUserConnMu.Lock()
+	defer wsUserConnMu.Unlock()
+	if wsUserConnCount[userID] >= wsMaxConnsPerUser {
+		return false
+	}
+	wsUserConnCount[userID]++
+	return true
+}
+
+func wsReleaseUserConn(userID uint) {
+	wsUserConnMu.Lock()
+	defer wsUserConnMu.Unlock()
+	if wsUserConnCount[userID] > 0 {
+		wsUserConnCount[userID]--
+	}
+	if wsUserConnCount[userID] == 0 {
+		delete(wsUserConnCount, userID)
+	}
+}
 
 // SEC-FIX-H1：上游 WS 拨号必须走 safeDialContext，防 channel.BaseURL 经 DNS rebinding
 // 解析到 169.254.169.254（云元数据服务）→ 凭证窃取。gorilla/websocket Dialer 通过
@@ -181,6 +222,17 @@ func ResponsesWebsocketProxyHandler(c *fiber.Ctx) error {
 	c.Locals(wsLocalsClientIP, clientIP)
 	c.Locals(wsLocalsStartTime, startTime)
 	c.Locals(wsLocalsAuthHeader, authHeader)
+
+	// fix C-L2：握手期先快速预检 cap（不占位），超过 → 503。真正的 +1 / -1
+	// 在 runResponsesWebsocketBridge 内做，避免 fiberws 升级失败时名额泄漏。
+	if wsAtUserConnLimit(user.ID) {
+		log.Printf("[WS-CONN-LIMIT] user=%d already at max=%d concurrent WS conns", user.ID, wsMaxConnsPerUser)
+		return c.Status(503).JSON(fiber.Map{"error": fiber.Map{
+			"message":      "WebSocket 并发连接数已达上限，请关闭其他会话后重试",
+			"type":         "rate_limited",
+			"message_code": "ERR_WS_USER_CONN_LIMIT",
+		}})
+	}
 
 	// fix C-M1 (2026-05-19)：原 fiberws.Config 默认接受所有 Origin；cookie 场景下
 	// 浏览器恶意网站可发起带 cookie 的跨站 WS 劫持。在升级前先校验：
@@ -357,6 +409,16 @@ func runResponsesWebsocketBridge(conn *fiberws.Conn) {
 	defer conn.Close()
 
 	user, _ := conn.Locals(wsLocalsUser).(*database.User)
+	// fix C-L2：bridge 内 reserve（避免 fiberws 升级失败时名额泄漏）。如果握手
+	// 到 bridge 之间被其他并发 WS 占满名额，graceful close 而非默默继续。
+	if user != nil {
+		if !wsTryReserveUserConn(user.ID) {
+			log.Printf("[WS-CONN-LIMIT] bridge user=%d at max=%d (race after handshake check)", user.ID, wsMaxConnsPerUser)
+			writeWebsocketErrorAndClose(conn, "rate_limited", "max concurrent WS conns per user")
+			return
+		}
+		defer wsReleaseUserConn(user.ID)
+	}
 	token, _ := conn.Locals(wsLocalsToken).(string)
 	subToken, _ := conn.Locals(wsLocalsSubToken).(*database.AccessToken)
 	isSubToken, _ := conn.Locals(wsLocalsIsSubToken).(bool)

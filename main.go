@@ -156,18 +156,23 @@ func main() {
 			})
 		},
 	})
+	// fix C-L1 (2026-05-19)：文本 LLM 接口 body 上限 4MB（覆盖 1M context 仍绰绰
+	// 有余），图像/视频上传保留全局 32MB。两个 middleware 共享，差异只在 limit。
+	textBodyLimit := middleware.BodyLimit(4 * 1024 * 1024) // 4MB for text LLM endpoints
+
 	// OpenAI 格式代理统一网关
-	app.All("/v1/chat/completions", llmIPCoarseLimiter, llmProxyLimiter, proxy.ChatCompletionProxyHandler)
+	app.All("/v1/chat/completions", llmIPCoarseLimiter, llmProxyLimiter, textBodyLimit, proxy.ChatCompletionProxyHandler)
 	// OpenAI legacy completions（GPT-3.5 之前的 prompt-based API；CPA 仍支持，
 	// DAOF 透传给 ChatCompletionProxyHandler 走同一计费链路）
-	app.Post("/v1/completions", llmIPCoarseLimiter, llmProxyLimiter, proxy.ChatCompletionProxyHandler)
+	app.Post("/v1/completions", llmIPCoarseLimiter, llmProxyLimiter, textBodyLimit, proxy.ChatCompletionProxyHandler)
 	// /v1/responses 多协议路由：
 	//   - GET + WebSocket Upgrade 头 → Codex Responses WebSocket v2 桥接（P7）
 	//   - 其他方法 / 普通 GET → OpenAI Agentic Responses API（SSE / 非流）
 	// fiber 不支持单 path 多 method 同时挂不同 handler，所以分两条注册：
 	app.Get("/v1/responses", llmIPCoarseLimiter, llmProxyLimiter, proxy.ResponsesWebsocketProxyHandler)
-	app.Post("/v1/responses", llmIPCoarseLimiter, llmProxyLimiter, proxy.ChatCompletionProxyHandler)
-	app.Post("/v1/responses/compact", llmIPCoarseLimiter, llmProxyLimiter, proxy.ChatCompletionProxyHandler)
+	app.Post("/v1/responses", llmIPCoarseLimiter, llmProxyLimiter, textBodyLimit, proxy.ChatCompletionProxyHandler)
+	app.Post("/v1/responses/compact", llmIPCoarseLimiter, llmProxyLimiter, textBodyLimit, proxy.ChatCompletionProxyHandler)
+	// 媒体生成接口保留 32MB 全局上限（图像 / 视频 multipart 可能大）
 	app.Post("/v1/images/generations", llmIPCoarseLimiter, llmProxyLimiter, proxy.ImageGenerationProxyHandler)
 	app.Post("/v1/images/edits", llmIPCoarseLimiter, llmProxyLimiter, proxy.ImageEditProxyHandler)
 	app.Post("/v1/videos/generations", llmIPCoarseLimiter, llmProxyLimiter, proxy.VideoGenerationProxyHandler)
@@ -179,8 +184,8 @@ func main() {
 	codexDirect := app.Group("/backend-api/codex", llmIPCoarseLimiter, llmProxyLimiter)
 	// 同 /v1/responses 拆法：GET → WebSocket，POST → SSE
 	codexDirect.Get("/responses", proxy.ResponsesWebsocketProxyHandler)
-	codexDirect.Post("/responses", proxy.ChatCompletionProxyHandler)
-	codexDirect.Post("/responses/compact", proxy.ChatCompletionProxyHandler)
+	codexDirect.Post("/responses", textBodyLimit, proxy.ChatCompletionProxyHandler)
+	codexDirect.Post("/responses/compact", textBodyLimit, proxy.ChatCompletionProxyHandler)
 	// Google Gemini 兼容 API 代理（P6）：generateContent / streamGenerateContent /
 	// countTokens（Imagen 内部走 :predict，CPA 自动翻译为 Gemini 格式）+ listModels
 	// (GET /v1beta/models 无 action 透传 CPA 模型列表)。客户端用 Google AI SDK /
@@ -191,14 +196,14 @@ func main() {
 	// `:modelAction` 单段 param 已足够，且阻止 `/v1beta/models/foo/bar/...` 多段
 	// 注入。listModels 走第一条无后缀路由。
 	app.Get("/v1beta/models", llmIPCoarseLimiter, llmProxyLimiter, proxy.GeminiNativeProxyHandler)
-	app.Post("/v1beta/models/:modelAction", llmIPCoarseLimiter, llmProxyLimiter, proxy.GeminiNativeProxyHandler)
+	app.Post("/v1beta/models/:modelAction", llmIPCoarseLimiter, llmProxyLimiter, textBodyLimit, proxy.GeminiNativeProxyHandler)
 	app.Get("/v1beta/models/:modelAction", llmIPCoarseLimiter, llmProxyLimiter, proxy.GeminiNativeProxyHandler)
 	// Anthropic 原生 Messages API（Claude Code / Anthropic SDK 默认调用此路径）
-	app.All("/v1/messages", llmIPCoarseLimiter, llmProxyLimiter, proxy.ChatCompletionProxyHandler)
+	app.All("/v1/messages", llmIPCoarseLimiter, llmProxyLimiter, textBodyLimit, proxy.ChatCompletionProxyHandler)
 	// 容错：客户端 base URL 误填为 ".../v1" 时 SDK 会拼出 /v1/v1/messages，仍正确路由
-	app.All("/v1/v1/messages", llmIPCoarseLimiter, llmProxyLimiter, proxy.ChatCompletionProxyHandler)
-	app.All("/v1/messages/count_tokens", llmIPCoarseLimiter, llmProxyLimiter, proxy.ChatCompletionProxyHandler)
-	app.All("/v1/v1/messages/count_tokens", llmIPCoarseLimiter, llmProxyLimiter, proxy.ChatCompletionProxyHandler)
+	app.All("/v1/v1/messages", llmIPCoarseLimiter, llmProxyLimiter, textBodyLimit, proxy.ChatCompletionProxyHandler)
+	app.All("/v1/messages/count_tokens", llmIPCoarseLimiter, llmProxyLimiter, textBodyLimit, proxy.ChatCompletionProxyHandler)
+	app.All("/v1/v1/messages/count_tokens", llmIPCoarseLimiter, llmProxyLimiter, textBodyLimit, proxy.ChatCompletionProxyHandler)
 	app.Get("/v1/models", controller.GetPublicModels)
 	app.Get("/v1/v1/models", controller.GetPublicModels)
 

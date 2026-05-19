@@ -619,12 +619,12 @@ func ChatCompletionProxyHandler(c *fiber.Ctx) error {
 			// 保留这个 cancel 给 SSE 路径，确保最后能取消上游连接
 			successfulUpstreamCancel = upstreamCancel
 			MarkChannelSuccess(selectedPath.ChannelID)
-			break
+			// fall through to line 718 outer-loop break
 		case StatusActionClientError:
 			httpResp = resp
 			successfulUpstreamCancel = upstreamCancel
 			releaseChannelProbe(selectedPath.ChannelID)
-			break
+			// fall through to line 718 outer-loop break
 		case StatusActionRateLimit:
 			upstreamCancel()
 			failedChannels[selectedPath.ChannelID] = true

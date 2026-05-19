@@ -144,14 +144,6 @@ func billingEntryViewFrom(b database.BillingEntry) BillingEntryView {
 	}
 }
 
-func billingEntryViewsFrom(rows []database.BillingEntry) []BillingEntryView {
-	out := make([]BillingEntryView, 0, len(rows))
-	for _, row := range rows {
-		out = append(out, billingEntryViewFrom(row))
-	}
-	return out
-}
-
 func topupOrderViewFrom(o database.TopupOrder) TopupOrderView {
 	return TopupOrderView{
 		ID:                          o.ID,

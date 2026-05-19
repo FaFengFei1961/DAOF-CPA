@@ -26,10 +26,6 @@ func resetCircuitForTest(channelID uint) {
 	channelRateLimitCooldowns.Delete(channelID)
 }
 
-func resetChannelModelHealthForTest(channelID uint, modelName string) {
-	channelModelUnhealthyUntilNs.Delete(channelModelHealthKey(channelID, modelName))
-}
-
 func TestChannelCircuit_DefaultClosed(t *testing.T) {
 	resetCircuitForTest(101)
 	if IsChannelCircuitOpen(101) {
