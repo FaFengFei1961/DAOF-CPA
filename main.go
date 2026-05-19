@@ -159,7 +159,12 @@ func main() {
 	// OpenAI legacy completions（GPT-3.5 之前的 prompt-based API；CPA 仍支持，
 	// DAOF 透传给 ChatCompletionProxyHandler 走同一计费链路）
 	app.Post("/v1/completions", llmIPCoarseLimiter, llmProxyLimiter, proxy.ChatCompletionProxyHandler)
-	app.All("/v1/responses", llmIPCoarseLimiter, llmProxyLimiter, proxy.ChatCompletionProxyHandler) // 兼容最新 OpenAI Agentic Responses API
+	// /v1/responses 多协议路由：
+	//   - GET + WebSocket Upgrade 头 → Codex Responses WebSocket v2 桥接（P7）
+	//   - 其他方法 / 普通 GET → OpenAI Agentic Responses API（SSE / 非流）
+	// fiber 不支持单 path 多 method 同时挂不同 handler，所以分两条注册：
+	app.Get("/v1/responses", llmIPCoarseLimiter, llmProxyLimiter, proxy.ResponsesWebsocketProxyHandler)
+	app.Post("/v1/responses", llmIPCoarseLimiter, llmProxyLimiter, proxy.ChatCompletionProxyHandler)
 	app.Post("/v1/responses/compact", llmIPCoarseLimiter, llmProxyLimiter, proxy.ChatCompletionProxyHandler)
 	app.Post("/v1/images/generations", llmIPCoarseLimiter, llmProxyLimiter, proxy.ImageGenerationProxyHandler)
 	app.Post("/v1/images/edits", llmIPCoarseLimiter, llmProxyLimiter, proxy.ImageEditProxyHandler)
@@ -170,7 +175,9 @@ func main() {
 	// Codex CLI 默认 base_url 兼容（与 /v1/responses 调用同一 handler，让 user 不必
 	// 改 chatgpt_base_url 配置）
 	codexDirect := app.Group("/backend-api/codex", llmIPCoarseLimiter, llmProxyLimiter)
-	codexDirect.All("/responses", proxy.ChatCompletionProxyHandler)
+	// 同 /v1/responses 拆法：GET → WebSocket，POST → SSE
+	codexDirect.Get("/responses", proxy.ResponsesWebsocketProxyHandler)
+	codexDirect.Post("/responses", proxy.ChatCompletionProxyHandler)
 	codexDirect.Post("/responses/compact", proxy.ChatCompletionProxyHandler)
 	// Google Gemini 兼容 API 代理（P6）：generateContent / streamGenerateContent /
 	// countTokens（Imagen 内部走 :predict，CPA 自动翻译为 Gemini 格式）+ listModels

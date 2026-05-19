@@ -26,6 +26,11 @@ const (
 	// 在 ChannelModel.AllowedEndpoints 中作为标记表示该 model 暴露给 /v1beta/models
 	// 路由——P6 引入，让客户端用 Google AI SDK 直接调 DAOF。
 	EndpointGeminiNative = "/v1beta/models"
+	// EndpointResponsesWebsocket 是 Codex Responses WebSocket v2 入口的端点标记。
+	// 实际 URL 是 `GET /v1/responses` 与 `GET /backend-api/codex/responses`（Codex
+	// CLI / 桌面端的默认拨号点）。AllowedEndpoints 中加上此条 admin 才会允许该模型
+	// 接受 WebSocket 长连。P7 引入；默认 disabled，admin 显式启用。
+	EndpointResponsesWebsocket = "/v1/responses/ws"
 )
 
 // AllowedImageEndpoints 是图像类 ChannelModel.AllowedEndpoints 的合法子集。
@@ -39,8 +44,9 @@ var AllowedVideoEndpoints = []string{EndpointVideosGenerations, EndpointVideosEd
 
 // AllowedTextEndpoints 是文本类 ChannelModel.AllowedEndpoints 的合法子集。
 // text 类一般不强制 endpoint（走 /v1/chat/completions 等通用入口），但 admin 启用
-// Gemini native 时需要标 /v1beta/models 让 DAOF 路由识别。
-var AllowedTextEndpoints = []string{EndpointGeminiNative}
+// Gemini native 时需要标 /v1beta/models 让 DAOF 路由识别；启用 Codex Responses
+// WebSocket（Codex CLI / 桌面端）时需要标 /v1/responses/ws。
+var AllowedTextEndpoints = []string{EndpointGeminiNative, EndpointResponsesWebsocket}
 
 var (
 	ErrImageGenerationUnsupported    = errors.New("image generation is not supported by the runtime yet")

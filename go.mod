@@ -3,7 +3,9 @@ module daof-cpa
 go 1.26.2
 
 require (
+	github.com/gofiber/contrib/websocket v1.3.4
 	github.com/gofiber/fiber/v2 v2.52.12
+	github.com/gorilla/websocket v1.5.3
 	github.com/router-for-me/CLIProxyAPI/v7 v7.0.5
 	github.com/tidwall/gjson v1.18.0
 	github.com/tidwall/sjson v1.2.5
@@ -17,6 +19,7 @@ require (
 	github.com/andybalholm/brotli v1.2.1 // indirect
 	github.com/clipperhouse/stringish v0.1.1 // indirect
 	github.com/clipperhouse/uax29/v2 v2.5.0 // indirect
+	github.com/fasthttp/websocket v1.5.8 // indirect
 	github.com/google/uuid v1.6.0 // indirect
 	github.com/jinzhu/inflection v1.0.0 // indirect
 	github.com/jinzhu/now v1.1.5 // indirect
@@ -26,6 +29,7 @@ require (
 	github.com/mattn/go-runewidth v0.0.19 // indirect
 	github.com/mattn/go-sqlite3 v1.14.22 // indirect
 	github.com/philhofer/fwd v1.1.3-0.20240916144458-20a13a1f6b7c // indirect
+	github.com/savsgio/gotils v0.0.0-20240303185622-093b76447511 // indirect
 	github.com/sirupsen/logrus v1.9.3 // indirect
 	github.com/tidwall/match v1.1.1 // indirect
 	github.com/tidwall/pretty v1.2.0 // indirect
