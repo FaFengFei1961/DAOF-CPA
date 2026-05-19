@@ -309,6 +309,58 @@ func TestValidateChannelModelActivation_RejectsForeignImageEndpoint(t *testing.T
 	}
 }
 
+func TestValidateChannelModelActivation_VideoEditsRequiresInputPricing(t *testing.T) {
+	db, err := gorm.Open(sqlite.Open("file::memory:?cache=private"), &gorm.Config{})
+	if err != nil {
+		t.Fatalf("open sqlite: %v", err)
+	}
+	oldDB := DB
+	DB = db
+	t.Cleanup(func() { DB = oldDB })
+	if err := DB.AutoMigrate(&ModelPricingRule{}); err != nil {
+		t.Fatalf("migrate: %v", err)
+	}
+
+	cm := &ChannelModel{
+		ModelID:          "grok-imagine-video",
+		Status:           1,
+		ModelCategory:    ModelCategoryVideo,
+		BillingMode:      BillingModeVideoSecond,
+		AllowedEndpoints: `["/v1/videos/generations","/v1/videos/edits"]`,
+	}
+	if err := DB.Create(&ModelPricingRule{
+		RuleKey: "video-test-out", PricingVersion: "test",
+		ProviderKey: "xai", ModelID: cm.ModelID, OfficialModelID: cm.ModelID,
+		BillingMode: BillingModeVideoSecond, Unit: "video_second", Direction: "output",
+		Resolution: "720p", PriceMicroUSD: 70_000,
+	}).Error; err != nil {
+		t.Fatalf("seed output pricing: %v", err)
+	}
+	if err := ValidateChannelModelActivation(cm); err != ErrVideoEditMissingInputPricing {
+		t.Fatalf("err=%v want ErrVideoEditMissingInputPricing", err)
+	}
+	// 加 input pricing 后 OK
+	if err := DB.Create(&ModelPricingRule{
+		RuleKey: "video-test-in", PricingVersion: "test",
+		ProviderKey: "xai", ModelID: cm.ModelID, OfficialModelID: cm.ModelID,
+		BillingMode: BillingModeVideoSecond, Unit: "video_second", Direction: "input",
+		PriceMicroUSD: 10_000,
+	}).Error; err != nil {
+		t.Fatalf("seed input pricing: %v", err)
+	}
+	if err := ValidateChannelModelActivation(cm); err != nil {
+		t.Fatalf("activation with both directions should pass: %v", err)
+	}
+	// extensions 同样要求 input pricing
+	if err := DB.Where("rule_key = ?", "video-test-in").Delete(&ModelPricingRule{}).Error; err != nil {
+		t.Fatalf("delete input pricing: %v", err)
+	}
+	cm.AllowedEndpoints = `["/v1/videos/generations","/v1/videos/extensions"]`
+	if err := ValidateChannelModelActivation(cm); err != ErrVideoEditMissingInputPricing {
+		t.Fatalf("extensions also requires input pricing: err=%v", err)
+	}
+}
+
 func TestCanonicalRuntimeImageModel_AllowsCLIProxyPrefixes(t *testing.T) {
 	for _, in := range []string{
 		"grok-imagine-image",

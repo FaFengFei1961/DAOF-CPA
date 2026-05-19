@@ -19,6 +19,8 @@ const (
 	EndpointImagesGenerations = "/v1/images/generations"
 	EndpointImagesEdits       = "/v1/images/edits"
 	EndpointVideosGenerations = "/v1/videos/generations"
+	EndpointVideosEdits       = "/v1/videos/edits"
+	EndpointVideosExtensions  = "/v1/videos/extensions"
 )
 
 // AllowedImageEndpoints 是图像类 ChannelModel.AllowedEndpoints 的合法子集。
@@ -26,7 +28,8 @@ const (
 var AllowedImageEndpoints = []string{EndpointImagesGenerations, EndpointImagesEdits}
 
 // AllowedVideoEndpoints 是视频类 ChannelModel.AllowedEndpoints 的合法子集。
-var AllowedVideoEndpoints = []string{EndpointVideosGenerations}
+// admin 可任意组合开关：generations / edits / extensions 子集。
+var AllowedVideoEndpoints = []string{EndpointVideosGenerations, EndpointVideosEdits, EndpointVideosExtensions}
 
 var (
 	ErrImageGenerationUnsupported    = errors.New("image generation is not supported by the runtime yet")
@@ -37,8 +40,9 @@ var (
 	ErrImageModelRequiresPricing     = errors.New("enabled image models require official image pricing rules")
 	ErrImageEditMissingInputPricing  = errors.New("enabled image models allowing /v1/images/edits require an input image pricing rule")
 	ErrImageTokenBillingUnsupported  = errors.New("token-billed image models are only supported for runtime-confirmed token usage models")
-	ErrVideoModelRequiresEndpoint    = errors.New("enabled video models must allow /v1/videos/generations only")
+	ErrVideoModelRequiresEndpoint    = errors.New("enabled video models must only allow /v1/videos/generations, /v1/videos/edits, and/or /v1/videos/extensions")
 	ErrVideoModelRequiresPricing     = errors.New("enabled video models require official output video-second pricing rules")
+	ErrVideoEditMissingInputPricing  = errors.New("enabled video models allowing /v1/videos/edits or /v1/videos/extensions require an input video-second pricing rule")
 )
 
 func IsRuntimeImageModelSupported(modelID string) bool {
@@ -354,7 +358,7 @@ func ValidateChannelModelActivation(cm *ChannelModel) error {
 		if !IsRuntimeVideoModelSupported(cm.ModelID) {
 			return ErrVideoGenerationUnsupported
 		}
-		if !ChannelModelAllowsOnlyEndpoint(cm, EndpointVideosGenerations) {
+		if !ChannelModelAllowsEndpointsSubset(cm, AllowedVideoEndpoints) {
 			return ErrVideoModelRequiresEndpoint
 		}
 		if cm.BillingMode != BillingModeVideoSecond {
@@ -362,6 +366,14 @@ func ValidateChannelModelActivation(cm *ChannelModel) error {
 		}
 		if !ModelHasUsagePricingRuleForDirection(cm.ModelID, "video_second", "output") {
 			return ErrVideoModelRequiresPricing
+		}
+		// 启用了 edits 或 extensions 端点的视频模型必须额外配置 input video_second
+		// 计费规则。xAI 视频 edits 输入视频按秒计费（fal.ai 公开口径 $0.01/sec），
+		// extensions 同样基于原视频秒数 + 新增秒数双段计费——缺 input pricing 会让
+		// fallback 估算偏差。
+		if (ChannelModelAllowsEndpoint(cm, EndpointVideosEdits) || ChannelModelAllowsEndpoint(cm, EndpointVideosExtensions)) &&
+			!ModelHasUsagePricingRuleForDirection(cm.ModelID, "video_second", "input") {
+			return ErrVideoEditMissingInputPricing
 		}
 	case ModelCategoryImage:
 		if !IsRuntimeImageModelSupported(cm.ModelID) {

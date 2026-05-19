@@ -160,6 +160,8 @@ func main() {
 	app.Post("/v1/images/generations", llmIPCoarseLimiter, llmProxyLimiter, proxy.ImageGenerationProxyHandler)
 	app.Post("/v1/images/edits", llmIPCoarseLimiter, llmProxyLimiter, proxy.ImageEditProxyHandler)
 	app.Post("/v1/videos/generations", llmIPCoarseLimiter, llmProxyLimiter, proxy.VideoGenerationProxyHandler)
+	app.Post("/v1/videos/edits", llmIPCoarseLimiter, llmProxyLimiter, proxy.VideoEditProxyHandler)
+	app.Post("/v1/videos/extensions", llmIPCoarseLimiter, llmProxyLimiter, proxy.VideoExtensionProxyHandler)
 	app.Get("/v1/videos/:request_id", llmIPCoarseLimiter, llmProxyLimiter, proxy.VideoRetrieveProxyHandler)
 	// Anthropic 原生 Messages API（Claude Code / Anthropic SDK 默认调用此路径）
 	app.All("/v1/messages", llmIPCoarseLimiter, llmProxyLimiter, proxy.ChatCompletionProxyHandler)

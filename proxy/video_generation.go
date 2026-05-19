@@ -32,7 +32,7 @@ const (
 
 type videoGenerationRequest struct {
 	Model       string          `json:"model"`
-	Prompt      string          `json:"prompt"`
+	Prompt      string          `json:"prompt,omitempty"`
 	Seconds     json.RawMessage `json:"seconds,omitempty"`
 	Duration    json.RawMessage `json:"duration,omitempty"`
 	Size        string          `json:"size,omitempty"`
@@ -40,7 +40,19 @@ type videoGenerationRequest struct {
 	Resolution  string          `json:"resolution,omitempty"`
 	Stream      *bool           `json:"stream,omitempty"`
 
+	// edit/extension-only 字段；generations 路径在 parseVideoGenerationRequest 显式拒绝
+	// 这些键名出现。Video 是要编辑/扩展的源视频；Image / ReferenceImages 是图生视频引用。
+	Video           json.RawMessage `json:"video,omitempty"`
+	Image           json.RawMessage `json:"image,omitempty"`
+	ImageURL        string          `json:"image_url,omitempty"`
+	ReferenceImages json.RawMessage `json:"reference_images,omitempty"`
+	InputReference  json.RawMessage `json:"input_reference,omitempty"`
+	RequestID       string          `json:"request_id,omitempty"`
+	ExtendSeconds   json.RawMessage `json:"extend_seconds,omitempty"`
+
 	DurationSeconds int64 `json:"-"`
+	// Endpoint 记录当前请求路径，由 processVideoRequest 在 parse 后写入。
+	Endpoint string `json:"-"`
 }
 
 type videoPriceResolution struct {
@@ -60,7 +72,26 @@ type videoPriceResolution struct {
 // Image references, edits, extensions, and uploads stay closed until their
 // extra metering facts are represented in ApiLogUsageLine. Retrieve polling is
 // opened separately as a user-bound auxiliary endpoint.
+// videoRequestParser 抽象不同视频端点的请求解析（generations 拒绝 input 媒体 /
+// edits / extensions 接 input 视频或图片）。返回值与 parseVideoGenerationRequest 一致。
+type videoRequestParser func(c *fiber.Ctx) (videoGenerationRequest, []byte, error)
+
+// parseVideoGenerationRequestFromCtx 将 fiber 请求体读入并交给 parseVideoGenerationRequest。
+func parseVideoGenerationRequestFromCtx(c *fiber.Ctx) (videoGenerationRequest, []byte, error) {
+	rawBody := c.Body()
+	body := make([]byte, len(rawBody))
+	copy(body, rawBody)
+	return parseVideoGenerationRequest(body)
+}
+
+// VideoGenerationProxyHandler 处理 POST /v1/videos/generations。
 func VideoGenerationProxyHandler(c *fiber.Ctx) error {
+	return processVideoRequest(c, database.EndpointVideosGenerations, parseVideoGenerationRequestFromCtx)
+}
+
+// processVideoRequest 是 /v1/videos/generations、/v1/videos/edits、
+// /v1/videos/extensions 共用的核心处理流程，通过 endpoint + parseFn 参数化区分。
+func processVideoRequest(c *fiber.Ctx, endpoint string, parseFn videoRequestParser) error {
 	startTime := time.Now()
 	clientIP := c.IP()
 	path := strings.Clone(c.Path())
@@ -96,15 +127,13 @@ func VideoGenerationProxyHandler(c *fiber.Ctx) error {
 		}
 	}
 
-	rawBody := c.Body()
-	body := make([]byte, len(rawBody))
-	copy(body, rawBody)
-	req, sanitizedBody, parseErr := parseVideoGenerationRequest(body)
+	req, sanitizedBody, parseErr := parseFn(c)
 	if parseErr != nil {
 		recordProxyApiLog(user.ID, token, "unknown", 400, clientIP, startTime, path, "invalid_request", parseErr.Error())
 		return c.Status(400).JSON(fiber.Map{"error": fiber.Map{"message": parseErr.Error(), "type": "invalid_request"}})
 	}
-	body = sanitizedBody
+	req.Endpoint = endpoint
+	body := sanitizedBody
 
 	if _, ok := database.CanonicalRuntimeVideoModel(req.Model); !ok {
 		recordProxyApiLog(user.ID, token, req.Model, 400, clientIP, startTime, path, "unsupported_model", "video model is not enabled for runtime")
@@ -119,7 +148,7 @@ func VideoGenerationProxyHandler(c *fiber.Ctx) error {
 	routes := append([]*database.ChannelModel(nil), RouteCache[req.Model]...)
 	channelMapRef := ChannelMapCache
 	gatewayMutex.RUnlock()
-	routes = filterVideoRoutes(routes)
+	routes = filterVideoRoutes(routes, endpoint)
 	if len(routes) == 0 {
 		recordProxyApiLog(user.ID, token, req.Model, 404, clientIP, startTime, path, "model_not_found", "Video model not available via any channel")
 		return c.Status(404).JSON(fiber.Map{"error": fiber.Map{"message": "Video model not available via any channel", "type": "model_not_found"}})
@@ -209,7 +238,7 @@ func VideoGenerationProxyHandler(c *fiber.Ctx) error {
 		}
 	}
 
-	upstream, upstreamErr := callVideoUpstream(c, req.Model, body, routes, channelMapRef)
+	upstream, upstreamErr := callVideoUpstream(c, req.Model, body, routes, channelMapRef, endpoint)
 	if upstreamErr != nil {
 		recordProxyApiLog(user.ID, token, req.Model, upstreamErr.status, clientIP, startTime, path, upstreamErr.errorType, upstreamErr.message)
 		c.Set("Content-Type", "application/json")
@@ -605,7 +634,9 @@ func normalizeVideoResolution(raw string) (string, error) {
 	}
 }
 
-func filterVideoRoutes(routes []*database.ChannelModel) []*database.ChannelModel {
+// filterVideoRoutes 过滤可服务指定 endpoint 的 video route。P3 后接 endpoint 参数
+// 以支持 /v1/videos/generations、/v1/videos/edits、/v1/videos/extensions 共用 route cache。
+func filterVideoRoutes(routes []*database.ChannelModel, endpoint string) []*database.ChannelModel {
 	out := make([]*database.ChannelModel, 0, len(routes))
 	for _, r := range routes {
 		if r == nil {
@@ -615,7 +646,7 @@ func filterVideoRoutes(routes []*database.ChannelModel) []*database.ChannelModel
 		if r.ModelCategory != database.ModelCategoryVideo || r.BillingMode != database.BillingModeVideoSecond {
 			continue
 		}
-		if !database.ChannelModelAllowsOnlyEndpoint(r, database.EndpointVideosGenerations) {
+		if !database.ChannelModelAllowsEndpoint(r, endpoint) {
 			continue
 		}
 		out = append(out, r)
@@ -697,7 +728,7 @@ func costTicksFromMediaResponse(body []byte) int64 {
 	return 0
 }
 
-func callVideoUpstream(c *fiber.Ctx, modelName string, body []byte, routes []*database.ChannelModel, channelMapRef map[uint]*database.Channel) (*selectedImageUpstream, *upstreamImageError) {
+func callVideoUpstream(c *fiber.Ctx, modelName string, body []byte, routes []*database.ChannelModel, channelMapRef map[uint]*database.Channel, endpoint string) (*selectedImageUpstream, *upstreamImageError) {
 	failedChannels := make(map[uint]bool)
 	maxRetries := len(routes)
 	if maxRetries > 5 {
@@ -732,7 +763,7 @@ func callVideoUpstream(c *fiber.Ctx, modelName string, body []byte, routes []*da
 			last = imageErr(502, "channel_misconfigured", "video generation is only supported through CLIProxyAPI channels")
 			continue
 		}
-		upstreamURL := strings.TrimRight(ch.BaseURL, "/") + database.EndpointVideosGenerations
+		upstreamURL := strings.TrimRight(ch.BaseURL, "/") + endpoint
 		upstreamCtx, upstreamCancel := context.WithCancel(c.Context())
 		httpReq, err := http.NewRequestWithContext(upstreamCtx, http.MethodPost, upstreamURL, bytes.NewReader(body))
 		if err != nil {
@@ -837,7 +868,7 @@ func createVideoApiLog(userID uint, token string, req videoGenerationRequest, pr
 		line := database.ApiLogUsageLine{
 			ApiLogID:       apiLog.ID,
 			ModelName:      req.Model,
-			RequestPath:    database.EndpointVideosGenerations,
+			RequestPath:    requestPathForVideoRequest(req),
 			Unit:           "video_second",
 			Direction:      "output",
 			Quantity:       price.Quantity,
@@ -937,7 +968,7 @@ func deductVideoBalanceAndLog(user *database.User, token string, req videoGenera
 		if err := tx.Create(&database.ApiLogUsageLine{
 			ApiLogID:       apiLogID,
 			ModelName:      req.Model,
-			RequestPath:    database.EndpointVideosGenerations,
+			RequestPath:    requestPathForVideoRequest(req),
 			Unit:           "video_second",
 			Direction:      "output",
 			Quantity:       price.Quantity,
@@ -1027,6 +1058,15 @@ func deductVideoBalanceAndLog(user *database.User, token string, req videoGenera
 	}
 	_ = balanceAfter
 	return apiLogID, effectiveRevenue, referralReward
+}
+
+// requestPathForVideoRequest 返回审计 ApiLogUsageLine.RequestPath，根据 videoGenerationRequest.Endpoint
+// 区分 generations/edits/extensions；Endpoint 未设置时回退到 generations。
+func requestPathForVideoRequest(req videoGenerationRequest) string {
+	if req.Endpoint != "" {
+		return req.Endpoint
+	}
+	return database.EndpointVideosGenerations
 }
 
 func videoUsageMetadata(req videoGenerationRequest, price videoPriceResolution) string {
