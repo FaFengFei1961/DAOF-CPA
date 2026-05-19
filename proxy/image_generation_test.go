@@ -3,6 +3,8 @@ package proxy
 import (
 	"bytes"
 	"encoding/json"
+	"fmt"
+	"io"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -394,10 +396,54 @@ func TestParseImageGenerationRequestRejectsUnsupportedXAIAspectRatio(t *testing.
 	}
 }
 
-func TestParseImageGenerationRequestRejectsStreaming(t *testing.T) {
+func TestParseImageGenerationRequestRejectsXAIStreaming(t *testing.T) {
 	_, _, err := parseImageGenerationRequest([]byte(`{"model":"grok-imagine-image","prompt":"x","stream":true}`))
-	if err == nil {
-		t.Fatal("expected stream=true to be rejected")
+	if err == nil || !strings.Contains(err.Error(), "streaming is only supported for gpt-image-2") {
+		t.Fatalf("err=%v want xAI streaming rejection", err)
+	}
+}
+
+func TestParseImageGenerationRequestAllowsGPTImageStreaming(t *testing.T) {
+	req, sanitized, err := parseImageGenerationRequest([]byte(`{"model":"gpt-image-2","prompt":"draw a logo","stream":true,"partial_images":2}`))
+	if err != nil {
+		t.Fatalf("expected gpt-image-2 streaming to be allowed, err=%v", err)
+	}
+	if req.Model != "gpt-image-2" {
+		t.Fatalf("model=%q want gpt-image-2", req.Model)
+	}
+	var body map[string]any
+	if err := json.Unmarshal(sanitized, &body); err != nil {
+		t.Fatalf("decode sanitized: %v", err)
+	}
+	if body["stream"] != true {
+		t.Fatalf("sanitized body missing stream=true: %#v", body)
+	}
+	if body["partial_images"] != float64(2) {
+		t.Fatalf("sanitized body partial_images=%v want 2", body["partial_images"])
+	}
+}
+
+func TestParseImageGenerationRequestRejectsPartialImagesWithoutStream(t *testing.T) {
+	_, _, err := parseImageGenerationRequest([]byte(`{"model":"gpt-image-2","prompt":"x","partial_images":2}`))
+	if err == nil || !strings.Contains(err.Error(), "partial_images requires stream=true") {
+		t.Fatalf("err=%v want partial_images requires stream rejection", err)
+	}
+}
+
+func TestParseImageGenerationRequestRejectsInvalidPartialImagesCount(t *testing.T) {
+	for _, n := range []int{-1, 0, 4, 99} {
+		body := []byte(fmt.Sprintf(`{"model":"gpt-image-2","prompt":"x","stream":true,"partial_images":%d}`, n))
+		_, _, err := parseImageGenerationRequest(body)
+		if n == 0 {
+			// partial_images=0 等价于未设置，无需 stream，应该通过
+			if err != nil {
+				t.Fatalf("partial_images=0 should be allowed (treated as unset): %v", err)
+			}
+			continue
+		}
+		if err == nil || !strings.Contains(err.Error(), "partial_images must be 1, 2, or 3") {
+			t.Fatalf("partial_images=%d err=%v want range rejection", n, err)
+		}
 	}
 }
 
@@ -572,5 +618,223 @@ func TestImageGenerationPricingRuleAppendOnly(t *testing.T) {
 	}
 	if err := db.Model(&database.ApiLogUsageLine{}).Where("id = ?", line.ID).Update("amount_micro_usd", int64(1)).Error; err != database.ErrApiLogAppendOnly {
 		t.Fatalf("update err=%v want append-only", err)
+	}
+}
+
+func TestImageGeneration_GPTImageStreamingSuccess(t *testing.T) {
+	db := setupImageGenerationTest(t)
+
+	backend := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != database.EndpointImagesGenerations {
+			t.Errorf("unexpected upstream path %s", r.URL.Path)
+		}
+		var body map[string]any
+		if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+			t.Errorf("decode upstream body: %v", err)
+		}
+		if body["stream"] != true {
+			t.Errorf("sanitized body must forward stream=true: %#v", body)
+		}
+		if body["partial_images"] != float64(2) {
+			t.Errorf("sanitized body partial_images=%v want 2", body["partial_images"])
+		}
+
+		w.Header().Set("Content-Type", "text/event-stream")
+		w.WriteHeader(200)
+		flusher, _ := w.(http.Flusher)
+		fmt.Fprint(w, "event: image_generation.partial_image\ndata: {\"partial_image_b64\":\"AA==\",\"index\":0}\n\n")
+		if flusher != nil {
+			flusher.Flush()
+		}
+		fmt.Fprint(w, "event: image_generation.completed\ndata: {\"b64_json\":\"FINAL==\",\"usage\":{\"input_tokens\":1000,\"output_tokens\":2000,\"total_tokens\":3000,\"input_tokens_details\":{\"cached_tokens\":200}}}\n\n")
+		if flusher != nil {
+			flusher.Flush()
+		}
+	}))
+	t.Cleanup(backend.Close)
+
+	user := database.User{
+		ID:                    11,
+		Username:              "gpt-img-stream",
+		Token:                 "sk-gpt-image-stream",
+		Role:                  "user",
+		Status:                1,
+		Quota:                 1_000_000,
+		BalanceConsumeEnabled: true,
+	}
+	if err := db.Create(&user).Error; err != nil {
+		t.Fatalf("seed user: %v", err)
+	}
+	AuthCache[user.Token] = &user
+	ChannelMapCache[2] = &database.Channel{ID: 2, Type: ChannelTypeCLIProxy, BaseURL: backend.URL, Key: "upstream-key", Status: 1}
+	RouteCache["gpt-image-2"] = []*database.ChannelModel{{
+		ID:                           2,
+		ChannelID:                    2,
+		ModelID:                      "gpt-image-2",
+		ModelCategory:                database.ModelCategoryImage,
+		BillingMode:                  database.BillingModeToken,
+		AllowedEndpoints:             database.DefaultAllowedEndpointsForCategory(database.ModelCategoryImage),
+		InputPricePicoPerToken:       5 * database.PicoPerTokenPerUSDPerMTok,
+		OutputPricePicoPerToken:      30 * database.PicoPerTokenPerUSDPerMTok,
+		CachedInputPricePicoPerToken: 125 * database.PicoPerTokenPerUSDPerMTok / 100,
+		Weight:                       1,
+		Status:                       1,
+	}}
+
+	app := fiber.New()
+	app.Post(database.EndpointImagesGenerations, ImageGenerationProxyHandler)
+	req := httptest.NewRequest(http.MethodPost, database.EndpointImagesGenerations,
+		bytes.NewBufferString(`{"model":"gpt-image-2","prompt":"draw a logo","stream":true,"partial_images":2}`))
+	req.Header.Set("Authorization", "Bearer "+user.Token)
+	req.Header.Set("Content-Type", "application/json")
+
+	resp, err := app.Test(req, -1)
+	if err != nil {
+		t.Fatalf("request: %v", err)
+	}
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("status=%d want 200", resp.StatusCode)
+	}
+	if got := resp.Header.Get("Content-Type"); !strings.HasPrefix(got, "text/event-stream") {
+		t.Fatalf("Content-Type=%q want text/event-stream*", got)
+	}
+
+	bodyBytes, _ := io.ReadAll(resp.Body)
+	if !bytes.Contains(bodyBytes, []byte("image_generation.partial_image")) {
+		t.Fatalf("response missing partial_image event: %q", string(bodyBytes))
+	}
+	if !bytes.Contains(bodyBytes, []byte("image_generation.completed")) {
+		t.Fatalf("response missing completed event: %q", string(bodyBytes))
+	}
+
+	// 等 SetBodyStreamWriter callback 异步执行完成（含计费写入）
+	deadline := time.Now().Add(2 * time.Second)
+	for time.Now().Before(deadline) {
+		var n int64
+		db.Model(&database.ApiLog{}).Where("model_name = ?", "gpt-image-2").Count(&n)
+		if n > 0 {
+			break
+		}
+		time.Sleep(20 * time.Millisecond)
+	}
+
+	var fresh database.User
+	if err := db.First(&fresh, user.ID).Error; err != nil {
+		t.Fatalf("load user: %v", err)
+	}
+	const wantCost = int64(64_250)
+	if fresh.Quota != user.Quota-wantCost {
+		t.Fatalf("quota=%d want %d", fresh.Quota, user.Quota-wantCost)
+	}
+	var logRow database.ApiLog
+	if err := db.Where("model_name = ?", "gpt-image-2").First(&logRow).Error; err != nil {
+		t.Fatalf("load api log: %v", err)
+	}
+	if logRow.PromptTokens != 1000 || logRow.CompletionTokens != 2000 || logRow.CachedTokens != 200 || logRow.Cost != wantCost {
+		t.Fatalf("unexpected api log: %#v", logRow)
+	}
+	var line database.ApiLogUsageLine
+	if err := db.Where("api_log_id = ?", logRow.ID).First(&line).Error; err != nil {
+		t.Fatalf("load usage line: %v", err)
+	}
+	if line.Unit != "token" || line.Direction != "total" || line.Quantity != 3000 || line.AmountMicroUSD != wantCost || line.CostSource != "upstream_usage" {
+		t.Fatalf("unexpected usage line: %#v", line)
+	}
+	var bill database.BillingEntry
+	if err := db.Where("entry_type = ?", database.BillingTypeApiConsumeBalance).First(&bill).Error; err != nil {
+		t.Fatalf("load billing entry: %v", err)
+	}
+	if bill.AmountUSD != -wantCost || bill.TokensTotal != 3000 {
+		t.Fatalf("unexpected billing entry: %#v", bill)
+	}
+}
+
+func TestImageGeneration_GPTImageStreamingMissingCompletedWritesPending(t *testing.T) {
+	db := setupImageGenerationTest(t)
+
+	backend := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		// 上游开了 SSE 但只发了 partial，没发 completed event 就关闭——模拟上游异常截断
+		w.Header().Set("Content-Type", "text/event-stream")
+		w.WriteHeader(200)
+		flusher, _ := w.(http.Flusher)
+		fmt.Fprint(w, "event: image_generation.partial_image\ndata: {\"partial_image_b64\":\"AA==\",\"index\":0}\n\n")
+		if flusher != nil {
+			flusher.Flush()
+		}
+		// 直接 return — 没发 completed 事件
+	}))
+	t.Cleanup(backend.Close)
+
+	user := database.User{
+		ID:                    12,
+		Username:              "gpt-img-stream-pending",
+		Token:                 "sk-gpt-image-stream-pending",
+		Role:                  "user",
+		Status:                1,
+		Quota:                 1_000_000,
+		BalanceConsumeEnabled: true,
+	}
+	if err := db.Create(&user).Error; err != nil {
+		t.Fatalf("seed user: %v", err)
+	}
+	AuthCache[user.Token] = &user
+	ChannelMapCache[3] = &database.Channel{ID: 3, Type: ChannelTypeCLIProxy, BaseURL: backend.URL, Key: "upstream-key", Status: 1}
+	RouteCache["gpt-image-2"] = []*database.ChannelModel{{
+		ID:                      3,
+		ChannelID:               3,
+		ModelID:                 "gpt-image-2",
+		ModelCategory:           database.ModelCategoryImage,
+		BillingMode:             database.BillingModeToken,
+		AllowedEndpoints:        database.DefaultAllowedEndpointsForCategory(database.ModelCategoryImage),
+		InputPricePicoPerToken:  5 * database.PicoPerTokenPerUSDPerMTok,
+		OutputPricePicoPerToken: 30 * database.PicoPerTokenPerUSDPerMTok,
+		Weight:                  1,
+		Status:                  1,
+	}}
+
+	app := fiber.New()
+	app.Post(database.EndpointImagesGenerations, ImageGenerationProxyHandler)
+	req := httptest.NewRequest(http.MethodPost, database.EndpointImagesGenerations,
+		bytes.NewBufferString(`{"model":"gpt-image-2","prompt":"draw a logo","stream":true}`))
+	req.Header.Set("Authorization", "Bearer "+user.Token)
+	req.Header.Set("Content-Type", "application/json")
+
+	resp, err := app.Test(req, -1)
+	if err != nil {
+		t.Fatalf("request: %v", err)
+	}
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("status=%d want 200", resp.StatusCode)
+	}
+	_, _ = io.ReadAll(resp.Body)
+
+	// 等异步 callback 完成 pending reconcile 写入
+	deadline := time.Now().Add(2 * time.Second)
+	for time.Now().Before(deadline) {
+		var n int64
+		db.Model(&database.BillingEntry{}).Where("entry_type = ?", database.BillingTypeApiUsagePendingReconcile).Count(&n)
+		if n > 0 {
+			break
+		}
+		time.Sleep(20 * time.Millisecond)
+	}
+
+	// 验证 quota 未扣（pending reconcile 不扣余额）
+	var fresh database.User
+	if err := db.First(&fresh, user.ID).Error; err != nil {
+		t.Fatalf("load user: %v", err)
+	}
+	if fresh.Quota != user.Quota {
+		t.Fatalf("quota=%d want unchanged %d (pending reconcile must not deduct)", fresh.Quota, user.Quota)
+	}
+	var pending database.BillingEntry
+	if err := db.Where("entry_type = ?", database.BillingTypeApiUsagePendingReconcile).First(&pending).Error; err != nil {
+		t.Fatalf("load pending billing entry: %v", err)
+	}
+	if pending.EstimatedCostUSD <= 0 {
+		t.Fatalf("pending entry must carry estimated cost: %#v", pending)
+	}
+	if !strings.Contains(pending.Description, "completed") && !strings.Contains(pending.Description, "stream") {
+		t.Fatalf("pending description missing stream-end marker: %q", pending.Description)
 	}
 }

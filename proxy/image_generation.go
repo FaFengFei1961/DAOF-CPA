@@ -1,6 +1,7 @@
 package proxy
 
 import (
+	"bufio"
 	"bytes"
 	"context"
 	"encoding/json"
@@ -10,6 +11,7 @@ import (
 	"log"
 	mrand "math/rand/v2"
 	"net/http"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -127,6 +129,7 @@ func ImageGenerationProxyHandler(c *fiber.Ctx) error {
 		return c.Status(400).JSON(fiber.Map{"error": fiber.Map{"message": parseErr.Error(), "type": "invalid_request"}})
 	}
 	body = sanitizedBody
+	isStream := req.Stream != nil && *req.Stream
 
 	if _, ok := database.CanonicalRuntimeImageModel(req.Model); !ok {
 		recordProxyApiLog(user.ID, token, req.Model, 400, clientIP, startTime, path, "unsupported_model", "image model is not enabled for runtime")
@@ -190,7 +193,13 @@ func ImageGenerationProxyHandler(c *fiber.Ctx) error {
 			}})
 		}
 		unlockBalance = lockImageBalance(user.ID)
-		defer unlockBalance()
+		if !isStream {
+			// 非流式：handler 全程持锁，return 时释放。
+			// 流式时不在这里 defer，所有权移交给 handleStreamingImageResponse 在
+			// SetBodyStreamWriter callback 末尾释放——否则锁会在 callback 异步执行前
+			// 就被 handler return 的 defer 释放掉，失去并发保护。
+			defer unlockBalance()
+		}
 		fresh, freshErr := loadFreshUserForImageBalance(user.ID)
 		if freshErr != nil {
 			recordProxyApiLog(user.ID, token, req.Model, 503, clientIP, startTime, path, "user_load_failed", freshErr.Error())
@@ -233,12 +242,20 @@ func ImageGenerationProxyHandler(c *fiber.Ctx) error {
 		}
 	}
 
-	upstream, upstreamErr := callImageUpstream(c, req.Model, body, routes, channelMapRef)
+	upstream, upstreamErr := callImageUpstream(c, req.Model, body, routes, channelMapRef, isStream)
 	if upstreamErr != nil {
+		if isStream && unlockBalance != nil {
+			unlockBalance()
+		}
 		recordProxyApiLog(user.ID, token, req.Model, upstreamErr.status, clientIP, startTime, path, upstreamErr.errorType, upstreamErr.message)
 		c.Set("Content-Type", "application/json")
 		return c.Status(upstreamErr.status).Send(upstreamErr.body)
 	}
+
+	if isStream {
+		return handleStreamingImageResponse(c, user, token, subToken, isSubToken, req, body, upstream, prePrice, fallbackUserOptIn, clientIP, path, startTime, unlockBalance)
+	}
+
 	defer upstream.resp.Body.Close()
 	if upstream.cancel != nil {
 		defer upstream.cancel()
@@ -431,11 +448,20 @@ func parseImageGenerationRequest(body []byte) (imageGenerationRequest, []byte, e
 		return imageGenerationRequest{}, nil, err
 	}
 	req.ResponseFormat = responseFormat
-	if req.Stream != nil && *req.Stream {
-		return imageGenerationRequest{}, nil, fmt.Errorf("streaming image generation is not supported")
+	isStream := req.Stream != nil && *req.Stream
+	isPartialReq := req.PartialImages != nil && *req.PartialImages != 0
+	if isStream && !database.IsRuntimeTokenBilledImageModel(req.Model) {
+		// xAI grok-imagine 不暴露稳定的流式 SSE 协议，仅 gpt-image-2 走 OpenAI 兼容的
+		// image_generation.partial_image / image_generation.completed 流式事件序列。
+		return imageGenerationRequest{}, nil, fmt.Errorf("streaming is only supported for gpt-image-2")
 	}
-	if req.PartialImages != nil && *req.PartialImages != 0 {
-		return imageGenerationRequest{}, nil, fmt.Errorf("partial image streaming is not supported")
+	if isPartialReq {
+		if !isStream {
+			return imageGenerationRequest{}, nil, fmt.Errorf("partial_images requires stream=true")
+		}
+		if *req.PartialImages < 1 || *req.PartialImages > 3 {
+			return imageGenerationRequest{}, nil, fmt.Errorf("partial_images must be 1, 2, or 3")
+		}
 	}
 
 	payload := map[string]any{
@@ -504,6 +530,12 @@ func parseImageGenerationRequest(body []byte) (imageGenerationRequest, []byte, e
 				return imageGenerationRequest{}, nil, fmt.Errorf("output_compression must be between 0 and 100")
 			}
 			payload["output_compression"] = *req.OutputCompression
+		}
+		if isStream {
+			payload["stream"] = true
+			if isPartialReq {
+				payload["partial_images"] = *req.PartialImages
+			}
 		}
 	} else {
 		if req.Quality != "" || req.OutputFormat != "" || req.Background != "" || req.Moderation != "" || req.OutputCompression != nil {
@@ -957,22 +989,34 @@ func costTicksFromImageResponse(body []byte) int64 {
 
 func countGeneratedImages(body []byte) int {
 	data := gjson.GetBytes(body, "data")
-	if !data.IsArray() {
-		return 0
+	if data.IsArray() {
+		count := 0
+		data.ForEach(func(_, _ gjson.Result) bool {
+			count++
+			return true
+		})
+		return count
 	}
-	count := 0
-	data.ForEach(func(_, _ gjson.Result) bool {
-		count++
-		return true
-	})
-	return count
+	// SSE completed event 不带 `data` 数组：gpt-image-2 流式响应直接在根上挂
+	// b64_json / image_url，按单图处理（与 OpenAI 官方 image_generation.completed
+	// 事件结构对齐）。
+	if gjson.GetBytes(body, "b64_json").Exists() ||
+		gjson.GetBytes(body, "image_url").Exists() ||
+		gjson.GetBytes(body, "url").Exists() {
+		return 1
+	}
+	return 0
 }
 
 func lockImageBalance(userID uint) func() {
 	v, _ := imageBalanceLocks.LoadOrStore(userID, &sync.Mutex{})
 	mu := v.(*sync.Mutex)
 	mu.Lock()
-	return mu.Unlock
+	// fix P1-stream: 返回的 unlock 必须幂等——非流式路径用 defer 释放，流式路径
+	// 把所有权移交给 SetBodyStreamWriter callback 在最末释放；两路都可能调用，
+	// 用 sync.Once 包装保证 mu.Unlock 不会被调用第二次（panic）。
+	var once sync.Once
+	return func() { once.Do(mu.Unlock) }
 }
 
 func loadFreshUserForImageBalance(userID uint) (*database.User, error) {
@@ -984,7 +1028,7 @@ func loadFreshUserForImageBalance(userID uint) (*database.User, error) {
 	return &user, nil
 }
 
-func callImageUpstream(c *fiber.Ctx, modelName string, body []byte, routes []*database.ChannelModel, channelMapRef map[uint]*database.Channel) (*selectedImageUpstream, *upstreamImageError) {
+func callImageUpstream(c *fiber.Ctx, modelName string, body []byte, routes []*database.ChannelModel, channelMapRef map[uint]*database.Channel, isStream bool) (*selectedImageUpstream, *upstreamImageError) {
 	failedChannels := make(map[uint]bool)
 	maxRetries := len(routes)
 	if maxRetries > 5 {
@@ -1029,7 +1073,11 @@ func callImageUpstream(c *fiber.Ctx, modelName string, body []byte, routes []*da
 			continue
 		}
 		httpReq.Header.Set("Content-Type", "application/json")
-		httpReq.Header.Set("Accept", "application/json")
+		if isStream {
+			httpReq.Header.Set("Accept", "text/event-stream")
+		} else {
+			httpReq.Header.Set("Accept", "application/json")
+		}
 		httpReq.Header.Set("Authorization", "Bearer "+ch.Key)
 		if ch.Headers != "" {
 			var customHeaders map[string]string
@@ -1492,4 +1540,304 @@ func firstNonEmptyLocal(values ...string) string {
 		}
 	}
 	return ""
+}
+
+// handleStreamingImageResponse 处理 gpt-image-2 的 SSE 流式响应。
+//
+// 流程：
+//  1. 上游 4xx/5xx：复用非流式错误格式（不返回 SSE）+ 立即释放余额锁
+//  2. 上游 2xx：设 SSE 响应头，进入 SetBodyStreamWriter callback
+//  3. callback 内边读 scanner 边透传给客户端，监听 image_generation.completed /
+//     image_edit.completed 事件累积 usage data
+//  4. callback 末尾按情况计费：
+//     a. 客户端断连 / 流意外早结束 / completed 缺 usage → pending reconcile（按 precheck estimate）
+//     b. 正常 completed + 有 usage → 走非流式同款计费链路（commit / 套餐 / 余额 / referral）
+//  5. callback 内最末释放余额锁
+//
+// 注意：fasthttp SetBodyStreamWriter 是注册 callback，handler return 后才异步执行。
+// 余额锁的所有权必须移交给 callback，主 handler 不得 defer 提前释放。
+func handleStreamingImageResponse(
+	c *fiber.Ctx,
+	user *database.User,
+	token string,
+	subToken *database.AccessToken,
+	isSubToken bool,
+	req imageGenerationRequest,
+	body []byte,
+	upstream *selectedImageUpstream,
+	prePrice imagePriceResolution,
+	fallbackUserOptIn bool,
+	clientIP, path string,
+	startTime time.Time,
+	unlockBalance func(),
+) error {
+	statusCode := upstream.resp.StatusCode
+	if statusCode < 200 || statusCode >= 300 {
+		// 非 2xx 通常不是 SSE，按非流式错误回退处理
+		defer upstream.resp.Body.Close()
+		if upstream.cancel != nil {
+			defer upstream.cancel()
+		}
+		if unlockBalance != nil {
+			unlockBalance()
+		}
+		bodyBytes, _ := io.ReadAll(upstream.resp.Body)
+		log.Printf("[IMAGE-STREAM-UPSTREAM-ERR] channel=%d status=%d body=%s", upstream.route.ChannelID, statusCode, sanitizeError(truncForLog(bodyBytes, 1024), 1024))
+		recordProxyApiLog(user.ID, token, req.Model, statusCode, clientIP, startTime, path, "upstream_error", string(bodyBytes))
+		c.Set("Content-Type", "application/json")
+		return c.Status(statusCode).JSON(fiber.Map{"error": fiber.Map{
+			"message": fmt.Sprintf("upstream returned %d", statusCode),
+			"type":    "upstream_error",
+		}})
+	}
+
+	copyImageResponseHeaders(c, upstream.resp.Header)
+	c.Set("Content-Type", "text/event-stream")
+	c.Set("Cache-Control", "no-cache")
+	c.Set("Connection", "keep-alive")
+	c.Set("X-Accel-Buffering", "no")
+	setModelAuditHeaders(c, req.Model, req.Model, fallbackUserOptIn, "")
+	c.Status(statusCode)
+
+	selectedChannelType := ""
+	if upstream.channel != nil {
+		selectedChannelType = upstream.channel.Type
+	}
+
+	c.Context().SetBodyStreamWriter(func(w *bufio.Writer) {
+		defer func() {
+			if r := recover(); r != nil {
+				log.Printf("[IMAGE-STREAM-PANIC] user=%d model=%s recovered: %v", user.ID, req.Model, r)
+			}
+			_ = upstream.resp.Body.Close()
+			if upstream.cancel != nil {
+				upstream.cancel()
+			}
+			if unlockBalance != nil {
+				unlockBalance()
+			}
+		}()
+
+		scanner := bufio.NewScanner(upstream.resp.Body)
+		// 图像 b64 chunk（特别是 partial_image）可能很大，默认 16MB，可由 SysConfig 调整
+		bufLimit := 16 * 1024 * 1024
+		SysConfigMutex.RLock()
+		if v := SysConfigCache["image_stream_scanner_buffer_bytes"]; v != "" {
+			if n, err := strconv.Atoi(v); err == nil && n >= 256*1024 {
+				bufLimit = n
+			}
+		}
+		SysConfigMutex.RUnlock()
+		scanner.Buffer(make([]byte, 64*1024), bufLimit)
+
+		flushOrBail := func() bool {
+			if err := w.Flush(); err != nil {
+				log.Printf("[IMAGE-STREAM-CLIENT-DISCONNECT] user=%d model=%s err=%v", user.ID, req.Model, err)
+				return false
+			}
+			return true
+		}
+
+		var (
+			currentEvent       string
+			completedDataJSON  []byte
+			sawCompleted       bool
+			clientDisconnected bool
+		)
+
+		for scanner.Scan() {
+			line := scanner.Bytes()
+
+			// 透传上游字节给客户端（保留 SSE 帧结构）
+			if len(line) > 0 {
+				w.Write(line)
+			}
+			w.Write([]byte("\n"))
+			if !flushOrBail() {
+				clientDisconnected = true
+				break
+			}
+
+			// 解析 SSE 行（仅 inspect，不破坏透传）
+			trimmed := bytes.TrimRight(line, "\r")
+			if len(trimmed) == 0 {
+				currentEvent = ""
+				continue
+			}
+			if bytes.HasPrefix(trimmed, []byte("event: ")) {
+				currentEvent = string(bytes.TrimPrefix(trimmed, []byte("event: ")))
+				continue
+			}
+			if bytes.HasPrefix(trimmed, []byte("data: ")) {
+				if currentEvent == "image_generation.completed" || currentEvent == "image_edit.completed" {
+					dataBytes := bytes.TrimPrefix(trimmed, []byte("data: "))
+					if len(dataBytes) > 0 && dataBytes[0] == '{' {
+						completedDataJSON = append([]byte(nil), dataBytes...)
+						sawCompleted = true
+					}
+				}
+			}
+		}
+		if err := scanner.Err(); err != nil {
+			log.Printf("[IMAGE-STREAM-SCANNER-ERR] user=%d model=%s err=%v (consider raising image_stream_scanner_buffer_bytes)", user.ID, req.Model, err)
+		}
+
+		performStreamingImageBilling(streamingImageBillingInput{
+			User:                user,
+			Token:               token,
+			SubToken:            subToken,
+			IsSubToken:          isSubToken,
+			Req:                 req,
+			Body:                body,
+			Upstream:            upstream,
+			PrePrice:            prePrice,
+			FallbackUserOptIn:   fallbackUserOptIn,
+			ClientIP:            clientIP,
+			Path:                path,
+			StartTime:           startTime,
+			SelectedChannelType: selectedChannelType,
+			CompletedData:       completedDataJSON,
+			SawCompleted:        sawCompleted,
+			ClientDisconnected:  clientDisconnected,
+			StatusCode:          statusCode,
+		})
+	})
+
+	return nil
+}
+
+type streamingImageBillingInput struct {
+	User                *database.User
+	Token               string
+	SubToken            *database.AccessToken
+	IsSubToken          bool
+	Req                 imageGenerationRequest
+	Body                []byte
+	Upstream            *selectedImageUpstream
+	PrePrice            imagePriceResolution
+	FallbackUserOptIn   bool
+	ClientIP            string
+	Path                string
+	StartTime           time.Time
+	SelectedChannelType string
+	CompletedData       []byte
+	SawCompleted        bool
+	ClientDisconnected  bool
+	StatusCode          int
+}
+
+// performStreamingImageBilling 在 SetBodyStreamWriter callback 内执行，复用非流式同款
+// 计费决策链路（commit / 套餐 / 余额 / referral）。
+//
+// 三种入口：
+//  1. 客户端断连 → pending reconcile（按 precheck estimate）
+//  2. 流结束但没见 completed event → pending reconcile（按 precheck estimate）
+//  3. 完整收到 completed event + 有 usage → resolveImageActualPrice 真实计费
+func performStreamingImageBilling(in streamingImageBillingInput) {
+	needsPending := false
+	reconcileReason := ""
+
+	if in.ClientDisconnected {
+		needsPending = true
+		reconcileReason = "client disconnected before stream completed"
+	} else if !in.SawCompleted {
+		needsPending = true
+		reconcileReason = "stream ended without completed event"
+	}
+
+	var (
+		actualPrice imagePriceResolution
+		priceErr    error
+	)
+	if !needsPending {
+		actualPrice, priceErr = resolveImageActualPrice(in.Req, in.CompletedData, in.Upstream.route)
+		if priceErr != nil {
+			if errors.Is(priceErr, errImageTokenUsageUnavailable) {
+				needsPending = true
+				reconcileReason = "completed event omitted billable usage"
+			} else {
+				log.Printf("[IMAGE-STREAM-BILLING-CRITICAL] user=%d model=%s stream completed price resolve failed: %v", in.User.ID, in.Req.Model, priceErr)
+				// 计费失败但已交付：仍记 pending reconcile，避免免费消耗
+				needsPending = true
+				reconcileReason = fmt.Sprintf("price resolve failed: %v", priceErr)
+			}
+		}
+	}
+
+	if needsPending {
+		pendingPrice := imagePriceResolution{
+			BillingMode:    database.BillingModeToken,
+			Quantity:       1,
+			AmountMicroUSD: in.PrePrice.AmountMicroUSD,
+			ResponseImages: 1,
+			CostSource:     "pending_reconcile",
+		}
+		billingResolution := ResolveBillingRules(in.Req.Model, in.Body, 0, in.SelectedChannelType, in.FallbackUserOptIn).WithCosts(pendingPrice.AmountMicroUSD)
+		apiLogID := recordImagePendingReconcile(in.User, in.Token, in.Req, pendingPrice, billingResolution, in.SelectedChannelType, in.StatusCode, in.ClientIP, in.Path, in.StartTime, reconcileReason)
+		if apiLogID == 0 {
+			log.Printf("[IMAGE-STREAM-BILLING-CRITICAL] user=%d model=%s streamed but pending reconcile write failed", in.User.ID, in.Req.Model)
+		}
+		return
+	}
+
+	billingResolution := ResolveBillingRules(in.Req.Model, in.Body, 0, in.SelectedChannelType, in.FallbackUserOptIn).WithCosts(actualPrice.AmountMicroUSD)
+	chargedCostMicroUSD := billingResolution.ChargedCostMicroUSD
+
+	commitDecision := Decide(EngineRequest{
+		UserID:       in.User.ID,
+		ModelName:    in.Req.Model,
+		InputTokens:  imageDecisionInputUnits(actualPrice),
+		OutputTokens: imageDecisionOutputUnits(actualPrice),
+		CostMicroUSD: chargedCostMicroUSD,
+		IsPrecheck:   false,
+	})
+	if commitDecision.NeedsRetry {
+		recordImagePendingReconcile(in.User, in.Token, in.Req, actualPrice, billingResolution, in.SelectedChannelType, in.StatusCode, in.ClientIP, in.Path, in.StartTime, "subscription commit failed")
+		return
+	}
+	commitOK := commitDecision.Allowed && !commitDecision.FallbackToBalance
+	if !commitOK && !in.User.BalanceConsumeEnabled {
+		recordImagePendingReconcile(in.User, in.Token, in.Req, actualPrice, billingResolution, in.SelectedChannelType, in.StatusCode, in.ClientIP, in.Path, in.StartTime, "subscription commit fell back to disabled balance")
+		return
+	}
+
+	var (
+		apiLogID                 uint
+		effectiveRevenueMicroUSD int64
+		referralReward           database.ReferralPaidSpendRewardResult
+	)
+	if commitOK {
+		apiLogID = createImageApiLog(in.User.ID, in.Token, in.Req, actualPrice, billingResolution, in.SelectedChannelType, in.StatusCode, in.ClientIP, in.Path, in.StartTime)
+		subID := commitDecision.SubscriptionID
+		if billErr := database.WriteBillingEntryNonFatal(database.BillingEntryInput{
+			UserID:               in.User.ID,
+			EntryType:            database.BillingTypeApiUsageSub,
+			AmountUSD:            0,
+			BalanceAfterUSD:      in.User.Quota,
+			ModelName:            in.Req.Model,
+			TokensTotal:          imageTokenTotal(actualPrice),
+			SourceSubscriptionID: &subID,
+			RelatedType:          relatedTypeForApiLog(apiLogID),
+			RelatedID:            apiLogID,
+			Description:          fmt.Sprintf("套餐 · %s · %s · %s · stream", in.Req.Model, imageUsageDescription(actualPrice), FormatChargedCostForDescription(actualPrice.AmountMicroUSD, chargedCostMicroUSD)),
+		}); billErr != nil {
+			log.Printf("[IMAGE-STREAM-BILLING-AUDIT-FAIL] user=%d sub=%d model=%s: %v", in.User.ID, subID, in.Req.Model, billErr)
+		}
+		effectiveRevenueMicroUSD = subscriptionRevenueMicroUSD(chargedCostMicroUSD, commitDecision.SubscriptionIsGranted)
+		if apiLogID != 0 {
+			RecordApiLogRevenue(apiLogID, database.RevenueSourceSubscription, effectiveRevenueMicroUSD, subID)
+		}
+	} else {
+		apiLogID, effectiveRevenueMicroUSD, referralReward = deductImageBalanceAndLog(in.User, in.Token, in.Req, actualPrice, billingResolution, in.SelectedChannelType, in.StatusCode, in.ClientIP, in.Path, in.StartTime)
+	}
+
+	if in.IsSubToken && effectiveRevenueMicroUSD > 0 {
+		incrementSubTokenUsedQuota(in.Token, in.SubToken, effectiveRevenueMicroUSD)
+	}
+	if referralReward.ReferrerID != 0 && referralReward.RewardMicroUSD > 0 {
+		RefreshUserAuth(referralReward.ReferrerID)
+	}
+	if apiLogID == 0 {
+		log.Printf("[IMAGE-STREAM-BILLING-CRITICAL] user=%d model=%s streamed but api_log missing", in.User.ID, in.Req.Model)
+	}
 }
