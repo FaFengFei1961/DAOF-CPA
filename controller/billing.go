@@ -387,6 +387,10 @@ func billingSummary(c *fiber.Ctx, userID uint, currentBalanceMicroUSD int64) err
 		return c.Status(400).JSON(fiber.Map{"success": false, "message": err.Error(), "message_code": "ERR_INVALID_FILTER"})
 	}
 	q := applyBillingFilters(database.DB.Model(&database.BillingEntry{}), f)
+	// fix D4 (2026-05-19)：pending_reconcile / upstream_unmetered 行的 amount_usd=0
+	// 不影响金额汇总，但 count 列把它们计入消费笔数 → 前端"月度消费 N 次"虚高。
+	// 默认只统计 settled 行；admin 看待对账队列走单独 endpoint。
+	q = q.Where("billing_state = ?", database.BillingStateSettled)
 
 	var rows []BillingSummaryRow
 	if err := q.

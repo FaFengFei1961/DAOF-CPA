@@ -126,10 +126,24 @@ func extractUsageTokenCounts(usage gjson.Result) usageTokenCounts {
 	// OpenAI prompt/input token totals already include cached tokens when details are present.
 	// Anthropic Messages reports cache read/write tokens as separate top-level counters, so
 	// add them into the total prompt side for billing and observability.
+	//
+	// fix R1 (2026-05-19)：原实现用 Exists() 判断 prompt_tokens_details / input_tokens_details
+	// 对象，若上游返回空 object（"prompt_tokens_details": {}）会被认为 promptIncludesCache=true
+	// → cached/write tokens 不被加进 promptTokens → 下游 clamp 把 cachedTokens 截零，缓存
+	// 命中按标准价算（偏低收费）。改为只要 details 对象**实际含**任何 token 子字段才认为
+	// "prompt 已含 cache"，空 object 与 nil 等价。
+	detailsContainsCacheTokens := func(detailsKey string) bool {
+		d := usage.Get(detailsKey)
+		if !d.Exists() || !d.IsObject() {
+			return false
+		}
+		return d.Get("cached_tokens").Exists() || d.Get("cache_read_tokens").Exists() ||
+			d.Get("cache_creation_tokens").Exists() || d.Get("cache_write_tokens").Exists()
+	}
 	promptIncludesCache := hasPromptTokens ||
 		hasGeminiPromptTokens ||
-		usage.Get("prompt_tokens_details").Exists() ||
-		usage.Get("input_tokens_details").Exists() ||
+		detailsContainsCacheTokens("prompt_tokens_details") ||
+		detailsContainsCacheTokens("input_tokens_details") ||
 		usage.Get("promptTokenCount").Exists() ||
 		usage.Get("prompt_token_count").Exists()
 	if out.HasPromptTokens && !promptIncludesCache {

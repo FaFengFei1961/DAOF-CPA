@@ -87,9 +87,9 @@ func recordGeminiPendingReconcile(user *database.User, token, modelName string, 
 		RelatedID:        apiLogID,
 		Description:      fmt.Sprintf("[GEMINI-PENDING] %s · %s · %s 待对账（%s）", modelName, geminiReq.Method, FormatChargedCostForDescription(price.AmountMicroUSD, billing.ChargedCostMicroUSD), reason),
 	}
-	if err := database.WriteBillingEntryNonFatal(entry); err != nil {
-		log.Printf("[GEMINI-BILLING-LOST-DEBT] user=%d model=%s amount_micro=%d: %v", user.ID, modelName, price.AmountMicroUSD, err)
-	}
+	// fix R8 (2026-05-19)：原仅 1 次尝试 + LOST-DEBT，其他 3 路（text/image/video）都已
+	// 用 writeBillingWithRetry 做 3 次重试 + LOST-DEBT。统一到同样的可靠性级别。
+	writeBillingWithRetry(entry, price.AmountMicroUSD, billing.ChargedCostMicroUSD, apiLogID, user.ID, modelName)
 	return apiLogID
 }
 

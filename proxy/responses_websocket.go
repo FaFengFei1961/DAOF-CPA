@@ -529,11 +529,18 @@ func pumpUpstreamToClient(ctx context.Context, client *fiberws.Conn, upstream *g
 		// 嗅探 response.completed
 		eventType := gjson.GetBytes(payload, "type").String()
 		if eventType == wsCompletedEventType {
+			// fix M1 (2026-05-19)：upstream 的 response.model 是计费唯一可信源。
+			// 之前 fallback 到 state.lastModel（来自客户端 response.create 帧），允许
+			// 恶意客户端用 "model:gpt-4o" 触发但 upstream 跑 "claude-opus-4-5"，按 gpt-4o
+			// 廉价档计费。现保留 fallback 但每次走 fallback 都 log 警告便于运维监控。
 			model := strings.TrimSpace(gjson.GetBytes(payload, "response.model").String())
 			if model == "" {
 				state.mu.Lock()
 				model = state.lastModel
 				state.mu.Unlock()
+				if model != "" {
+					log.Printf("[WS-MODEL-FALLBACK] user=%d using client-supplied model=%q (upstream omitted response.model) — verify CPA is forwarding model field", state.user.ID, model)
+				}
 			}
 			usageBlock := gjson.GetBytes(payload, "response.usage")
 			if !usageBlock.Exists() {

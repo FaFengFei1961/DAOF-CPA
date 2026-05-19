@@ -144,6 +144,13 @@ func AdminReconcileBillingEntry(c *fiber.Ctx) error {
 			if fresh.EstimatedCostUSD <= 0 {
 				return fmt.Errorf("entry %d has no estimated_cost to charge", fresh.ID)
 			}
+			// fix M4 (2026-05-19)：上限校验防止 future bug 写出膨胀 EstimatedCostUSD 时
+			// admin 一键 charged 扣巨额。$100 上限对正常 LLM 请求绰绰有余，超过该值需先
+			// 人工分账（admin 可拆分多笔 pending entry 或改 absorbed）。
+			const maxSingleReconcileMicroUSD int64 = 100 * 1_000_000 // $100
+			if fresh.EstimatedCostUSD > maxSingleReconcileMicroUSD {
+				return fmt.Errorf("entry %d estimated_cost=%d micro_usd exceeds single-reconcile cap %d ($100); split or use absorbed", fresh.ID, fresh.EstimatedCostUSD, maxSingleReconcileMicroUSD)
+			}
 			// 原子 CAS：扣余额必须 quota >= cost（防打负）
 			res := tx.Model(&database.User{}).
 				Where("id = ? AND quota >= ?", fresh.UserID, fresh.EstimatedCostUSD).

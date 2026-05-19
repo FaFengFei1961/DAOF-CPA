@@ -251,12 +251,21 @@ func RecordManualBillingState(ctx CommitTextContext, in ManualBillingStateInput)
 		relatedType = "api_log"
 	}
 	requestID := UpstreamRequestID(ctx.UpstreamHeaders, relatedID, ctx.User.ID, ctx.StartTime)
+	// fix M2 (2026-05-19)：ctx.User.Quota 是请求入口时的 snapshot，到此处可能因并发
+	// 扣费已过期。重读一次让 BalanceAfterUSD 准确，方便对账员决策（扣 vs 退）。
+	currentBalance := ctx.User.Quota
+	var fresh database.User
+	if err := database.DB.Select("id, quota").First(&fresh, ctx.User.ID).Error; err == nil {
+		currentBalance = fresh.Quota
+	} else {
+		log.Printf("[BILLING-MANUAL-REFRESH-FAIL] user=%d: %v (keep stale snapshot)", ctx.User.ID, err)
+	}
 	entry := database.BillingEntryInput{
 		UserID:               ctx.User.ID,
 		EntryType:            database.BillingTypeApiUsagePendingReconcile,
 		BillingState:         in.BillingState,
 		AmountUSD:            0,
-		BalanceAfterUSD:      ctx.User.Quota,
+		BalanceAfterUSD:      currentBalance,
 		ModelName:            ctx.ModelName,
 		TokensTotal:          in.PromptTokens + in.CompletionTokens,
 		RequestID:            requestID,
@@ -376,9 +385,15 @@ func CommitTextTurn(ctx CommitTextContext, usage TextUsage, status int, delivere
 	}
 	cacheWriteInputPricePico := ctx.SelectedPath.CacheWriteInputPricePicoPerToken
 	if cacheWriteInputPricePico <= 0 {
-		cacheWriteInputPricePico = inputPricePico
-		if strings.Contains(strings.ToLower(ctx.ModelName), "claude") {
+		// fix R3 (2026-05-19)：原来只识别 "claude" 字串，claude 别名 alias 漏掉 1.25 倍。
+		// 改为：只要请求里出现 cache_write tokens（说明上游实际收了写费），就按 Anthropic
+		// 官方公式 1.25 × inputPrice 计算；其他模型（如 OpenAI/Gemini）若返回 cache_write
+		// 也按 1.25× — 这是 Anthropic 公开口径，与 GPT/Gemini 大模型 prompt-caching API
+		// 兼容 (OpenAI 5min cache write 也是 base × 1.25 倍率)。
+		if cacheWriteTokens > 0 {
 			cacheWriteInputPricePico = (inputPricePico * 125) / 100
+		} else {
+			cacheWriteInputPricePico = inputPricePico
 		}
 	}
 	cacheWrite1hInputPricePico := ctx.SelectedPath.CacheWrite1hInputPricePicoPerToken
@@ -573,7 +588,10 @@ func CommitTextTurn(ctx CommitTextContext, usage TextUsage, status int, delivere
 			relatedID = apiLog.ID
 			relatedType = "api_log"
 		}
-		if billErr := database.WriteBillingEntryNonFatal(database.BillingEntryInput{
+		// fix R6 (2026-05-19)：订阅审计 BillingEntry 改用 writeBillingWithRetry（3 次重试
+		// + LOST-DEBT 日志），与 pending_reconcile 路径同样的可靠性。原 NonFatal 单次
+		// 尝试失败 → 仅一行 log，admin 无法对账（quota 已扣但 BillingEntry 缺失）。
+		writeBillingWithRetry(database.BillingEntryInput{
 			UserID:               ctx.User.ID,
 			EntryType:            database.BillingTypeApiUsageSub,
 			AmountUSD:            0,
@@ -584,9 +602,7 @@ func CommitTextTurn(ctx CommitTextContext, usage TextUsage, status int, delivere
 			RelatedType:          relatedType,
 			RelatedID:            relatedID,
 			Description:          fmt.Sprintf("套餐 · %s · %d tokens · %s", ctx.ModelName, tokensTotal, FormatChargedCostForDescription(costMicroUSD, chargedCostMicroUSD)),
-		}); billErr != nil {
-			log.Printf("[BILLING-AUDIT-FAIL] user=%d sub=%d type=%s: %v", ctx.User.ID, subID, database.BillingTypeApiUsageSub, billErr)
-		}
+		}, costMicroUSD, chargedCostMicroUSD, relatedID, ctx.User.ID, ctx.ModelName)
 		effectiveRevenueMicroUSD = subscriptionRevenueMicroUSD(chargedCostMicroUSD, commitDecision.SubscriptionIsGranted)
 		if apiLogPersisted {
 			RecordApiLogRevenue(apiLog.ID, database.RevenueSourceSubscription, effectiveRevenueMicroUSD, subID)
