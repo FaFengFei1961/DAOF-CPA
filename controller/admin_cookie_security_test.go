@@ -63,7 +63,7 @@ func TestGodSetup_BlockedWhenAdminExists(t *testing.T) {
 		Role:         "admin",
 		Token:        "sk-configured-admin",
 		Status:       1,
-		PasswordHash: utils.GenerateHash("old-password"),
+		PasswordHash: utils.GenerateHashForTest("old-password"),
 	}
 	if err := database.DB.Create(&admin).Error; err != nil {
 		t.Fatalf("create admin: %v", err)
@@ -147,7 +147,7 @@ func TestGodLogin_TruncatesUsernameLog(t *testing.T) {
 		Role:         "admin",
 		Token:        "sk-long-admin",
 		Status:       1,
-		PasswordHash: utils.GenerateHash("correct-password"),
+		PasswordHash: utils.GenerateHashForTest("correct-password"),
 	}
 	if err := database.DB.Create(&admin).Error; err != nil {
 		t.Fatalf("create admin: %v", err)

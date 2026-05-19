@@ -54,7 +54,7 @@ func initializeMegaTestDB() *fiber.App {
 
 	// Seeds
 	// admin 用 root + 默认密码 hash，匹配 GodSetup 的 initial-setup 路径
-	database.DB.Create(&database.User{ID: 1, Username: "root", Role: "admin", Token: "admin-token-777", Quota: 100 * database.MicroPerUSD, PasswordHash: utils.GenerateHash("123456")})
+	database.DB.Create(&database.User{ID: 1, Username: "root", Role: "admin", Token: "admin-token-777", Quota: 100 * database.MicroPerUSD, PasswordHash: utils.GenerateHashForTest("123456")})
 	database.DB.Create(&database.User{ID: 2, Username: "testUser1", Role: "user", Token: "sk-user-111", Quota: 50 * database.MicroPerUSD})
 
 	// API Log Seed for Stats — 0.05 USD = 50_000 micro_usd
