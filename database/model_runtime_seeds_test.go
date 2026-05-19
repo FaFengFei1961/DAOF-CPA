@@ -294,6 +294,38 @@ func TestSeedModelRuntimeDefaults_TotalCount(t *testing.T) {
 			t.Fatalf("alias model %q official_status=%q want alias_or_unofficial", id, cat.OfficialStatus)
 		}
 	}
+
+	// 2026-05-19 业务决策：当前业务全部聚焦 text，全部 image/video catalog 必须
+	// Supported=false（admin UI 不展示为"已支持"，handler 代码仍保留以便后续切回）。
+	var mediaCatalogs []ModelCatalog
+	if err := DB.Where("category IN ?", []string{ModelCategoryImage, ModelCategoryVideo}).Find(&mediaCatalogs).Error; err != nil {
+		t.Fatalf("load image/video catalogs: %v", err)
+	}
+	for _, c := range mediaCatalogs {
+		if c.Supported {
+			t.Fatalf("image/video catalog %q must be Supported=false (当前业务聚焦 text): %+v", c.ModelID, c)
+		}
+		if c.DefaultEnabled {
+			t.Fatalf("image/video catalog %q must be DefaultEnabled=false: %+v", c.ModelID, c)
+		}
+	}
+
+	// 锁定最终启用/停用分布：27 启用 + 16 停用（catalog Supported=true count = enabled）。
+	// 任何一次 seed 调整都应让这条断言保持，否则就要解释为什么变。
+	var enabledChannelCount int64
+	if err := DB.Model(&ChannelModel{}).Where("status = ?", 1).Count(&enabledChannelCount).Error; err != nil {
+		t.Fatalf("count enabled channel_models: %v", err)
+	}
+	if enabledChannelCount != 27 {
+		t.Fatalf("enabled channel_models=%d want 27 (text+price 全启用，image/video+无价 alias 全停用)", enabledChannelCount)
+	}
+	var disabledChannelCount int64
+	if err := DB.Model(&ChannelModel{}).Where("status = ?", 2).Count(&disabledChannelCount).Error; err != nil {
+		t.Fatalf("count disabled channel_models: %v", err)
+	}
+	if disabledChannelCount != 16 {
+		t.Fatalf("disabled channel_models=%d want 16", disabledChannelCount)
+	}
 }
 
 func TestValidateChannelModelActivation_EditsRequiresInputPricing(t *testing.T) {
