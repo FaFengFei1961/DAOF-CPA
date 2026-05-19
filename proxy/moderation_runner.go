@@ -565,11 +565,13 @@ func sanitizeErrText(s string, maxLen int) string {
 }
 
 // writeApiLog 写一条 ApiLog 记录拒绝（与 stream.go 现有错误路径同模式）。
+// fix SF-C3 (2026-05-19)：原实现完全忽略 DB.Create 返回值；keyword/policy/oversize
+// 三个拒绝路径都丢错 → jailbreak 攻击的审计 trail 静默消失。改为捕获 + log。
 func (g *ModerationGate) writeApiLog(status int, errorType, errorMessage string) {
 	if database.DB == nil {
 		return
 	}
-	database.DB.Create(&database.ApiLog{
+	if err := database.DB.Create(&database.ApiLog{
 		UserID:       g.UserID,
 		TokenName:    g.TokenHash,
 		ModelName:    g.ModelName,
@@ -581,7 +583,10 @@ func (g *ModerationGate) writeApiLog(status int, errorType, errorMessage string)
 		ErrorType:    sanitizeError(errorType, 64),
 		ErrorMessage: sanitizeError(errorMessage, 512),
 		CreatedAt:    time.Now(),
-	})
+	}).Error; err != nil {
+		log.Printf("[BILLING-AUDIT-FAIL] moderation-reject user=%d status=%d err_type=%s: %v",
+			g.UserID, status, errorType, err)
+	}
 }
 
 // audit 入审计队列（异步，不阻塞）。details 是 JSON 字符串。

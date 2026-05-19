@@ -789,9 +789,13 @@ func commitTextBalanceTurn(ctx CommitTextContext, apiLogID uint, apiLogPersisted
 // 报表"按 usage line"vs"按 api_log.cost"系统性差额。现统一改 ceil-div。
 func writeTextUsageLines(apiLogID uint, modelName, requestPath string, promptTokens, completionTokens int, inputPricePico, outputPricePico int64) {
 	now := time.Now()
+	// fix SF-C1 (2026-05-19)：原 `_ = DB.Create().Error` 静默丢弃错误。usage lines
+	// 不影响真实扣费（金额已在 ApiLog.cost 落地），但 admin token-level 报表是
+	// 按 ApiLogUsageLine 聚合的，写失败会让 admin 看到 0 且无任何告警。改为
+	// 记 `[BILLING-USAGE-LINE-LOST]` 日志，便于后期对账。
 	if promptTokens > 0 {
 		amountMicro := ceilDivPicoToMicro(int64(promptTokens), inputPricePico)
-		_ = database.DB.Create(&database.ApiLogUsageLine{
+		if err := database.DB.Create(&database.ApiLogUsageLine{
 			ApiLogID:       apiLogID,
 			ModelName:      modelName,
 			RequestPath:    sanitizeError(requestPath, 160),
@@ -802,11 +806,14 @@ func writeTextUsageLines(apiLogID uint, modelName, requestPath string, promptTok
 			AmountMicroUSD: amountMicro,
 			CostSource:     "upstream_usage",
 			CreatedAt:      now,
-		}).Error
+		}).Error; err != nil {
+			log.Printf("[BILLING-USAGE-LINE-LOST] api_log_id=%d direction=input tokens=%d amount_micro=%d: %v",
+				apiLogID, promptTokens, amountMicro, err)
+		}
 	}
 	if completionTokens > 0 {
 		amountMicro := ceilDivPicoToMicro(int64(completionTokens), outputPricePico)
-		_ = database.DB.Create(&database.ApiLogUsageLine{
+		if err := database.DB.Create(&database.ApiLogUsageLine{
 			ApiLogID:       apiLogID,
 			ModelName:      modelName,
 			RequestPath:    sanitizeError(requestPath, 160),
@@ -817,7 +824,10 @@ func writeTextUsageLines(apiLogID uint, modelName, requestPath string, promptTok
 			AmountMicroUSD: amountMicro,
 			CostSource:     "upstream_usage",
 			CreatedAt:      now,
-		}).Error
+		}).Error; err != nil {
+			log.Printf("[BILLING-USAGE-LINE-LOST] api_log_id=%d direction=output tokens=%d amount_micro=%d: %v",
+				apiLogID, completionTokens, amountMicro, err)
+		}
 	}
 }
 

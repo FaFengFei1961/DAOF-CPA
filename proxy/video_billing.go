@@ -90,21 +90,10 @@ func recordVideoPendingReconcile(user *database.User, token string, req videoGen
 		RelatedID:        apiLogID,
 		Description:      fmt.Sprintf("[VIDEO-PENDING] %s · %d 秒视频 · %s 待对账（%s）", req.Model, price.Quantity, FormatChargedCostForDescription(price.AmountMicroUSD, billing.ChargedCostMicroUSD), reason),
 	}
-	var billErr error
-	for attempt := 1; attempt <= 3; attempt++ {
-		billErr = database.WriteBillingEntryNonFatal(entry)
-		if billErr == nil {
-			break
-		}
-		log.Printf("[VIDEO-BILLING-PENDING-RETRY] attempt=%d/3 user=%d model=%s: %v", attempt, user.ID, req.Model, billErr)
-		if attempt < 3 {
-			time.Sleep(100 * time.Millisecond)
-		}
-	}
-	if billErr != nil {
-		log.Printf("[VIDEO-BILLING-LOST-DEBT] user=%d model=%s raw_cost_micro=%d charged_cost_micro=%d api_log_id=%d UNRECOVERABLE - manual reconcile from ApiLog required: %v",
-			user.ID, req.Model, price.AmountMicroUSD, billing.ChargedCostMicroUSD, apiLogID, billErr)
-	}
+	// fix SF-H4 (2026-05-19)：原手写 3-retry 用 WriteBillingEntryNonFatal（单次尝试），
+	// 与 gemini / text / image 三路统一改用 writeBillingWithRetry，
+	// 自动产出 [BILLING-LOST-DEBT] 告警以备对账。
+	writeBillingWithRetry(entry, price.AmountMicroUSD, billing.ChargedCostMicroUSD, apiLogID, user.ID, req.Model)
 	return apiLogID
 }
 

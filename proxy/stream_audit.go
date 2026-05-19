@@ -44,7 +44,10 @@ func recordProxyApiLog(userID uint, token, modelName string, status int, clientI
 		errorType = ""
 		errorMessage = ""
 	}
-	database.DB.Create(&database.ApiLog{
+	// fix SF-C2 (2026-05-19)：原实现完全忽略 DB.Create 返回值；DB 压力下被拒
+	// 绝的请求（auth fail / rate limit / quota exceeded）可能从审计 trail 消失。
+	// 改为捕获 error + log，便于运维知道 audit 损失了哪些请求。
+	if err := database.DB.Create(&database.ApiLog{
 		UserID:           userID,
 		TokenName:        HashTokenForLog(token),
 		ModelName:        modelName,
@@ -60,7 +63,10 @@ func recordProxyApiLog(userID uint, token, modelName string, status int, clientI
 		ErrorType:        sanitizeError(errorType, 64),
 		ErrorMessage:     sanitizeError(errorMessage, 512),
 		CreatedAt:        time.Now(),
-	})
+	}).Error; err != nil {
+		log.Printf("[BILLING-AUDIT-FAIL] reject path user=%d status=%d ip=%s err_type=%s: %v",
+			userID, status, clientIP, errorType, err)
+	}
 }
 
 func shouldRecordInvalidAuthApiLog(clientIP string) bool {
@@ -118,7 +124,7 @@ func recordProxyApiLogWithPrecheck(userID uint, token, modelName string, status 
 		errorMessage = ""
 	}
 	quotaLimit, quotaUsed, quotaRemaining := precheckQuotaMicroValues(decision)
-	database.DB.Create(&database.ApiLog{
+	if err := database.DB.Create(&database.ApiLog{
 		UserID:                 userID,
 		TokenName:              HashTokenForLog(token),
 		ModelName:              modelName,
@@ -147,5 +153,8 @@ func recordProxyApiLogWithPrecheck(userID uint, token, modelName string, status 
 		ErrorType:              sanitizeError(errorType, 64),
 		ErrorMessage:           sanitizeError(errorMessage, 512),
 		CreatedAt:              time.Now(),
-	})
+	}).Error; err != nil {
+		log.Printf("[BILLING-AUDIT-FAIL] precheck-reject user=%d status=%d block_reason=%s: %v",
+			userID, status, decision.BlockReason, err)
+	}
 }
