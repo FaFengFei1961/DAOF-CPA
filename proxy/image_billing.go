@@ -108,6 +108,12 @@ func deductImageBalanceAndLog(user *database.User, token string, req imageGenera
 	var referralReward database.ReferralPaidSpendRewardResult
 	referralRewardBPS, referralRewardWindowSeconds := readReferralPaidSpendRewardConfig()
 	txErr := database.DB.Transaction(func(tx *gorm.DB) error {
+		// fix H2 (2026-05-19)：window tracking 必须在 CAS quota 前调用，与 text path 一致。
+		// 原顺序在 quota 扣减后调用，window-track DB error 时会让 quota 已扣但 window 未增
+		// → 攻击者可触发 transient error 绕过 window limit。
+		if !TryConsumeBalanceTx(tx, user.ID, price.AmountMicroUSD, true) {
+			log.Printf("[IMAGE-BILLING-WINDOW-TRACK-FAIL] user=%d model=%s raw_cost_micro=%d", user.ID, req.Model, price.AmountMicroUSD)
+		}
 		res := tx.Model(&database.User{}).
 			Where("id = ? AND quota >= ?", user.ID, price.AmountMicroUSD).
 			UpdateColumn("quota", gorm.Expr("quota - ?", price.AmountMicroUSD))
@@ -182,9 +188,6 @@ func deductImageBalanceAndLog(user *database.User, token string, req imageGenera
 				RelatedID:        apiLogID,
 				Description:      fmt.Sprintf("[IMAGE-INSUFFICIENT-BALANCE] %s · %s · 余额不足，已交付服务待对账（按 raw 上游成本计 $%s）", req.Model, imageUsageDescription(price), database.FormatMicroUSD(price.AmountMicroUSD)),
 			})
-		}
-		if !TryConsumeBalanceTx(tx, user.ID, price.AmountMicroUSD, true) {
-			log.Printf("[IMAGE-BILLING-WINDOW-TRACK-FAIL] user=%d model=%s raw_cost_micro=%d", user.ID, req.Model, price.AmountMicroUSD)
 		}
 		var fresh database.User
 		if err := tx.Select("id, quota").First(&fresh, user.ID).Error; err != nil {

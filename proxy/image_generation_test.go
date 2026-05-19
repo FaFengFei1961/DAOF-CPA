@@ -588,8 +588,10 @@ func TestImageBalanceInsufficientWritesPendingReconcile(t *testing.T) {
 	if fresh.Quota != 10_000 {
 		t.Fatalf("quota=%d want unchanged 10000", fresh.Quota)
 	}
-	if fresh.BalanceConsumedInWindow != 1_234 {
-		t.Fatalf("balance window consumed=%d want unchanged 1234", fresh.BalanceConsumedInWindow)
+	// fix H2 (2026-05-19)：window tracking 在 CAS quota 前调用，window 会 reset
+	// 然后 forceTrack 累加 20000 → 最终 20000（与 text path 对齐）。
+	if fresh.BalanceConsumedInWindow != 20_000 {
+		t.Fatalf("balance window consumed=%d want 20000 (H2 fix: window resets then tracks 20000)", fresh.BalanceConsumedInWindow)
 	}
 	var pending database.BillingEntry
 	if err := db.Where("entry_type = ?", database.BillingTypeApiUsagePendingReconcile).First(&pending).Error; err != nil {

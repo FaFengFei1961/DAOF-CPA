@@ -249,8 +249,12 @@ func TestVideoBalanceInsufficientWritesPendingReconcile(t *testing.T) {
 	if fresh.Quota != 10_000 {
 		t.Fatalf("quota=%d want unchanged 10000", fresh.Quota)
 	}
-	if fresh.BalanceConsumedInWindow != 1_234 {
-		t.Fatalf("balance window consumed=%d want unchanged 1234", fresh.BalanceConsumedInWindow)
+	// fix H2 (2026-05-19)：window tracking 改为先于 CAS quota 调用（与 text path 对齐），
+	// 即使 CAS 失败（余额不足）window 也会记录"尝试消费"，与 text 路径一致。
+	// 这里 user.BalanceConsumeWindowStartAt 是 nil（首次进入），TryConsumeBalanceTx
+	// 会先 reset window（清 1234 → 0），再 forceTrack 累加 280000 → 最终 280000。
+	if fresh.BalanceConsumedInWindow != 280_000 {
+		t.Fatalf("balance window consumed=%d want 280000 (H2 fix: window resets then tracks 280000)", fresh.BalanceConsumedInWindow)
 	}
 	var pending database.BillingEntry
 	if err := db.Where("entry_type = ?", database.BillingTypeApiUsagePendingReconcile).First(&pending).Error; err != nil {

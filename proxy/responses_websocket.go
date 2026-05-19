@@ -602,6 +602,10 @@ func commitResponsesWebsocketTurn(state *websocketBridgeState, modelName string,
 		writeWebsocketPendingReconcile(state, modelName, "no_pricing_route_for_model")
 		return
 	}
+	// fix H1 (2026-05-19)：WS 长连里 state.user 是 handshake 时的 snapshot，admin
+	// 中途改余额、或前一个 turn 扣费后 quota 不会同步。每个 turn commit 前重读
+	// 一次 quota，避免 BillingEntry.BalanceAfterUSD 写错。失败 fallback 用 stale。
+	refreshUserQuotaFromDB(state.user)
 	ctx := CommitTextContext{
 		User:              state.user,
 		Token:             state.token,
@@ -647,6 +651,8 @@ func writeWebsocketPendingReconcile(state *websocketBridgeState, modelName, reas
 		relatedID = apiLog.ID
 		relatedType = "api_log"
 	}
+	// fix H1：写 pending_reconcile 前重读 quota，避免 BalanceAfterUSD 是 handshake stale
+	refreshUserQuotaFromDB(state.user)
 	_ = database.WriteBillingEntryNonFatal(database.BillingEntryInput{
 		UserID:          state.user.ID,
 		EntryType:       database.BillingTypeApiUsagePendingReconcile,
@@ -658,6 +664,20 @@ func writeWebsocketPendingReconcile(state *websocketBridgeState, modelName, reas
 		RelatedID:       relatedID,
 		Description:     fmt.Sprintf("[%s] WS %s · 待对账（无 usage）", reasonTag, modelName),
 	})
+}
+
+// refreshUserQuotaFromDB 重读 user.Quota 字段（其余字段不变），用于 WS 长连
+// 在每个 turn commit 前刷新 BalanceAfterUSD 写入值。失败保留 stale 值不致 panic。
+func refreshUserQuotaFromDB(user *database.User) {
+	if user == nil || user.ID == 0 {
+		return
+	}
+	var fresh database.User
+	if err := database.DB.Select("id, quota").First(&fresh, user.ID).Error; err != nil {
+		log.Printf("[WS-USER-REFRESH-FAIL] user=%d: %v (keep stale snapshot)", user.ID, err)
+		return
+	}
+	user.Quota = fresh.Quota
 }
 
 

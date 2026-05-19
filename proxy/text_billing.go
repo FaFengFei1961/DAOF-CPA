@@ -18,6 +18,7 @@ package proxy
 import (
 	"fmt"
 	"log"
+	"math/big"
 	"net/http"
 	"strings"
 	"time"
@@ -766,10 +767,14 @@ func commitTextBalanceTurn(ctx CommitTextContext, apiLogID uint, apiLogPersisted
 
 // writeTextUsageLines 写一对 ApiLogUsageLine（input + output token）。
 // P8 起 SSE/WS 两条路径都写，让 admin UI 能看到 token 计量明细。
+//
+// fix D2 (2026-05-19)：原实现用 floor (`tokens × pico / 1e9`)，与 CommitTextTurn 主路径
+// checkedCostMicroUSD 的 ceil-div 不一致，每 1M token 差 1 micro_usd 级别 → admin
+// 报表"按 usage line"vs"按 api_log.cost"系统性差额。现统一改 ceil-div。
 func writeTextUsageLines(apiLogID uint, modelName, requestPath string, promptTokens, completionTokens int, inputPricePico, outputPricePico int64) {
 	now := time.Now()
 	if promptTokens > 0 {
-		amountMicro := int64(promptTokens) * inputPricePico / int64(1_000_000_000)
+		amountMicro := ceilDivPicoToMicro(int64(promptTokens), inputPricePico)
 		_ = database.DB.Create(&database.ApiLogUsageLine{
 			ApiLogID:       apiLogID,
 			ModelName:      modelName,
@@ -784,7 +789,7 @@ func writeTextUsageLines(apiLogID uint, modelName, requestPath string, promptTok
 		}).Error
 	}
 	if completionTokens > 0 {
-		amountMicro := int64(completionTokens) * outputPricePico / int64(1_000_000_000)
+		amountMicro := ceilDivPicoToMicro(int64(completionTokens), outputPricePico)
 		_ = database.DB.Create(&database.ApiLogUsageLine{
 			ApiLogID:       apiLogID,
 			ModelName:      modelName,
@@ -798,4 +803,24 @@ func writeTextUsageLines(apiLogID uint, modelName, requestPath string, promptTok
 			CreatedAt:      now,
 		}).Error
 	}
+}
+
+// ceilDivPicoToMicro 把 (tokens × pico_per_token) ÷ 1e9 转成 micro_usd，
+// 用 big.Int 做 ceil-div 避开 int64 中间溢出 + 与 checkedCostMicroUSD 一致。
+// fix D2：原 floor 截断让 ApiLogUsageLine.AmountMicroUSD 与 ApiLog.Cost 系统性差额。
+func ceilDivPicoToMicro(tokens, picoPerToken int64) int64 {
+	if tokens <= 0 || picoPerToken <= 0 {
+		return 0
+	}
+	prod := new(big.Int).Mul(big.NewInt(tokens), big.NewInt(picoPerToken))
+	div := big.NewInt(1_000_000_000)
+	rem := new(big.Int)
+	q, rem := new(big.Int).QuoRem(prod, div, rem)
+	if rem.Sign() > 0 {
+		q.Add(q, big.NewInt(1))
+	}
+	if !q.IsInt64() {
+		return 0 // 极端溢出 fail-closed；调用方仍记 token 数，AmountMicroUSD=0
+	}
+	return q.Int64()
 }
