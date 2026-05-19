@@ -1959,6 +1959,7 @@
     "ERR_MODEL_ENDPOINT_UNSUPPORTED": "This model does not support the requested endpoint. Use a compatible endpoint or switch models.",
     "ERR_IMAGE_MODEL_UNSUPPORTED": "This image model is not open for runtime yet or lacks auditable pricing rules.",
     "ERR_VIDEO_MODEL_UNSUPPORTED": "This video model is not open for runtime yet or lacks auditable pricing rules.",
+    "ERR_GEMINI_MODEL_UNSUPPORTED": "This Gemini model is not enabled for /v1beta/models or lacks auditable pricing rules.",
     "ERR_MODEL_NOT_FOUND": "Target model not found.",
     "ERR_MODEL_NOT_SUPPORTED": "This model capability is not open yet or lacks billable pricing.",
     "ERR_MODERATION_API_ERROR": "Moderation call failed. Check upstream URL, model name, and call permissions.",

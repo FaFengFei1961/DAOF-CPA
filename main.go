@@ -163,6 +163,12 @@ func main() {
 	app.Post("/v1/videos/edits", llmIPCoarseLimiter, llmProxyLimiter, proxy.VideoEditProxyHandler)
 	app.Post("/v1/videos/extensions", llmIPCoarseLimiter, llmProxyLimiter, proxy.VideoExtensionProxyHandler)
 	app.Get("/v1/videos/:request_id", llmIPCoarseLimiter, llmProxyLimiter, proxy.VideoRetrieveProxyHandler)
+	// Google Gemini 兼容 API 代理（P6）：支持 generateContent / streamGenerateContent /
+	// countTokens（Imagen 内部走 :predict，CPA 自动翻译为 Gemini 格式）。客户端用
+	// Google AI SDK / @google/generative-ai 直接调 DAOF；admin 必须在 ChannelModel
+	// .AllowedEndpoints 中加 /v1/v1beta/models 启用对应 model。
+	app.Post("/v1beta/models/*", llmIPCoarseLimiter, llmProxyLimiter, proxy.GeminiNativeProxyHandler)
+	app.Get("/v1beta/models/*", llmIPCoarseLimiter, llmProxyLimiter, proxy.GeminiNativeProxyHandler)
 	// Anthropic 原生 Messages API（Claude Code / Anthropic SDK 默认调用此路径）
 	app.All("/v1/messages", llmIPCoarseLimiter, llmProxyLimiter, proxy.ChatCompletionProxyHandler)
 	// 容错：客户端 base URL 误填为 ".../v1" 时 SDK 会拼出 /v1/v1/messages，仍正确路由

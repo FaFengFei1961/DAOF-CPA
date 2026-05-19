@@ -21,15 +21,26 @@ const (
 	EndpointVideosGenerations = "/v1/videos/generations"
 	EndpointVideosEdits       = "/v1/videos/edits"
 	EndpointVideosExtensions  = "/v1/videos/extensions"
+	// EndpointGeminiNative 是 Google Gemini 兼容 API 入口（generateContent /
+	// streamGenerateContent / countTokens / :predict for Imagen）的端点前缀。
+	// 在 ChannelModel.AllowedEndpoints 中作为标记表示该 model 暴露给 /v1beta/models
+	// 路由——P6 引入，让客户端用 Google AI SDK 直接调 DAOF。
+	EndpointGeminiNative = "/v1beta/models"
 )
 
 // AllowedImageEndpoints 是图像类 ChannelModel.AllowedEndpoints 的合法子集。
-// admin 可任意组合开关：仅 generations / 仅 edits / 两者都开。
-var AllowedImageEndpoints = []string{EndpointImagesGenerations, EndpointImagesEdits}
+// admin 可任意组合开关：generations / edits / Gemini native。Gemini image / Imagen
+// 必须用 EndpointGeminiNative；OpenAI/xAI 图像走 generations/edits；admin 也可让
+// 同一个 model 同时挂多端点（不常见但合法）。
+var AllowedImageEndpoints = []string{EndpointImagesGenerations, EndpointImagesEdits, EndpointGeminiNative}
 
 // AllowedVideoEndpoints 是视频类 ChannelModel.AllowedEndpoints 的合法子集。
-// admin 可任意组合开关：generations / edits / extensions 子集。
 var AllowedVideoEndpoints = []string{EndpointVideosGenerations, EndpointVideosEdits, EndpointVideosExtensions}
+
+// AllowedTextEndpoints 是文本类 ChannelModel.AllowedEndpoints 的合法子集。
+// text 类一般不强制 endpoint（走 /v1/chat/completions 等通用入口），但 admin 启用
+// Gemini native 时需要标 /v1beta/models 让 DAOF 路由识别。
+var AllowedTextEndpoints = []string{EndpointGeminiNative}
 
 var (
 	ErrImageGenerationUnsupported    = errors.New("image generation is not supported by the runtime yet")
@@ -159,6 +170,56 @@ func IsRuntimeTokenBilledImageModel(modelID string) bool {
 func IsRuntimeVideoModelSupported(modelID string) bool {
 	_, ok := CanonicalRuntimeVideoModel(modelID)
 	return ok
+}
+
+// IsRuntimeGeminiModelSupported returns true when the model can be served via
+// the Gemini native API path (/v1beta/models). admin 必须先在 ModelCatalog 中
+// 注册该 model（provider_key="google" + supported=true）才返回 true。
+func IsRuntimeGeminiModelSupported(modelID string) bool {
+	_, ok := CanonicalRuntimeGeminiModel(modelID)
+	return ok
+}
+
+// CanonicalRuntimeGeminiModel 把 client 传入的 Gemini model_id 归一化为运行时
+// 正式名。剥前缀（models/、tunedModels/ 等 Google API URI 前缀）后查
+// ModelCatalog WHERE provider_key="google" AND category IN (text, image) AND
+// supported=true。
+//
+// 与 CanonicalRuntimeImageModel 不同点：Gemini 系列全是 admin 注册（没有静态
+// white-list fast path），因为 Gemini text + image + Imagen 数量多变。
+func CanonicalRuntimeGeminiModel(modelID string) (string, bool) {
+	raw := strings.ToLower(strings.TrimSpace(modelID))
+	if raw == "" {
+		return "", false
+	}
+	// 剥 Gemini API URI 风格的前缀（admin 注册时一般用 base name）
+	base := raw
+	for _, prefix := range []string{"models/", "tunedmodels/"} {
+		if strings.HasPrefix(base, prefix) {
+			base = strings.TrimPrefix(base, prefix)
+			break
+		}
+	}
+	// 再剥通用 provider 前缀
+	if idx := strings.LastIndex(base, "/"); idx >= 0 && idx < len(base)-1 {
+		base = strings.TrimSpace(base[idx+1:])
+	}
+
+	if DB == nil {
+		return "", false
+	}
+	candidates := []string{base, raw}
+	if raw != base {
+		candidates = []string{raw, base}
+	}
+	for _, candidate := range candidates {
+		var cat ModelCatalog
+		err := DB.Where("LOWER(model_id) = ? AND provider_key = ? AND supported = ?", candidate, "google", true).First(&cat).Error
+		if err == nil {
+			return cat.ModelID, true
+		}
+	}
+	return "", false
 }
 
 func CanonicalRuntimeVideoModel(modelID string) (string, bool) {
