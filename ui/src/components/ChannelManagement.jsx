@@ -1231,7 +1231,7 @@ const ChannelManagement = () => {
                                     </div>
                                     {normalizeModelCategory(modelForm.model_category, modelForm.model_id) !== 'text' && (
                                         <p className="mt-3 text-[11px] leading-relaxed text-on-surface-variant">
-                                            {t('CHANNEL_MGMT.RUNTIME.MEDIA_HINT', '媒体模型价格来自默认官方计费矩阵；当前只支持 xAI 文本生成图片，视频和 token 计费图片模型会被后端拒绝启用。')}
+                                            {t('CHANNEL_MGMT.RUNTIME.MEDIA_HINT', '媒体模型价格来自默认官方计费矩阵。当前支持：xAI 图像/视频（按 cost_in_usd_ticks 实扣）、Gemini image 系列（BillingMode=token，按 candidatesTokenCount × output rate 计费）、Imagen 系列（BillingMode=image，按 candidates[].inlineData 数量 × flat 价计费）。启用前请确保 AllowedEndpoints 包含正确路径（如 Gemini/Imagen 需 /v1beta/models）。')}
                                         </p>
                                     )}
                                 </fieldset>
