@@ -45,8 +45,19 @@ var (
 
 	githubTokenEndpoint = "https://github.com/login/oauth/access_token"
 	githubUserEndpoint  = "https://api.github.com/user"
-	githubHTTPClient    = &http.Client{Timeout: 10 * time.Second}
+	// fix B-H1 (2026-05-19)：加 SafeTransport + RedirectGuard 防 DNS rebinding /
+	// open redirect 把 OAuth 流量重定向到内网；下游 io.ReadAll 也需要 LimitReader
+	// 防 OOM（见 readGithubResponseBody 助手）。
+	githubHTTPClient = &http.Client{
+		Timeout:       10 * time.Second,
+		Transport:     proxy.SafeTransport(),
+		CheckRedirect: proxy.RedirectGuard,
+	}
 )
+
+// githubResponseLimit 限制 GitHub OAuth/User 响应体大小。
+// GitHub 公开 token 响应 ~200 字节，user profile JSON 5~10KB，64KB 充足。
+const githubResponseLimit int64 = 64 * 1024
 
 // tmp_token TTL：超过此时长视为过期
 const tmpTokenTTL = 15 * time.Minute
@@ -575,7 +586,9 @@ func GithubCallback(c *fiber.Ctx) error {
 		log.Printf("[OAUTH] marshal token req failed: %v", err)
 		return c.Status(500).JSON(fiber.Map{"success": false, "message_code": "ERR_GITHUB_INTERNAL"})
 	}
-	req, err := http.NewRequest("POST", githubTokenEndpoint, bytes.NewBuffer(bodyBytes))
+	// fix B-H1 / B-L1：用 RequestWithContext + 限读响应体，防 OOM + 客户端断开
+	// 不释放上游 socket。
+	req, err := http.NewRequestWithContext(c.UserContext(), "POST", githubTokenEndpoint, bytes.NewBuffer(bodyBytes))
 	if err != nil {
 		log.Printf("[OAUTH] build token req failed: %v", err)
 		return c.Status(500).JSON(fiber.Map{"success": false, "message_code": "ERR_GITHUB_INTERNAL"})
@@ -583,19 +596,20 @@ func GithubCallback(c *fiber.Ctx) error {
 	req.Header.Set("Content-Type", "application/json")
 	req.Header.Set("Accept", "application/json")
 
-	client := githubHTTPClient
-	if client == nil {
-		client = &http.Client{Timeout: 10 * time.Second}
-	}
-	resp, err := client.Do(req)
+	resp, err := githubHTTPClient.Do(req)
 	if err != nil {
 		log.Printf("[OAUTH] token exchange failed: %v", err)
 		return c.Status(502).JSON(fiber.Map{"success": false, "message": "第三方服务响应超时(502)", "message_code": "ERR_GITHUB_CONN"})
 	}
 	defer resp.Body.Close()
 
+	tokenBody, err := io.ReadAll(io.LimitReader(resp.Body, githubResponseLimit))
+	if err != nil {
+		log.Printf("[OAUTH] read token resp failed (status=%d): %v", resp.StatusCode, err)
+		return c.Status(502).JSON(fiber.Map{"success": false, "message_code": "ERR_GITHUB_DECODE"})
+	}
 	var tokenRes map[string]interface{}
-	if err := json.NewDecoder(resp.Body).Decode(&tokenRes); err != nil {
+	if err := json.Unmarshal(tokenBody, &tokenRes); err != nil {
 		log.Printf("[OAUTH] decode token resp failed (status=%d): %v", resp.StatusCode, err)
 		return c.Status(502).JSON(fiber.Map{"success": false, "message_code": "ERR_GITHUB_DECODE"})
 	}
@@ -605,21 +619,21 @@ func GithubCallback(c *fiber.Ctx) error {
 	}
 
 	// 3. 获取用户极客身份
-	req2, err := http.NewRequest("GET", githubUserEndpoint, nil)
+	req2, err := http.NewRequestWithContext(c.UserContext(), "GET", githubUserEndpoint, nil)
 	if err != nil {
 		log.Printf("[OAUTH] build user req failed: %v", err)
 		return c.Status(500).JSON(fiber.Map{"success": false, "message_code": "ERR_GITHUB_INTERNAL"})
 	}
 	req2.Header.Set("Authorization", "Bearer "+accessToken)
-	resp2, err := client.Do(req2)
+	resp2, err := githubHTTPClient.Do(req2)
 	if err != nil {
 		log.Printf("[OAUTH] fetch user failed: %v", err)
 		return c.Status(502).JSON(fiber.Map{"success": false, "message": "无法同步上游服务器资料", "message_code": "ERR_GITHUB_PROFILE_FAIL"})
 	}
 	defer resp2.Body.Close()
 
-	// 读取 Body 二进制以便解析
-	userBody, err := io.ReadAll(resp2.Body)
+	// 读取 Body 二进制以便解析（限读防 OOM）
+	userBody, err := io.ReadAll(io.LimitReader(resp2.Body, githubResponseLimit))
 	if err != nil {
 		log.Printf("[OAUTH] read user body failed: %v", err)
 		return c.Status(502).JSON(fiber.Map{"success": false, "message_code": "ERR_GITHUB_PROFILE_FAIL"})

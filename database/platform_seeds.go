@@ -26,9 +26,13 @@ var PlatformSysConfigDefaults = map[string]string{
 	"aliyun_sms_template":  "",
 
 	// ── Registration risk controls ──
-	"reg_strategy":   "dynamic",
-	"reg_ip_limit":   "3",
-	"max_users":      "0",       // 0 = unlimited
+	"reg_strategy": "dynamic",
+	"reg_ip_limit": "3",
+	// fix C-H1 (2026-05-19)：默认改为 10000（之前 0 = unlimited 是攻击面：
+	// 攻击者可任意注册 → AuthCache 全量装载 → 内存 OOM）。每用户 50 子 token
+	// 上限已在 controller/token.go 强制；上限 10K user × 50 token = 500K cache entries
+	// ~= 几百 MB，安全包络。admin 可改 0 显式 opt-in 无限注册（接受风险）。
+	"max_users":      "10000",
 	"signup_bonus":   "1000000", // micro_usd; $1
 	"referrer_bonus": "0",
 	"referee_bonus":  "0",
