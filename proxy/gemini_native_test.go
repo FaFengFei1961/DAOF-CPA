@@ -381,6 +381,89 @@ func TestGeminiNative_ImagenPerImageBilling(t *testing.T) {
 	}
 }
 
+// TestGeminiNative_FlashImageTokenBilling 固化 S3 行为：Gemini 3.1 flash image
+// 用 BillingMode=Token，candidatesTokenCount × $60/Mtok 自动 cover resolution。
+// 真实校准数据（scripts/calibration/00_summary.json）：
+//   - default size: usageMetadata.candidatesTokenCount = 1469 → $0.08814
+//   - 2K:           usageMetadata.candidatesTokenCount = 2036 → $0.12216
+func TestGeminiNative_FlashImageTokenBilling(t *testing.T) {
+	db := setupImageGenerationTest(t)
+	backend := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		// mock antigravity gemini-3.1-flash-image default response（与 calibration 一致）
+		_, _ = w.Write([]byte(`{
+			"candidates":[{
+				"content":{
+					"parts":[
+						{"inlineData":{"mimeType":"image/png","data":"AAA="}}
+					],
+					"role":"model"
+				},
+				"finishReason":"STOP"
+			}],
+			"usageMetadata":{
+				"promptTokenCount":5,
+				"candidatesTokenCount":1469,
+				"totalTokenCount":1474
+			},
+			"modelVersion":"gemini-3.1-flash-image"
+		}`))
+	}))
+	t.Cleanup(backend.Close)
+
+	user := database.User{ID: 71, Username: "gemini-flashimg", Token: "sk-gemini-flashimg", Status: 1, Quota: 10_000_000, BalanceConsumeEnabled: true}
+	if err := db.Create(&user).Error; err != nil {
+		t.Fatalf("seed user: %v", err)
+	}
+	AuthCache[user.Token] = &user
+	if err := db.Create(&database.ModelCatalog{
+		ProviderKey: "google", ProviderName: "Google Gemini",
+		ModelID: "gemini-3.1-flash-image", DisplayName: "Gemini 3.1 Flash Image",
+		Category: database.ModelCategoryImage, BillingMode: database.BillingModeToken,
+		Supported: true, Public: true,
+	}).Error; err != nil {
+		t.Fatalf("seed catalog: %v", err)
+	}
+	ChannelMapCache[51] = &database.Channel{ID: 51, Type: ChannelTypeCLIProxy, BaseURL: backend.URL, Key: "upstream-key", Status: 1}
+	RouteCache["gemini-3.1-flash-image"] = []*database.ChannelModel{{
+		ID: 51, ChannelID: 51, ModelID: "gemini-3.1-flash-image",
+		ModelCategory:           database.ModelCategoryImage,
+		BillingMode:             database.BillingModeToken,
+		AllowedEndpoints:        `["/v1beta/models"]`,
+		InputPricePicoPerToken:  500 * database.PicoPerTokenPerUSDPerMTok / 1000,    // $0.50 / 1M
+		OutputPricePicoPerToken: 60_000 * database.PicoPerTokenPerUSDPerMTok / 1000, // $60.00 / 1M
+		Weight:                  1,
+		Status:                  1,
+	}}
+
+	app := fiber.New()
+	app.Post("/v1beta/models/*", GeminiNativeProxyHandler)
+	body := `{"contents":[{"parts":[{"text":"a tiny grey square"}]}]}`
+	req := httptest.NewRequest(http.MethodPost, "/v1beta/models/gemini-3.1-flash-image:generateContent", strings.NewReader(body))
+	req.Header.Set("Authorization", "Bearer "+user.Token)
+	req.Header.Set("Content-Type", "application/json")
+	resp, err := app.Test(req, -1)
+	if err != nil {
+		t.Fatalf("request: %v", err)
+	}
+	if resp.StatusCode != http.StatusOK {
+		respBody, _ := io.ReadAll(resp.Body)
+		t.Fatalf("status=%d want 200 body=%s", resp.StatusCode, respBody)
+	}
+
+	// 计费：prompt=5 × $0.5/M + candidates=1469 × $60/M
+	//     = 0.0000025 + 0.08814 ≈ $0.088 = 88,140 micro_usd
+	//     允许 1 micro 的 ceil-div 误差
+	var fresh database.User
+	if err := db.First(&fresh, user.ID).Error; err != nil {
+		t.Fatalf("load user: %v", err)
+	}
+	consumed := int64(10_000_000) - fresh.Quota
+	if consumed < 88_000 || consumed > 88_200 {
+		t.Fatalf("quota consumed=%d want ~88_140 (real-call calibration); fresh.Quota=%d", consumed, fresh.Quota)
+	}
+}
+
 func TestGeminiNative_CountTokensPassthrough(t *testing.T) {
 	db := setupImageGenerationTest(t)
 	called := 0
