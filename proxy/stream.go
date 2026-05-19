@@ -26,7 +26,6 @@ import (
 	"github.com/gofiber/fiber/v2"
 	"github.com/tidwall/gjson"
 	"github.com/tidwall/sjson"
-	"gorm.io/gorm"
 
 	sdktranslator "github.com/router-for-me/CLIProxyAPI/v7/sdk/translator"
 	_ "github.com/router-for-me/CLIProxyAPI/v7/sdk/translator/builtin"
@@ -1245,672 +1244,66 @@ retryLoopExhausted:
 	// Helper for Atomic Quota Deduction
 	apiErrorType := ""
 	apiErrorMessage := ""
-	type manualBillingStateInput struct {
-		BillingState                 string
-		ReasonTag                    string
-		ErrorType                    string
-		ErrorMessage                 string
-		Status                       int
-		PromptTokens                 int
-		CompletionTokens             int
-		CachedTokens                 int
-		CacheWriteTokens             int
-		CacheWrite5mTokens           int
-		CacheWrite1hTokens           int
-		ReasoningTokens              int
-		DeliveredBytes               int64
-		EstimatedInputTokens         int
-		EstimatedRawCostMicroUSD     int64
-		EstimatedChargedCostMicroUSD int64
-	}
-	type deliveredCostEstimate struct {
-		RawCostMicroUSD     int64
-		ChargedCostMicroUSD int64
-	}
+	// P8.1：原 inner type 提到包级（proxy/text_billing.go）。这里保留 type alias 让闭包
+	// 内部代码无需大规模 rename；后续 P8.3 把闭包整体抽到顶层时直接用包级类型。
+	type manualBillingStateInput = ManualBillingStateInput
+	type deliveredCostEstimate = DeliveredCostEstimate
+	// P8.2：以下 4 个 closure 改为薄包装，把实现委托到 proxy/text_billing.go
+	// 顶层函数。捕获状态（selectedChan / httpResp / user / startTime / modelName）
+	// 只在调用时按需取，handler 仍可在 retry 循环里换 selectedChan/httpResp。
 	selectedChannelTypeForBilling := func() string {
-		if selectedChan == nil {
-			return ""
-		}
-		return selectedChan.Type
+		return channelTypeOfSelected(selectedChan)
 	}
-	upstreamRequestID := func(apiLogID uint) string {
-		for _, header := range []string{"X-Request-Id", "X-Cpa-Request-Id", "Request-Id"} {
-			if v := strings.TrimSpace(httpResp.Header.Get(header)); v != "" {
-				return sanitizeError(v, 128)
-			}
+	// upstreamRequestID 闭包在 P8.4 后已不需要（RecordManualBillingState /
+	// CommitTextTurn 都直接用顶层 UpstreamRequestID（ctx.UpstreamHeaders, ...））。
+	// P8.3：writeBillingWithRetry / RecordManualBillingState 全部转为调 text_billing.go
+	// 顶层函数；deductQuota 闭包内的 3-retry 还是 inline，P8.4 抽 CommitTextTurn 时一起搬。
+	// P8.3：recordManualBillingState 整段抽到顶层 RecordManualBillingState；
+	// 闭包改为薄包装，组装 CommitTextContext 后委托。
+	buildCommitContext := func() CommitTextContext {
+		var hdr http.Header
+		if httpResp != nil {
+			hdr = httpResp.Header
 		}
-		if apiLogID > 0 {
-			return fmt.Sprintf("api_log:%d", apiLogID)
+		return CommitTextContext{
+			User:              user,
+			Token:             token,
+			SubToken:          subToken,
+			IsSubToken:        isSubToken,
+			ModelName:         modelName,
+			Body:              body,
+			Path:              path,
+			ClientIP:          clientIP,
+			StartTime:         startTime,
+			IsStream:          isStream,
+			FallbackUserOptIn: fallbackUserOptIn,
+			SelectedPath:      selectedPath,
+			SelectedChan:      selectedChan,
+			EngineDecision:    engineDecision,
+			UpstreamHeaders:   hdr,
 		}
-		return fmt.Sprintf("local:%d:%d", user.ID, startTime.UnixNano())
-	}
-	writeBillingWithRetry := func(entry database.BillingEntryInput, rawCostMicroUSD, chargedCostMicroUSD int64, apiLogID uint) {
-		var billErr error
-		for attempt := 1; attempt <= 3; attempt++ {
-			billErr = database.WriteBillingEntryNonFatal(entry)
-			if billErr == nil {
-				return
-			}
-			log.Printf("[BILLING-PENDING-WRITE] attempt %d/3 failed user=%d model=%s state=%s: %v", attempt, user.ID, modelName, entry.BillingState, billErr)
-			if attempt < 3 {
-				time.Sleep(100 * time.Millisecond)
-			}
-		}
-		log.Printf("[BILLING-LOST-DEBT] user=%d model=%s raw_cost_micro=%d charged_cost_micro=%d api_log_id=%d state=%s UNRECOVERABLE — manual reconcile from ApiLog required: %v",
-			user.ID, modelName, rawCostMicroUSD, chargedCostMicroUSD, apiLogID, entry.BillingState, billErr)
 	}
 	recordManualBillingState := func(in manualBillingStateInput) {
-		if in.EstimatedInputTokens <= 0 {
-			in.EstimatedInputTokens = estimatePrecheckTokens(body)
-		}
-		if in.Status == 0 {
-			in.Status = 200
-		}
-		selectedChannelType := selectedChannelTypeForBilling()
-		estimatedRawCostMicroUSD := in.EstimatedRawCostMicroUSD
-		if estimatedRawCostMicroUSD < 0 {
-			estimatedRawCostMicroUSD = 0
-		}
-		resolution := ResolveBillingRules(modelName, body, in.ReasoningTokens, selectedChannelType, fallbackUserOptIn).WithCosts(estimatedRawCostMicroUSD)
-		estimatedChargedCostMicroUSD := in.EstimatedChargedCostMicroUSD
-		if estimatedChargedCostMicroUSD <= 0 && estimatedRawCostMicroUSD > 0 {
-			estimatedChargedCostMicroUSD = resolution.ChargedCostMicroUSD
-		}
-		if estimatedChargedCostMicroUSD < 0 {
-			estimatedChargedCostMicroUSD = 0
-		}
-		reconcileCostMicroUSD := estimatedRawCostMicroUSD
-		if !engineDecision.FallbackToBalance {
-			reconcileCostMicroUSD = estimatedChargedCostMicroUSD
-		}
-		apiLog := database.ApiLog{
-			UserID:              user.ID,
-			TokenName:           HashTokenForLog(token),
-			ModelName:           modelName,
-			RequestedModel:      resolution.RequestedModel,
-			ServedModel:         resolution.ServedModel,
-			PromptTokens:        in.PromptTokens,
-			CompletionTokens:    in.CompletionTokens,
-			CachedTokens:        in.CachedTokens,
-			CacheWriteTokens:    in.CacheWriteTokens,
-			CacheWrite5mTokens:  in.CacheWrite5mTokens,
-			CacheWrite1hTokens:  in.CacheWrite1hTokens,
-			ReasoningTokens:     in.ReasoningTokens,
-			Cost:                0,
-			ChargedCost:         0,
-			ModelWeight:         resolution.ModelWeight,
-			HealthMultiplier:    resolution.HealthMultiplier,
-			BillingRulesVersion: resolution.BillingRulesVersion,
-			FallbackUserOptIn:   resolution.FallbackUserOptIn,
-			FallbackReason:      sanitizeError(resolution.FallbackReason, 160),
-			UpstreamProvider:    sanitizeError(strings.ToLower(strings.TrimSpace(selectedChannelType)), 64),
-			Latency:             time.Since(startTime).Milliseconds(),
-			Status:              in.Status,
-			IPAddress:           clientIP,
-			RequestPath:         sanitizeError(path, 160),
-			ErrorType:           sanitizeError(in.ErrorType, 64),
-			ErrorMessage:        sanitizeError(in.ErrorMessage, 512),
-			PrecheckInputTokens: in.EstimatedInputTokens,
-			PrecheckRawCost:     estimatedRawCostMicroUSD,
-			PrecheckChargedCost: estimatedChargedCostMicroUSD,
-			CreatedAt:           time.Now(),
-		}
-		apiLogPersisted := true
-		if err := database.DB.Create(&apiLog).Error; err != nil {
-			log.Printf("[BILLING-CRITICAL] user=%d model=%s manual-state api_log create failed: %v", user.ID, modelName, err)
-			apiLogPersisted = false
-		}
-		relatedID := uint(0)
-		relatedType := ""
-		if apiLogPersisted {
-			relatedID = apiLog.ID
-			relatedType = "api_log"
-		}
-		requestID := upstreamRequestID(relatedID)
-		entry := database.BillingEntryInput{
-			UserID:               user.ID,
-			EntryType:            database.BillingTypeApiUsagePendingReconcile,
-			BillingState:         in.BillingState,
-			AmountUSD:            0,
-			BalanceAfterUSD:      user.Quota,
-			ModelName:            modelName,
-			TokensTotal:          in.PromptTokens + in.CompletionTokens,
-			RequestID:            requestID,
-			DeliveredBytes:       in.DeliveredBytes,
-			EstimatedInputTokens: in.EstimatedInputTokens,
-			EstimatedCostUSD:     reconcileCostMicroUSD,
-			RelatedType:          relatedType,
-			RelatedID:            relatedID,
-			Description: fmt.Sprintf("[%s] %s · request_id=%s · delivered_bytes=%d · estimated_input_tokens=%d · estimated_cost=%s · reconcile_cost=%s · %s",
-				in.ReasonTag, modelName, requestID, in.DeliveredBytes, in.EstimatedInputTokens,
-				FormatChargedCostForDescription(estimatedRawCostMicroUSD, estimatedChargedCostMicroUSD),
-				database.FormatMicroUSD(reconcileCostMicroUSD), in.ErrorMessage),
-		}
-		writeBillingWithRetry(entry, estimatedRawCostMicroUSD, estimatedChargedCostMicroUSD, relatedID)
+		RecordManualBillingState(buildCommitContext(), in)
 	}
 	estimateDeliveredCost := func(deliveredBytes int64, reasoningTokens int) deliveredCostEstimate {
-		outputTokens := 0
-		if deliveredBytes > 0 {
-			outputTokens = int((deliveredBytes + 3) / 4)
-		}
-		rawCost := estimatePrecheckBalanceDelta(modelName, estimatePrecheckTokens(body), outputTokens)
-		resolution := ResolveBillingRules(modelName, body, reasoningTokens, selectedChannelTypeForBilling(), fallbackUserOptIn).WithCosts(rawCost)
-		return deliveredCostEstimate{
-			RawCostMicroUSD:     rawCost,
-			ChargedCostMicroUSD: resolution.ChargedCostMicroUSD,
-		}
+		return EstimateDeliveredCost(modelName, body, deliveredBytes, reasoningTokens, selectedChannelTypeForBilling(), fallbackUserOptIn)
 	}
 	deductQuota := func(promptTokens, completionTokens, cachedTokens, cacheWriteTokens, cacheWrite5mTokens, cacheWrite1hTokens, reasoningTokens, status int, deliveredBytes int64) bool {
-		// fix CRITICAL Phase 4-codex（第二十四轮）：所有 token 必须 clamp >= 0；
-		// cached 必须 ≤ prompt（cached 是 prompt 子集），否则 (prompt-cached) 为负让 cost 变负，
-		// 进入 `if costMicroUSD > 0` 分支被跳过 → 用户得到免费服务且 ApiLog.Cost 污染统计。
-		if promptTokens < 0 {
-			promptTokens = 0
+		usage := usageTokenCounts{
+			PromptTokens:       promptTokens,
+			CompletionTokens:   completionTokens,
+			CachedTokens:       cachedTokens,
+			CacheWriteTokens:   cacheWriteTokens,
+			CacheWrite5mTokens: cacheWrite5mTokens,
+			CacheWrite1hTokens: cacheWrite1hTokens,
+			ReasoningTokens:    reasoningTokens,
 		}
-		if completionTokens < 0 {
-			completionTokens = 0
-		}
-		if cachedTokens < 0 {
-			cachedTokens = 0
-		}
-		if cacheWriteTokens < 0 {
-			cacheWriteTokens = 0
-		}
-		if cacheWrite5mTokens < 0 {
-			cacheWrite5mTokens = 0
-		}
-		if cacheWrite1hTokens < 0 {
-			cacheWrite1hTokens = 0
-		}
-		if reasoningTokens < 0 {
-			reasoningTokens = 0
-		}
-		// Anthropic 协议 usage 必须按 5m / 1h 分桶给出 cache_creation_input_tokens 细分。
-		// 不接受 legacy "single counter" fallback：上游必须显式提供分桶，否则不计费 cache write。
-		cacheWriteTokens = cacheWrite5mTokens + cacheWrite1hTokens
-		if cachedTokens > promptTokens {
-			cachedTokens = promptTokens
-		}
-		if cachedTokens+cacheWriteTokens > promptTokens {
-			cacheWriteTokens = promptTokens - cachedTokens
-			if cacheWriteTokens < 0 {
-				cacheWriteTokens = 0
-			}
-		}
-		if cacheWrite5mTokens+cacheWrite1hTokens > cacheWriteTokens {
-			overflow := cacheWrite5mTokens + cacheWrite1hTokens - cacheWriteTokens
-			if cacheWrite5mTokens >= overflow {
-				cacheWrite5mTokens -= overflow
-			} else {
-				overflow -= cacheWrite5mTokens
-				cacheWrite5mTokens = 0
-				cacheWrite1hTokens -= overflow
-				if cacheWrite1hTokens < 0 {
-					cacheWrite1hTokens = 0
-				}
-			}
-		}
-		if reasoningTokens > completionTokens {
-			reasoningTokens = completionTokens
-		}
-
-		// fix MAJOR Phase 4-codex（第二十四轮）：失败请求（status < 200 || >= 400）不扣费，
-		// 上游已 4xx 响应说明服务未交付，不应进入订阅 commit / 余额扣费。
-		// 仅写 ApiLog 用作错误统计，cost = 0。
-		failedRequest := status < 200 || status >= 400
-
-		inputPricePico := selectedPath.InputPricePicoPerToken
-		outputPricePico := selectedPath.OutputPricePicoPerToken
-		cachedInputPricePico := selectedPath.CachedInputPricePicoPerToken
-
-		if selectedPath.ContextPriceThreshold > 0 && promptTokens >= selectedPath.ContextPriceThreshold {
-			if selectedPath.HighInputPricePicoPerToken > 0 {
-				inputPricePico = selectedPath.HighInputPricePicoPerToken
-			}
-			if selectedPath.HighCachedInputPricePicoPerToken > 0 {
-				cachedInputPricePico = selectedPath.HighCachedInputPricePicoPerToken
-			}
-			if selectedPath.HighOutputPricePicoPerToken > 0 {
-				outputPricePico = selectedPath.HighOutputPricePicoPerToken
-			}
-		}
-		cacheWriteInputPricePico := selectedPath.CacheWriteInputPricePicoPerToken
-		if cacheWriteInputPricePico <= 0 {
-			cacheWriteInputPricePico = inputPricePico
-			if strings.Contains(strings.ToLower(modelName), "claude") {
-				cacheWriteInputPricePico = (inputPricePico * 125) / 100
-			}
-		}
-		cacheWrite1hInputPricePico := selectedPath.CacheWrite1hInputPricePicoPerToken
-		if cacheWrite1hInputPricePico <= 0 {
-			cacheWrite1hInputPricePico = inputPricePico * 2
-		}
-
-		// fix MAJOR M-B5（codex 第二十一轮）：原成本公式漏掉 reasoningTokens（OpenAI o1/o3、Claude
-		// thinking 等推理模型会单独返回 reasoning_tokens，与 completion_tokens 解耦计费）。
-		nonReasoningCompletion := completionTokens - reasoningTokens
-		if nonReasoningCompletion < 0 {
-			nonReasoningCompletion = 0
-		}
-		standardInputTokens := promptTokens - cachedTokens - cacheWriteTokens
-		if standardInputTokens < 0 {
-			standardInputTokens = 0
-		}
-		// fix MAJOR M22-A1 Phase 1：cost 单位 micro_usd（int64）。
-		// fix MAJOR Phase 4-codex：用 checkedCostMicroUSD 加固，failedRequest 直接 0，
-		// 浮点结果 NaN/Inf/超出 int64 上下界都返回 (0, false) → fail-closed（写 0 cost 不扣不计）。
-		var costMicroUSD int64
-		var costOK bool
-		if failedRequest {
-			costMicroUSD, costOK = 0, true
-		} else {
-			costMicroUSD, costOK = checkedCostMicroUSD(
-				standardInputTokens, inputPricePico,
-				cachedTokens, cachedInputPricePico,
-				cacheWrite5mTokens, cacheWriteInputPricePico,
-				cacheWrite1hTokens, cacheWrite1hInputPricePico,
-				nonReasoningCompletion, outputPricePico,
-				reasoningTokens, outputPricePico,
-			)
-			if !costOK {
-				log.Printf("[BILLING-CRITICAL] user=%d model=%s cost overflow/invalid; prompt=%d completion=%d cached_read=%d cache_write=%d cache_write_5m=%d cache_write_1h=%d reasoning=%d inputPricePico=%d outputPricePico=%d cachedPricePico=%d cacheWrite5mPricePico=%d cacheWrite1hPricePico=%d — failing closed (0 cost)",
-					user.ID, modelName, promptTokens, completionTokens, cachedTokens, cacheWriteTokens, cacheWrite5mTokens, cacheWrite1hTokens, reasoningTokens,
-					inputPricePico, outputPricePico, cachedInputPricePico, cacheWriteInputPricePico, cacheWrite1hInputPricePico)
-				if isStream {
-					estimatedCost := estimateDeliveredCost(deliveredBytes, reasoningTokens)
-					recordManualBillingState(manualBillingStateInput{
-						BillingState:                 database.BillingStatePendingReconcile,
-						ReasonTag:                    "COST-CALC-FAILED",
-						ErrorType:                    "billing_cost_invalid",
-						ErrorMessage:                 "stream delivered but cost calculation failed",
-						Status:                       200,
-						PromptTokens:                 promptTokens,
-						CompletionTokens:             completionTokens,
-						CachedTokens:                 cachedTokens,
-						CacheWriteTokens:             cacheWriteTokens,
-						CacheWrite5mTokens:           cacheWrite5mTokens,
-						CacheWrite1hTokens:           cacheWrite1hTokens,
-						ReasoningTokens:              reasoningTokens,
-						DeliveredBytes:               deliveredBytes,
-						EstimatedInputTokens:         promptTokens,
-						EstimatedRawCostMicroUSD:     estimatedCost.RawCostMicroUSD,
-						EstimatedChargedCostMicroUSD: estimatedCost.ChargedCostMicroUSD,
-					})
-				} else {
-					recordProxyApiLog(user.ID, token, modelName, 502, clientIP, startTime, path, "billing_cost_invalid", "cost calculation failed")
-				}
-				return false
-			}
-		}
-		selectedChannelType := ""
-		if selectedChan != nil {
-			selectedChannelType = selectedChan.Type
-		}
-		billingResolution := ResolveBillingRules(modelName, body, reasoningTokens, selectedChannelType, fallbackUserOptIn).WithCosts(costMicroUSD)
-		chargedCostMicroUSD := billingResolution.ChargedCostMicroUSD
-
-		apiLog := database.ApiLog{
-			UserID:              user.ID,
-			TokenName:           HashTokenForLog(token),
-			ModelName:           modelName,
-			RequestedModel:      billingResolution.RequestedModel,
-			ServedModel:         billingResolution.ServedModel,
-			PromptTokens:        promptTokens,
-			CompletionTokens:    completionTokens,
-			CachedTokens:        cachedTokens,
-			CacheWriteTokens:    cacheWriteTokens,
-			CacheWrite5mTokens:  cacheWrite5mTokens,
-			CacheWrite1hTokens:  cacheWrite1hTokens,
-			ReasoningTokens:     reasoningTokens,
-			Cost:                costMicroUSD,
-			ChargedCost:         chargedCostMicroUSD,
-			ModelWeight:         billingResolution.ModelWeight,
-			HealthMultiplier:    billingResolution.HealthMultiplier,
-			BillingRulesVersion: billingResolution.BillingRulesVersion,
-			FallbackUserOptIn:   billingResolution.FallbackUserOptIn,
-			FallbackReason:      sanitizeError(billingResolution.FallbackReason, 160),
-			UpstreamProvider:    sanitizeError(strings.ToLower(strings.TrimSpace(selectedChannelType)), 64),
-			Latency:             time.Since(startTime).Milliseconds(), // Parity Tracker
-			Status:              status,                               // Parity Tracker
-			IPAddress:           clientIP,                             // Parity Tracker
-			RequestPath:         sanitizeError(path, 160),
-			ErrorType:           sanitizeError(apiErrorType, 64),
-			ErrorMessage:        sanitizeError(apiErrorMessage, 512),
-			CreatedAt:           time.Now(),
-		}
-		// fix Major（codex 第十四轮）：原 Create 未检 .Error → apiLog.ID=0 时下游账单
-		// RelatedID 写空指针。失败仅日志告警，但账单条目对应 RelatedID 留空避免假关联。
-		apiLogPersisted := true
-		if err := database.DB.Create(&apiLog).Error; err != nil {
-			log.Printf("[BILLING-CRITICAL] user=%d model=%s api_log create failed: %v", user.ID, modelName, err)
-			apiLogPersisted = false
-		}
-
-		// 订阅扣费：实扣（基于真实 token 数）。命中订阅则不扣 USD 余额。
-		// 失败的请求（status < 200 || >= 400）不扣订阅额度也不扣余额。
-		commitOK := false
-		// effectiveRevenueMicroUSD 是"本次请求真实从用户那拿到多少钱"。
-		// 订阅命中 → chargedCost；余额扣费成功 → rawCost (=costMicroUSD)；其它（失败/pending）→ 0。
-		// 同时驱动两件事：ApiLogRevenue.effective_revenue + 子 token UsedQuota 累加。
-		var effectiveRevenueMicroUSD int64
-		var commitDecision EngineDecision
-		if !failedRequest {
-			commitDecision = Decide(EngineRequest{
-				UserID:       user.ID,
-				ModelName:    modelName,
-				InputTokens:  promptTokens,
-				OutputTokens: completionTokens,
-				CostMicroUSD: chargedCostMicroUSD,
-				IsPrecheck:   false,
-			})
-			commitOK = commitDecision.Allowed && !commitDecision.FallbackToBalance
-			if !commitOK {
-				log.Printf("[BILLING-FALLBACK] user=%d model=%s raw_cost_micro=%d charged_cost_micro=%d reason=%s allowed=%v fallback_balance=%v sub=%d plan=%d needs_retry=%v",
-					user.ID, modelName, costMicroUSD, chargedCostMicroUSD, commitDecision.BlockReason,
-					commitDecision.Allowed, commitDecision.FallbackToBalance,
-					commitDecision.SubscriptionID, commitDecision.QuotaPlanID, commitDecision.NeedsRetry)
-			}
-		}
-		// fix CRITICAL R23+2-C3 + MAJOR R23+3-B5（codex 第四轮）：
-		// commit 阶段订阅 DB 加载失败时落一条**独立 EntryType** 的待对账账单
-		//
-		// fix CRITICAL Phase 4-codex（第二十四轮）：原用 NonFatal 写失败后只 log → return，
-		// 形成"已交付服务但无扣费、无待对账记录"的财务黑洞。改为重试 3 次 + 失败后写日志放大警报，
-		// 让 admin 看 [BILLING-LOST-DEBT] 必要时按 ApiLog 手工补账。
-		if !failedRequest && commitDecision.NeedsRetry {
-			log.Printf("[BILLING-DB-RETRY] user=%d model=%s raw_cost_micro=%d charged_cost_micro=%d sub-load failed, recording for manual reconcile",
-				user.ID, modelName, costMicroUSD, chargedCostMicroUSD)
-			relatedID := uint(0)
-			relatedType := ""
-			if apiLogPersisted {
-				relatedID = apiLog.ID
-				relatedType = "api_log"
-			}
-			pendingEntry := database.BillingEntryInput{
-				UserID:               user.ID,
-				EntryType:            database.BillingTypeApiUsagePendingReconcile,
-				BillingState:         database.BillingStatePendingReconcile,
-				AmountUSD:            0,
-				BalanceAfterUSD:      user.Quota,
-				ModelName:            modelName,
-				TokensTotal:          promptTokens + completionTokens, // cached/reasoning 是 prompt/completion 子集（cost 算法保持一致）
-				RequestID:            upstreamRequestID(relatedID),
-				EstimatedInputTokens: promptTokens,
-				EstimatedCostUSD:     costMicroUSD,
-				RelatedType:          relatedType,
-				RelatedID:            relatedID,
-				Description: fmt.Sprintf("[DB-RETRY] %s · %d+%d tokens · %s 待对账（订阅 DB 加载失败）",
-					modelName, promptTokens, completionTokens, FormatChargedCostForDescription(costMicroUSD, chargedCostMicroUSD)),
-			}
-			// 重试 3 次：每次新事务，失败 → 100ms backoff
-			var billErr error
-			for attempt := 1; attempt <= 3; attempt++ {
-				billErr = database.WriteBillingEntryNonFatal(pendingEntry)
-				if billErr == nil {
-					break
-				}
-				log.Printf("[BILLING-DB-RETRY] write attempt %d/3 failed: %v", attempt, billErr)
-				if attempt < 3 {
-					time.Sleep(100 * time.Millisecond)
-				}
-			}
-			if billErr != nil {
-				// 所有重试都失败 → 财务损失警报。admin 必须按 ApiLog（已写入）手工补账。
-				log.Printf("[BILLING-LOST-DEBT] user=%d model=%s raw_cost_micro=%d charged_cost_micro=%d api_log_id=%d UNRECOVERABLE — manual reconcile from ApiLog required: %v",
-					user.ID, modelName, costMicroUSD, chargedCostMicroUSD, apiLog.ID, billErr)
-			}
-			return true // 不走 sub 账单 + 不走 balance fallback 扣费
-		}
-
-		// 账单流水：命中订阅扣额度（不动 quota，AmountUSD=0，仅审计 token 数）
-		// 失败时仅日志，不影响请求 — 上游已成功，账单是审计层而非阻塞层。
-		// Phase 8：addon 已移除，所有命中订阅都走 api_usage_sub
-		if commitOK {
-			entryType := database.BillingTypeApiUsageSub
-			productLabel := "套餐"
-			subID := commitDecision.SubscriptionID
-			tokensTotal := promptTokens + completionTokens // cached/reasoning 是子集
-			// fix Major（codex 第十四轮）：失败 ApiLog 时 RelatedID 留空，避免账单挂死链
-			relatedID := uint(0)
-			relatedType := ""
-			if apiLogPersisted {
-				relatedID = apiLog.ID
-				relatedType = "api_log"
-			}
-			// 命中订阅不动 quota，余额不变；这里 user.Quota 是缓存快照，
-			// 在订阅命中场景下数值无金额变动，仅作为审计参考写入。
-			if billErr := database.WriteBillingEntryNonFatal(database.BillingEntryInput{
-				UserID:               user.ID,
-				EntryType:            entryType,
-				AmountUSD:            0,
-				BalanceAfterUSD:      user.Quota,
-				ModelName:            modelName,
-				TokensTotal:          tokensTotal,
-				SourceSubscriptionID: &subID,
-				RelatedType:          relatedType,
-				RelatedID:            relatedID,
-				Description:          fmt.Sprintf("%s · %s · %d tokens · %s", productLabel, modelName, tokensTotal, FormatChargedCostForDescription(costMicroUSD, chargedCostMicroUSD)),
-			}); billErr != nil {
-				log.Printf("[BILLING-AUDIT-FAIL] user=%d sub=%d type=%s: %v", user.ID, subID, entryType, billErr)
-			}
-			// 事实化记录：本次请求收入归订阅。付费订阅 = chargedCost；管理员赠送订阅 = 0。
-			// 赠送订阅仍会保留 ApiLog.cost 作为真实上游成本，但不应污染真实营收与毛利分子。
-			effectiveRevenueMicroUSD = subscriptionRevenueMicroUSD(chargedCostMicroUSD, commitDecision.SubscriptionIsGranted)
-			if apiLogPersisted {
-				RecordApiLogRevenue(apiLog.ID, database.RevenueSourceSubscription, effectiveRevenueMicroUSD, subID)
-			}
-		}
-
-		if !commitOK && chargedCostMicroUSD > 0 {
-			// 三段消费 fallback 到余额。
-			//
-			// fix CRITICAL（多模型审计第二十五轮）：本路径下扣减用户余额必须使用 chargedCostMicroUSD（套餐口径）
-			// 而不是 raw costMicroUSD。否则模型权重对余额扣费失效，Haiku 多扣（weight=0.3）、Opus 少扣（weight=3.5），
-			// 违反三账分离原则（raw_cost 仅记账，charged_cost 才是用户实扣）。
-			//
-			// PRODUCT REVERSAL（本次决策）：经业务确认，余额扣费改回 rawCost。理由：
-			//   - 订阅是"模型组合包月"产品，modelWeight 调配 Haiku/Opus 含金量是产品定义
-			//   - 余额是用户预付美元，应按上游真实成本扣，不应被 modelWeight 重定价
-			//   - 这是产品策略变更，不是 bug 回退
-			//   - 业务影响：纯余额用户 Opus 扣费下降（3.5x→1x），Haiku 扣费上升（0.3x→1x）
-			// fix CRITICAL Sprint1-P0-3：余额扣减必须 CAS 原子化
-			// 旧实现：`UPDATE quota = quota - ?` 无 WHERE quota >= ? 守卫 → 并发请求可把余额打负。
-			// 新实现：`WHERE id=? AND quota >= ?` 条件 UPDATE：
-			//   - 命中（RowsAffected==1）→ 正常扣费 + 写 api_consume_balance 账单
-			//   - 未命中（RowsAffected==0）→ 重查区分用户缺失 vs 余额不足；
-			//     余额不足时上游服务已交付，不打负余额，改写 api_usage_pending_reconcile 待对账。
-			deductQuotaAtomic := func() {
-				var balanceAfterMicroUSD int64
-				balanceConsumeMicroUSD := costMicroUSD // rawCost：余额路径按上游真实成本扣费
-				balanceConsumed := false               // CAS 成功（非 pending）才记 revenue
-				var referralReward database.ReferralPaidSpendRewardResult
-				referralRewardBPS, referralRewardWindowSeconds := readReferralPaidSpendRewardConfig()
-				txErr := database.DB.Transaction(func(tx *gorm.DB) error {
-					if !TryConsumeBalanceTx(tx, user.ID, balanceConsumeMicroUSD, true /* forceTrack */) {
-						log.Printf("[BILLING-WINDOW-TRACK-FAIL] user=%d model=%s raw_cost_micro=%d charged_cost_micro=%d forceTrack failed (DB issue), continuing quota deduct", user.ID, modelName, balanceConsumeMicroUSD, chargedCostMicroUSD)
-					}
-
-					// 原子 CAS：仅在余额 ≥ 扣费金额时执行 UPDATE
-					res := tx.Model(&database.User{}).
-						Where("id = ? AND quota >= ?", user.ID, balanceConsumeMicroUSD).
-						UpdateColumn("quota", gorm.Expr("quota - ?", balanceConsumeMicroUSD))
-					if res.Error != nil {
-						return fmt.Errorf("quota deduct: %w", res.Error)
-					}
-
-					tokensTotal := promptTokens + completionTokens // cached/reasoning 是 prompt/completion 子集
-					relatedID := uint(0)
-					relatedType := ""
-					if apiLogPersisted {
-						relatedID = apiLog.ID
-						relatedType = "api_log"
-					}
-
-					if res.RowsAffected == 0 {
-						// CAS 失败：用户不存在 OR 余额不足。重查区分。
-						var u database.User
-						if err := tx.Select("id, quota").First(&u, user.ID).Error; err != nil {
-							return fmt.Errorf("user row missing: %w", err)
-						}
-						// 用户存在 → 余额不足。上游服务已交付，写 pending_reconcile，
-						// 不动 quota（保证余额永不为负），admin 人工对账或免扣。
-						log.Printf("[BILLING-INSUFFICIENT-BALANCE] user=%d model=%s raw_cost_micro=%d charged_cost_micro=%d current_quota=%d — recording pending_reconcile (service already delivered)",
-							user.ID, modelName, balanceConsumeMicroUSD, chargedCostMicroUSD, u.Quota)
-						return database.WriteBillingEntry(tx, database.BillingEntryInput{
-							UserID:               user.ID,
-							EntryType:            database.BillingTypeApiUsagePendingReconcile,
-							BillingState:         database.BillingStatePendingReconcile,
-							AmountUSD:            0, // 未实际扣减
-							BalanceAfterUSD:      u.Quota,
-							ModelName:            modelName,
-							TokensTotal:          tokensTotal,
-							RequestID:            upstreamRequestID(relatedID),
-							EstimatedInputTokens: promptTokens,
-							EstimatedCostUSD:     balanceConsumeMicroUSD,
-							RelatedType:          relatedType,
-							RelatedID:            relatedID,
-							Description: fmt.Sprintf("[INSUFFICIENT-BALANCE] %s · %d tokens · 余额不足，已交付服务待对账（按 raw 上游成本计 $%s）",
-								modelName, tokensTotal, database.FormatMicroUSD(balanceConsumeMicroUSD)),
-						})
-					}
-
-					// CAS 成功 → 余额已扣减，写正常 api_consume_balance 账单
-					var freshUser database.User
-					if err := tx.Select("id, quota").First(&freshUser, user.ID).Error; err != nil {
-						return fmt.Errorf("re-select quota: %w", err)
-					}
-					balanceAfterMicroUSD = freshUser.Quota
-
-					if err := database.WriteBillingEntry(tx, database.BillingEntryInput{
-						UserID:          user.ID,
-						EntryType:       database.BillingTypeApiConsumeBalance,
-						AmountUSD:       -balanceConsumeMicroUSD,
-						BalanceAfterUSD: balanceAfterMicroUSD,
-						ModelName:       modelName,
-						TokensTotal:     tokensTotal,
-						RelatedType:     relatedType,
-						RelatedID:       relatedID,
-						Description:     fmt.Sprintf("余额扣费 · %s · %d tokens · %s", modelName, tokensTotal, FormatChargedCostForDescription(costMicroUSD, chargedCostMicroUSD)),
-					}); err != nil {
-						return fmt.Errorf("write billing: %w", err)
-					}
-					reward, err := database.ApplyReferralPaidSpendRewardTx(
-						tx,
-						user.ID,
-						balanceConsumeMicroUSD,
-						referralRewardBPS,
-						referralRewardWindowSeconds,
-						time.Now(),
-						relatedType,
-						relatedID,
-						fmt.Sprintf("余额扣费 · %s", modelName),
-					)
-					if err != nil {
-						return fmt.Errorf("apply referral spend reward: %w", err)
-					}
-					referralReward = reward
-					balanceConsumed = true
-					return nil
-				})
-				if txErr != nil {
-					log.Printf("[BILLING-CRITICAL] user=%d model=%s raw_cost_micro=%d charged_cost_micro=%d QUOTA-DEDUCT-TX-FAILED reason=balance-fallback: %v",
-						user.ID, modelName, costMicroUSD, chargedCostMicroUSD, txErr)
-					return
-				}
-				// 事实化记录：CAS 成功的余额扣费路径才记 revenue；pending_reconcile 分支未真实扣钱不记
-				if balanceConsumed {
-					effectiveRevenueMicroUSD = balanceConsumeMicroUSD
-					if apiLogPersisted {
-						RecordApiLogRevenue(apiLog.ID, database.RevenueSourceBalance, balanceConsumeMicroUSD, 0)
-					}
-				}
-				RefreshUserAuth(user.ID)
-				if referralReward.ReferrerID != 0 && referralReward.RewardMicroUSD > 0 {
-					RefreshUserAuth(referralReward.ReferrerID)
-				}
-			}
-
-			if !user.BalanceConsumeEnabled {
-				// fix CRITICAL Phase 4-codex（第二十四轮）：UNAUTHORIZED-FALLBACK 路径——
-				// 订阅在 commit 阶段被并发耗尽 + 余额消费禁用 → 上游已交付服务但平台无路扣费。
-				// 原实现仅 log，留下"已服务但无账"黑洞。改为写 api_usage_pending_reconcile 待对账，
-				// AmountUSD=0（确实没扣 quota）+ Description 标注 cost 让 admin 决策补扣或免扣。
-				log.Printf("[BILLING-PENDING-DEBT] user=%d model=%s raw_cost_micro=%d charged_cost_micro=%d UNAUTHORIZED-FALLBACK reason=subscription_drained_during_request balance_consume_disabled — recording for admin reconcile",
-					user.ID, modelName, costMicroUSD, chargedCostMicroUSD)
-				relatedID := uint(0)
-				relatedType := ""
-				if apiLogPersisted {
-					relatedID = apiLog.ID
-					relatedType = "api_log"
-				}
-				pendingEntry := database.BillingEntryInput{
-					UserID:               user.ID,
-					EntryType:            database.BillingTypeApiUsagePendingReconcile,
-					BillingState:         database.BillingStatePendingReconcile,
-					AmountUSD:            0,
-					BalanceAfterUSD:      user.Quota,
-					ModelName:            modelName,
-					TokensTotal:          promptTokens + completionTokens, // cached/reasoning 是 prompt/completion 子集（cost 算法保持一致）
-					RequestID:            upstreamRequestID(relatedID),
-					EstimatedInputTokens: promptTokens,
-					EstimatedCostUSD:     costMicroUSD,
-					RelatedType:          relatedType,
-					RelatedID:            relatedID,
-					Description: fmt.Sprintf("[UNAUTHORIZED-FALLBACK] %s · %d+%d tokens · %s 待对账（订阅 commit 期被耗尽 + 余额消费禁用）",
-						modelName, promptTokens, completionTokens, FormatChargedCostForDescription(costMicroUSD, chargedCostMicroUSD)),
-				}
-				var billErr error
-				for attempt := 1; attempt <= 3; attempt++ {
-					billErr = database.WriteBillingEntryNonFatal(pendingEntry)
-					if billErr == nil {
-						break
-					}
-					if attempt < 3 {
-						time.Sleep(100 * time.Millisecond)
-					}
-				}
-				if billErr != nil {
-					log.Printf("[BILLING-LOST-DEBT] user=%d model=%s raw_cost_micro=%d charged_cost_micro=%d api_log_id=%d UNRECOVERABLE — manual reconcile from ApiLog required: %v",
-						user.ID, modelName, costMicroUSD, chargedCostMicroUSD, apiLog.ID, billErr)
-				}
-			} else {
-				deductQuotaAtomic()
-			}
-		}
-
-		// 子 token UsedQuota 累加（详见原注释 — 选择"无条件累加 + precheck 拦截"模型）
-		//
-		// 按 effectiveRevenueMicroUSD 累加，与"用户实际花了多少"对齐：
-		//   - 订阅命中 → effective = chargedCost（与 SubscriptionUsage.ConsumedValue 同口径）
-		//   - 余额扣费 → effective = rawCost（与 User.Quota 扣减同口径）
-		//   - pending / 失败 → effective = 0，不累加
-		//
-		// 这样 sub-token.QuotaLimit 永远反映"用户实际花了多少美元"，无论后端走哪条扣减路径。
-		// 旧实现（一刀切按 chargedCost）会让纯余额用户：Opus weight=3.5 时 UsedQuota 虚高 3.5×，
-		// Haiku weight=0.3 时 UsedQuota 虚低 3.3× —— 子 token 限额语义被破坏。
-		if isSubToken && effectiveRevenueMicroUSD > 0 && status >= 200 && status < 400 {
-			res := database.DB.Model(&database.AccessToken{}).
-				Where("id = ?", subToken.ID).
-				UpdateColumn("used_quota", gorm.Expr("used_quota + ?", effectiveRevenueMicroUSD))
-			if res.Error != nil {
-				log.Printf("[SUB-TOKEN-CRITICAL] token_id=%d effective_revenue_micro=%d UsedQuota-UPDATE-FAILED: %v", subToken.ID, effectiveRevenueMicroUSD, res.Error)
-			} else if res.RowsAffected == 0 {
-				log.Printf("[SUB-TOKEN-CRITICAL] token_id=%d effective_revenue_micro=%d token-not-found-at-commit", subToken.ID, effectiveRevenueMicroUSD)
-			} else {
-				if subToken.QuotaLimit > 0 && subToken.UsedQuota+effectiveRevenueMicroUSD > subToken.QuotaLimit {
-					log.Printf("[SUB-TOKEN-OVERLIMIT] token_id=%d effective_revenue_micro=%d used-quota-exceeded-limit", subToken.ID, effectiveRevenueMicroUSD)
-				}
-				// clone-on-write 防 data race
-				authSnapshotMutex.Lock()
-				if existing, ok := AuthTokenCache[token]; ok {
-					updated := *existing
-					updated.UsedQuota += effectiveRevenueMicroUSD
-					AuthTokenCache[token] = &updated
-				}
-				authSnapshotMutex.Unlock()
-			}
-		}
-		return true
+		// P8.4：整段 deductQuota 算式抽到 proxy/text_billing.go CommitTextTurn。
+		// 这里维持原 closure 签名 + 返回语义，handler 内调用点零改动。apiErrorType /
+		// apiErrorMessage 在 closure 外被 handler mutated（如 upstream_error 路径），
+		// closure 捕获是引用类型，调用时读到最新值。
+		return CommitTextTurn(buildCommitContext(), usage, status, deliveredBytes, apiErrorType, apiErrorMessage)
 	}
 
 	// fix Major（codex 第七轮）：原实现把上游所有响应头透传给客户端，

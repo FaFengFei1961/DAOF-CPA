@@ -42,7 +42,6 @@ import (
 	"github.com/gofiber/fiber/v2"
 	gorillaws "github.com/gorilla/websocket"
 	"github.com/tidwall/gjson"
-	"gorm.io/gorm"
 )
 
 const (
@@ -527,19 +526,24 @@ func websocketTrimPayloadForLog(payload []byte) string {
 	return string(payload[:maxLen]) + "...(truncated)"
 }
 
-// commitResponsesWebsocketTurn 完成单个 response.completed 事件的计费。
-// 与 ChatCompletionProxyHandler.deductQuota 同步设计原则：
-//   - 失败请求（status<200 || >=400）不扣费
-//   - cost 用 selectedPath 价格表 × usage 算
-//   - 订阅命中扣额度（不动 quota），否则 fallback 余额 CAS 扣
-//   - 全程写 ApiLog + BillingEntry + RevenueAttribution
-//   - 任何写失败 → pending_reconcile 兜底审计
+
+
+
+// commitResponsesWebsocketTurn 为单个 response.completed 事件做计费。
+// P8.6 后变薄：找 pinned channel 下该 model 的 ChannelModel 路由 → 组装
+// CommitTextContext → 委托 proxy/text_billing.go CommitTextTurn。
+//
+// 路由查找失败（admin 改 ChannelModel 配置导致 model 不在该 channel）→ 写
+// pending_reconcile 兜底；不进入 commit pipeline（避免拿错价格扣费）。
+//
+// 注意：WS 路径没有 precheck（precheck 在 chat handler 入口；WS 接收每帧都不重做），
+// 所以 CommitTextContext.EngineDecision 传零值；
+// CommitTextContext.IsStream=true 让 cost 算不出的 ReConcile 走 pending 而非 502。
+// CommitTextContext.UpstreamHeaders=nil（WS 无 HTTP 响应头）。
 func commitResponsesWebsocketTurn(state *websocketBridgeState, modelName string, usage usageTokenCounts, payload []byte) {
 	if modelName == "" {
 		modelName = "unknown"
 	}
-
-	// 1. 找当前 pinned channel 下该 model 的价格表
 	gatewayMutex.RLock()
 	var selectedPath *database.ChannelModel
 	for _, r := range RouteCache[modelName] {
@@ -555,334 +559,24 @@ func commitResponsesWebsocketTurn(state *websocketBridgeState, modelName string,
 		writeWebsocketPendingReconcile(state, modelName, "no_pricing_route_for_model")
 		return
 	}
-
-	promptTokens := usage.PromptTokens
-	completionTokens := usage.CompletionTokens
-	cachedTokens := usage.CachedTokens
-	cacheWriteTokens := usage.CacheWriteTokens
-	cacheWrite5mTokens := usage.CacheWrite5mTokens
-	cacheWrite1hTokens := usage.CacheWrite1hTokens
-	reasoningTokens := usage.ReasoningTokens
-
-	// 2. clamp / 一致性（与 deductQuota 同一组防御）
-	if promptTokens < 0 {
-		promptTokens = 0
+	ctx := CommitTextContext{
+		User:              state.user,
+		Token:             state.token,
+		SubToken:          state.subToken,
+		IsSubToken:        state.isSubToken,
+		ModelName:         modelName,
+		Body:              payload,
+		Path:              state.path,
+		ClientIP:          state.clientIP,
+		StartTime:         state.startTime,
+		IsStream:          true,
+		FallbackUserOptIn: false,
+		SelectedPath:      selectedPath,
+		SelectedChan:      state.channel,
+		EngineDecision:    EngineDecision{},
+		UpstreamHeaders:   nil,
 	}
-	if completionTokens < 0 {
-		completionTokens = 0
-	}
-	if cachedTokens < 0 {
-		cachedTokens = 0
-	}
-	if cacheWrite5mTokens < 0 {
-		cacheWrite5mTokens = 0
-	}
-	if cacheWrite1hTokens < 0 {
-		cacheWrite1hTokens = 0
-	}
-	if reasoningTokens < 0 {
-		reasoningTokens = 0
-	}
-	cacheWriteTokens = cacheWrite5mTokens + cacheWrite1hTokens
-	if cachedTokens > promptTokens {
-		cachedTokens = promptTokens
-	}
-	if cachedTokens+cacheWriteTokens > promptTokens {
-		cacheWriteTokens = promptTokens - cachedTokens
-		if cacheWriteTokens < 0 {
-			cacheWriteTokens = 0
-		}
-	}
-	if reasoningTokens > completionTokens {
-		reasoningTokens = completionTokens
-	}
-
-	// 3. 计算 raw cost
-	inputPricePico := selectedPath.InputPricePicoPerToken
-	outputPricePico := selectedPath.OutputPricePicoPerToken
-	cachedInputPricePico := selectedPath.CachedInputPricePicoPerToken
-	if selectedPath.ContextPriceThreshold > 0 && promptTokens >= selectedPath.ContextPriceThreshold {
-		if selectedPath.HighInputPricePicoPerToken > 0 {
-			inputPricePico = selectedPath.HighInputPricePicoPerToken
-		}
-		if selectedPath.HighCachedInputPricePicoPerToken > 0 {
-			cachedInputPricePico = selectedPath.HighCachedInputPricePicoPerToken
-		}
-		if selectedPath.HighOutputPricePicoPerToken > 0 {
-			outputPricePico = selectedPath.HighOutputPricePicoPerToken
-		}
-	}
-	cacheWriteInputPricePico := selectedPath.CacheWriteInputPricePicoPerToken
-	if cacheWriteInputPricePico <= 0 {
-		cacheWriteInputPricePico = inputPricePico
-	}
-	cacheWrite1hInputPricePico := selectedPath.CacheWrite1hInputPricePicoPerToken
-	if cacheWrite1hInputPricePico <= 0 {
-		cacheWrite1hInputPricePico = inputPricePico * 2
-	}
-	nonReasoningCompletion := completionTokens - reasoningTokens
-	if nonReasoningCompletion < 0 {
-		nonReasoningCompletion = 0
-	}
-	standardInputTokens := promptTokens - cachedTokens - cacheWriteTokens
-	if standardInputTokens < 0 {
-		standardInputTokens = 0
-	}
-	costMicroUSD, costOK := checkedCostMicroUSD(
-		standardInputTokens, inputPricePico,
-		cachedTokens, cachedInputPricePico,
-		cacheWrite5mTokens, cacheWriteInputPricePico,
-		cacheWrite1hTokens, cacheWrite1hInputPricePico,
-		nonReasoningCompletion, outputPricePico,
-		reasoningTokens, outputPricePico,
-	)
-	if !costOK {
-		log.Printf("[WS-BILLING-CRITICAL] user=%d model=%s cost overflow/invalid; writing pending_reconcile", state.user.ID, modelName)
-		writeWebsocketPendingReconcile(state, modelName, "cost_calc_failed")
-		return
-	}
-
-	// 4. ResolveBillingRules — modelWeight × healthMultiplier，调用 helper
-	channelType := NormalizeChannelType(state.channel.Type)
-	billingResolution := ResolveBillingRules(modelName, payload, reasoningTokens, channelType, false).WithCosts(costMicroUSD)
-	chargedCostMicroUSD := billingResolution.ChargedCostMicroUSD
-
-	// 5. 写 ApiLog
-	apiLog := database.ApiLog{
-		UserID:              state.user.ID,
-		TokenName:           HashTokenForLog(state.token),
-		ModelName:           modelName,
-		RequestedModel:      billingResolution.RequestedModel,
-		ServedModel:         billingResolution.ServedModel,
-		PromptTokens:        promptTokens,
-		CompletionTokens:    completionTokens,
-		CachedTokens:        cachedTokens,
-		CacheWriteTokens:    cacheWriteTokens,
-		CacheWrite5mTokens:  cacheWrite5mTokens,
-		CacheWrite1hTokens:  cacheWrite1hTokens,
-		ReasoningTokens:     reasoningTokens,
-		Cost:                costMicroUSD,
-		ChargedCost:         chargedCostMicroUSD,
-		ModelWeight:         billingResolution.ModelWeight,
-		HealthMultiplier:    billingResolution.HealthMultiplier,
-		BillingRulesVersion: billingResolution.BillingRulesVersion,
-		UpstreamProvider:    sanitizeError(strings.ToLower(channelType), 64),
-		Latency:             time.Since(state.startTime).Milliseconds(),
-		Status:              200,
-		IPAddress:           state.clientIP,
-		RequestPath:         sanitizeError(state.path, 160),
-		CreatedAt:           time.Now(),
-	}
-	apiLogPersisted := true
-	if err := database.DB.Create(&apiLog).Error; err != nil {
-		log.Printf("[WS-BILLING-CRITICAL] user=%d model=%s api_log create failed: %v", state.user.ID, modelName, err)
-		apiLogPersisted = false
-	}
-
-	// 6. 写 ApiLogUsageLine（token 输入 / 输出）
-	if apiLogPersisted && (promptTokens > 0 || completionTokens > 0) {
-		writeWebsocketUsageLines(apiLog.ID, modelName, state.path, promptTokens, completionTokens, inputPricePico, outputPricePico)
-	}
-
-	// 7. 订阅扣额度 OR 余额扣费 fallback
-	commitDecision := Decide(EngineRequest{
-		UserID:       state.user.ID,
-		ModelName:    modelName,
-		InputTokens:  promptTokens,
-		OutputTokens: completionTokens,
-		CostMicroUSD: chargedCostMicroUSD,
-		IsPrecheck:   false,
-	})
-	commitOK := commitDecision.Allowed && !commitDecision.FallbackToBalance
-	var effectiveRevenueMicroUSD int64
-
-	if commitDecision.NeedsRetry {
-		log.Printf("[WS-BILLING-DB-RETRY] user=%d model=%s charged_cost_micro=%d sub-load failed", state.user.ID, modelName, chargedCostMicroUSD)
-		writeWebsocketPendingReconcileEntry(state, apiLog.ID, apiLogPersisted, modelName, "DB-RETRY", costMicroUSD, chargedCostMicroUSD, promptTokens, completionTokens)
-		return
-	}
-
-	if commitOK {
-		entryType := database.BillingTypeApiUsageSub
-		subID := commitDecision.SubscriptionID
-		tokensTotal := promptTokens + completionTokens
-		relatedID := uint(0)
-		relatedType := ""
-		if apiLogPersisted {
-			relatedID = apiLog.ID
-			relatedType = "api_log"
-		}
-		if billErr := database.WriteBillingEntryNonFatal(database.BillingEntryInput{
-			UserID:               state.user.ID,
-			EntryType:            entryType,
-			AmountUSD:            0,
-			BalanceAfterUSD:      state.user.Quota,
-			ModelName:            modelName,
-			TokensTotal:          tokensTotal,
-			SourceSubscriptionID: &subID,
-			RelatedType:          relatedType,
-			RelatedID:            relatedID,
-			Description:          fmt.Sprintf("套餐 · %s · %d tokens · %s · WS", modelName, tokensTotal, FormatChargedCostForDescription(costMicroUSD, chargedCostMicroUSD)),
-		}); billErr != nil {
-			log.Printf("[WS-BILLING-AUDIT-FAIL] user=%d sub=%d: %v", state.user.ID, subID, billErr)
-		}
-		effectiveRevenueMicroUSD = subscriptionRevenueMicroUSD(chargedCostMicroUSD, commitDecision.SubscriptionIsGranted)
-		if apiLogPersisted {
-			RecordApiLogRevenue(apiLog.ID, database.RevenueSourceSubscription, effectiveRevenueMicroUSD, subID)
-		}
-	} else if chargedCostMicroUSD > 0 {
-		if !state.user.BalanceConsumeEnabled {
-			log.Printf("[WS-BILLING-PENDING-DEBT] user=%d model=%s charged_cost_micro=%d UNAUTHORIZED-FALLBACK (balance disabled)", state.user.ID, modelName, chargedCostMicroUSD)
-			writeWebsocketPendingReconcileEntry(state, apiLog.ID, apiLogPersisted, modelName, "UNAUTHORIZED-FALLBACK", costMicroUSD, chargedCostMicroUSD, promptTokens, completionTokens)
-			return
-		}
-		effectiveRevenueMicroUSD = websocketDeductBalance(state, apiLog.ID, apiLogPersisted, modelName, costMicroUSD, chargedCostMicroUSD, promptTokens, completionTokens)
-	}
-
-	// 8. 子 token UsedQuota 累加
-	if state.isSubToken && state.subToken != nil && effectiveRevenueMicroUSD > 0 {
-		res := database.DB.Model(&database.AccessToken{}).
-			Where("id = ?", state.subToken.ID).
-			UpdateColumn("used_quota", gorm.Expr("used_quota + ?", effectiveRevenueMicroUSD))
-		if res.Error != nil {
-			log.Printf("[WS-SUB-TOKEN-CRITICAL] token_id=%d effective_revenue_micro=%d UsedQuota-UPDATE-FAILED: %v", state.subToken.ID, effectiveRevenueMicroUSD, res.Error)
-		} else {
-			authSnapshotMutex.Lock()
-			if existing, ok := AuthTokenCache[state.token]; ok {
-				updated := *existing
-				updated.UsedQuota += effectiveRevenueMicroUSD
-				AuthTokenCache[state.token] = &updated
-			}
-			authSnapshotMutex.Unlock()
-		}
-	}
-}
-
-// websocketDeductBalance 走原子 CAS 余额扣费，余额不足时写 pending_reconcile。
-// 返回实际扣到的 micro_usd（CAS 成功），失败/不足返回 0。
-func websocketDeductBalance(state *websocketBridgeState, apiLogID uint, apiLogPersisted bool, modelName string, costMicroUSD, chargedCostMicroUSD int64, promptTokens, completionTokens int) int64 {
-	balanceConsumed := false
-	var consumed int64
-	referralRewardBPS, referralRewardWindowSeconds := readReferralPaidSpendRewardConfig()
-
-	txErr := database.DB.Transaction(func(tx *gorm.DB) error {
-		if !TryConsumeBalanceTx(tx, state.user.ID, costMicroUSD, true) {
-			log.Printf("[WS-BILLING-WINDOW-TRACK-FAIL] user=%d model=%s raw_cost_micro=%d forceTrack failed", state.user.ID, modelName, costMicroUSD)
-		}
-		res := tx.Model(&database.User{}).
-			Where("id = ? AND quota >= ?", state.user.ID, costMicroUSD).
-			UpdateColumn("quota", gorm.Expr("quota - ?", costMicroUSD))
-		if res.Error != nil {
-			return fmt.Errorf("quota deduct: %w", res.Error)
-		}
-		tokensTotal := promptTokens + completionTokens
-		relatedID := uint(0)
-		relatedType := ""
-		if apiLogPersisted {
-			relatedID = apiLogID
-			relatedType = "api_log"
-		}
-		if res.RowsAffected == 0 {
-			var u database.User
-			if err := tx.Select("id, quota").First(&u, state.user.ID).Error; err != nil {
-				return fmt.Errorf("user row missing: %w", err)
-			}
-			log.Printf("[WS-BILLING-INSUFFICIENT-BALANCE] user=%d model=%s raw_cost_micro=%d current_quota=%d — pending_reconcile",
-				state.user.ID, modelName, costMicroUSD, u.Quota)
-			return database.WriteBillingEntry(tx, database.BillingEntryInput{
-				UserID:               state.user.ID,
-				EntryType:            database.BillingTypeApiUsagePendingReconcile,
-				BillingState:         database.BillingStatePendingReconcile,
-				AmountUSD:            0,
-				BalanceAfterUSD:      u.Quota,
-				ModelName:            modelName,
-				TokensTotal:          tokensTotal,
-				EstimatedInputTokens: promptTokens,
-				EstimatedCostUSD:     costMicroUSD,
-				RelatedType:          relatedType,
-				RelatedID:            relatedID,
-				Description: fmt.Sprintf("[INSUFFICIENT-BALANCE] %s · %d tokens · WebSocket 已交付，余额不足待对账（按 raw 上游成本计 $%s）",
-					modelName, tokensTotal, database.FormatMicroUSD(costMicroUSD)),
-			})
-		}
-		var freshUser database.User
-		if err := tx.Select("id, quota").First(&freshUser, state.user.ID).Error; err != nil {
-			return fmt.Errorf("re-select quota: %w", err)
-		}
-		if err := database.WriteBillingEntry(tx, database.BillingEntryInput{
-			UserID:          state.user.ID,
-			EntryType:       database.BillingTypeApiConsumeBalance,
-			AmountUSD:       -costMicroUSD,
-			BalanceAfterUSD: freshUser.Quota,
-			ModelName:       modelName,
-			TokensTotal:     tokensTotal,
-			RelatedType:     relatedType,
-			RelatedID:       relatedID,
-			Description:     fmt.Sprintf("余额扣费 · WS · %s · %d tokens · %s", modelName, tokensTotal, FormatChargedCostForDescription(costMicroUSD, chargedCostMicroUSD)),
-		}); err != nil {
-			return fmt.Errorf("write billing: %w", err)
-		}
-		if _, err := database.ApplyReferralPaidSpendRewardTx(
-			tx,
-			state.user.ID,
-			costMicroUSD,
-			referralRewardBPS,
-			referralRewardWindowSeconds,
-			time.Now(),
-			relatedType,
-			relatedID,
-			fmt.Sprintf("余额扣费 · WS · %s", modelName),
-		); err != nil {
-			return fmt.Errorf("apply referral reward: %w", err)
-		}
-		balanceConsumed = true
-		consumed = costMicroUSD
-		return nil
-	})
-	if txErr != nil {
-		log.Printf("[WS-BILLING-CRITICAL] user=%d model=%s tx failed: %v", state.user.ID, modelName, txErr)
-		return 0
-	}
-	if balanceConsumed && apiLogPersisted {
-		RecordApiLogRevenue(apiLogID, database.RevenueSourceBalance, consumed, 0)
-	}
-	RefreshUserAuth(state.user.ID)
-	return consumed
-}
-
-// writeWebsocketUsageLines 写一对 ApiLogUsageLine（input + output token）。
-func writeWebsocketUsageLines(apiLogID uint, modelName, requestPath string, promptTokens, completionTokens int, inputPricePico, outputPricePico int64) {
-	now := time.Now()
-	if promptTokens > 0 {
-		amountMicro := int64(promptTokens) * inputPricePico / int64(1_000_000_000)
-		_ = database.DB.Create(&database.ApiLogUsageLine{
-			ApiLogID:       apiLogID,
-			ModelName:      modelName,
-			RequestPath:    sanitizeError(requestPath, 160),
-			Unit:           "token",
-			Direction:      "input",
-			Quantity:       int64(promptTokens),
-			UnitPriceMicro: inputPricePico / int64(1_000_000_000),
-			AmountMicroUSD: amountMicro,
-			CostSource:     "upstream_usage",
-			CreatedAt:      now,
-		}).Error
-	}
-	if completionTokens > 0 {
-		amountMicro := int64(completionTokens) * outputPricePico / int64(1_000_000_000)
-		_ = database.DB.Create(&database.ApiLogUsageLine{
-			ApiLogID:       apiLogID,
-			ModelName:      modelName,
-			RequestPath:    sanitizeError(requestPath, 160),
-			Unit:           "token",
-			Direction:      "output",
-			Quantity:       int64(completionTokens),
-			UnitPriceMicro: outputPricePico / int64(1_000_000_000),
-			AmountMicroUSD: amountMicro,
-			CostSource:     "upstream_usage",
-			CreatedAt:      now,
-		}).Error
-	}
+	CommitTextTurn(ctx, usage, 200, 0, "", "")
 }
 
 // writeWebsocketPendingReconcile 写一条审计 ApiLog + pending_reconcile 账单。
@@ -923,31 +617,6 @@ func writeWebsocketPendingReconcile(state *websocketBridgeState, modelName, reas
 	})
 }
 
-// writeWebsocketPendingReconcileEntry 写一条带 cost 估算的 pending_reconcile 账单
-// （用于 commit 阶段订阅 DB 加载失败 / 余额消费被禁用等异常路径，区别于完全无 usage）。
-func writeWebsocketPendingReconcileEntry(state *websocketBridgeState, apiLogID uint, apiLogPersisted bool, modelName, reasonTag string, costMicroUSD, chargedCostMicroUSD int64, promptTokens, completionTokens int) {
-	relatedID := uint(0)
-	relatedType := ""
-	if apiLogPersisted {
-		relatedID = apiLogID
-		relatedType = "api_log"
-	}
-	_ = database.WriteBillingEntryNonFatal(database.BillingEntryInput{
-		UserID:               state.user.ID,
-		EntryType:            database.BillingTypeApiUsagePendingReconcile,
-		BillingState:         database.BillingStatePendingReconcile,
-		AmountUSD:            0,
-		BalanceAfterUSD:      state.user.Quota,
-		ModelName:            modelName,
-		TokensTotal:          promptTokens + completionTokens,
-		EstimatedInputTokens: promptTokens,
-		EstimatedCostUSD:     costMicroUSD,
-		RelatedType:          relatedType,
-		RelatedID:            relatedID,
-		Description: fmt.Sprintf("[%s] WS %s · %d+%d tokens · %s 待对账",
-			reasonTag, modelName, promptTokens, completionTokens, FormatChargedCostForDescription(costMicroUSD, chargedCostMicroUSD)),
-	})
-}
 
 // buildUpstreamWebsocketURL 把 http(s):// channel base url 转为 ws(s)://，
 // 并追加 client 实际请求的 path（保留 `/v1/responses` 与 `/backend-api/codex/responses` 两种）。
