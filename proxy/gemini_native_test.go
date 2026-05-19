@@ -531,6 +531,53 @@ func TestGeminiNative_RejectsFileURI(t *testing.T) {
 	}
 }
 
+func TestGeminiNative_ListModelsPassthrough(t *testing.T) {
+	db := setupImageGenerationTest(t)
+	backend := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodGet {
+			t.Errorf("upstream method=%s want GET", r.Method)
+		}
+		if r.URL.Path != "/v1beta/models" {
+			t.Errorf("upstream path=%s want /v1beta/models", r.URL.Path)
+		}
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{"models":[{"name":"models/gemini-2.5-flash","baseModelId":"gemini-2.5-flash"},{"name":"models/gemini-3.1-pro-preview"}]}`))
+	}))
+	t.Cleanup(backend.Close)
+
+	user := database.User{ID: 70, Username: "list-models", Token: "sk-list-models", Status: 1, Quota: 1_000_000, BalanceConsumeEnabled: true}
+	if err := db.Create(&user).Error; err != nil {
+		t.Fatalf("seed user: %v", err)
+	}
+	AuthCache[user.Token] = &user
+	if err := db.Create(&database.Channel{ID: 50, Name: "list-models-test", Type: ChannelTypeCLIProxy, BaseURL: backend.URL, Key: "upstream-key", Status: 1}).Error; err != nil {
+		t.Fatalf("seed channel: %v", err)
+	}
+
+	app := fiber.New()
+	app.Get("/v1beta/models", GeminiNativeProxyHandler)
+	req := httptest.NewRequest(http.MethodGet, "/v1beta/models", nil)
+	req.Header.Set("Authorization", "Bearer "+user.Token)
+	resp, err := app.Test(req, -1)
+	if err != nil {
+		t.Fatalf("request: %v", err)
+	}
+	if resp.StatusCode != http.StatusOK {
+		body, _ := io.ReadAll(resp.Body)
+		t.Fatalf("status=%d want 200 body=%s", resp.StatusCode, body)
+	}
+	body, _ := io.ReadAll(resp.Body)
+	if !bytes.Contains(body, []byte("gemini-2.5-flash")) {
+		t.Fatalf("response should passthrough model list: %s", body)
+	}
+	// listModels 不计费：不应有 ApiLogUsageLine
+	var lineCount int64
+	db.Model(&database.ApiLogUsageLine{}).Count(&lineCount)
+	if lineCount != 0 {
+		t.Fatalf("listModels must not create usage line, got %d", lineCount)
+	}
+}
+
 func init() {
 	// 避免 unused import 警告
 	_ = json.Marshal

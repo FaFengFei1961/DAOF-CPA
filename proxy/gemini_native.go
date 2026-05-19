@@ -100,6 +100,14 @@ func GeminiNativeProxyHandler(c *fiber.Ctx) error {
 		}
 	}
 
+	// listModels 模式：客户端 GET /v1beta/models（无 :method action）→ 透传 CPA
+	// 给 Google AI SDK 的 listModels() 调用使用。不计费、不写 ApiLogUsageLine，
+	// 仅透传响应（CPA `s.geminiModelsHandler` 返回 Gemini 兼容的 {models: [...]}
+	// 格式）。
+	if isGeminiListModelsRequest(c) {
+		return forwardGeminiListModels(c, user, token, clientIP, startTime, path)
+	}
+
 	// parse action
 	geminiReq, parseErr := parseGeminiNativeAction(c)
 	if parseErr != nil {
@@ -337,6 +345,66 @@ func GeminiNativeProxyHandler(c *fiber.Ctx) error {
 	copyImageResponseHeaders(c, upstream.resp.Header)
 	setModelAuditHeaders(c, canonical, canonical, fallbackUserOptIn, "")
 	return c.Status(statusCode).Send(bodyCopy)
+}
+
+// isGeminiListModelsRequest 检测请求是 listModels 模式：GET 方法 + action 为空
+// （/v1beta/models 直接路径，无 :method 后缀）。
+func isGeminiListModelsRequest(c *fiber.Ctx) bool {
+	if c.Method() != http.MethodGet {
+		return false
+	}
+	action := strings.TrimPrefix(c.Params("*"), "/")
+	return action == ""
+}
+
+// forwardGeminiListModels 透传 GET /v1beta/models 到 CPA，让 Google AI SDK 拿到
+// Gemini 兼容的模型列表。不计费、不写 ApiLogUsageLine，但 ApiLog 会记一条用于审计。
+func forwardGeminiListModels(c *fiber.Ctx, user *database.User, token, clientIP string, startTime time.Time, path string) error {
+	// 找一个活跃的 cliproxy channel 转发
+	var ch database.Channel
+	if err := database.DB.Where("type = ? AND status = ?", ChannelTypeCLIProxy, 1).First(&ch).Error; err != nil {
+		recordProxyApiLog(user.ID, token, "list_models", 503, clientIP, startTime, path, "channel_unavailable", "no active CLIProxyAPI channel for listModels")
+		return c.Status(503).JSON(fiber.Map{"error": fiber.Map{
+			"message": "no active CLIProxyAPI channel available for /v1beta/models listing",
+			"type":    "service_unavailable",
+		}})
+	}
+	upstreamURL := strings.TrimRight(ch.BaseURL, "/") + database.EndpointGeminiNative
+	if alt := strings.TrimSpace(c.Query("alt")); alt != "" {
+		upstreamURL += "?alt=" + alt
+	}
+	upstreamCtx, upstreamCancel := context.WithCancel(c.Context())
+	defer upstreamCancel()
+	httpReq, err := http.NewRequestWithContext(upstreamCtx, http.MethodGet, upstreamURL, nil)
+	if err != nil {
+		recordProxyApiLog(user.ID, token, "list_models", 502, clientIP, startTime, path, "bad_gateway", err.Error())
+		return c.Status(502).JSON(fiber.Map{"error": fiber.Map{"message": "upstream request build failed", "type": "bad_gateway"}})
+	}
+	httpReq.Header.Set("Accept", "application/json")
+	httpReq.Header.Set("Authorization", "Bearer "+ch.Key)
+	if ch.Headers != "" {
+		var customHeaders map[string]string
+		if err := json.Unmarshal([]byte(ch.Headers), &customHeaders); err == nil {
+			for k, v := range customHeaders {
+				httpReq.Header.Set(k, v)
+			}
+		}
+	}
+	httpClient := &http.Client{
+		Transport: getTransport(ch.ProxyURL),
+		Timeout:   nonStreamUpstreamTimeout(),
+	}
+	resp, err := httpClient.Do(httpReq)
+	if err != nil {
+		MarkChannelFailure(ch.ID, 0)
+		recordProxyApiLog(user.ID, token, "list_models", 502, clientIP, startTime, path, "bad_gateway", "upstream listModels connection failed")
+		return c.Status(502).JSON(fiber.Map{"error": fiber.Map{"message": "upstream connection failed", "type": "bad_gateway"}})
+	}
+	defer resp.Body.Close()
+	bodyCopy, _ := io.ReadAll(resp.Body)
+	copyImageResponseHeaders(c, resp.Header)
+	recordProxyApiLog(user.ID, token, "list_models", resp.StatusCode, clientIP, startTime, path, "", "")
+	return c.Status(resp.StatusCode).Send(bodyCopy)
 }
 
 // parseGeminiNativeAction 从 fiber 路由参数解析 "<model>:<method>"。

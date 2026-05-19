@@ -156,17 +156,28 @@ func main() {
 	})
 	// OpenAI 格式代理统一网关
 	app.All("/v1/chat/completions", llmIPCoarseLimiter, llmProxyLimiter, proxy.ChatCompletionProxyHandler)
+	// OpenAI legacy completions（GPT-3.5 之前的 prompt-based API；CPA 仍支持，
+	// DAOF 透传给 ChatCompletionProxyHandler 走同一计费链路）
+	app.Post("/v1/completions", llmIPCoarseLimiter, llmProxyLimiter, proxy.ChatCompletionProxyHandler)
 	app.All("/v1/responses", llmIPCoarseLimiter, llmProxyLimiter, proxy.ChatCompletionProxyHandler) // 兼容最新 OpenAI Agentic Responses API
+	app.Post("/v1/responses/compact", llmIPCoarseLimiter, llmProxyLimiter, proxy.ChatCompletionProxyHandler)
 	app.Post("/v1/images/generations", llmIPCoarseLimiter, llmProxyLimiter, proxy.ImageGenerationProxyHandler)
 	app.Post("/v1/images/edits", llmIPCoarseLimiter, llmProxyLimiter, proxy.ImageEditProxyHandler)
 	app.Post("/v1/videos/generations", llmIPCoarseLimiter, llmProxyLimiter, proxy.VideoGenerationProxyHandler)
 	app.Post("/v1/videos/edits", llmIPCoarseLimiter, llmProxyLimiter, proxy.VideoEditProxyHandler)
 	app.Post("/v1/videos/extensions", llmIPCoarseLimiter, llmProxyLimiter, proxy.VideoExtensionProxyHandler)
 	app.Get("/v1/videos/:request_id", llmIPCoarseLimiter, llmProxyLimiter, proxy.VideoRetrieveProxyHandler)
-	// Google Gemini 兼容 API 代理（P6）：支持 generateContent / streamGenerateContent /
-	// countTokens（Imagen 内部走 :predict，CPA 自动翻译为 Gemini 格式）。客户端用
-	// Google AI SDK / @google/generative-ai 直接调 DAOF；admin 必须在 ChannelModel
-	// .AllowedEndpoints 中加 /v1/v1beta/models 启用对应 model。
+	// Codex CLI 默认 base_url 兼容（与 /v1/responses 调用同一 handler，让 user 不必
+	// 改 chatgpt_base_url 配置）
+	codexDirect := app.Group("/backend-api/codex", llmIPCoarseLimiter, llmProxyLimiter)
+	codexDirect.All("/responses", proxy.ChatCompletionProxyHandler)
+	codexDirect.Post("/responses/compact", proxy.ChatCompletionProxyHandler)
+	// Google Gemini 兼容 API 代理（P6）：generateContent / streamGenerateContent /
+	// countTokens（Imagen 内部走 :predict，CPA 自动翻译为 Gemini 格式）+ listModels
+	// (GET /v1beta/models 无 action 透传 CPA 模型列表)。客户端用 Google AI SDK /
+	// @google/generative-ai 直接调 DAOF；admin 必须在 ChannelModel.AllowedEndpoints
+	// 中加 /v1beta/models 启用对应 model。
+	app.Get("/v1beta/models", llmIPCoarseLimiter, llmProxyLimiter, proxy.GeminiNativeProxyHandler)
 	app.Post("/v1beta/models/*", llmIPCoarseLimiter, llmProxyLimiter, proxy.GeminiNativeProxyHandler)
 	app.Get("/v1beta/models/*", llmIPCoarseLimiter, llmProxyLimiter, proxy.GeminiNativeProxyHandler)
 	// Anthropic 原生 Messages API（Claude Code / Anthropic SDK 默认调用此路径）
@@ -175,9 +186,6 @@ func main() {
 	app.All("/v1/v1/messages", llmIPCoarseLimiter, llmProxyLimiter, proxy.ChatCompletionProxyHandler)
 	app.All("/v1/messages/count_tokens", llmIPCoarseLimiter, llmProxyLimiter, proxy.ChatCompletionProxyHandler)
 	app.All("/v1/v1/messages/count_tokens", llmIPCoarseLimiter, llmProxyLimiter, proxy.ChatCompletionProxyHandler)
-	// Gemini 原生 Generative Language API（Gemini CLI / Google GenAI SDK）
-	app.All("/v1beta/models/:modelAction", llmIPCoarseLimiter, llmProxyLimiter, proxy.ChatCompletionProxyHandler)
-	app.All("/v1/models/:modelAction", llmIPCoarseLimiter, llmProxyLimiter, proxy.ChatCompletionProxyHandler)
 	app.Get("/v1/models", controller.GetPublicModels)
 	app.Get("/v1/v1/models", controller.GetPublicModels)
 
