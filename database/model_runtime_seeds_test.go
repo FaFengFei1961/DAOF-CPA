@@ -229,7 +229,7 @@ func TestValidateChannelModelActivation_BlocksUnsupportedMediaAndUnpricedText(t 
 	}
 }
 
-func TestSeedModelRuntimeDefaults_TotalCountAlignsWithCPA(t *testing.T) {
+func TestSeedModelRuntimeDefaults_TotalCount(t *testing.T) {
 	db, err := gorm.Open(sqlite.Open("file::memory:?cache=private"), &gorm.Config{})
 	if err != nil {
 		t.Fatalf("open sqlite: %v", err)
@@ -242,25 +242,44 @@ func TestSeedModelRuntimeDefaults_TotalCountAlignsWithCPA(t *testing.T) {
 	}
 	SeedModelRuntimeDefaults()
 
-	// CPA 上游 2026-05-19 实际暴露 42 个模型（Anthropic 11 + OpenAI 7 + Google 15 + Grok 9）。
-	// DAOF seed 总数必须保持对齐——少了说明遗漏 CPA 新增模型；多了说明 seed 写入了上游
-	// 不存在的 alias。后续 CPA 暴露列表变化时需要同步更新此断言。
-	const cpaModelCount = int64(42)
+	// DAOF seed 总数 = 59：
+	//   - 38 个对齐 CPA registry（含已确认 pricing 的内置 + 17 个 alias_or_unofficial）
+	//   - 4 个 DAOF 内置但不在 CPA registry/models.json（gpt-image-2 + grok-imagine-* 通过
+	//     CPA client_models 暴露，不在 registry/models.json）
+	//   - 17 个 alias_or_unofficial（user 2026-05-19 决策：把 CPA registry 暴露的全部补进
+	//     seed，admin UI 显示完整列表，启用前由 admin 手填 pricing 并切 Supported=true）
+	//
+	// 当 CPA registry 变化或 admin 完善某个 alias 的 pricing 后，需要同步更新此断言。
+	const expectedSeedCount = int64(59)
 	var got int64
 	if err := DB.Model(&ModelCatalog{}).Count(&got).Error; err != nil {
 		t.Fatalf("count catalog: %v", err)
 	}
-	if got != cpaModelCount {
-		t.Fatalf("seed catalog count=%d want %d (must align with CPA's exposed model list)", got, cpaModelCount)
+	if got != expectedSeedCount {
+		t.Fatalf("seed catalog count=%d want %d", got, expectedSeedCount)
 	}
 
-	// 锁定补的 10 个 alias_or_unofficial 模型必须 Supported=false + DefaultEnabled=false
-	// （admin 启用前手动确认 pricing + 切 Supported=true）。
+	// 锁定 17 个 alias_or_unofficial 模型必须 Supported=false + DefaultEnabled=false +
+	// OfficialStatus=alias_or_unofficial（admin 启用前手动确认 pricing + 切 Supported=true）。
 	uncommitted := []string{
+		// Anthropic alias
+		"claude-opus-4-6-thinking",
+		// OpenAI alias
+		"gpt-5.3-codex-spark", "gpt-oss-120b-medium",
+		// Gemini text alias
 		"gemini-3-flash", "gemini-3-pro-low", "gemini-3-pro-high", "gemini-3-pro-preview",
 		"gemini-flash-latest", "gemini-flash-lite-latest", "gemini-pro-agent",
-		"gemini-3.1-flash-image",
+		"gemini-3.1-pro-low", "gemini-pro-latest",
+		// Gemini image (CPA antigravity / generateContent 路径，DAOF /v1/images/* 当前不接通)
+		"gemini-3.1-flash-image", "gemini-3.1-flash-image-preview",
+		"gemini-2.5-flash-image", "gemini-3-pro-image-preview",
+		// Google Imagen (CPA Vertex executor 路径，DAOF 不接通)
+		"imagen-3.0-fast-generate-001", "imagen-3.0-generate-002",
+		"imagen-4.0-fast-generate-001", "imagen-4.0-generate-001", "imagen-4.0-ultra-generate-001",
+		// xAI alias
 		"grok-3-mini", "grok-3-mini-fast",
+		// Moonshot Kimi
+		"kimi-k2", "kimi-k2-thinking", "kimi-k2.5", "kimi-k2.6",
 	}
 	for _, id := range uncommitted {
 		var cat ModelCatalog
