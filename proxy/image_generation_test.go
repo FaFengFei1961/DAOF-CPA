@@ -30,6 +30,7 @@ func setupImageGenerationTest(t *testing.T) *gorm.DB {
 		&database.AccessToken{},
 		&database.Channel{},
 		&database.ChannelModel{},
+		&database.ModelCatalog{},
 		&database.ModelPricingRule{},
 		&database.ApiLog{},
 		&database.ApiLogUsageLine{},

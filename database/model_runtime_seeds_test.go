@@ -361,6 +361,120 @@ func TestValidateChannelModelActivation_VideoEditsRequiresInputPricing(t *testin
 	}
 }
 
+func TestCanonicalRuntimeImageModel_AcceptsAdminRegisteredThirdParty(t *testing.T) {
+	db, err := gorm.Open(sqlite.Open("file::memory:?cache=private"), &gorm.Config{})
+	if err != nil {
+		t.Fatalf("open sqlite: %v", err)
+	}
+	oldDB := DB
+	DB = db
+	t.Cleanup(func() { DB = oldDB })
+	if err := DB.AutoMigrate(&ModelCatalog{}); err != nil {
+		t.Fatalf("migrate: %v", err)
+	}
+
+	// 1. 未注册：拒绝
+	if _, ok := CanonicalRuntimeImageModel("sd-3.5-large"); ok {
+		t.Fatalf("unregistered model should be rejected before admin adds catalog row")
+	}
+
+	// 2. admin 加 catalog row（Supported=true）：接受
+	if err := DB.Create(&ModelCatalog{
+		ProviderKey: "fal", ProviderName: "fal.ai",
+		ModelID: "sd-3.5-large", DisplayName: "Stable Diffusion 3.5 Large",
+		Category: ModelCategoryImage, BillingMode: BillingModeImage,
+		Supported: true,
+	}).Error; err != nil {
+		t.Fatalf("seed catalog: %v", err)
+	}
+	got, ok := CanonicalRuntimeImageModel("sd-3.5-large")
+	if !ok || got != "sd-3.5-large" {
+		t.Fatalf("CanonicalRuntimeImageModel=(%q,%v) want sd-3.5-large/true after admin registration", got, ok)
+	}
+
+	// 3. 客户端带前缀也能命中（剥前缀查 base）
+	got, ok = CanonicalRuntimeImageModel("fal/sd-3.5-large")
+	if !ok || got != "sd-3.5-large" {
+		t.Fatalf("prefixed client model lookup=(%q,%v) want sd-3.5-large/true", got, ok)
+	}
+
+	// 4. admin 直接用带前缀注册也支持
+	if err := DB.Create(&ModelCatalog{
+		ProviderKey: "replicate", ProviderName: "Replicate",
+		ModelID: "replicate/flux-1.1", DisplayName: "FLUX 1.1",
+		Category: ModelCategoryImage, BillingMode: BillingModeImage,
+		Supported: true,
+	}).Error; err != nil {
+		t.Fatalf("seed prefixed catalog: %v", err)
+	}
+	got, ok = CanonicalRuntimeImageModel("replicate/flux-1.1")
+	if !ok || got != "replicate/flux-1.1" {
+		t.Fatalf("admin-registered prefixed model=(%q,%v) want replicate/flux-1.1/true", got, ok)
+	}
+
+	// 5. Supported=false：仍拒绝（admin 软关 model 时立即生效）
+	if err := DB.Create(&ModelCatalog{
+		ProviderKey: "fal", ProviderName: "fal.ai",
+		ModelID: "unsupported-model", DisplayName: "Disabled",
+		Category: ModelCategoryImage, BillingMode: BillingModeImage,
+		Supported: false,
+	}).Error; err != nil {
+		t.Fatalf("seed unsupported: %v", err)
+	}
+	if _, ok := CanonicalRuntimeImageModel("unsupported-model"); ok {
+		t.Fatalf("Supported=false catalog row should be rejected")
+	}
+
+	// 6. 静态白名单仍优先（fast path）— 内置模型即使不在 DB 也工作
+	if _, ok := CanonicalRuntimeImageModel("gpt-image-2"); !ok {
+		t.Fatalf("static built-in gpt-image-2 must work even without catalog row")
+	}
+}
+
+func TestIsRuntimeTokenBilledImageModel_RespectsAdminBillingMode(t *testing.T) {
+	db, err := gorm.Open(sqlite.Open("file::memory:?cache=private"), &gorm.Config{})
+	if err != nil {
+		t.Fatalf("open sqlite: %v", err)
+	}
+	oldDB := DB
+	DB = db
+	t.Cleanup(func() { DB = oldDB })
+	if err := DB.AutoMigrate(&ModelCatalog{}); err != nil {
+		t.Fatalf("migrate: %v", err)
+	}
+
+	// 内置 gpt-image-2 → token-billed（static fast path，即使无 DB row）
+	if !IsRuntimeTokenBilledImageModel("gpt-image-2") {
+		t.Fatalf("built-in gpt-image-2 must be token-billed via static fast path")
+	}
+
+	// admin 注册 token-billed 第三方 image model
+	if err := DB.Create(&ModelCatalog{
+		ProviderKey: "openai", ProviderName: "OpenAI compat",
+		ModelID: "gpt-image-3-preview", DisplayName: "GPT Image 3 Preview",
+		Category: ModelCategoryImage, BillingMode: BillingModeToken,
+		Supported: true,
+	}).Error; err != nil {
+		t.Fatalf("seed token-billed: %v", err)
+	}
+	if !IsRuntimeTokenBilledImageModel("gpt-image-3-preview") {
+		t.Fatalf("admin-registered token-billed model should be detected via DB")
+	}
+
+	// admin 注册 image-billed（per-image）第三方
+	if err := DB.Create(&ModelCatalog{
+		ProviderKey: "fal", ProviderName: "fal.ai",
+		ModelID: "sdxl", DisplayName: "SDXL",
+		Category: ModelCategoryImage, BillingMode: BillingModeImage,
+		Supported: true,
+	}).Error; err != nil {
+		t.Fatalf("seed image-billed: %v", err)
+	}
+	if IsRuntimeTokenBilledImageModel("sdxl") {
+		t.Fatalf("admin-registered image-billed model must NOT report token-billed")
+	}
+}
+
 func TestCanonicalRuntimeImageModel_AllowsCLIProxyPrefixes(t *testing.T) {
 	for _, in := range []string{
 		"grok-imagine-image",

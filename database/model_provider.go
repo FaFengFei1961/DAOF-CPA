@@ -50,18 +50,44 @@ func IsRuntimeImageModelSupported(modelID string) bool {
 	return ok
 }
 
+// CanonicalRuntimeImageModel 把客户端传入的图像 model_id 归一化为运行时正式名。
+//
+// 双层 lookup：
+//   - **静态内置**：gpt-image-2 + grok-imagine-image{,-quality}。pure function，
+//     测试简单且 fast path。
+//   - **动态 admin 注册**：查 ModelCatalog WHERE category=image AND supported=true，
+//     支持 admin 通过新增 ModelCatalog row 注册任意 OpenAI 兼容图像服务
+//     （fal.ai / Replicate / 自托管 OpenAI 兼容 endpoint 等）。
+//     依赖 [[media_endpoint_allowlist]] 2026-05-19 策略修订：代码全支持，
+//     管理后台显式启用。
+//
+// 客户端前缀（xai/x-ai/grok/openai/<provider>/）会被剥除后查 base。如果
+// admin 注册时带前缀（如 "fal/sd-3.5"），则原 raw 也会查一次。
 func CanonicalRuntimeImageModel(modelID string) (string, bool) {
 	raw := strings.ToLower(strings.TrimSpace(modelID))
+	if raw == "" {
+		return "", false
+	}
+	// 静态内置 fast path
+	if canonical, ok := canonicalStaticImageModel(raw); ok {
+		return canonical, true
+	}
+	// admin-registered fallback：查 ModelCatalog
+	return canonicalDBImageModel(raw)
+}
+
+// canonicalStaticImageModel 是内置 OpenAI 兼容图像模型的硬编码白名单。
+// gpt-image-2 + grok-imagine-image{,-quality}，含前缀 alias 处理。
+// 提取出来便于单元测试 + DB-less 环境（如 seed 测试）保持兼容。
+func canonicalStaticImageModel(raw string) (string, bool) {
 	prefix := ""
 	base := raw
 	if idx := strings.LastIndex(raw, "/"); idx >= 0 && idx < len(raw)-1 {
 		prefix = strings.TrimSpace(raw[:idx])
 		base = strings.TrimSpace(raw[idx+1:])
 	}
-	if prefix != "" && prefix != "xai" && prefix != "x-ai" && prefix != "grok" {
-		if prefix != "openai" {
-			return "", false
-		}
+	if prefix != "" && prefix != "xai" && prefix != "x-ai" && prefix != "grok" && prefix != "openai" {
+		return "", false
 	}
 	switch base {
 	case "grok-imagine-image", "grok-imagine-image-quality":
@@ -79,9 +105,55 @@ func CanonicalRuntimeImageModel(modelID string) (string, bool) {
 	}
 }
 
+// canonicalDBImageModel 查 ModelCatalog 看是否有 admin 注册的图像模型。
+// 先查 raw（含前缀，admin 可能用 "fal/sd-3.5" 注册），再查 base（剥前缀）。
+// 命中要求 Category=image AND Supported=true（admin 在 ModelCatalog 标 Supported
+// 即表示"代码侧已接通该模型"——是否在客户端 RouteCache 暴露由 ChannelModel.Status 决定）。
+func canonicalDBImageModel(raw string) (string, bool) {
+	if DB == nil {
+		return "", false
+	}
+	base := raw
+	if idx := strings.LastIndex(raw, "/"); idx >= 0 && idx < len(raw)-1 {
+		base = strings.TrimSpace(raw[idx+1:])
+	}
+	candidates := []string{raw}
+	if base != raw {
+		candidates = append(candidates, base)
+	}
+	for _, candidate := range candidates {
+		var count int64
+		err := DB.Model(&ModelCatalog{}).
+			Where("LOWER(model_id) = ? AND category = ? AND supported = ?", candidate, ModelCategoryImage, true).
+			Count(&count).Error
+		if err == nil && count > 0 {
+			return candidate, true
+		}
+	}
+	return "", false
+}
+
+// IsRuntimeTokenBilledImageModel 判断指定 image model 是否走 token 计费路径
+// （gpt-image-2 系列）。静态内置只识别 gpt-image-2；admin 注册的模型由
+// ModelCatalog.BillingMode 字段决定。
 func IsRuntimeTokenBilledImageModel(modelID string) bool {
 	canonical, ok := CanonicalRuntimeImageModel(modelID)
-	return ok && canonical == "gpt-image-2"
+	if !ok {
+		return false
+	}
+	// 静态内置 fast path
+	if canonical == "gpt-image-2" {
+		return true
+	}
+	// admin-registered：查 ModelCatalog.BillingMode
+	if DB == nil {
+		return false
+	}
+	var cat ModelCatalog
+	if err := DB.Where("LOWER(model_id) = ? AND category = ?", canonical, ModelCategoryImage).First(&cat).Error; err != nil {
+		return false
+	}
+	return cat.BillingMode == BillingModeToken
 }
 
 func IsRuntimeVideoModelSupported(modelID string) bool {
