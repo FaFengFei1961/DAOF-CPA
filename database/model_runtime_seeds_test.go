@@ -223,6 +223,92 @@ func TestValidateChannelModelActivation_BlocksUnsupportedMediaAndUnpricedText(t 
 	}
 }
 
+func TestValidateChannelModelActivation_EditsRequiresInputPricing(t *testing.T) {
+	db, err := gorm.Open(sqlite.Open("file::memory:?cache=private"), &gorm.Config{})
+	if err != nil {
+		t.Fatalf("open sqlite: %v", err)
+	}
+	oldDB := DB
+	DB = db
+	t.Cleanup(func() { DB = oldDB })
+	if err := DB.AutoMigrate(&ModelPricingRule{}); err != nil {
+		t.Fatalf("migrate: %v", err)
+	}
+
+	cm := &ChannelModel{
+		ModelID:          "grok-imagine-image-quality",
+		Status:           1,
+		ModelCategory:    ModelCategoryImage,
+		BillingMode:      BillingModeImage,
+		AllowedEndpoints: `["/v1/images/generations","/v1/images/edits"]`,
+	}
+	// 仅 output pricing：edits 启用应被拒绝
+	if err := DB.Create(&ModelPricingRule{
+		RuleKey: "test-out-1k", PricingVersion: "test",
+		ProviderKey: "xai", ModelID: cm.ModelID, OfficialModelID: cm.ModelID,
+		BillingMode: BillingModeImage, Unit: "image", Direction: "output",
+		Resolution: "1K", PriceMicroUSD: 50_000,
+	}).Error; err != nil {
+		t.Fatalf("seed output pricing: %v", err)
+	}
+	if err := ValidateChannelModelActivation(cm); err != ErrImageEditMissingInputPricing {
+		t.Fatalf("err=%v want ErrImageEditMissingInputPricing", err)
+	}
+
+	// 加 input pricing 后激活成功
+	if err := DB.Create(&ModelPricingRule{
+		RuleKey: "test-in", PricingVersion: "test",
+		ProviderKey: "xai", ModelID: cm.ModelID, OfficialModelID: cm.ModelID,
+		BillingMode: BillingModeImage, Unit: "image", Direction: "input",
+		PriceMicroUSD: 10_000,
+	}).Error; err != nil {
+		t.Fatalf("seed input pricing: %v", err)
+	}
+	if err := ValidateChannelModelActivation(cm); err != nil {
+		t.Fatalf("activation with input+output pricing should pass: %v", err)
+	}
+
+	// 仅 generations 时不要求 input pricing：移除 input rule，预期仍激活成功
+	if err := DB.Where("rule_key = ?", "test-in").Delete(&ModelPricingRule{}).Error; err != nil {
+		t.Fatalf("delete input pricing: %v", err)
+	}
+	cm.AllowedEndpoints = `["/v1/images/generations"]`
+	if err := ValidateChannelModelActivation(cm); err != nil {
+		t.Fatalf("generations-only activation without input pricing should still pass: %v", err)
+	}
+}
+
+func TestValidateChannelModelActivation_RejectsForeignImageEndpoint(t *testing.T) {
+	db, err := gorm.Open(sqlite.Open("file::memory:?cache=private"), &gorm.Config{})
+	if err != nil {
+		t.Fatalf("open sqlite: %v", err)
+	}
+	oldDB := DB
+	DB = db
+	t.Cleanup(func() { DB = oldDB })
+	if err := DB.AutoMigrate(&ModelPricingRule{}); err != nil {
+		t.Fatalf("migrate: %v", err)
+	}
+	if err := DB.Create(&ModelPricingRule{
+		RuleKey: "test-out", PricingVersion: "test",
+		ProviderKey: "xai", ModelID: "grok-imagine-image-quality", OfficialModelID: "grok-imagine-image-quality",
+		BillingMode: BillingModeImage, Unit: "image", Direction: "output",
+		Resolution: "1K", PriceMicroUSD: 50_000,
+	}).Error; err != nil {
+		t.Fatalf("seed: %v", err)
+	}
+	cm := &ChannelModel{
+		ModelID:          "grok-imagine-image-quality",
+		Status:           1,
+		ModelCategory:    ModelCategoryImage,
+		BillingMode:      BillingModeImage,
+		AllowedEndpoints: `["/v1/images/generations","/v1/images/extensions"]`,
+	}
+	if err := ValidateChannelModelActivation(cm); err != ErrImageModelRequiresEndpoint {
+		t.Fatalf("err=%v want ErrImageModelRequiresEndpoint (extensions not in image whitelist)", err)
+	}
+}
+
 func TestCanonicalRuntimeImageModel_AllowsCLIProxyPrefixes(t *testing.T) {
 	for _, in := range []string{
 		"grok-imagine-image",

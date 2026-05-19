@@ -17,16 +17,25 @@ const (
 	BillingModeVideoSecond = "video_second"
 
 	EndpointImagesGenerations = "/v1/images/generations"
+	EndpointImagesEdits       = "/v1/images/edits"
 	EndpointVideosGenerations = "/v1/videos/generations"
 )
+
+// AllowedImageEndpoints 是图像类 ChannelModel.AllowedEndpoints 的合法子集。
+// admin 可任意组合开关：仅 generations / 仅 edits / 两者都开。
+var AllowedImageEndpoints = []string{EndpointImagesGenerations, EndpointImagesEdits}
+
+// AllowedVideoEndpoints 是视频类 ChannelModel.AllowedEndpoints 的合法子集。
+var AllowedVideoEndpoints = []string{EndpointVideosGenerations}
 
 var (
 	ErrImageGenerationUnsupported    = errors.New("image generation is not supported by the runtime yet")
 	ErrVideoGenerationUnsupported    = errors.New("video generation is not supported by the runtime yet")
 	ErrTextModelRequiresTokenBilling = errors.New("text models must use token billing")
 	ErrTextModelRequiresTokenPricing = errors.New("enabled text models require at least one token price")
-	ErrImageModelRequiresEndpoint    = errors.New("enabled image models must allow /v1/images/generations only")
+	ErrImageModelRequiresEndpoint    = errors.New("enabled image models must only allow /v1/images/generations and/or /v1/images/edits")
 	ErrImageModelRequiresPricing     = errors.New("enabled image models require official image pricing rules")
+	ErrImageEditMissingInputPricing  = errors.New("enabled image models allowing /v1/images/edits require an input image pricing rule")
 	ErrImageTokenBillingUnsupported  = errors.New("token-billed image models are only supported for runtime-confirmed token usage models")
 	ErrVideoModelRequiresEndpoint    = errors.New("enabled video models must allow /v1/videos/generations only")
 	ErrVideoModelRequiresPricing     = errors.New("enabled video models require official output video-second pricing rules")
@@ -262,6 +271,53 @@ func ChannelModelAllowsOnlyEndpoint(cm *ChannelModel, endpoint string) bool {
 	return allowed == `["`+endpoint+`"]`
 }
 
+// ChannelModelAllowedEndpointsList 解析 cm.AllowedEndpoints 为 []string；
+// 空值时回退到 DefaultAllowedEndpointsForCategory。
+func ChannelModelAllowedEndpointsList(cm *ChannelModel) []string {
+	if cm == nil {
+		return nil
+	}
+	allowed := strings.TrimSpace(cm.AllowedEndpoints)
+	if allowed == "" {
+		allowed = DefaultAllowedEndpointsForCategory(cm.ModelCategory)
+	}
+	if allowed == "" {
+		return nil
+	}
+	var endpoints []string
+	if err := json.Unmarshal([]byte(allowed), &endpoints); err != nil {
+		return nil
+	}
+	out := make([]string, 0, len(endpoints))
+	for _, e := range endpoints {
+		e = strings.TrimSpace(e)
+		if e != "" {
+			out = append(out, e)
+		}
+	}
+	return out
+}
+
+// ChannelModelAllowsEndpointsSubset 校验 cm.AllowedEndpoints 是 allowed 白名单的子集且非空。
+// 用于 P2 后的多端点放宽：允许 admin 自由组合开关 generations / edits，但不允许引入
+// 白名单外的 endpoint（防止 admin 误配置接通未审计的上游路径）。
+func ChannelModelAllowsEndpointsSubset(cm *ChannelModel, allowed []string) bool {
+	eps := ChannelModelAllowedEndpointsList(cm)
+	if len(eps) == 0 {
+		return false
+	}
+	allowedSet := make(map[string]bool, len(allowed))
+	for _, e := range allowed {
+		allowedSet[strings.TrimSpace(e)] = true
+	}
+	for _, e := range eps {
+		if !allowedSet[e] {
+			return false
+		}
+	}
+	return true
+}
+
 func ModelHasUsagePricingRule(modelID, unit string) bool {
 	if DB == nil {
 		return false
@@ -311,7 +367,7 @@ func ValidateChannelModelActivation(cm *ChannelModel) error {
 		if !IsRuntimeImageModelSupported(cm.ModelID) {
 			return ErrImageGenerationUnsupported
 		}
-		if !ChannelModelAllowsOnlyEndpoint(cm, EndpointImagesGenerations) {
+		if !ChannelModelAllowsEndpointsSubset(cm, AllowedImageEndpoints) {
 			return ErrImageModelRequiresEndpoint
 		}
 		switch cm.BillingMode {
@@ -328,6 +384,12 @@ func ValidateChannelModelActivation(cm *ChannelModel) error {
 			}
 			if !ModelHasUsagePricingRuleForDirection(cm.ModelID, "image", "output") {
 				return ErrImageModelRequiresPricing
+			}
+			// 启用了 /v1/images/edits 端点的模型必须额外配置 input image 计费规则
+			// （图生图：参考图按张计费，xAI grok-imagine-image-quality 上游 $0.01/image）。
+			if ChannelModelAllowsEndpoint(cm, EndpointImagesEdits) &&
+				!ModelHasUsagePricingRuleForDirection(cm.ModelID, "image", "input") {
+				return ErrImageEditMissingInputPricing
 			}
 		default:
 			return ErrImageModelRequiresPricing

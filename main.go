@@ -158,6 +158,7 @@ func main() {
 	app.All("/v1/chat/completions", llmIPCoarseLimiter, llmProxyLimiter, proxy.ChatCompletionProxyHandler)
 	app.All("/v1/responses", llmIPCoarseLimiter, llmProxyLimiter, proxy.ChatCompletionProxyHandler) // 兼容最新 OpenAI Agentic Responses API
 	app.Post("/v1/images/generations", llmIPCoarseLimiter, llmProxyLimiter, proxy.ImageGenerationProxyHandler)
+	app.Post("/v1/images/edits", llmIPCoarseLimiter, llmProxyLimiter, proxy.ImageEditProxyHandler)
 	app.Post("/v1/videos/generations", llmIPCoarseLimiter, llmProxyLimiter, proxy.VideoGenerationProxyHandler)
 	app.Get("/v1/videos/:request_id", llmIPCoarseLimiter, llmProxyLimiter, proxy.VideoRetrieveProxyHandler)
 	// Anthropic 原生 Messages API（Claude Code / Anthropic SDK 默认调用此路径）

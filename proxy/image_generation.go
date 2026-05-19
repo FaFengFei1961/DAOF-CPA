@@ -44,6 +44,28 @@ type imageGenerationRequest struct {
 	PartialImages     *int   `json:"partial_images,omitempty"`
 	Resolution        string `json:"resolution,omitempty"`
 	AspectRatio       string `json:"aspect_ratio,omitempty"`
+
+	// edit-only 字段，仅 /v1/images/edits 路径使用；/v1/images/generations 在
+	// parseImageGenerationRequest 显式拒绝以避免误用。
+	Image         json.RawMessage  `json:"image,omitempty"`
+	Images        []imageReference `json:"images,omitempty"`
+	Mask          *imageReference  `json:"mask,omitempty"`
+	InputFidelity string           `json:"input_fidelity,omitempty"`
+
+	// 计算字段（不序列化）：parse 阶段从 Images/Mask 提取出来供审计 + 计费用
+	InputImageCount int    `json:"-"`
+	MaskImageURL    string `json:"-"`
+	// Endpoint 记录当前请求路径（/v1/images/generations 或 /v1/images/edits）。
+	// 由 processImageRequest 在解析后写入，供 imageUsageLines / 审计字段使用。
+	Endpoint string `json:"-"`
+}
+
+// imageReference 表示一张引用图（OpenAI images.edits 输入图 / mask）。
+// 严格只支持 image_url（data URL 或 http/https URL）；file_id 在解析阶段被拒绝，
+// 避免上游用 DAOF 当作 fetch oracle（SSRF 风险）以及避免引入跨用户 file_id 重放。
+type imageReference struct {
+	ImageURL string `json:"image_url,omitempty"`
+	FileID   string `json:"file_id,omitempty"`
 }
 
 type imagePriceResolution struct {
@@ -80,11 +102,29 @@ type selectedImageUpstream struct {
 	cancel  context.CancelFunc
 }
 
-// ImageGenerationProxyHandler exposes only the OpenAI-compatible text-to-image
-// endpoint we can deterministically meter today. Edits, variations, uploads,
-// remote image inputs, and video tasks stay closed until their billing facts are
-// equally auditable.
+// imageRequestParser 抽象不同端点的请求解析（generations 直接解 JSON / edits 还要
+// 处理 multipart）。返回值与 parseImageGenerationRequest 一致：sanitized JSON body 用于
+// 转发上游。
+type imageRequestParser func(c *fiber.Ctx) (imageGenerationRequest, []byte, error)
+
+// parseImageGenerationRequestFromCtx 将 fiber 请求体读入并交给 parseImageGenerationRequest。
+// /v1/images/generations 端点用。
+func parseImageGenerationRequestFromCtx(c *fiber.Ctx) (imageGenerationRequest, []byte, error) {
+	rawBody := c.Body()
+	body := make([]byte, len(rawBody))
+	copy(body, rawBody)
+	return parseImageGenerationRequest(body)
+}
+
+// ImageGenerationProxyHandler exposes the OpenAI-compatible text-to-image
+// endpoint. Edit + multipart 路径走 ImageEditProxyHandler。
 func ImageGenerationProxyHandler(c *fiber.Ctx) error {
+	return processImageRequest(c, database.EndpointImagesGenerations, parseImageGenerationRequestFromCtx)
+}
+
+// processImageRequest 是 /v1/images/generations 和 /v1/images/edits 共用的核心处理流程，
+// 通过 endpoint + parseFn 参数化区分。所有上游调用、计费、流式、pending reconcile 均共用。
+func processImageRequest(c *fiber.Ctx, endpoint string, parseFn imageRequestParser) error {
 	startTime := time.Now()
 	clientIP := c.IP()
 	path := strings.Clone(c.Path())
@@ -120,15 +160,13 @@ func ImageGenerationProxyHandler(c *fiber.Ctx) error {
 		}
 	}
 
-	rawBody := c.Body()
-	body := make([]byte, len(rawBody))
-	copy(body, rawBody)
-	req, sanitizedBody, parseErr := parseImageGenerationRequest(body)
+	req, sanitizedBody, parseErr := parseFn(c)
 	if parseErr != nil {
 		recordProxyApiLog(user.ID, token, "unknown", 400, clientIP, startTime, path, "invalid_request", parseErr.Error())
 		return c.Status(400).JSON(fiber.Map{"error": fiber.Map{"message": parseErr.Error(), "type": "invalid_request"}})
 	}
-	body = sanitizedBody
+	req.Endpoint = endpoint
+	body := sanitizedBody
 	isStream := req.Stream != nil && *req.Stream
 
 	if _, ok := database.CanonicalRuntimeImageModel(req.Model); !ok {
@@ -144,7 +182,7 @@ func ImageGenerationProxyHandler(c *fiber.Ctx) error {
 	routes := append([]*database.ChannelModel(nil), RouteCache[req.Model]...)
 	channelMapRef := ChannelMapCache
 	gatewayMutex.RUnlock()
-	routes = filterImageRoutes(routes)
+	routes = filterImageRoutes(routes, endpoint)
 	if len(routes) == 0 {
 		recordProxyApiLog(user.ID, token, req.Model, 404, clientIP, startTime, path, "model_not_found", "Image model not available via any channel")
 		return c.Status(404).JSON(fiber.Map{"error": fiber.Map{"message": "Image model not available via any channel", "type": "model_not_found"}})
@@ -242,7 +280,7 @@ func ImageGenerationProxyHandler(c *fiber.Ctx) error {
 		}
 	}
 
-	upstream, upstreamErr := callImageUpstream(c, req.Model, body, routes, channelMapRef, isStream)
+	upstream, upstreamErr := callImageUpstream(c, req.Model, body, routes, channelMapRef, isStream, endpoint)
 	if upstreamErr != nil {
 		if isStream && unlockBalance != nil {
 			unlockBalance()
@@ -677,7 +715,9 @@ func normalizeGPTImageModeration(moderation string) (string, error) {
 	}
 }
 
-func filterImageRoutes(routes []*database.ChannelModel) []*database.ChannelModel {
+// filterImageRoutes 过滤可服务指定 endpoint 的 image route。P2 后接受 endpoint
+// 参数以支持 /v1/images/generations 和 /v1/images/edits 共用同一 route cache。
+func filterImageRoutes(routes []*database.ChannelModel, endpoint string) []*database.ChannelModel {
 	out := make([]*database.ChannelModel, 0, len(routes))
 	for _, r := range routes {
 		if r == nil {
@@ -687,7 +727,7 @@ func filterImageRoutes(routes []*database.ChannelModel) []*database.ChannelModel
 		if r.ModelCategory != database.ModelCategoryImage {
 			continue
 		}
-		if !database.ChannelModelAllowsOnlyEndpoint(r, database.EndpointImagesGenerations) {
+		if !database.ChannelModelAllowsEndpoint(r, endpoint) {
 			continue
 		}
 		if database.IsRuntimeTokenBilledImageModel(r.ModelID) {
@@ -1028,7 +1068,7 @@ func loadFreshUserForImageBalance(userID uint) (*database.User, error) {
 	return &user, nil
 }
 
-func callImageUpstream(c *fiber.Ctx, modelName string, body []byte, routes []*database.ChannelModel, channelMapRef map[uint]*database.Channel, isStream bool) (*selectedImageUpstream, *upstreamImageError) {
+func callImageUpstream(c *fiber.Ctx, modelName string, body []byte, routes []*database.ChannelModel, channelMapRef map[uint]*database.Channel, isStream bool, endpoint string) (*selectedImageUpstream, *upstreamImageError) {
 	failedChannels := make(map[uint]bool)
 	maxRetries := len(routes)
 	if maxRetries > 5 {
@@ -1063,7 +1103,7 @@ func callImageUpstream(c *fiber.Ctx, modelName string, body []byte, routes []*da
 			last = imageErr(502, "channel_misconfigured", "image generation is only supported through CLIProxyAPI channels")
 			continue
 		}
-		upstreamURL := strings.TrimRight(ch.BaseURL, "/") + database.EndpointImagesGenerations
+		upstreamURL := strings.TrimRight(ch.BaseURL, "/") + endpoint
 		upstreamCtx, upstreamCancel := context.WithCancel(c.Context())
 		httpReq, err := http.NewRequestWithContext(upstreamCtx, http.MethodPost, upstreamURL, bytes.NewReader(body))
 		if err != nil {
@@ -1421,7 +1461,7 @@ func imageUsageLines(apiLogID uint, req imageGenerationRequest, price imagePrice
 		return []database.ApiLogUsageLine{{
 			ApiLogID:       apiLogID,
 			ModelName:      req.Model,
-			RequestPath:    database.EndpointImagesGenerations,
+			RequestPath:    requestPathForImageRequest(req),
 			Unit:           "token",
 			Direction:      "total",
 			Quantity:       int64(imageTokenTotal(price)),
@@ -1436,7 +1476,7 @@ func imageUsageLines(apiLogID uint, req imageGenerationRequest, price imagePrice
 	return []database.ApiLogUsageLine{{
 		ApiLogID:       apiLogID,
 		ModelName:      req.Model,
-		RequestPath:    database.EndpointImagesGenerations,
+		RequestPath:    requestPathForImageRequest(req),
 		Unit:           "image",
 		Direction:      "output",
 		Quantity:       price.Quantity,
@@ -1531,6 +1571,15 @@ func copyImageResponseHeaders(c *fiber.Ctx, h http.Header) {
 	if h.Get("Content-Type") == "" {
 		c.Set("Content-Type", "application/json")
 	}
+}
+
+// requestPathForImageRequest 返回审计 ApiLogUsageLine.RequestPath，根据 imageGenerationRequest.Endpoint
+// 区分 generations/edits；Endpoint 未设置时回退到 generations 保持 P1 之前的行为。
+func requestPathForImageRequest(req imageGenerationRequest) string {
+	if req.Endpoint != "" {
+		return req.Endpoint
+	}
+	return database.EndpointImagesGenerations
 }
 
 func firstNonEmptyLocal(values ...string) string {
