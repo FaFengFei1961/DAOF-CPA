@@ -1,0 +1,98 @@
+{
+  "01_gpt_image_2_gen.json": {
+    "error": {
+      "message": "auth_not_found: no auth available (providers=codex, model=gpt-image-2)",
+      "type": "server_error",
+      "code": "internal_server_error"
+    }
+  },
+  "02_grok_image_gen.json": {
+    "usage": {
+      "cost_in_usd_ticks": 200000000
+    },
+    "data_len": 1,
+    "data_keys": [
+      "b64_json"
+    ]
+  },
+  "03_grok_quality_default.json": {
+    "usage": {
+      "cost_in_usd_ticks": 500000000
+    },
+    "data_len": 1,
+    "data_keys": [
+      "b64_json"
+    ]
+  },
+  "04_grok_quality_2k.json": {
+    "usage": {
+      "cost_in_usd_ticks": 700000000
+    },
+    "data_len": 1,
+    "data_keys": [
+      "b64_json"
+    ]
+  },
+  "05_grok_image_edit.json": {
+    "usage": {
+      "cost_in_usd_ticks": 220000000
+    },
+    "data_len": 1,
+    "data_keys": [
+      "b64_json"
+    ]
+  },
+  "06_grok_quality_edit.json": {
+    "usage": {
+      "cost_in_usd_ticks": 600000000
+    },
+    "data_len": 1,
+    "data_keys": [
+      "b64_json"
+    ]
+  },
+  "07_gemini_31_flash_image.json": {
+    "usageMetadata": {
+      "promptTokenCount": 5,
+      "candidatesTokenCount": 1469,
+      "totalTokenCount": 1474
+    },
+    "candidates_len": 1,
+    "candidates_0_parts_keys": [
+      [
+        "inlineData",
+        "thoughtSignature"
+      ]
+    ],
+    "modelVersion": "gemini-3.1-flash-image"
+  },
+  "08_gemini_2k.json": {
+    "usageMetadata": {
+      "promptTokenCount": 5,
+      "candidatesTokenCount": 2036,
+      "totalTokenCount": 2041
+    },
+    "candidates_len": 1,
+    "candidates_0_parts_keys": [
+      [
+        "inlineData",
+        "thoughtSignature"
+      ]
+    ],
+    "modelVersion": "gemini-3.1-flash-image"
+  },
+  "09_imagen_4.json": {
+    "error": {
+      "message": "unknown provider for model imagen-4.0-generate-001",
+      "type": "server_error",
+      "code": "internal_server_error"
+    }
+  },
+  "10_gemini25.json": {
+    "error": {
+      "message": "unknown provider for model gemini-2.5-flash-image",
+      "type": "server_error",
+      "code": "internal_server_error"
+    }
+  }
+}
