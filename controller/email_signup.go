@@ -72,7 +72,17 @@ func EmailSignup(c *fiber.Ctx) error {
 		return c.Status(400).JSON(fiber.Map{"success": false, "message_code": code})
 	}
 
-	// 临界区：cap 检查 + 邮箱/用户名占用检查 + 创建 user，与 OAuth 路径同一锁
+	// fix M-4：bcrypt cost=12 约 250ms。放在 registerMu 锁前完成，避免把所有并发注册
+	// （含 OAuth 路径）串行化。bcrypt 输入是 user-provided password + username，
+	// 不依赖任何 shared state，移到锁前安全。
+	pwdHash := utils.GenerateHash(req.Password)
+	if pwdHash == "" {
+		log.Printf("[EMAIL-SIGNUP] bcrypt hash empty (password too long?) email=%s", maskEmailForAdmin(email))
+		return c.Status(500).JSON(fiber.Map{"success": false, "message_code": "ERR_INTERNAL"})
+	}
+
+	// 临界区：cap 检查 + 邮箱/用户名占用检查 + 创建 user，与 OAuth 路径同一锁。
+	// 锁内只做 DB 操作，不再持锁等 bcrypt。
 	registerMu.Lock()
 	defer registerMu.Unlock()
 
@@ -89,12 +99,6 @@ func EmailSignup(c *fiber.Ctx) error {
 	var dupName database.User
 	if database.DB.Where("username = ?", req.Username).First(&dupName).Error == nil {
 		return c.Status(409).JSON(fiber.Map{"success": false, "message_code": "ERR_USERNAME_TAKEN"})
-	}
-
-	pwdHash := utils.GenerateHash(req.Password)
-	if pwdHash == "" {
-		log.Printf("[EMAIL-SIGNUP] bcrypt hash empty (password too long?) email=%s", maskEmailForAdmin(email))
-		return c.Status(500).JSON(fiber.Map{"success": false, "message_code": "ERR_INTERNAL"})
 	}
 
 	signupBonusMicro, referrerBonusMicro, refereeBonusMicro := resolveBonusConfig()

@@ -22,7 +22,9 @@
 package proxy
 
 import (
+	"crypto/rand"
 	"crypto/tls"
+	"encoding/hex"
 	"errors"
 	"fmt"
 	"log"
@@ -292,8 +294,10 @@ func buildEmailBody(cfg SMTPConfig, msg EmailMessage) string {
 		b.WriteString("\r\n")
 		b.WriteString(msg.TextBody)
 	} else {
-		// multipart/alternative：客户端选 HTML，否则退到 text
-		boundary := "DAOF-CPA-Boundary-" + strconv.FormatInt(time.Now().UnixNano(), 36)
+		// multipart/alternative：客户端选 HTML，否则退到 text。
+		// fix M-3：boundary 加 crypto/rand 防 RFC 2046 §5.1 boundary collision
+		// （body 中包含同一时间戳字符串 → 解析错误）。time-based 部分留作 debug 用。
+		boundary := generateMIMEBoundary()
 		b.WriteString("Content-Type: multipart/alternative; boundary=\"" + boundary + "\"\r\n")
 		b.WriteString("\r\n")
 
@@ -323,6 +327,17 @@ func sanitizeHeaderValue(s string) string {
 	s = strings.ReplaceAll(s, "\r", " ")
 	s = strings.ReplaceAll(s, "\n", " ")
 	return s
+}
+
+// generateMIMEBoundary 生成符合 RFC 2046 §5.1.1 的 multipart boundary。
+// 用 crypto/rand 4 字节 hex 防 boundary 与 body 内容冲突；时间戳保留方便调试。
+// 失败 fallback 到时间戳唯一（极少触发）。
+func generateMIMEBoundary() string {
+	var rnd [4]byte
+	if _, err := rand.Read(rnd[:]); err != nil {
+		return "DAOF-CPA-" + strconv.FormatInt(time.Now().UnixNano(), 36)
+	}
+	return "DAOF-CPA-" + hex.EncodeToString(rnd[:]) + "-" + strconv.FormatInt(time.Now().UnixNano(), 36)
 }
 
 // extractEmailAddr 从 "Name <addr@host>" 里提取 addr 部分。

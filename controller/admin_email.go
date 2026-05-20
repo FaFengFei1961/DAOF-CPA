@@ -355,9 +355,12 @@ func SendAdminEmailTest(c *fiber.Ctx) error {
 	LogOperationBy(op.ID, op.ID, "admin", "ADMIN_EMAIL_TEST_SEND", c.IP(),
 		fmt.Sprintf(`[{"type":"ADMIN_EMAIL_TEST_SEND","to":%q}]`, maskEmailForAdmin(to)))
 
+	// fix M-11：SMTP 接受 ≠ 收件人收到。SMTP server 可能稍后异步 bounce / spam-filter。
+	// 改成"已提交 SMTP，请查收"的提示，避免 admin 以为 SMTP 全链路 ok 但用户没收到。
 	return c.JSON(fiber.Map{
 		"success":      true,
 		"message_code": "SUCCESS_EMAIL_TEST_SENT",
+		"note":         "邮件已被 SMTP 服务器接受。请检查收件人邮箱（含垃圾箱）确认实际送达。",
 	})
 }
 

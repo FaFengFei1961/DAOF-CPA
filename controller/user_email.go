@@ -177,7 +177,14 @@ func BindEmail(c *fiber.Ctx) error {
 //   - 已 consumed → ERR_EMAIL_TOKEN_CONSUMED
 //   - 已过期 → ERR_EMAIL_TOKEN_EXPIRED
 //   - 都通过 → SET user.Email + EmailVerifiedAt + token.ConsumedAt
+//
+// fix M-8：admin 关闭 email_enabled 后已发的 token **不应**再可消费。
+// 否则攻击者拿到之前签发的 token，admin 关功能后仍可"激活"邮箱并启用 email-login，
+// 绕过 admin 的紧急 kill-switch 意图。
 func VerifyEmail(c *fiber.Ctx) error {
+	if !proxy.IsEmailEnabled() {
+		return c.Status(503).JSON(fiber.Map{"success": false, "message_code": "ERR_EMAIL_FEATURE_DISABLED"})
+	}
 	user, err := getCurrentUser(c)
 	if err != nil {
 		return c.Status(401).JSON(fiber.Map{"success": false, "message_code": "ERR_NO_AUTH"})
@@ -480,6 +487,10 @@ func buildEmailVerifyURL(rawToken string) (string, error) {
 //
 // 校验：server_address 必须有值；当 server_address_require_https=true 时强制 https://。
 // 校验失败返回 error，调用方应转 503 + ERR_SERVER_ADDRESS_NOT_CONFIGURED。
+//
+// fix MEDIUM M-7：admin 可能误把 path 配成含 \r\n / HTML 标签的字符串，未经过滤
+// 会被嵌入邮件正文（{verify_url}），形成 header injection / HTML 注入。
+// 任意非法字符 → 用 defaultPath fallback 而不是返回 error（避免 admin 误配置阻塞流程）。
 func buildFrontendTokenURL(pathConfigKey, defaultPath, rawToken string) (string, error) {
 	base := strings.TrimSpace(readSysConfigCached("server_address", ""))
 	if base == "" {
@@ -493,6 +504,16 @@ func buildFrontendTokenURL(pathConfigKey, defaultPath, rawToken string) (string,
 	path := strings.TrimSpace(readSysConfigCached(pathConfigKey, defaultPath))
 	if !strings.HasPrefix(path, "/") {
 		path = "/" + path
+	}
+	// 安全：admin 配置的 path 不能含 CR/LF/Tab/< >/" 等会破坏邮件正文或 URL 的字符。
+	// 出现 → 用 defaultPath fallback 并 log（这是 admin 配置错误，应在 UI 修复）。
+	if strings.ContainsAny(path, "\r\n\t<>\"'`") {
+		log.Printf("[BUILD-URL] SysConfig %s has illegal chars %q — falling back to default %q",
+			pathConfigKey, path, defaultPath)
+		path = defaultPath
+		if !strings.HasPrefix(path, "/") {
+			path = "/" + path
+		}
 	}
 	return strings.TrimRight(base, "/") + path + "?token=" + rawToken, nil
 }

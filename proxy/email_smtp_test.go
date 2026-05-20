@@ -113,7 +113,8 @@ func TestBuildEmailBody_HTMLMultipart(t *testing.T) {
 	}
 	body := buildEmailBody(cfg, msg)
 	for _, expected := range []string{
-		"Content-Type: multipart/alternative; boundary=\"DAOF-CPA-Boundary-",
+		// fix M-3：boundary 改 crypto/rand hex + 时间戳，断言前缀
+		"Content-Type: multipart/alternative; boundary=\"DAOF-CPA-",
 		"Plain fallback",
 		"<p>HTML body</p>",
 		"Content-Type: text/plain; charset=\"UTF-8\"",
