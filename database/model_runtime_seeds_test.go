@@ -261,7 +261,7 @@ func TestSeedModelRuntimeDefaults_TotalCount(t *testing.T) {
 	// / claude-opus-4-6-thinking / gpt-5.3-codex-spark / gpt-oss-120b-medium
 	// 已从 seed 移除（CPA 当前不暴露），handler / pricing / calibration
 	// 代码仍保留——admin 后续如有需求可在 admin UI 手动配回。
-	const expectedSeedCount = int64(43)
+	const expectedSeedCount = int64(44)
 	var got int64
 	if err := DB.Model(&ModelCatalog{}).Count(&got).Error; err != nil {
 		t.Fatalf("count catalog: %v", err)
@@ -274,12 +274,16 @@ func TestSeedModelRuntimeDefaults_TotalCount(t *testing.T) {
 	// OfficialStatus=alias_or_unofficial（admin 启用前手动确认 pricing + 切 Supported=true）。
 	// 2026-05-19 调整：对齐 CPA /v1/models 实际暴露，移除 CPA 不再暴露的 alias，新增
 	// CPA 新出现的 antigravity alias (gemini-3.5-flash-low / gemini-3-flash-agent)。
+	// 2026-05-20 增量：CPA 新增 Google 官方 gemini-3.5-flash（type=gemini, owned_by=google），
+	// pricing 待确认 → 暂归 uncommitted。
 	uncommitted := []string{
 		// Gemini text alias (CPA antigravity 路径暴露)
 		"gemini-3-flash", "gemini-3-flash-agent",
 		"gemini-3-pro-low", "gemini-3-pro-high", "gemini-3-pro-preview",
 		"gemini-3.1-pro-low", "gemini-3.5-flash-low",
 		"gemini-pro-agent",
+		// CPA 上游 2026-05-20 新增的 Google 官方模型（pricing 未确认）
+		"gemini-3.5-flash",
 		// Gemini image (CPA antigravity 路径，DAOF /v1beta/models 接通)
 		"gemini-3.1-flash-image",
 		// xAI alias (CPA registry 暴露但 docs.x.ai 当前列表不含)
@@ -329,8 +333,8 @@ func TestSeedModelRuntimeDefaults_TotalCount(t *testing.T) {
 	if err := DB.Model(&ChannelModel{}).Where("status = ?", 2).Count(&disabledChannelCount).Error; err != nil {
 		t.Fatalf("count disabled channel_models: %v", err)
 	}
-	if disabledChannelCount != 16 {
-		t.Fatalf("disabled channel_models=%d want 16", disabledChannelCount)
+	if disabledChannelCount != 17 {
+		t.Fatalf("disabled channel_models=%d want 17", disabledChannelCount)
 	}
 }
 
