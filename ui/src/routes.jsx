@@ -36,6 +36,9 @@ const PricingDash = lazy(() => import('./components/PricingDash'));
 const Topup = lazy(() => import('./components/Topup'));
 const TopupResult = lazy(() => import('./components/TopupResult'));
 const VerifyEmailPage = lazy(() => import('./components/VerifyEmailPage'));
+// Phase G-2.6：邮箱+密码 reset / set 落地页
+const ResetPasswordPage = lazy(() => import('./components/ResetPasswordPage'));
+const SetPasswordPage = lazy(() => import('./components/SetPasswordPage'));
 const BillsPage = lazy(() => import('./components/BillsPage'));
 const Tickets = lazy(() => import('./components/Tickets'));
 
@@ -86,6 +89,9 @@ const router = createBrowserRouter([
       { path: 'topup-result', element: <TopupResult /> },
       // Phase G-1.8：邮箱验证落地页（用户从邮件链接进入）
       { path: 'verify-email', element: <VerifyEmailPage /> },
+      // Phase G-2.6：邮箱+密码 重置 / 首次设置 落地页（从邮件链接进入，public）
+      { path: 'reset-password', element: <ResetPasswordPage /> },
+      { path: 'set-password', element: <SetPasswordPage /> },
       // fix P2（codex review verify-1 + verify-r4 + verify-r5）：后端 notification_links.go
       // 仍生成 `/upgrade?pane=mine|store` 用于通知 action_url。/upgrade 路由删除后这些通知按钮
       // silent 跳全局 404。

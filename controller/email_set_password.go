@@ -110,8 +110,8 @@ func RequestSetPassword(c *fiber.Ctx) error {
 		return c.Status(500).JSON(fiber.Map{"success": false, "message_code": "ERR_DB_TRANSACTION"})
 	}
 
-	// reset URL 路径复用：前端用同一页面（凭 purpose 区分 UI 文案即可，token 自包含信息）
-	setURL, err := buildPasswordResetURL(rawToken)
+	// set 与 reset 用不同 URL 路径让前端分别处理两个 endpoint；token 也独立 purpose 防混用
+	setURL, err := buildPasswordSetURL(rawToken)
 	if err != nil {
 		log.Printf("[SET-PWD-REQ] build URL failed: %v", err)
 		return c.Status(503).JSON(fiber.Map{"success": false, "message_code": "ERR_SERVER_ADDRESS_NOT_CONFIGURED"})
@@ -254,3 +254,22 @@ func SetPassword(c *fiber.Ctx) error {
 // errPasswordAlreadySetInTx 是 SetPassword tx 内的并发竞态 sentinel：
 // 用户在 token 生成与消费之间，从其他渠道已设过密码，本次 SetPassword 必须拒绝。
 var errPasswordAlreadySetInTx = errors.New("password already set by concurrent path")
+
+// buildPasswordSetURL 拼装前端"首次设置密码"页面 URL。
+// 与 buildPasswordResetURL 类似但走独立 SysConfig key 让前端能分两个页面处理。
+func buildPasswordSetURL(rawToken string) (string, error) {
+	base := strings.TrimSpace(readSysConfigCached("server_address", ""))
+	if base == "" {
+		return "", fmt.Errorf("server_address SysConfig not configured")
+	}
+	if readBoolConfig("server_address_require_https", true) {
+		if !strings.HasPrefix(strings.ToLower(base), "https://") {
+			return "", fmt.Errorf("server_address must use https:// (got %q)", base)
+		}
+	}
+	path := strings.TrimSpace(readSysConfigCached("email_set_url_path", "/set-password"))
+	if !strings.HasPrefix(path, "/") {
+		path = "/" + path
+	}
+	return strings.TrimRight(base, "/") + path + "?token=" + rawToken, nil
+}

@@ -1,6 +1,6 @@
 import React, { useState, useRef, useEffect } from 'react';
 import { useTranslation } from 'react-i18next';
-import { X, Phone, UserRound, ArrowRight } from 'lucide-react';
+import { X, Phone, UserRound, ArrowRight, Mail, Eye, EyeOff, Lock } from 'lucide-react';
 import toast from 'react-hot-toast';
 import { useModalA11y } from '../hooks/useModalA11y';
 
@@ -41,6 +41,13 @@ const AuthModal = ({ isOpen, onClose, onLoginSuccess, initialStep = 'github', tm
 
   const [profileName, setProfileName] = useState('');
   const [profileError, setProfileError] = useState('');
+
+  // Email auth state (Phase G-2.6)
+  const [email, setEmail] = useState('');
+  const [pwd, setPwd] = useState('');
+  const [pwdConfirm, setPwdConfirm] = useState('');
+  const [showPwd, setShowPwd] = useState(false);
+  const [emailUsername, setEmailUsername] = useState('');
 
   // Sync state from App level initial loading interceptors
   React.useEffect(() => {
@@ -203,6 +210,85 @@ const AuthModal = ({ isOpen, onClose, onLoginSuccess, initialStep = 'github', tm
     }
   };
 
+  // Phase G-2.6 email login
+  const handleEmailLogin = async (e) => {
+    e.preventDefault();
+    setLoading(true);
+    try {
+      const res = await fetch('/api/auth/email/login', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ email, password: pwd }),
+      });
+      const data = await res.json();
+      if (data.success) {
+        if (!data.session_id) throw new Error('missing session_id');
+        localStorage.setItem('daof_token', data.session_id);
+        if (data.message_code) toast.success(t('API.' + data.message_code, '登录成功'));
+        onLoginSuccess();
+      } else {
+        toast.error((data.message_code ? t('API.' + data.message_code) : data.message) || t('AUTH.EMAIL_LOGIN_FAILED', '邮箱登录失败'));
+        setLoading(false);
+      }
+    } catch {
+      toast.error(t('AUTH.EMAIL_LOGIN_NET_ERROR', '登录网络异常'));
+      setLoading(false);
+    }
+  };
+
+  // Phase G-2.6 email signup
+  const handleEmailSignup = async (e) => {
+    e.preventDefault();
+    if (pwd !== pwdConfirm) {
+      toast.error(t('AUTH.EMAIL_PWD_MISMATCH', '两次密码不一致'));
+      return;
+    }
+    setLoading(true);
+    try {
+      const res = await fetch('/api/auth/email/signup', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ email, password: pwd, username: emailUsername }),
+      });
+      const data = await res.json();
+      if (data.success) {
+        // 注册成功不带 session_id —— 必须先验证邮箱
+        if (data.message_code) toast.success(t('API.' + data.message_code, '注册成功，请到邮箱完成验证后再登录'));
+        setStep('email-signup-sent');
+      } else {
+        toast.error((data.message_code ? t('API.' + data.message_code) : data.message) || t('AUTH.EMAIL_SIGNUP_FAILED', '注册失败'));
+      }
+    } catch {
+      toast.error(t('AUTH.EMAIL_SIGNUP_NET_ERROR', '注册网络异常'));
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  // Phase G-2.6 forgot password
+  const handleForgotPassword = async (e) => {
+    e.preventDefault();
+    setLoading(true);
+    try {
+      const res = await fetch('/api/auth/email/forgot-password', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ email }),
+      });
+      const data = await res.json();
+      if (data.success) {
+        if (data.message_code) toast.success(t('API.' + data.message_code, '如该邮箱已注册并验证，重置链接已发出'));
+        setStep('email-forgot-sent');
+      } else {
+        toast.error((data.message_code ? t('API.' + data.message_code) : data.message) || t('AUTH.EMAIL_FORGOT_FAILED', '请求失败'));
+      }
+    } catch {
+      toast.error(t('AUTH.EMAIL_FORGOT_NET_ERROR', '网络异常'));
+    } finally {
+      setLoading(false);
+    }
+  };
+
   const handleCreateProfile = async (e) => {
     e.preventDefault();
     const nextProfileName = profileName.trim();
@@ -257,17 +343,27 @@ const AuthModal = ({ isOpen, onClose, onLoginSuccess, initialStep = 'github', tm
 
         <div className="p-6 sm:p-8 pt-10 flex flex-col items-center">
           <h2 id="auth-modal-title" className="text-xl font-bold tracking-tight text-on-surface mb-2">
-            {step === 'github' ? t('AUTH.TITLE_GITHUB') : (step === 'bind' ? t('AUTH.TITLE_BIND') : t('AUTH.TITLE_PROFILE'))}
+            {step === 'github' && t('AUTH.TITLE_GITHUB')}
+            {step === 'bind' && t('AUTH.TITLE_BIND')}
+            {step === 'profile' && t('AUTH.TITLE_PROFILE')}
+            {step === 'email-login' && t('AUTH.TITLE_EMAIL_LOGIN', '邮箱登录')}
+            {step === 'email-signup' && t('AUTH.TITLE_EMAIL_SIGNUP', '邮箱注册')}
+            {step === 'email-forgot' && t('AUTH.TITLE_EMAIL_FORGOT', '找回密码')}
+            {step === 'email-signup-sent' && t('AUTH.TITLE_SIGNUP_SENT', '验证邮件已发送')}
+            {step === 'email-forgot-sent' && t('AUTH.TITLE_FORGOT_SENT', '邮件已发送')}
           </h2>
           <p className="text-center text-sm text-on-surface-variant mb-8 mx-auto leading-relaxed">
             {step === 'github' && t('AUTH.DESC_GITHUB')}
             {step === 'bind' && t('AUTH.DESC_BIND')}
             {step === 'profile' && t('AUTH.DESC_PROFILE')}
+            {step === 'email-login' && t('AUTH.DESC_EMAIL_LOGIN', '使用您的邮箱和密码登录。')}
+            {step === 'email-signup' && t('AUTH.DESC_EMAIL_SIGNUP', '创建一个新账号。注册后需到邮箱完成验证。')}
+            {step === 'email-forgot' && t('AUTH.DESC_EMAIL_FORGOT', '我们会向您发送密码重置链接。')}
           </p>
 
           {/* GitHub Step */}
           {step === 'github' && (
-            <div className="w-full flex justify-center">
+            <div className="w-full flex flex-col gap-3 items-center">
                {/* fix P2（codex review verify-1）：避开 hardcoded hex 违反 design-system/strict-tokens。
                    GitHub 官方品牌色（#24292f）不属于本项目 design token，但作为 OAuth 提供商
                    品牌按钮是合理破例 → 用 style 内联绕过 Tailwind lint。 */}
@@ -294,6 +390,21 @@ const AuthModal = ({ isOpen, onClose, onLoginSuccess, initialStep = 'github', tm
                      {t('AUTH.BTN_GITHUB')}
                    </>
                  )}
+               </button>
+
+               {/* Phase G-2.6：在 GitHub 按钮下方提供"使用邮箱登录/注册"入口 */}
+               <div className="flex items-center w-full gap-3 my-1">
+                 <div className="flex-1 h-px bg-outline-variant" />
+                 <span className="text-xs text-on-surface-variant">{t('AUTH.OR', '或')}</span>
+                 <div className="flex-1 h-px bg-outline-variant" />
+               </div>
+               <button
+                 type="button"
+                 onClick={() => setStep('email-login')}
+                 className="w-full h-11 bg-surface-container-high border border-outline text-on-surface rounded-control text-sm font-medium flex items-center justify-center gap-2 hover:bg-surface-container active:scale-[0.99] transition-all"
+               >
+                 <Mail size={16} />
+                 {t('AUTH.BTN_USE_EMAIL', '使用邮箱登录 / 注册')}
                </button>
             </div>
           )}
@@ -355,6 +466,210 @@ const AuthModal = ({ isOpen, onClose, onLoginSuccess, initialStep = 'github', tm
                </button>
 
             </form>
+          )}
+
+          {/* Phase G-2.6 邮箱+密码登录 */}
+          {step === 'email-login' && (
+            <form onSubmit={handleEmailLogin} className="w-full flex gap-4 flex-col">
+              <div className="relative">
+                <div className="absolute inset-y-0 left-3 flex items-center pointer-events-none">
+                  <Mail size={16} className="text-on-surface-variant" />
+                </div>
+                <input
+                  type="email"
+                  required
+                  autoComplete="email"
+                  value={email}
+                  onChange={(e) => setEmail(e.target.value)}
+                  placeholder={t('AUTH.EMAIL_PLACEHOLDER', '邮箱')}
+                  className="w-full h-11 bg-surface-container border border-white/10 rounded-control pl-10 pr-4 text-sm text-on-surface outline-none focus:border-primary/50 placeholder-on-surface-variant/50"
+                />
+              </div>
+              <div className="relative">
+                <div className="absolute inset-y-0 left-3 flex items-center pointer-events-none">
+                  <Lock size={16} className="text-on-surface-variant" />
+                </div>
+                <input
+                  type={showPwd ? 'text' : 'password'}
+                  required
+                  autoComplete="current-password"
+                  value={pwd}
+                  onChange={(e) => setPwd(e.target.value)}
+                  placeholder={t('AUTH.PWD_PLACEHOLDER', '密码')}
+                  className="w-full h-11 bg-surface-container border border-white/10 rounded-control pl-10 pr-10 text-sm text-on-surface outline-none focus:border-primary/50 placeholder-on-surface-variant/50"
+                />
+                <button
+                  type="button"
+                  aria-label={t('COMMON.TOGGLE_PASSWORD_VISIBILITY', '切换密码可见性')}
+                  onClick={() => setShowPwd(s => !s)}
+                  className="absolute right-3 top-1/2 -translate-y-1/2 text-on-surface-variant"
+                >
+                  {showPwd ? <EyeOff size={16} /> : <Eye size={16} />}
+                </button>
+              </div>
+              <button
+                type="submit"
+                disabled={loading || !email || !pwd}
+                className="w-full h-11 mt-1 bg-gradient-to-r from-blue-600 to-cyan-500 text-on-surface font-semibold rounded-control flex items-center justify-center hover:opacity-90 disabled:opacity-50"
+              >
+                {loading ? t('AUTH.BTN_LOGIN_LOADING', '登录中...') : t('AUTH.BTN_EMAIL_LOGIN', '登录')}
+              </button>
+              <div className="flex justify-between text-xs">
+                <button type="button" className="text-primary hover:underline" onClick={() => setStep('email-forgot')}>
+                  {t('AUTH.LINK_FORGOT_PWD', '忘记密码？')}
+                </button>
+                <button type="button" className="text-primary hover:underline" onClick={() => setStep('email-signup')}>
+                  {t('AUTH.LINK_GOTO_SIGNUP', '注册新账号')}
+                </button>
+              </div>
+              <button type="button" className="text-xs text-on-surface-variant hover:underline mt-1" onClick={() => setStep('github')}>
+                {t('AUTH.LINK_BACK_OAUTH', '改用 GitHub 登录')}
+              </button>
+            </form>
+          )}
+
+          {/* Phase G-2.6 邮箱+密码注册 */}
+          {step === 'email-signup' && (
+            <form onSubmit={handleEmailSignup} className="w-full flex gap-4 flex-col">
+              <input
+                type="text"
+                required
+                value={emailUsername}
+                onChange={(e) => setEmailUsername(e.target.value)}
+                placeholder={t('AUTH.USERNAME_PLACEHOLDER', '用户名')}
+                className="w-full h-11 bg-surface-container border border-white/10 rounded-control px-4 text-sm text-on-surface outline-none focus:border-primary/50 placeholder-on-surface-variant/50"
+              />
+              <div className="relative">
+                <div className="absolute inset-y-0 left-3 flex items-center pointer-events-none">
+                  <Mail size={16} className="text-on-surface-variant" />
+                </div>
+                <input
+                  type="email"
+                  required
+                  autoComplete="email"
+                  value={email}
+                  onChange={(e) => setEmail(e.target.value)}
+                  placeholder={t('AUTH.EMAIL_PLACEHOLDER', '邮箱')}
+                  className="w-full h-11 bg-surface-container border border-white/10 rounded-control pl-10 pr-4 text-sm text-on-surface outline-none focus:border-primary/50 placeholder-on-surface-variant/50"
+                />
+              </div>
+              <div className="relative">
+                <div className="absolute inset-y-0 left-3 flex items-center pointer-events-none">
+                  <Lock size={16} className="text-on-surface-variant" />
+                </div>
+                <input
+                  type={showPwd ? 'text' : 'password'}
+                  required
+                  autoComplete="new-password"
+                  minLength={8}
+                  maxLength={72}
+                  value={pwd}
+                  onChange={(e) => setPwd(e.target.value)}
+                  placeholder={t('AUTH.SIGNUP_PWD_PLACEHOLDER', '密码（至少 8 字符）')}
+                  className="w-full h-11 bg-surface-container border border-white/10 rounded-control pl-10 pr-10 text-sm text-on-surface outline-none focus:border-primary/50 placeholder-on-surface-variant/50"
+                />
+                <button
+                  type="button"
+                  aria-label={t('COMMON.TOGGLE_PASSWORD_VISIBILITY', '切换密码可见性')}
+                  onClick={() => setShowPwd(s => !s)}
+                  className="absolute right-3 top-1/2 -translate-y-1/2 text-on-surface-variant"
+                >
+                  {showPwd ? <EyeOff size={16} /> : <Eye size={16} />}
+                </button>
+              </div>
+              <input
+                type={showPwd ? 'text' : 'password'}
+                required
+                autoComplete="new-password"
+                minLength={8}
+                maxLength={72}
+                value={pwdConfirm}
+                onChange={(e) => setPwdConfirm(e.target.value)}
+                placeholder={t('AUTH.PWD_CONFIRM_PLACEHOLDER', '确认密码')}
+                className="w-full h-11 bg-surface-container border border-white/10 rounded-control px-4 text-sm text-on-surface outline-none focus:border-primary/50 placeholder-on-surface-variant/50"
+              />
+              <button
+                type="submit"
+                disabled={loading || !email || !pwd || !emailUsername || pwd !== pwdConfirm}
+                className="w-full h-11 mt-1 bg-gradient-to-r from-blue-600 to-cyan-500 text-on-surface font-semibold rounded-control flex items-center justify-center hover:opacity-90 disabled:opacity-50"
+              >
+                {loading ? t('AUTH.BTN_SIGNUP_LOADING', '注册中...') : t('AUTH.BTN_EMAIL_SIGNUP', '注册')}
+              </button>
+              <button type="button" className="text-xs text-on-surface-variant hover:underline" onClick={() => setStep('email-login')}>
+                {t('AUTH.LINK_BACK_LOGIN', '已有账号？去登录')}
+              </button>
+            </form>
+          )}
+
+          {/* Phase G-2.6 忘记密码 */}
+          {step === 'email-forgot' && (
+            <form onSubmit={handleForgotPassword} className="w-full flex gap-4 flex-col">
+              <p className="text-sm text-on-surface-variant">
+                {t('AUTH.FORGOT_DESC', '请输入您的注册邮箱，我们会发送重置链接。')}
+              </p>
+              <div className="relative">
+                <div className="absolute inset-y-0 left-3 flex items-center pointer-events-none">
+                  <Mail size={16} className="text-on-surface-variant" />
+                </div>
+                <input
+                  type="email"
+                  required
+                  autoComplete="email"
+                  value={email}
+                  onChange={(e) => setEmail(e.target.value)}
+                  placeholder={t('AUTH.EMAIL_PLACEHOLDER', '邮箱')}
+                  className="w-full h-11 bg-surface-container border border-white/10 rounded-control pl-10 pr-4 text-sm text-on-surface outline-none focus:border-primary/50 placeholder-on-surface-variant/50"
+                />
+              </div>
+              <button
+                type="submit"
+                disabled={loading || !email}
+                className="w-full h-11 mt-1 bg-gradient-to-r from-blue-600 to-cyan-500 text-on-surface font-semibold rounded-control flex items-center justify-center hover:opacity-90 disabled:opacity-50"
+              >
+                {loading ? t('AUTH.BTN_FORGOT_LOADING', '发送中...') : t('AUTH.BTN_FORGOT', '发送重置链接')}
+              </button>
+              <button type="button" className="text-xs text-on-surface-variant hover:underline" onClick={() => setStep('email-login')}>
+                {t('AUTH.LINK_BACK_LOGIN', '返回登录')}
+              </button>
+            </form>
+          )}
+
+          {/* Phase G-2.6 注册成功提示 */}
+          {step === 'email-signup-sent' && (
+            <div className="w-full text-center">
+              <Mail size={36} className="mx-auto text-primary mb-4" />
+              <h3 className="text-base font-semibold text-on-surface">
+                {t('AUTH.SIGNUP_SENT_TITLE', '请到邮箱完成验证')}
+              </h3>
+              <p className="text-sm text-on-surface-variant mt-3">
+                {t('AUTH.SIGNUP_SENT_DESC', '我们已经向您的邮箱发送了验证链接。点击邮件中的链接完成验证后即可登录。')}
+              </p>
+              <button
+                onClick={() => setStep('email-login')}
+                className="mt-6 h-10 px-6 bg-primary text-on-primary rounded-control text-sm font-medium"
+              >
+                {t('AUTH.BTN_GOTO_LOGIN', '去登录')}
+              </button>
+            </div>
+          )}
+
+          {/* Phase G-2.6 忘记密码已发送提示 */}
+          {step === 'email-forgot-sent' && (
+            <div className="w-full text-center">
+              <Mail size={36} className="mx-auto text-primary mb-4" />
+              <h3 className="text-base font-semibold text-on-surface">
+                {t('AUTH.FORGOT_SENT_TITLE', '请查收邮件')}
+              </h3>
+              <p className="text-sm text-on-surface-variant mt-3">
+                {t('AUTH.FORGOT_SENT_DESC', '如该邮箱对应的账号存在并已验证，重置链接已发送。请查收并按邮件指引完成密码重置。')}
+              </p>
+              <button
+                onClick={() => setStep('email-login')}
+                className="mt-6 h-10 px-6 bg-primary text-on-primary rounded-control text-sm font-medium"
+              >
+                {t('AUTH.BTN_BACK_LOGIN', '返回登录')}
+              </button>
+            </div>
           )}
 
           {/* Setup Profile Step */}
