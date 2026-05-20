@@ -98,6 +98,8 @@ func InitDB() {
 		&DistributedLock{}, &UserSession{},
 		// Phase G-1.1 邮箱验证 / 密码重置 token 事实表
 		&EmailVerification{},
+		// Phase H-1 OAuth 第三方身份绑定（多 provider 抽象）
+		&OAuthIdentity{},
 	)
 	if err != nil {
 		log.Fatalf("数据库结构自动迁移失败: %v", err)
@@ -258,6 +260,28 @@ func InitDB() {
 	// 调 strings.ToLower(strings.TrimSpace(...)) 再入库。
 	DB.Exec(`CREATE UNIQUE INDEX IF NOT EXISTS uniq_users_email_nonempty
 		ON users(email) WHERE email IS NOT NULL AND email <> ''`)
+
+	// Phase H-1：OAuth identity 表的 partial unique index。
+	// (provider, external_id) 在 active（unlinked_at IS NULL）行内全局唯一——
+	// 防同一个外部账号同时绑给两个 DAOF user。
+	// 软删（unlinked_at != NULL）的旧行不算占用，允许"解绑后重新绑"重新 INSERT 一行。
+	DB.Exec(`CREATE UNIQUE INDEX IF NOT EXISTS uniq_oauth_identity_active
+		ON oauth_identities(provider, external_id) WHERE unlinked_at IS NULL`)
+
+	// Phase H-1 一次性 backfill：把旧 User.GithubID 列同步成 oauth_identities 行。
+	// 幂等：已存在的 active (github, ext) 行不重复 INSERT。
+	// 用 NOT EXISTS subquery 保证幂等；time.Now() 作为 linked_at 表示"backfill 那一刻"。
+	// 此 SQL 跑完，oauth_identities 与 User.GithubID 数据等价。
+	// 注：本步骤要在 schema migration 之后跑（表已存在），但 GithubID 列还在
+	//（H-3 才删列）。
+	DB.Exec(`INSERT INTO oauth_identities (user_id, provider, external_id, email_at_link, username_at_link, linked_at)
+		SELECT u.id, ?, u.github_id, COALESCE(u.email, ''), u.username, u.created_at
+		FROM users u
+		WHERE u.github_id IS NOT NULL AND u.github_id <> ''
+		  AND NOT EXISTS (
+		    SELECT 1 FROM oauth_identities oi
+		    WHERE oi.provider = ? AND oi.external_id = u.github_id AND oi.unlinked_at IS NULL
+		  )`, OAuthProviderGitHub, OAuthProviderGitHub)
 
 	// fix Suggestion Phase 4-codex（第二十四轮）：DB 层 partial index 兜底"零金额类型 invariant"。
 	//
