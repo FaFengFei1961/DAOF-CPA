@@ -15,11 +15,19 @@ const BANNED_MARKER = '\u5c01\u7981';
 const BANNED_PREFIX = '\u8d26\u6237\u88ab\u5c01\u7981';
 const BANNED_REASON_PREFIX = '\u7406\u7531\uff1a';
 
-const GithubCallbackHandler = () => {
+// OAuthCallbackHandler 通用 OAuth 回调处理器（H-4 多 provider）。
+// 检测当前 URL path 是否为 /oauth/{provider}，是则用对应 provider 调 backend callback。
+// 支持的 path: /oauth/github, /oauth/google（H-4 新增）。
+const OAuthCallbackHandler = () => {
   const { t } = useTranslation();
   const { openLogin, onLoginSuccess } = useAuth();
 
   useEffect(() => {
+    // 从 URL path 拆 provider key（/oauth/github → "github"; /oauth/google → "google"）
+    const pathMatch = window.location.pathname.match(/^\/oauth\/([a-z0-9_]+)$/i);
+    if (!pathMatch) return;
+    const provider = pathMatch[1].toLowerCase();
+
     const params = new URLSearchParams(window.location.search);
     const code = params.get('code');
     const state = params.get('state') || '';
@@ -29,7 +37,7 @@ const GithubCallbackHandler = () => {
     window.history.replaceState({}, document.title, '/');
     queueMicrotask(() => openLogin({ step: 'github', loading: true }));
 
-    fetch(`/api/auth/oauth/github/callback?code=${encodeURIComponent(code)}&state=${encodeURIComponent(state)}`, {
+    fetch(`/api/auth/oauth/${encodeURIComponent(provider)}/callback?code=${encodeURIComponent(code)}&state=${encodeURIComponent(state)}`, {
       method: 'POST',
       credentials: 'include',
       headers: { 'Content-Type': 'application/json' },
@@ -60,12 +68,12 @@ const GithubCallbackHandler = () => {
             detail: data.ban_reason || (data.message ? data.message.replace(BANNED_PREFIX, '').replace(BANNED_REASON_PREFIX, '').trim() : ''),
           }));
         } else {
-          toast.error((data.message_code ? t('API.' + data.message_code) : data.message) || t('APP.GITHUB_OAUTH_FAILED', 'GitHub 登录失败'));
+          toast.error((data.message_code ? t('API.' + data.message_code) : data.message) || t('APP.OAUTH_FAILED', '第三方登录失败'));
           openLogin({ step: 'github' });
         }
       })
       .catch((err) => {
-        logger.warn('[github-oauth] failed', err);
+        logger.warn('[oauth-callback] failed', err);
         toast.error(t('APP.LOGIN_NET_ERROR', '登录网络异常'));
         openLogin({ step: 'github' });
       });
@@ -88,7 +96,7 @@ const RootShell = () => (
         },
       }}
     />
-    <GithubCallbackHandler />
+    <OAuthCallbackHandler />
     <AuthModalContainer />
     <BanAlertContainer />
     <RouterProvider router={router} />

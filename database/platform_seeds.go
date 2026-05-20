@@ -20,6 +20,9 @@ var PlatformSysConfigDefaults = map[string]string{
 	"server_address":       "", // deployment-specific public origin; admin must set before payment callbacks
 	"github_client_id":     "",
 	"github_client_secret": "",
+	// Phase H-4：Google OAuth。admin 在 oauth admin 面板填入。
+	"google_client_id":     "",
+	"google_client_secret": "",
 	"aliyun_access_key":    "",
 	"aliyun_access_secret": "",
 	"aliyun_sms_sign":      "",

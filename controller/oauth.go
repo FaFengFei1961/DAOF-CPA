@@ -789,18 +789,27 @@ func mapOAuthProviderErrorGeneric(c *fiber.Ctx, providerKey string, err error) e
 
 // GetPublicConfig 暴露不受查验的安全级别配置给前台。
 // fix CRITICAL Sprint4-M3：exchange_rate 改为 int64 micros 字段名，杜绝 float 协议。
+//
+// H-4：新增 google_client_id + oauth_providers 数组让前端按已配置 provider 渲染按钮。
 func GetPublicConfig(c *fiber.Ctx) error {
 	proxy.SysConfigMutex.RLock()
-	clientID := proxy.SysConfigCache["github_client_id"]
+	githubClientID := proxy.SysConfigCache["github_client_id"]
+	googleClientID := proxy.SysConfigCache["google_client_id"]
 	serverAddress := proxy.SysConfigCache["server_address"]
 	rateStr := proxy.SysConfigCache["exchange_rate_rmb_per_usd_micros"]
 	proxy.SysConfigMutex.RUnlock()
 	signupBonus, referrerBonus, refereeBonus := resolveBonusConfig()
 	paidSpendRewardBPS, paidSpendRewardWindowSeconds := readReferralPaidSpendRewardConfig()
 
+	// oauth_providers：列已配置（registry 注册 + IsConfigured 返 true）的 provider key
+	// 前端用这个数组渲染登录按钮（"用 GitHub / Google 登录"）
+	providers := ListConfiguredOAuthProviders()
+
 	return c.JSON(fiber.Map{
 		"success":                          true,
-		"github_client_id":                 clientID,
+		"github_client_id":                 githubClientID,
+		"google_client_id":                 googleClientID,
+		"oauth_providers":                  providers, // []string{"github", "google", ...}
 		"server_address":                   serverAddress,
 		"exchange_rate_rmb_per_usd_micros": rateStr,
 		"referral_incentives": fiber.Map{
