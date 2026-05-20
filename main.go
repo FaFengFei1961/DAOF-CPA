@@ -447,6 +447,14 @@ func main() {
 	api.Get("/balance-consume/preference", middleware.UserGuardAllowBanned, controller.GetMyBalanceConsumePreference)
 	api.Put("/balance-consume/preference", middleware.UserGuardAllowBanned, middleware.CSRFGuard, controller.UpdateMyBalanceConsumePreference)
 
+	// 用户邮箱绑定（Phase G-1.5）——绑定/验证/重发/解绑/查询
+	// 所有写动作挂 CSRFGuard；banned 用户不允许绑/改邮箱
+	api.Get("/user/email", middleware.UserGuardAllowBanned, controller.GetMyEmailStatus)
+	api.Post("/user/email/bind", middleware.UserGuard, middleware.CSRFGuard, controller.BindEmail)
+	api.Post("/user/email/verify", middleware.UserGuard, middleware.CSRFGuard, controller.VerifyEmail)
+	api.Post("/user/email/resend-verification", middleware.UserGuard, middleware.CSRFGuard, controller.ResendVerificationEmail)
+	api.Delete("/user/email", middleware.UserGuard, middleware.CSRFGuard, controller.UnbindEmail)
+
 	// 工单系统（用户↔admin 多轮会话；关闭后 15 天 cron 清除）
 	//
 	// 限流策略修订（fix CRITICAL：双角色路由没 UserGuard 时 c.Locals("user") 永远是 nil

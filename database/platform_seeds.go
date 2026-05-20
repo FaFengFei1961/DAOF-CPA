@@ -47,6 +47,26 @@ var PlatformSysConfigDefaults = map[string]string{
 	"cpa_project_id_refresh_seconds":     "86400",
 	"credits_shrink_abort_threshold_pct": "50",
 
+	// ── Email feature (Phase G) ──
+	// Master kill switch + 子 toggle。所有 toggle 默认 false：admin 必须显式开启邮箱功能。
+	"email_enabled":              "false", // master kill: 全关
+	"email_signup_enabled":       "false", // 允许邮箱+密码注册（G-2 用）
+	"email_login_enabled":        "false", // 允许邮箱+密码登录（G-2 用）
+	"email_verify_url_path":      "/verify-email",       // 前端验证邮箱页路径，verify_url = server_address + 这个 + ?token=
+	"email_reset_url_path":       "/reset-password",     // 前端重置密码页路径
+	"email_verify_ttl_seconds":   "3600",                // 验证 token TTL 默认 1 小时
+	"email_reset_ttl_seconds":    "900",                 // 密码重置 token TTL 默认 15 分钟
+	"email_rate_limit_per_email_hourly": "5",
+	"email_rate_limit_per_ip_hourly":    "20",
+	// SMTP 配置（admin 必须填，否则 IsConfigured=false → 邮件不发）
+	"smtp_host":              "",
+	"smtp_port":              "",     // 465 或 587
+	"smtp_username":          "",
+	"smtp_password":          "",     // utils.Encrypt 加密存
+	"smtp_from":              "",     // "Site <noreply@example.com>"
+	"smtp_use_implicit_tls":  "false", // 465 端口设 true；587 STARTTLS 设 false
+	"smtp_reply_to":          "",     // 可选
+
 	// ── Runtime hardening knobs ──
 	"channel_circuit_open_threshold":           "5",
 	"channel_circuit_initial_cooldown_seconds": "30",
