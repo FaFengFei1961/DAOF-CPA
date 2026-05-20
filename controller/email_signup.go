@@ -114,10 +114,11 @@ func EmailSignup(c *fiber.Ctx) error {
 		BalanceConsumeLimitUSD:      readDefaultBalanceConsumeLimitMicroUSD(),
 		BalanceConsumeWindowSeconds: int(readInt64Config("balance_consume_default_window_secs", 2592000)),
 
-		// EmailLoginEnabled = false：用户在设置里 opt-in 才能用邮箱登录
-		// （注册路径不强制 opt-in，避免攻击者用注册接口大量启用 login channel）
-		EmailLoginEnabled: false,
-		// EmailVerifiedAt = nil：必须 verify 后才能登录
+		// EmailLoginEnabled = true：邮箱+密码注册路径的用户显然就是想用邮箱登录的；
+		// "opt-in 在设置里"那套逻辑是给 OAuth 用户走 G-2.5 set-password 流程时用的，
+		// 不适用于显式 signup。否则用户注册完→验邮箱→却无法登录，需先登录才能改设置，死循环。
+		EmailLoginEnabled: true,
+		// EmailVerifiedAt = nil：必须 verify 后才能登录（login handler 检查这个）
 	}
 
 	if err := createUserWithSignupBonus(&newUser, signupBonusMicro, "email"); err != nil {

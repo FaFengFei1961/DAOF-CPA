@@ -124,8 +124,10 @@ func TestEmailSignup_Success(t *testing.T) {
 	if u.EmailVerifiedAt != nil {
 		t.Error("EmailVerifiedAt should be nil at signup")
 	}
-	if u.EmailLoginEnabled {
-		t.Error("EmailLoginEnabled should be false at signup")
+	// 邮箱+密码注册的用户显然就是想用邮箱登录的，应自动 opt-in；
+	// 否则注册→验邮箱→却无法登录（验邮箱前需登录才能改设置 → 死循环）
+	if !u.EmailLoginEnabled {
+		t.Error("EmailLoginEnabled should be true at signup (signup intent = email login opt-in)")
 	}
 	// 应该有一条 EmailVerification 待消费
 	var count int64

@@ -2175,6 +2175,8 @@
     "SUCCESS_EMAIL_LOGIN_TOGGLED": "邮箱登录开关已更新。",
     "SUCCESS_LOGIN": "登录成功。",
     "SUCCESS_SIGNUP_PENDING_VERIFY": "注册成功！请前往邮箱完成验证后再登录。",
+    "SUCCESS_PASSWORD_RESET_EMAIL_SENT": "如果该邮箱对应的账号存在并已验证，重置链接已发送，请查收。",
+    "SUCCESS_PASSWORD_RESET": "密码已重置，请使用新密码登录。",
     "SUCCESS_EMAIL_VERIFIED": "邮箱验证成功。",
     "SUCCESS_DELETED": "删除成功。",
     "SUCCESS_GOD_MODE_LOGIN": "管理员权限验证成功。",

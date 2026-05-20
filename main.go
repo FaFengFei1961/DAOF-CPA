@@ -335,6 +335,37 @@ func main() {
 	})
 	api.Post("/auth/email/signup", emailSignupLimiter, controller.EmailSignup)
 
+	// Phase G-2.4 忘记密码限流：严格（per-IP 5次/hour）—— 防滥发重置邮件骚扰
+	emailForgotPwdLimiter := limiter.New(limiter.Config{
+		Max:        5,
+		Expiration: 1 * time.Hour,
+		KeyGenerator: func(c *fiber.Ctx) string {
+			return "email-forgot-pwd:" + utils.RealClientIP(c)
+		},
+		LimitReached: func(c *fiber.Ctx) error {
+			return c.Status(429).JSON(fiber.Map{
+				"success":      false,
+				"message_code": "ERR_RATE_LIMIT",
+			})
+		},
+	})
+	api.Post("/auth/email/forgot-password", emailForgotPwdLimiter, controller.ForgotPassword)
+	// reset-password 限流：稍宽（per-IP 10次/hour）—— token 自身已是 256bit 随机，主要防恶意刷请求
+	emailResetPwdLimiter := limiter.New(limiter.Config{
+		Max:        10,
+		Expiration: 1 * time.Hour,
+		KeyGenerator: func(c *fiber.Ctx) string {
+			return "email-reset-pwd:" + utils.RealClientIP(c)
+		},
+		LimitReached: func(c *fiber.Ctx) error {
+			return c.Status(429).JSON(fiber.Map{
+				"success":      false,
+				"message_code": "ERR_RATE_LIMIT",
+			})
+		},
+	})
+	api.Post("/auth/email/reset-password", emailResetPwdLimiter, controller.ResetPassword)
+
 	// Admin 高权限隔离区 (换用 LanGuard + AdminGuard)
 	adminApi := api.Group("/admin", middleware.LanGuard, middleware.AdminGuard)
 	adminApi.Get("/config", controller.GetSysConfigs)

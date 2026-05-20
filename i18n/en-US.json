@@ -2177,6 +2177,8 @@
     "SUCCESS_EMAIL_VERIFIED": "Email verified successfully.",
     "SUCCESS_LOGIN": "Login successful.",
     "SUCCESS_SIGNUP_PENDING_VERIFY": "Signup successful! Please verify your email before logging in.",
+    "SUCCESS_PASSWORD_RESET_EMAIL_SENT": "If an account with that verified email exists, a reset link has been sent.",
+    "SUCCESS_PASSWORD_RESET": "Password reset successfully. Please log in with your new password.",
     "SUCCESS_GOD_MODE_LOGIN": "Administrator login successful.",
     "SUCCESS_APPEAL_SESSION": "Account access is restricted; an appeal session has been preserved.",
     "SUCCESS_BULK_GRANTED": "Bulk coupon grant completed.",
