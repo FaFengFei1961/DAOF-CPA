@@ -95,134 +95,47 @@ func recordGeminiPendingReconcile(user *database.User, token, modelName string, 
 }
 
 func deductGeminiBalanceAndLog(user *database.User, token, modelName string, geminiReq geminiNativeRequest, price geminiPriceResolution, billing BillingRuleResolution, channelType string, statusCode int, clientIP, path string, startTime time.Time) (uint, int64, database.ReferralPaidSpendRewardResult) {
-	var apiLogID uint
-	balanceConsumed := false
-	var referralReward database.ReferralPaidSpendRewardResult
-	referralRewardBPS, referralRewardWindowSeconds := readReferralPaidSpendRewardConfig()
-	txErr := database.DB.Transaction(func(tx *gorm.DB) error {
-		// fix H2：window tracking 必须在 CAS quota 前调用，与 text path 一致
-		if !TryConsumeBalanceTx(tx, user.ID, price.AmountMicroUSD, true) {
-			log.Printf("[GEMINI-BILLING-WINDOW-TRACK-FAIL] user=%d model=%s amount=%d", user.ID, modelName, price.AmountMicroUSD)
-		}
-		res := tx.Model(&database.User{}).
-			Where("id = ? AND quota >= ?", user.ID, price.AmountMicroUSD).
-			UpdateColumn("quota", gorm.Expr("quota - ?", price.AmountMicroUSD))
-		if res.Error != nil {
-			return fmt.Errorf("quota deduct: %w", res.Error)
-		}
-		balanceInsufficient := res.RowsAffected == 0
-		// fix R5：余额不足 → pending_reconcile，ApiLog.Cost / ChargedCost 设 0 防污染报表
-		apiLogCost := price.AmountMicroUSD
-		apiLogChargedCost := billing.ChargedCostMicroUSD
-		if balanceInsufficient {
-			apiLogCost = 0
-			apiLogChargedCost = 0
-		}
-		apiLog := database.ApiLog{
-			UserID:              user.ID,
-			TokenName:           HashTokenForLog(token),
-			ModelName:           modelName,
-			RequestedModel:      billing.RequestedModel,
-			ServedModel:         billing.ServedModel,
-			PromptTokens:        price.PromptTokens,
-			CompletionTokens:    price.CompletionTokens,
-			CachedTokens:        price.CachedTokens,
-			ReasoningTokens:     price.ReasoningTokens,
-			Cost:                apiLogCost,
-			ChargedCost:         apiLogChargedCost,
-			ModelWeight:         billing.ModelWeight,
-			HealthMultiplier:    billing.HealthMultiplier,
-			BillingRulesVersion: billing.BillingRulesVersion,
-			FallbackUserOptIn:   billing.FallbackUserOptIn,
-			FallbackReason:      sanitizeError(billing.FallbackReason, 160),
-			UpstreamProvider:    sanitizeError(strings.ToLower(strings.TrimSpace(channelType)), 64),
-			Latency:             time.Since(startTime).Milliseconds(),
-			Status:              statusCode,
-			IPAddress:           clientIP,
-			RequestPath:         sanitizeError(path, 160),
-			CreatedAt:           time.Now(),
-		}
-		if err := tx.Create(&apiLog).Error; err != nil {
-			return fmt.Errorf("create api log: %w", err)
-		}
-		apiLogID = apiLog.ID
-		if err := tx.Create(&database.ApiLogUsageLine{
-			ApiLogID:       apiLogID,
-			ModelName:      modelName,
-			RequestPath:    database.EndpointGeminiNative,
-			Unit:           geminiUsageUnit(price),
-			Direction:      "total",
-			Quantity:       price.Quantity,
-			UnitPriceMicro: price.UnitPriceMicro,
-			AmountMicroUSD: price.AmountMicroUSD,
-			CostSource:     price.CostSource,
-			MetadataJSON:   geminiUsageMetadataJSON(geminiReq, price),
-			CreatedAt:      time.Now(),
-		}).Error; err != nil {
-			return fmt.Errorf("create usage line: %w", err)
-		}
-		if balanceInsufficient {
-			// 并发耗光：写 pending reconcile（同 image/video 模式）
-			var current database.User
-			if err := tx.Select("id, quota").First(&current, user.ID).Error; err != nil {
-				return fmt.Errorf("user row missing: %w", err)
-			}
-			return database.WriteBillingEntry(tx, database.BillingEntryInput{
-				UserID:           user.ID,
-				EntryType:        database.BillingTypeApiUsagePendingReconcile,
-				BillingState:     database.BillingStatePendingReconcile,
-				AmountUSD:        0,
-				BalanceAfterUSD:  current.Quota,
-				ModelName:        modelName,
-				TokensTotal:      price.PromptTokens + price.CompletionTokens,
-				RequestID:        fmt.Sprintf("api_log:%d", apiLogID),
-				EstimatedCostUSD: price.AmountMicroUSD,
-				RelatedType:      "api_log",
-				RelatedID:        apiLogID,
-				Description:      fmt.Sprintf("[GEMINI-INSUFFICIENT-BALANCE] %s · %s · 余额不足，已交付服务待对账", modelName, geminiReq.Method),
-			})
-		}
-		var fresh database.User
-		if err := tx.Select("id, quota").First(&fresh, user.ID).Error; err != nil {
-			return fmt.Errorf("re-select quota: %w", err)
-		}
-		if err := database.WriteBillingEntry(tx, database.BillingEntryInput{
-			UserID:          user.ID,
-			EntryType:       database.BillingTypeApiConsumeBalance,
-			AmountUSD:       -price.AmountMicroUSD,
-			BalanceAfterUSD: fresh.Quota,
-			ModelName:       modelName,
-			RelatedType:     "api_log",
-			RelatedID:       apiLogID,
-			Description:     fmt.Sprintf("余额扣费 · %s · gemini native · %s · %s", modelName, geminiReq.Method, FormatChargedCostForDescription(price.AmountMicroUSD, billing.ChargedCostMicroUSD)),
-		}); err != nil {
-			return fmt.Errorf("write billing: %w", err)
-		}
-		reward, err := database.ApplyReferralPaidSpendRewardTx(
-			tx, user.ID, price.AmountMicroUSD, referralRewardBPS, referralRewardWindowSeconds,
-			time.Now(), "api_log", apiLogID, fmt.Sprintf("Gemini native · %s", modelName),
-		)
-		if err != nil {
-			return fmt.Errorf("apply referral spend reward: %w", err)
-		}
-		referralReward = reward
-		balanceConsumed = true
-		return nil
+	// fix A-P0-3：合并到 DeductMediaBalanceAndLog 统一流程
+	return DeductMediaBalanceAndLog(MediaBillingInput{
+		User:             user,
+		Token:            token,
+		ModelName:        modelName,
+		ClientIP:         clientIP,
+		Path:             path,
+		StartTime:        startTime,
+		AmountMicroUSD:   price.AmountMicroUSD,
+		Billing:          billing,
+		ChannelType:      channelType,
+		StatusCode:       statusCode,
+		PromptTokens:     price.PromptTokens,
+		CompletionTokens: price.CompletionTokens,
+		CachedTokens:     price.CachedTokens,
+		ReasoningTokens:  price.ReasoningTokens,
+		TokensTotal:      price.PromptTokens + price.CompletionTokens,
+		BuildUsageLines: func(apiLogID uint) []database.ApiLogUsageLine {
+			return []database.ApiLogUsageLine{{
+				ApiLogID:       apiLogID,
+				ModelName:      modelName,
+				RequestPath:    database.EndpointGeminiNative,
+				Unit:           geminiUsageUnit(price),
+				Direction:      "total",
+				Quantity:       price.Quantity,
+				UnitPriceMicro: price.UnitPriceMicro,
+				AmountMicroUSD: price.AmountMicroUSD,
+				CostSource:     price.CostSource,
+				MetadataJSON:   geminiUsageMetadataJSON(geminiReq, price),
+				CreatedAt:      time.Now(),
+			}}
+		},
+		BuildRequestID:   func(apiLogID uint) string { return fmt.Sprintf("api_log:%d", apiLogID) },
+		LogPrefix:        "GEMINI",
+		InsufficientDesc: fmt.Sprintf("[GEMINI-INSUFFICIENT-BALANCE] %s · %s · 余额不足，已交付服务待对账", modelName, geminiReq.Method),
+		SuccessDesc:      fmt.Sprintf("余额扣费 · %s · gemini native · %s · %s", modelName, geminiReq.Method, FormatChargedCostForDescription(price.AmountMicroUSD, billing.ChargedCostMicroUSD)),
+		ReferralDesc:     fmt.Sprintf("Gemini native · %s", modelName),
+		OnTxFailed: func() uint {
+			return recordGeminiPendingReconcile(user, token, modelName, geminiReq, price, billing, channelType, statusCode, clientIP, path, startTime, "balance transaction failed")
+		},
 	})
-	if txErr != nil {
-		log.Printf("[GEMINI-BILLING-CRITICAL] user=%d model=%s balance tx failed: %v", user.ID, modelName, txErr)
-		apiLogID = recordGeminiPendingReconcile(user, token, modelName, geminiReq, price, billing, channelType, statusCode, clientIP, path, startTime, "balance transaction failed")
-		return apiLogID, 0, database.ReferralPaidSpendRewardResult{}
-	}
-	RefreshUserAuth(user.ID)
-	effectiveRevenue := int64(0)
-	if balanceConsumed {
-		effectiveRevenue = price.AmountMicroUSD
-		if apiLogID != 0 {
-			RecordApiLogRevenue(apiLogID, database.RevenueSourceBalance, price.AmountMicroUSD, 0)
-		}
-	}
-	return apiLogID, effectiveRevenue, referralReward
 }
 
 func geminiUsageUnit(price geminiPriceResolution) string {

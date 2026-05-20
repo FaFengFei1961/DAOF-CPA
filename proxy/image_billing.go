@@ -104,144 +104,37 @@ func recordImagePendingReconcile(user *database.User, token string, req imageGen
 }
 
 func deductImageBalanceAndLog(user *database.User, token string, req imageGenerationRequest, price imagePriceResolution, billing BillingRuleResolution, channelType string, statusCode int, clientIP, path string, startTime time.Time) (uint, int64, database.ReferralPaidSpendRewardResult) {
-	var apiLogID uint
-	var balanceAfter int64
-	balanceConsumed := false
-	var referralReward database.ReferralPaidSpendRewardResult
-	referralRewardBPS, referralRewardWindowSeconds := readReferralPaidSpendRewardConfig()
-	txErr := database.DB.Transaction(func(tx *gorm.DB) error {
-		// fix H2 (2026-05-19)：window tracking 必须在 CAS quota 前调用，与 text path 一致。
-		// 原顺序在 quota 扣减后调用，window-track DB error 时会让 quota 已扣但 window 未增
-		// → 攻击者可触发 transient error 绕过 window limit。
-		if !TryConsumeBalanceTx(tx, user.ID, price.AmountMicroUSD, true) {
-			log.Printf("[IMAGE-BILLING-WINDOW-TRACK-FAIL] user=%d model=%s raw_cost_micro=%d", user.ID, req.Model, price.AmountMicroUSD)
-		}
-		res := tx.Model(&database.User{}).
-			Where("id = ? AND quota >= ?", user.ID, price.AmountMicroUSD).
-			UpdateColumn("quota", gorm.Expr("quota - ?", price.AmountMicroUSD))
-		if res.Error != nil {
-			return fmt.Errorf("quota deduct: %w", res.Error)
-		}
-		balanceInsufficient := res.RowsAffected == 0
-		// fix R5 (2026-05-19)：余额不足 → 走 pending_reconcile 分支，但 ApiLog
-		// 已 INSERT 且 Cost=raw_cost 会污染 admin 报表 sum(cost) / sum(charged_cost)。
-		// 改为：pending 分支 ApiLog.Cost=0 + ChargedCost=0，真实 raw cost 仅存
-		// BillingEntry.EstimatedCostUSD 供对账员人工查看。
-		apiLogCost := price.AmountMicroUSD
-		apiLogChargedCost := billing.ChargedCostMicroUSD
-		if balanceInsufficient {
-			apiLogCost = 0
-			apiLogChargedCost = 0
-		}
-		apiLog := database.ApiLog{
-			UserID:              user.ID,
-			TokenName:           HashTokenForLog(token),
-			ModelName:           req.Model,
-			RequestedModel:      billing.RequestedModel,
-			ServedModel:         billing.ServedModel,
-			PromptTokens:        price.PromptTokens,
-			CompletionTokens:    price.CompletionTokens,
-			CachedTokens:        price.CachedTokens,
-			CacheWriteTokens:    price.CacheWriteTokens,
-			CacheWrite5mTokens:  price.CacheWrite5mTokens,
-			CacheWrite1hTokens:  price.CacheWrite1hTokens,
-			ReasoningTokens:     price.ReasoningTokens,
-			Cost:                apiLogCost,
-			ChargedCost:         apiLogChargedCost,
-			ModelWeight:         billing.ModelWeight,
-			HealthMultiplier:    billing.HealthMultiplier,
-			BillingRulesVersion: billing.BillingRulesVersion,
-			FallbackUserOptIn:   billing.FallbackUserOptIn,
-			FallbackReason:      sanitizeError(billing.FallbackReason, 160),
-			UpstreamProvider:    sanitizeError(strings.ToLower(strings.TrimSpace(channelType)), 64),
-			Latency:             time.Since(startTime).Milliseconds(),
-			Status:              statusCode,
-			IPAddress:           clientIP,
-			RequestPath:         sanitizeError(path, 160),
-			CreatedAt:           time.Now(),
-		}
-		if err := tx.Create(&apiLog).Error; err != nil {
-			return fmt.Errorf("create api log: %w", err)
-		}
-		apiLogID = apiLog.ID
-		lines := imageUsageLines(apiLogID, req, price)
-		if len(lines) > 0 {
-			if err := tx.Create(&lines).Error; err != nil {
-				return fmt.Errorf("create usage line: %w", err)
-			}
-		}
-		if balanceInsufficient {
-			var current database.User
-			if err := tx.Select("id, quota").First(&current, user.ID).Error; err != nil {
-				return fmt.Errorf("user row missing: %w", err)
-			}
-			balanceAfter = current.Quota
-			return database.WriteBillingEntry(tx, database.BillingEntryInput{
-				UserID:           user.ID,
-				EntryType:        database.BillingTypeApiUsagePendingReconcile,
-				BillingState:     database.BillingStatePendingReconcile,
-				AmountUSD:        0,
-				BalanceAfterUSD:  balanceAfter,
-				ModelName:        req.Model,
-				TokensTotal:      imageTokenTotal(price),
-				RequestID:        imageRequestID(user.ID, startTime, apiLogID),
-				EstimatedCostUSD: price.AmountMicroUSD,
-				RelatedType:      "api_log",
-				RelatedID:        apiLogID,
-				Description:      fmt.Sprintf("[IMAGE-INSUFFICIENT-BALANCE] %s · %s · 余额不足，已交付服务待对账（按 raw 上游成本计 $%s）", req.Model, imageUsageDescription(price), database.FormatMicroUSD(price.AmountMicroUSD)),
-			})
-		}
-		var fresh database.User
-		if err := tx.Select("id, quota").First(&fresh, user.ID).Error; err != nil {
-			return fmt.Errorf("re-select quota: %w", err)
-		}
-		balanceAfter = fresh.Quota
-		if err := database.WriteBillingEntry(tx, database.BillingEntryInput{
-			UserID:          user.ID,
-			EntryType:       database.BillingTypeApiConsumeBalance,
-			AmountUSD:       -price.AmountMicroUSD,
-			BalanceAfterUSD: balanceAfter,
-			ModelName:       req.Model,
-			TokensTotal:     imageTokenTotal(price),
-			RelatedType:     "api_log",
-			RelatedID:       apiLogID,
-			Description:     fmt.Sprintf("余额扣费 · %s · %s · %s", req.Model, imageUsageDescription(price), FormatChargedCostForDescription(price.AmountMicroUSD, billing.ChargedCostMicroUSD)),
-		}); err != nil {
-			return fmt.Errorf("write billing: %w", err)
-		}
-		reward, err := database.ApplyReferralPaidSpendRewardTx(
-			tx,
-			user.ID,
-			price.AmountMicroUSD,
-			referralRewardBPS,
-			referralRewardWindowSeconds,
-			time.Now(),
-			"api_log",
-			apiLogID,
-			fmt.Sprintf("图片生成 · %s", req.Model),
-		)
-		if err != nil {
-			return fmt.Errorf("apply referral spend reward: %w", err)
-		}
-		referralReward = reward
-		balanceConsumed = true
-		return nil
+	// fix A-P0-3 (2026-05-19)：合并 image/video/gemini billing 三胞胎 → 薄包装。
+	// 业务行为不变（H2 / R5 顺序、Cost=0 fix、SF-H6 异步等都在 DeductMediaBalanceAndLog 内统一）。
+	return DeductMediaBalanceAndLog(MediaBillingInput{
+		User:               user,
+		Token:              token,
+		ModelName:          req.Model,
+		ClientIP:           clientIP,
+		Path:               path,
+		StartTime:          startTime,
+		AmountMicroUSD:     price.AmountMicroUSD,
+		Billing:            billing,
+		ChannelType:        channelType,
+		StatusCode:         statusCode,
+		PromptTokens:       price.PromptTokens,
+		CompletionTokens:   price.CompletionTokens,
+		CachedTokens:       price.CachedTokens,
+		CacheWriteTokens:   price.CacheWriteTokens,
+		CacheWrite5mTokens: price.CacheWrite5mTokens,
+		CacheWrite1hTokens: price.CacheWrite1hTokens,
+		ReasoningTokens:    price.ReasoningTokens,
+		TokensTotal:        imageTokenTotal(price),
+		BuildUsageLines:    func(apiLogID uint) []database.ApiLogUsageLine { return imageUsageLines(apiLogID, req, price) },
+		BuildRequestID:     func(apiLogID uint) string { return imageRequestID(user.ID, startTime, apiLogID) },
+		LogPrefix:          "IMAGE",
+		InsufficientDesc:   fmt.Sprintf("[IMAGE-INSUFFICIENT-BALANCE] %s · %s · 余额不足，已交付服务待对账（按 raw 上游成本计 $%s）", req.Model, imageUsageDescription(price), database.FormatMicroUSD(price.AmountMicroUSD)),
+		SuccessDesc:        fmt.Sprintf("余额扣费 · %s · %s · %s", req.Model, imageUsageDescription(price), FormatChargedCostForDescription(price.AmountMicroUSD, billing.ChargedCostMicroUSD)),
+		ReferralDesc:       fmt.Sprintf("图片生成 · %s", req.Model),
+		OnTxFailed: func() uint {
+			return recordImagePendingReconcile(user, token, req, price, billing, channelType, statusCode, clientIP, path, startTime, "balance transaction failed")
+		},
 	})
-	if txErr != nil {
-		log.Printf("[IMAGE-BILLING-CRITICAL] user=%d model=%s balance tx failed: %v", user.ID, req.Model, txErr)
-		apiLogID = recordImagePendingReconcile(user, token, req, price, billing, channelType, statusCode, clientIP, path, startTime, "balance transaction failed")
-		return apiLogID, 0, database.ReferralPaidSpendRewardResult{}
-	}
-	RefreshUserAuth(user.ID)
-	effectiveRevenue := int64(0)
-	if balanceConsumed {
-		effectiveRevenue = price.AmountMicroUSD
-	}
-	if apiLogID != 0 && balanceConsumed {
-		RecordApiLogRevenue(apiLogID, database.RevenueSourceBalance, price.AmountMicroUSD, 0)
-	}
-	_ = balanceAfter
-	return apiLogID, effectiveRevenue, referralReward
 }
 
 func imageUsageMetadata(req imageGenerationRequest, price imagePriceResolution) string {
