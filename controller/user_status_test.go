@@ -5,6 +5,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"testing"
+	"time"
 
 	"daof-cpa/database"
 	"daof-cpa/middleware"
@@ -110,6 +111,12 @@ func TestUserStatus_OnlyRejectsStatusTwo(t *testing.T) {
 		if err := database.DB.Create(&user).Error; err != nil {
 			t.Fatalf("create user: %v", err)
 		}
+		// H-3：oauth_identities 是 lookup 真相
+		if err := database.DB.Create(&database.OAuthIdentity{
+			UserID: user.ID, Provider: database.OAuthProviderGitHub, ExternalID: "12345", LinkedAt: time.Now(),
+		}).Error; err != nil {
+			t.Fatalf("create oauth identity: %v", err)
+		}
 		if err := database.DB.Model(&user).Update("status", 2).Error; err != nil {
 			t.Fatalf("set status: %v", err)
 		}
@@ -167,6 +174,12 @@ func TestUserStatus_OnlyRejectsStatusTwo(t *testing.T) {
 		user := database.User{Username: "oauth_status3", GithubID: "12345", Role: "user", Token: "sk-oauth-status3", Status: 1}
 		if err := database.DB.Create(&user).Error; err != nil {
 			t.Fatalf("create user: %v", err)
+		}
+		// H-3：oauth_identities 是 lookup 真相
+		if err := database.DB.Create(&database.OAuthIdentity{
+			UserID: user.ID, Provider: database.OAuthProviderGitHub, ExternalID: "12345", LinkedAt: time.Now(),
+		}).Error; err != nil {
+			t.Fatalf("create oauth identity: %v", err)
 		}
 		if err := database.DB.Model(&user).Update("status", 3).Error; err != nil {
 			t.Fatalf("set status: %v", err)

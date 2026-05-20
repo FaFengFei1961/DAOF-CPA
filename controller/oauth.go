@@ -5,6 +5,7 @@ import (
 	"crypto/sha256"
 	"encoding/base64"
 	"encoding/hex"
+	"errors"
 	"fmt"
 	"log"
 	"net/http"
@@ -107,23 +108,29 @@ func startTmpTokenJanitor() {
 	})
 }
 
-// parseTmpToken 解析并校验 OAuth 流程中的 tmp_token
-// payload 形如：(clean|sms)|ghID|ghName|ref|timestamp
+// parseTmpToken 解析并校验 OAuth 流程中的 tmp_token。
+// payload 形如（Phase H-3 多 provider 格式）：
+//
+//	(clean|sms) | provider | externalID | suggestedUsername | ref | timestamp
+//
 // 返回 (tokenType, refUser, originalDecryptedStr, error)
+// originalDecryptedStr 让 caller 自己 split 出 provider / externalID / suggestedUsername。
 func parseTmpToken(tmpToken string) (string, string, string, error) {
 	decrypted, err := utils.Decrypt(tmpToken)
 	if err != nil || decrypted == "" {
 		return "", "", "", fmt.Errorf("无效或被篡改的风控票据")
 	}
 	parts := strings.Split(decrypted, "|")
-	if len(parts) < 5 {
+	// H-3：新格式 6 段。旧格式（5 段）一律拒（项目尚未上线 + 任何漏掉的旧 token TTL 15min 已过）
+	if len(parts) < 6 {
 		return "", "", "", fmt.Errorf("票据格式损坏")
 	}
 	tokenType := parts[0]
 	if tokenType != "clean" && tokenType != "sms" {
 		return "", "", "", fmt.Errorf("票据类型未知")
 	}
-	tsStr := parts[4]
+	// parts[1]=provider parts[2]=externalID parts[3]=username parts[4]=ref parts[5]=ts
+	tsStr := parts[5]
 	ts, err := strconv.ParseInt(tsStr, 10, 64)
 	if err != nil {
 		return "", "", "", fmt.Errorf("票据时间戳损坏")
@@ -136,12 +143,42 @@ func parseTmpToken(tmpToken string) (string, string, string, error) {
 		// 时钟漂移容忍，但不允许显著未来时间
 		return "", "", "", fmt.Errorf("票据时间异常")
 	}
-	refUser := parts[3]
+	refUser := parts[4]
 	return tokenType, refUser, decrypted, nil
 }
 
+// parseOAuthTmpTokenParts 从 parseTmpToken 返回的 decryptedStr 中提取 (provider, externalID, username)。
+// 不重复校验段数（parseTmpToken 已确认 >= 6）。
+func parseOAuthTmpTokenParts(decryptedStr string) (provider, externalID, suggestedUsername string) {
+	parts := strings.Split(decryptedStr, "|")
+	if len(parts) < 6 {
+		return "", "", ""
+	}
+	return parts[1], parts[2], parts[3]
+}
+
+// buildOAuthTmpTokenPayload 拼装 tmp_token 明文（caller 再 utils.Encrypt）。
+// 严禁 provider/externalID/username/ref 含 "|" —— caller 责任：先用 sanitizeTmpTokenField 过滤。
+func buildOAuthTmpTokenPayload(tokenType, provider, externalID, username, refUser string) string {
+	return fmt.Sprintf("%s|%s|%s|%s|%s|%d",
+		tokenType,
+		sanitizeTmpTokenField(provider),
+		sanitizeTmpTokenField(externalID),
+		sanitizeTmpTokenField(username),
+		sanitizeTmpTokenField(refUser),
+		time.Now().Unix(),
+	)
+}
+
+// sanitizeTmpTokenField 过滤掉 "|" 防止破坏 tmp_token 切分。
+func sanitizeTmpTokenField(s string) string { return strings.ReplaceAll(s, "|", "") }
+
 // PrepareOAuthState 给前端发起 OAuth 之前调用。服务端生成一次性 state 和 PKCE verifier，
 // 只把 state + code_challenge 下发给前端，verifier 留在服务端 5 分钟内存表。
+//
+// H-3：路由 /api/auth/oauth/:provider/prepare —— c.Params("provider") 可选校验。
+// 旧 /api/auth/github/prepare 已删，此 handler 现在 provider-agnostic（state/verifier 与
+// provider 无关，下发的 challenge 复用于任意 provider）。
 func PrepareOAuthState(c *fiber.Ctx) error {
 	// fix C-M2：触顶就 503，让 cleanupExpiredOAuthStates 有窗口跑完一轮 GC
 	if atomic.LoadInt64(&oauthStateCount) >= oauthStateMaxItems {
@@ -553,7 +590,48 @@ func rejectIfUserCapReached(c *fiber.Ctx) bool {
 }
 
 // GithubCallback 核心注册网关：集成了智能风控引擎
+// GithubCallback 是 OAuthCallback 的 GitHub-specific 别名，给 oauth_test.go 的
+// 现有测试复用（旧测试直接 app.Post("/callback", GithubCallback) 注册，没有 :provider
+// URL 段）。新代码 / 生产路由请用 OAuthCallback + /api/auth/oauth/:provider/callback。
 func GithubCallback(c *fiber.Ctx) error {
+	c.Locals(oauthProviderOverrideKey, database.OAuthProviderGitHub)
+	return OAuthCallback(c)
+}
+
+// oauthProviderOverrideKey 是 c.Locals 的 key，让 GithubCallback 等 alias handler 在
+// 不修改路由参数的情况下传递 provider key 给 OAuthCallback。仅 controller package 内部用。
+const oauthProviderOverrideKey = "oauth_provider_override"
+
+// OAuthCallback 是多 provider OAuth 回调统一入口。
+// 路由：POST /api/auth/oauth/:provider/callback?code=...&state=...
+//
+// :provider 由路由捕获，必须是注册过的 OAuthProvider Key（github / google / ...）。
+// 流程：
+//  1. 校验 :provider 已注册
+//  2. 校验 state + 取 code_verifier
+//  3. provider.Exchange(ctx, code, verifier) → OAuthIdentityData
+//  4. 在 oauth_identities 表查 (provider, external_id) 是否已绑定到 user
+//  5. 找到 → 直接发 session（包括 banned 用户的 appeal session）
+//  6. 没找到 → 风控决定走 SMS 或直进 profile setup；body 内 ref 写进 tmp_token
+//
+// **行为兼容**：保留原 GithubCallback 的所有响应字段 / message_code（不区分 provider 的部分）
+// 以减少前端改动面。
+func OAuthCallback(c *fiber.Ctx) error {
+	providerKey := strings.ToLower(strings.TrimSpace(c.Params("provider")))
+	if providerKey == "" {
+		// 允许通过 Locals 注入（GithubCallback alias / test 用）
+		if v, ok := c.Locals(oauthProviderOverrideKey).(string); ok {
+			providerKey = v
+		}
+	}
+	if providerKey == "" {
+		return c.Status(400).JSON(fiber.Map{"success": false, "message_code": "ERR_OAUTH_PROVIDER_UNKNOWN"})
+	}
+	provider, ok := GetOAuthProvider(providerKey)
+	if !ok {
+		return c.Status(400).JSON(fiber.Map{"success": false, "message_code": "ERR_OAUTH_PROVIDER_UNKNOWN"})
+	}
+
 	var payload GithubAuthRequest
 	_ = c.BodyParser(&payload) // body 只承载可选 ref；code/state 必须来自 query
 	code := strings.TrimSpace(c.Query("code"))
@@ -570,40 +648,42 @@ func GithubCallback(c *fiber.Ctx) error {
 		})
 	}
 
-	// 1. 取风控配置（与 provider 无关，保留在 handler 层）
+	// 取风控配置（与 provider 无关）
 	proxy.SysConfigMutex.RLock()
 	regStrategy := proxy.SysConfigCache["reg_strategy"] // trust, strict, dynamic
 	regIpLimitStr := proxy.SysConfigCache["reg_ip_limit"]
 	proxy.SysConfigMutex.RUnlock()
 
-	// 2-3. 通过 OAuthProvider 抽象完成 code → identity 交换（H-2 重构：原 inline HTTP 调用搬到
-	// oauth_provider_github.go）。
-	provider, ok := GetOAuthProvider(database.OAuthProviderGitHub)
-	if !ok {
-		return c.Status(500).JSON(fiber.Map{"success": false, "message": "GitHub OAuth 适配器未注册", "message_code": "ERR_GITHUB_NOT_CONFIGURED"})
-	}
 	identity, err := provider.Exchange(c.UserContext(), code, codeVerifier)
 	if err != nil {
-		return mapOAuthProviderErrorGitHub(c, err)
+		// GitHub 路径保留旧 ERR_GITHUB_* 错误码不变；其它 provider 用 generic 映射
+		if providerKey == database.OAuthProviderGitHub {
+			return mapOAuthProviderErrorGitHub(c, err)
+		}
+		return mapOAuthProviderErrorGeneric(c, providerKey, err)
 	}
-	ghID := identity.ExternalID
-	ghName := identity.Username
 
-	// ====== 核心逻辑：查询该 Github ID 是否已经存在 ======
-	var existingUser database.User
-	res := database.DB.Where("github_id = ?", ghID).First(&existingUser)
-	if res.RowsAffected > 0 {
+	extID := identity.ExternalID
+	displayName := identity.Username
+
+	// 查 oauth_identities：identity 已绑过哪个 DAOF user？
+	existingUser, found, lookupErr := lookupActiveUserByOAuthIdentity(providerKey, extID)
+	if lookupErr != nil {
+		log.Printf("[OAUTH] identity lookup failed provider=%s ext_id=%s: %v", providerKey, extID, lookupErr)
+		return c.Status(500).JSON(fiber.Map{"success": false, "message_code": "ERR_DB_QUERY"})
+	}
+	if found {
+		// 老用户回归
 		if existingUser.Status == 2 {
-			// Banned users still need a browser session for appeal/read-only paths
-			// (/api/user/me, tickets, billing). Business writes and LLM API usage
-			// remain blocked by UserGuard / proxy auth status checks.
+			// Banned 用户保留 session 供 appeal 流程使用
 			sessionID, err := database.CreateUserSession(existingUser.ID, c.Get("User-Agent"), c.IP())
 			if err != nil {
 				log.Printf("[OAUTH] create appeal session failed banned user=%d: %v", existingUser.ID, err)
 				return c.Status(500).JSON(fiber.Map{"success": false, "message_code": "ERR_DB_INSERT_FAILED"})
 			}
 			LogOperationBy(existingUser.ID, existingUser.ID, "user", "LOGIN_BANNED_APPEAL", c.IP(),
-				fmt.Sprintf(`[{"type":"LOGIN_BANNED_APPEAL","via":"github","username":%q,"github_id":%q}]`, existingUser.Username, ghID))
+				fmt.Sprintf(`[{"type":"LOGIN_BANNED_APPEAL","via":%q,"username":%q,"external_id":%q}]`,
+					providerKey, existingUser.Username, extID))
 			return c.JSON(fiber.Map{
 				"success":        true,
 				"message_code":   "SUCCESS_APPEAL_SESSION",
@@ -612,93 +692,99 @@ func GithubCallback(c *fiber.Ctx) error {
 				"session_id":     sessionID,
 			})
 		}
-
-		// 老用户回归！直接放行，无视风控
 		LogOperationBy(existingUser.ID, existingUser.ID, "user", "LOGIN", c.IP(),
-			fmt.Sprintf(`[{"type":"LOGIN","via":"github","username":%q,"github_id":%q}]`, existingUser.Username, ghID))
+			fmt.Sprintf(`[{"type":"LOGIN","via":%q,"username":%q,"external_id":%q}]`,
+				providerKey, existingUser.Username, extID))
 		sessionID, err := database.CreateUserSession(existingUser.ID, c.Get("User-Agent"), c.IP())
 		if err != nil {
 			log.Printf("[OAUTH] create session failed existing user=%d: %v", existingUser.ID, err)
 			return c.Status(500).JSON(fiber.Map{"success": false, "message_code": "ERR_DB_INSERT_FAILED"})
 		}
 		return c.JSON(fiber.Map{
-			"success": true,
-			"msg":     "欢迎回归, " + ghName, "msg_code": "SUCCESS_WELCOME_BACK", "gh_name": ghName,
-			"session_id": sessionID,
+			"success":      true,
+			"msg":          "欢迎回归, " + displayName,
+			"msg_code":     "SUCCESS_WELCOME_BACK",
+			"gh_name":      displayName, // 字段名保持 gh_name 兼容现有前端；H-3b 改 display_name
+			"session_id":   sessionID,
 		})
 	}
 
-	// ====== 平台容量上限拦截 (新用户专用，老用户已在上方放行) ======
+	// ====== 新用户分支 ======
 	if rejectIfUserCapReached(c) {
 		return nil
 	}
 
-	// ====== 新注册边缘拦截风控系统 (Zero Trust Engine) ======
-	// 获取探针 IP
 	currentIP := c.IP()
-
 	needSmsBind := false
 
-	if regStrategy == "strict" {
-		// 模式：宁可错杀，必须实名
+	switch regStrategy {
+	case "strict":
 		needSmsBind = true
-	} else if regStrategy == "dynamic" {
-		// 模式：沙盒智控
+	case "dynamic":
 		limit, _ := strconv.ParseInt(regIpLimitStr, 10, 64)
 		if limit <= 0 {
 			limit = 3
-		} // Default 3
-
+		}
 		var ipRegCount int64
-		// fix MEDIUM（silent-failure 第十八轮）：Count 错误丢弃 → DB 故障时 count=0 < limit →
-		// IP 限频被 bypass，绕过 SMS 实名要求。fail-closed：错误时强制 needSmsBind=true。
 		if err := database.DB.Model(&database.User{}).Where("reg_ip = ?", currentIP).Count(&ipRegCount).Error; err != nil {
 			log.Printf("[REG-IP-CHECK] count query failed for ip=%s: %v — fail-closed (force SMS bind)", currentIP, err)
 			needSmsBind = true
 		} else if ipRegCount >= limit {
-			// 该 IP 的羊毛党超配！勒令实名
 			needSmsBind = true
 		}
-	} else {
-		// 模式：trust (无论何种 IP，直接穿透，仅受制于全局黑名单，暂缓)
+	default:
+		// trust 模式
 		needSmsBind = false
 	}
 
-	// 推荐人 username（前端从 ?ref=xxx 透传），编进 tmp_token，CompleteProfile/Risk 完成注册时使用
 	refUser := strings.TrimSpace(payload.Ref)
 	if refUser == "" {
 		refUser = strings.TrimSpace(c.Query("ref"))
 	}
-	// 防止 ref 包含 "|" 破坏 tmp_token 切分
-	refUser = strings.ReplaceAll(refUser, "|", "")
 
+	tokenType := "clean"
+	action := "require_profile_setup"
+	messageCode := "ERR_REQUIRE_PROFILE_SETUP"
+	message := "联合登录完成，请指定本平台内用户名用作唯一标识"
 	if needSmsBind {
-		// 中断注册管道。将身份信息下发临时内存验证环中 (这里使用短效加密token)
-		// payload 结构：sms|ghID|ghName|ref|timestamp
-		tmpAuthPayload := fmt.Sprintf("sms|%s|%s|%s|%d", ghID, ghName, refUser, time.Now().Unix())
-		safeTmpToken, _ := utils.Encrypt(tmpAuthPayload)
-
-		return c.JSON(fiber.Map{
-			"success":      false,
-			"action":       "require_sms_bind",
-			"tmp_token":    safeTmpToken,
-			"message":      "安全校验未完成：受新账号安全策略影响，请先验证手机号码以完成注册核验。",
-			"message_code": "ERR_REQUIRE_SMS_BIND",
-		})
+		tokenType = "sms"
+		action = "require_sms_bind"
+		messageCode = "ERR_REQUIRE_SMS_BIND"
+		message = "安全校验未完成：受新账号安全策略影响，请先验证手机号码以完成注册核验。"
 	}
-
-	// ====== 绿灯安全用户，抛出设定昵称拦截 ======
-	// payload 结构：clean|ghID|ghName|ref|timestamp
-	tmpAuthPayload := fmt.Sprintf("clean|%s|%s|%s|%d", ghID, ghName, refUser, time.Now().Unix())
-	safeTmpToken, _ := utils.Encrypt(tmpAuthPayload)
-	return c.JSON(fiber.Map{
+	safeTmpToken, _ := utils.Encrypt(buildOAuthTmpTokenPayload(tokenType, providerKey, extID, displayName, refUser))
+	resp := fiber.Map{
 		"success":      false,
-		"action":       "require_profile_setup",
+		"action":       action,
 		"tmp_token":    safeTmpToken,
-		"default_name": suggestUsernameFromOAuthName(ghName),
-		"message":      "联合登录完成，请指定本平台内用户名用作唯一标识",
-		"message_code": "ERR_REQUIRE_PROFILE_SETUP",
-	})
+		"message":      message,
+		"message_code": messageCode,
+	}
+	if !needSmsBind {
+		resp["default_name"] = suggestUsernameFromOAuthName(displayName)
+	}
+	return c.JSON(resp)
+}
+
+// mapOAuthProviderErrorGeneric 给非 GitHub provider 用的通用错误响应。
+// 暂用 ERR_OAUTH_* 通用前缀；H-4 接入 Google 时若需要 provider-specific 文案再分。
+func mapOAuthProviderErrorGeneric(c *fiber.Ctx, providerKey string, err error) error {
+	switch {
+	case errors.Is(err, ErrOAuthProviderNotConfigured):
+		return c.Status(500).JSON(fiber.Map{
+			"success":      false,
+			"message_code": "ERR_OAUTH_PROVIDER_NOT_CONFIGURED",
+			"provider":     providerKey,
+		})
+	case errors.Is(err, ErrOAuthCodeExpired):
+		return c.Status(401).JSON(fiber.Map{"success": false, "message_code": "ERR_OAUTH_CODE_EXPIRED", "provider": providerKey})
+	case errors.Is(err, ErrOAuthUpstreamUnavailable):
+		return c.Status(502).JSON(fiber.Map{"success": false, "message_code": "ERR_OAUTH_UPSTREAM_UNAVAILABLE", "provider": providerKey})
+	case errors.Is(err, ErrOAuthUpstreamMalformed):
+		return c.Status(502).JSON(fiber.Map{"success": false, "message_code": "ERR_OAUTH_UPSTREAM_MALFORMED", "provider": providerKey})
+	default:
+		return c.Status(500).JSON(fiber.Map{"success": false, "message_code": "ERR_OAUTH_INTERNAL", "provider": providerKey})
+	}
 }
 
 // GetPublicConfig 暴露不受查验的安全级别配置给前台。
@@ -761,13 +847,12 @@ func CompleteRisk(c *fiber.Ctx) error {
 		})
 	}
 
-	// fix CRITICAL（codex 第四轮）：从 tmp_token 解出 GitHub ID 写到 newUser，
-	// 防止"同一 GitHub 账号用不同手机号反复注册领取奖励"。
-	// tmp_token payload 格式：(clean|sms)|ghID|ghName|ref|timestamp
-	tmpParts := strings.Split(decryptedStr, "|")
-	ghID := ""
-	if len(tmpParts) >= 5 {
-		ghID = strings.TrimSpace(tmpParts[1])
+	// H-3：tmp_token payload 格式：(clean|sms) | provider | externalID | username | ref | timestamp
+	providerKey, externalID, displayName := parseOAuthTmpTokenParts(decryptedStr)
+	providerKey = strings.TrimSpace(providerKey)
+	externalID = strings.TrimSpace(externalID)
+	if providerKey == "" || externalID == "" {
+		return c.Status(403).JSON(fiber.Map{"success": false, "message": "票据缺少 provider 身份", "message_code": "ERR_RISK_TICKET_INVALID"})
 	}
 
 	registerMu.Lock()
@@ -777,12 +862,14 @@ func CompleteRisk(c *fiber.Ctx) error {
 	if res := database.DB.Where("phone = ?", req.Phone).First(&dbUser); res.RowsAffected > 0 {
 		return c.Status(403).JSON(fiber.Map{"success": false, "message": "系统判定：该手机号已绑定其它账户", "message_code": "ERR_PHONE_BOUND"})
 	}
-	// fix CRITICAL：同一 GitHub 账号已绑定其它账户也要拒绝，否则同 ghID 可在 SMS 路径反复开户
-	if ghID != "" {
-		var dbGh database.User
-		if res := database.DB.Where("github_id = ?", ghID).First(&dbGh); res.RowsAffected > 0 {
-			return c.Status(403).JSON(fiber.Map{"success": false, "message": "该 GitHub 账号已绑定其它账户", "message_code": "ERR_GITHUB_ALREADY_REGISTERED"})
-		}
+	// 同一外部账号已绑定其它 DAOF user 也要拒（同 externalID 在 SMS 路径反复开户）
+	if _, found, lookupErr := lookupActiveUserByOAuthIdentity(providerKey, externalID); lookupErr == nil && found {
+		return c.Status(403).JSON(fiber.Map{
+			"success":      false,
+			"message":      "该第三方账号已绑定其它账户",
+			"message_code": "ERR_OAUTH_ALREADY_REGISTERED",
+			"provider":     providerKey,
+		})
 	}
 
 	if rejectIfUserCapReached(c) {
@@ -796,7 +883,6 @@ func CompleteRisk(c *fiber.Ctx) error {
 	newUser := database.User{
 		Username:     newUsername,
 		Phone:        req.Phone,
-		GithubID:     ghID, // 修复 CRITICAL：必须把 tmp_token 里的 ghID 写入，关闭重复领奖通道
 		Role:         "user",
 		Token:        newSk,
 		Quota:        signupBonusMicro, // 由 SysConfig.signup_bonus 控制（micro_usd），0 表示不送
@@ -809,11 +895,25 @@ func CompleteRisk(c *fiber.Ctx) error {
 		BalanceConsumeLimitUSD:      readDefaultBalanceConsumeLimitMicroUSD(),
 		BalanceConsumeWindowSeconds: int(readInt64Config("balance_consume_default_window_secs", 2592000)),
 	}
+	// 过渡期：GitHub provider 同时写 User.GithubID，让 admin UI 的"按 github_id 搜索 / 显示"
+	// 继续工作（H-3b/H-5 会移除 User.GithubID）。其它 provider 不写。
+	if providerKey == database.OAuthProviderGitHub {
+		newUser.GithubID = externalID
+	}
 
 	// fix CRITICAL C19-2（codex 第十九轮）：user 创建 + signup_bonus 账单原子化
 	if err := createUserWithSignupBonus(&newUser, signupBonusMicro, "sms"); err != nil {
 		log.Printf("[REGISTER-SMS] tx failed username=%s: %v", newUser.Username, err)
 		return c.Status(500).JSON(fiber.Map{"success": false, "message": "创建根记录失败", "message_code": "ERR_CREATE_ROOT_RECORD"})
+	}
+	// 写 oauth_identities 行（new user 已经有 ID 了）
+	if err := linkOAuthIdentityTx(database.DB, newUser.ID, OAuthIdentityData{
+		Provider: providerKey, ExternalID: externalID, Username: displayName,
+	}); err != nil {
+		log.Printf("[REGISTER-SMS] link oauth_identity failed user=%d provider=%s ext=%s: %v",
+			newUser.ID, providerKey, externalID, err)
+		// user 已建立，但 oauth_identity 没写进去 → 下次该 provider 登录会被当作新用户
+		// 风险可接受（运维事后可补）；不阻塞响应。
 	}
 
 	// fix HIGH NEW-H2（codex 第十八轮）：AddUserToAuthCache 必须在 applyReferralBonuses **之前**调用。
@@ -919,18 +1019,25 @@ func CompleteProfile(c *fiber.Ctx) error {
 		return c.Status(403).JSON(fiber.Map{"success": false, "message": "票据类型错误", "message_code": "ERR_INVALID_PASS_STATE"})
 	}
 
-	parts := strings.Split(decryptedStr, "|")
-	if len(parts) < 4 {
+	// H-3：新 tmp_token 格式拆 (provider, externalID, suggestedUsername)
+	providerKey, externalID, _ := parseOAuthTmpTokenParts(decryptedStr)
+	providerKey = strings.TrimSpace(providerKey)
+	externalID = strings.TrimSpace(externalID)
+	if providerKey == "" || externalID == "" {
 		return c.Status(403).JSON(fiber.Map{"success": false, "message": "无效的干净通行证状态", "message_code": "ERR_INVALID_PASS_STATE"})
 	}
-	ghID := parts[1]
 
 	registerMu.Lock()
 	defer registerMu.Unlock()
 
-	var dbUser database.User
-	if res := database.DB.Where("github_id = ?", ghID).First(&dbUser); res.RowsAffected > 0 {
-		return c.Status(403).JSON(fiber.Map{"success": false, "message": "系统防刷判定：此 Github 账号已经注册过", "message_code": "ERR_GITHUB_ALREADY_REGISTERED"})
+	// 拒重复绑：同一外部账号已绑过其它 DAOF user
+	if _, found, lookupErr := lookupActiveUserByOAuthIdentity(providerKey, externalID); lookupErr == nil && found {
+		return c.Status(403).JSON(fiber.Map{
+			"success":      false,
+			"message":      "系统防刷判定：此第三方账号已经注册过",
+			"message_code": "ERR_OAUTH_ALREADY_REGISTERED",
+			"provider":     providerKey,
+		})
 	}
 
 	if rejectIfUserCapReached(c) {
@@ -942,7 +1049,6 @@ func CompleteProfile(c *fiber.Ctx) error {
 
 	newSk := utils.GenerateRandomToken("sk-daof")
 	newUser := database.User{
-		GithubID:     ghID,
 		Username:     req.Username,
 		Role:         "user",
 		Token:        newSk,
@@ -951,16 +1057,27 @@ func CompleteProfile(c *fiber.Ctx) error {
 		RegIP:        c.IP(),
 		RegRiskScore: 0,
 
-		// 三段消费模型：从 SysConfig 默认值初始化（避免 GitHub 注册路径漏初始化导致 WindowSeconds=0）
+		// 三段消费模型：从 SysConfig 默认值初始化
 		BalanceConsumeEnabled:       readBoolConfig("balance_consume_default_enabled", false),
 		BalanceConsumeLimitUSD:      readDefaultBalanceConsumeLimitMicroUSD(),
 		BalanceConsumeWindowSeconds: int(readInt64Config("balance_consume_default_window_secs", 2592000)),
 	}
+	// 过渡：GitHub provider 同时双写 User.GithubID（admin UI 兼容）。其它 provider 不写。
+	if providerKey == database.OAuthProviderGitHub {
+		newUser.GithubID = externalID
+	}
 
 	// fix CRITICAL C19-2（codex 第十九轮）：user 创建 + signup_bonus 账单原子化
-	if err := createUserWithSignupBonus(&newUser, signupBonusMicro, "github"); err != nil {
-		log.Printf("[REGISTER-GITHUB] tx failed username=%s: %v", newUser.Username, err)
+	if err := createUserWithSignupBonus(&newUser, signupBonusMicro, providerKey); err != nil {
+		log.Printf("[REGISTER-OAUTH] tx failed provider=%s username=%s: %v", providerKey, newUser.Username, err)
 		return c.Status(500).JSON(fiber.Map{"success": false, "message": "创建通行记录失败", "message_code": "ERR_CREATE_PASS_RECORD"})
+	}
+	// 写 oauth_identities 行
+	if err := linkOAuthIdentityTx(database.DB, newUser.ID, OAuthIdentityData{
+		Provider: providerKey, ExternalID: externalID, Username: req.Username,
+	}); err != nil {
+		log.Printf("[REGISTER-OAUTH] link oauth_identity failed user=%d provider=%s ext=%s: %v",
+			newUser.ID, providerKey, externalID, err)
 	}
 
 	// fix HIGH NEW-H2：AddUserToAuthCache 在 applyReferralBonuses 前调用（见 CompleteRisk 同样修复）
@@ -971,12 +1088,12 @@ func CompleteProfile(c *fiber.Ctx) error {
 
 	var afterCount int64
 	database.DB.Model(&database.User{}).Where("role = ?", "user").Count(&afterCount)
-	log.Printf("[USER-CREATED] via=CompleteProfile id=%d username=%s ghID=%s ip=%s new_user_count=%d ref=%q signup_bonus=%s",
-		newUser.ID, newUser.Username, newUser.GithubID, c.IP(), afterCount, refUser, database.FormatMicroUSD(signupBonusMicro))
+	log.Printf("[USER-CREATED] via=CompleteProfile id=%d username=%s provider=%s ext_id=%s ip=%s new_user_count=%d ref=%q signup_bonus=%s",
+		newUser.ID, newUser.Username, providerKey, externalID, c.IP(), afterCount, refUser, database.FormatMicroUSD(signupBonusMicro))
 
 	LogOperationBy(0, newUser.ID, "system", "REGISTER", c.IP(),
-		fmt.Sprintf(`[{"type":"REGISTER","via":"github","username":%q,"github_id":%q,"ref":%q,"signup_bonus":%g,"signup_bonus_micro":%d}]`,
-			newUser.Username, newUser.GithubID, refUser, database.MicroToUSD(signupBonusMicro), signupBonusMicro))
+		fmt.Sprintf(`[{"type":"REGISTER","via":%q,"username":%q,"external_id":%q,"ref":%q,"signup_bonus":%g,"signup_bonus_micro":%d}]`,
+			providerKey, newUser.Username, externalID, refUser, database.MicroToUSD(signupBonusMicro), signupBonusMicro))
 
 	sessionID, err := database.CreateUserSession(newUser.ID, c.Get("User-Agent"), c.IP())
 	if err != nil {

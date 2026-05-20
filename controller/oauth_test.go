@@ -60,12 +60,18 @@ func setupOAuthControllerTestDB(t *testing.T) {
 		&database.ChannelModel{},
 		&database.SysConfig{},
 		&database.AccessToken{},
+		// Phase H-1：OAuth 多 provider 抽象
+		&database.OAuthIdentity{},
 	); err != nil {
 		t.Fatalf("migrate: %v", err)
 	}
+	// partial unique index 与 sqlite.go 保持一致
+	database.DB.Exec(`CREATE UNIQUE INDEX IF NOT EXISTS uniq_oauth_identity_active
+		ON oauth_identities(provider, external_id) WHERE unlinked_at IS NULL`)
 	database.DB.Exec("DELETE FROM operation_logs")
 	database.DB.Exec("DELETE FROM user_sessions")
 	database.DB.Exec("DELETE FROM users")
+	database.DB.Exec("DELETE FROM oauth_identities")
 	resetOAuthStatesForTest()
 	resetTmpTokenConsumedForTest()
 }
@@ -287,6 +293,13 @@ func TestGithubCallback_RejectsReusedState(t *testing.T) {
 	if err := database.DB.Create(&user).Error; err != nil {
 		t.Fatalf("create user: %v", err)
 	}
+	// H-3：oauth_identities 才是 lookup 真相
+	if err := database.DB.Create(&database.OAuthIdentity{
+		UserID: user.ID, Provider: database.OAuthProviderGitHub, ExternalID: "12345",
+		LinkedAt: time.Now(),
+	}).Error; err != nil {
+		t.Fatalf("create oauth identity: %v", err)
+	}
 	state, verifier := prepareOAuthStateForTest(t)
 	tokenHits := installMockGitHub(t, verifier)
 
@@ -367,7 +380,8 @@ func TestCompleteProfile_UsesBalanceConsumeDefaultLimitMicroUSD(t *testing.T) {
 		proxy.SysConfigMutex.Unlock()
 	})
 
-	tmpToken, err := utils.Encrypt(fmt.Sprintf("clean|gh-limit-default|octo||%d", time.Now().Unix()))
+	// H-3 tmp_token 格式：clean|provider|extID|username|ref|ts (6 segments)
+	tmpToken, err := utils.Encrypt(fmt.Sprintf("clean|github|gh-limit-default|octo||%d", time.Now().Unix()))
 	if err != nil {
 		t.Fatalf("encrypt tmp token: %v", err)
 	}
@@ -415,7 +429,8 @@ func TestTmpTokenSingleConsume_RejectsReplay(t *testing.T) {
 		proxy.SysConfigMutex.Unlock()
 	})
 
-	tmpToken, err := utils.Encrypt(fmt.Sprintf("clean|gh-single-consume|octo||%d", time.Now().Unix()))
+	// H-3 tmp_token 格式：clean|provider|extID|username|ref|ts
+	tmpToken, err := utils.Encrypt(fmt.Sprintf("clean|github|gh-single-consume|octo||%d", time.Now().Unix()))
 	if err != nil {
 		t.Fatalf("encrypt tmp token: %v", err)
 	}

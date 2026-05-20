@@ -219,11 +219,10 @@ func main() {
 	// 仅 /api/root/* 走 LanGuard 单独处理（admin 引导路径必须可达）。
 	// ==========================================
 	api.Get("/public-config", middleware.SetupGuard, controller.GetPublicConfig)
-	api.Get("/auth/github/prepare", middleware.SetupGuard, controller.PrepareOAuthState)
 
 	// fix Major M3（claude security 第十五轮）：OAuth/SMS 注册路径加 IP 级 rate limiter。
 	// 对照 godLoginLimiter 5/5min 已有；此前这三条公开 POST 完全没限流，攻击者可以：
-	//   - 用预生成的 GitHub code 批量探测 GithubCallback
+	//   - 用预生成的 OAuth code 批量探测 callback
 	//   - 拿合法 tmp_token 批量回放 CompleteRisk/Profile（registerMu.Lock 让 goroutine 排队，做到 DoS）
 	//   - SendSMS 已有应用层 5/小时 限制，外加 IP 级再加一道防 IP 切换
 	authLimiter := limiter.New(limiter.Config{
@@ -241,7 +240,10 @@ func main() {
 		},
 	})
 
-	api.Post("/auth/github", middleware.SetupGuard, authLimiter, controller.GithubCallback)
+	// Phase H-3：OAuth 路由按 :provider 参数化，GitHub / Google / 其它 provider 共用同一 handler。
+	// 旧 /api/auth/github/* 路由已删（项目尚未上线，无需向后兼容）。
+	api.Get("/auth/oauth/:provider/prepare", middleware.SetupGuard, controller.PrepareOAuthState)
+	api.Post("/auth/oauth/:provider/callback", middleware.SetupGuard, authLimiter, controller.OAuthCallback)
 	api.Post("/auth/send-sms", middleware.SetupGuard, authLimiter, controller.SendSMS)
 	api.Post("/auth/complete-risk", middleware.SetupGuard, authLimiter, controller.CompleteRisk)
 	api.Post("/auth/complete-profile", middleware.SetupGuard, authLimiter, controller.CompleteProfile)

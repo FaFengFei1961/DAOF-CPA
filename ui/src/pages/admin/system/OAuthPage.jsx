@@ -50,7 +50,7 @@ const OAuthPage = () => {
               {configs.server_address ? (
                 <>
                   {t('ADMIN_SYS.OAUTH.CALLBACK_CURRENT_PREFIX')}<code className="font-mono text-primary">{configs.server_address}</code>
-                  {' · '}{t('ADMIN_SYS.OAUTH.CALLBACK_AUTO_SUFFIX')} <code className="font-mono">/api/auth/github</code>
+                  {' · '}{t('ADMIN_SYS.OAUTH.CALLBACK_AUTO_SUFFIX')} <code className="font-mono">/api/auth/oauth/github/callback</code>
                 </>
               ) : (
                 <>

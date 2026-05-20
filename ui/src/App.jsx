@@ -29,7 +29,7 @@ const GithubCallbackHandler = () => {
     window.history.replaceState({}, document.title, '/');
     queueMicrotask(() => openLogin({ step: 'github', loading: true }));
 
-    fetch(`/api/auth/github?code=${encodeURIComponent(code)}&state=${encodeURIComponent(state)}`, {
+    fetch(`/api/auth/oauth/github/callback?code=${encodeURIComponent(code)}&state=${encodeURIComponent(state)}`, {
       method: 'POST',
       credentials: 'include',
       headers: { 'Content-Type': 'application/json' },

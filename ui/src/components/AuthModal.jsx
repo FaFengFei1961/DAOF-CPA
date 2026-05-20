@@ -80,7 +80,7 @@ const AuthModal = ({ isOpen, onClose, onLoginSuccess, initialStep = 'github', tm
 
       const [pubRes, stateRes] = await Promise.all([
         fetch('/api/public-config'),
-        fetch('/api/auth/github/prepare', { credentials: 'include' }),
+        fetch('/api/auth/oauth/github/prepare', { credentials: 'include' }),
       ]);
 
       if (!pubRes.ok) {
