@@ -546,6 +546,12 @@ func main() {
 	// Phase G-2.1：用户级开关（控制是否允许邮箱+密码登录；admin master 是另一道闸）
 	api.Put("/user/email-login-enabled", middleware.UserGuard, middleware.CSRFGuard, controller.PutMyEmailLoginEnabled)
 
+	// Phase H-5：用户视角的 OAuth identity 管理
+	// 读路径对 banned 放行（用户查看自己已绑账号）；写路径不许 banned
+	api.Get("/user/oauth/identities", middleware.UserGuardAllowBanned, controller.GetMyOAuthIdentities)
+	api.Post("/user/oauth/:provider/link/prepare", middleware.UserGuard, middleware.CSRFGuard, controller.PrepareOAuthLink)
+	api.Post("/user/oauth/:provider/unlink", middleware.UserGuard, middleware.CSRFGuard, controller.UnlinkMyOAuthIdentity)
+
 	// 工单系统（用户↔admin 多轮会话；关闭后 15 天 cron 清除）
 	//
 	// 限流策略修订（fix CRITICAL：双角色路由没 UserGuard 时 c.Locals("user") 永远是 nil

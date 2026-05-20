@@ -36,6 +36,10 @@ const oauthStateTTL = 5 * time.Minute
 type oauthStateRecord struct {
 	CodeVerifier string
 	ExpiresAt    time.Time
+	// H-5：非 0 表示这是"已登录用户主动 link 新 provider"的请求。
+	// OAuthCallback 读到 LinkUserID != 0 时走 link-to-existing-user 分支，
+	// 而不是 "find by external_id → 新注册" 路径。
+	LinkUserID uint
 }
 
 var (
@@ -226,30 +230,55 @@ func pkceChallenge(verifier string) string {
 }
 
 func storeOAuthState(state, verifier string) {
-	startOAuthStateJanitor()
-	if _, loaded := oauthStateStore.LoadOrStore(state, oauthStateRecord{
+	storeOAuthStateRecord(state, oauthStateRecord{
 		CodeVerifier: verifier,
 		ExpiresAt:    time.Now().Add(oauthStateTTL),
-	}); !loaded {
+	})
+}
+
+// storeOAuthLinkState 存一条 link-mode state（H-5）：已登录用户主动绑新 provider。
+// 与普通 login state 区别仅在 LinkUserID 字段，janitor / 容量限制共用。
+func storeOAuthLinkState(state, verifier string, linkUserID uint) {
+	storeOAuthStateRecord(state, oauthStateRecord{
+		CodeVerifier: verifier,
+		ExpiresAt:    time.Now().Add(oauthStateTTL),
+		LinkUserID:   linkUserID,
+	})
+}
+
+// loadOAuthStateCount 提供给同 package 其它文件读取 atomic counter。
+func loadOAuthStateCount() int64 { return atomic.LoadInt64(&oauthStateCount) }
+
+func storeOAuthStateRecord(state string, rec oauthStateRecord) {
+	startOAuthStateJanitor()
+	if _, loaded := oauthStateStore.LoadOrStore(state, rec); !loaded {
 		atomic.AddInt64(&oauthStateCount, 1)
 	}
 }
 
+// consumeOAuthState 拿 verifier；老 API 保持签名兼容。新 link-aware caller 用 consumeOAuthStateFull。
 func consumeOAuthState(state string) (string, bool) {
+	verifier, _, ok := consumeOAuthStateFull(state)
+	return verifier, ok
+}
+
+// consumeOAuthStateFull 返回 (verifier, linkUserID, ok)。
+// linkUserID == 0 表示这是普通 login state；非 0 表示是 "已登录用户 link 新 provider" 的请求。
+func consumeOAuthStateFull(state string) (string, uint, bool) {
 	state = strings.TrimSpace(state)
 	if state == "" {
-		return "", false
+		return "", 0, false
 	}
 	raw, ok := oauthStateStore.LoadAndDelete(state)
 	if !ok {
-		return "", false
+		return "", 0, false
 	}
 	atomic.AddInt64(&oauthStateCount, -1)
 	record, ok := raw.(oauthStateRecord)
 	if !ok || record.CodeVerifier == "" || time.Now().After(record.ExpiresAt) {
-		return "", false
+		return "", 0, false
 	}
-	return record.CodeVerifier, true
+	return record.CodeVerifier, record.LinkUserID, true
 }
 
 func startOAuthStateJanitor() {
@@ -639,7 +668,7 @@ func OAuthCallback(c *fiber.Ctx) error {
 	if code == "" {
 		return c.Status(400).JSON(fiber.Map{"success": false, "message": "授权码 (OAuth Code) 验证失败或无效", "message_code": "ERR_INVALID_OAUTH_CODE"})
 	}
-	codeVerifier, ok := consumeOAuthState(state)
+	codeVerifier, linkUserID, ok := consumeOAuthStateFull(state)
 	if !ok {
 		return c.Status(403).JSON(fiber.Map{
 			"success":      false,
@@ -665,6 +694,12 @@ func OAuthCallback(c *fiber.Ctx) error {
 
 	extID := identity.ExternalID
 	displayName := identity.Username
+
+	// H-5：link-mode 分支。state 是 "已登录用户 link 新 provider" 的请求，跳过 find /
+	// create 路径，直接把 identity 绑到 LinkUserID。
+	if linkUserID != 0 {
+		return finishOAuthLinkToExistingUser(c, linkUserID, providerKey, identity)
+	}
 
 	// 查 oauth_identities：identity 已绑过哪个 DAOF user？
 	existingUser, found, lookupErr := lookupActiveUserByOAuthIdentity(providerKey, extID)
