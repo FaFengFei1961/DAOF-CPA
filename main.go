@@ -458,6 +458,8 @@ func main() {
 	api.Post("/user/email/verify", middleware.UserGuard, middleware.CSRFGuard, controller.VerifyEmail)
 	api.Post("/user/email/resend-verification", middleware.UserGuard, middleware.CSRFGuard, controller.ResendVerificationEmail)
 	api.Delete("/user/email", middleware.UserGuard, middleware.CSRFGuard, controller.UnbindEmail)
+	// Phase G-2.1：用户级开关（控制是否允许邮箱+密码登录；admin master 是另一道闸）
+	api.Put("/user/email-login-enabled", middleware.UserGuard, middleware.CSRFGuard, controller.PutMyEmailLoginEnabled)
 
 	// 工单系统（用户↔admin 多轮会话；关闭后 15 天 cron 清除）
 	//
