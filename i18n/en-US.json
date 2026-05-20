@@ -2577,7 +2577,19 @@
     "NEW_PASSWORD_LABEL": "New password",
     "NEW_PASSWORD_PLACEHOLDER": "Enter a new password",
     "BTN_UPDATING": "Saving...",
-    "BTN_UPDATE": "Save changes"
+    "BTN_UPDATE": "Save changes",
+    "OAUTH_LINKED_TITLE": "Linked accounts",
+    "OAUTH_LINKED_DESC": "Link GitHub / Google to enable one-click sign-in and as a fallback login credential.",
+    "OAUTH_LINKED_AT": "Linked at",
+    "OAUTH_LINKED_BTN": "Linked",
+    "OAUTH_LINK_BTN": "Link now",
+    "OAUTH_UNLINK_BTN": "Unlink",
+    "OAUTH_LINKING": "Redirecting...",
+    "OAUTH_UNLINKING": "Unlinking...",
+    "OAUTH_UNLINK_CONFIRM": "After unlinking {{provider}}, you will no longer be able to sign in with that account. Continue?",
+    "OAUTH_GITHUB": "GitHub",
+    "OAUTH_GOOGLE": "Google",
+    "OAUTH_NO_PROVIDERS": "No third-party sign-in providers configured by the admin."
   },
   "MY_SUBS": {
     "MY_TITLE": "My subscriptions",

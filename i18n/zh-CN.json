@@ -2577,7 +2577,19 @@
     "NEW_PASSWORD_LABEL": "新密码",
     "NEW_PASSWORD_PLACEHOLDER": "输入新密码",
     "BTN_UPDATING": "提交中...",
-    "BTN_UPDATE": "保存变更"
+    "BTN_UPDATE": "保存变更",
+    "OAUTH_LINKED_TITLE": "第三方账号",
+    "OAUTH_LINKED_DESC": "绑定 GitHub / Google 等账号后即可用第三方一键登录，并作为账号兜底凭据。",
+    "OAUTH_LINKED_AT": "绑定于",
+    "OAUTH_LINKED_BTN": "已绑定",
+    "OAUTH_LINK_BTN": "立即绑定",
+    "OAUTH_UNLINK_BTN": "解绑",
+    "OAUTH_LINKING": "正在跳转...",
+    "OAUTH_UNLINKING": "解绑中...",
+    "OAUTH_UNLINK_CONFIRM": "解绑 {{provider}} 后，您将无法再使用该第三方账号登录。确定继续？",
+    "OAUTH_GITHUB": "GitHub",
+    "OAUTH_GOOGLE": "Google",
+    "OAUTH_NO_PROVIDERS": "管理员尚未配置任何第三方登录渠道。"
   },
   "MY_SUBS": {
     "MY_TITLE": "我的订阅",

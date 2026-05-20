@@ -55,6 +55,15 @@ const OAuthCallbackHandler = () => {
       })
       .then(data => {
         if (data.success) {
+          // H-5：已登录用户主动 link 新 provider 时，后端返 SUCCESS_OAUTH_LINKED 但无 session_id
+          // （用户原 session 仍有效）。检测这种情况：直接弹成功 toast + 跳设置页，不重 openLogin。
+          if (data.message_code === 'SUCCESS_OAUTH_LINKED') {
+            toast.success(t('API.SUCCESS_OAUTH_LINKED', '第三方账号绑定成功'));
+            if (window.location.pathname !== '/settings') {
+              window.location.replace('/settings?tab=account');
+            }
+            return;
+          }
           if (!data.session_id) throw new Error('missing session_id');
           localStorage.setItem('daof_token', data.session_id);
           onLoginSuccess();
