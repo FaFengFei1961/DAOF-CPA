@@ -69,9 +69,16 @@ func buildSubscriptionUsageSummary(snapshotJSON string, usages []database.Subscr
 	}
 	now := time.Now()
 	usageByPlanBucket := make(map[string]database.SubscriptionUsage, len(usages))
+	// fix LOW（Phase E 复审）：补 plan→usage 二级 map，消除 fallback 的 O(N×M) 退化
+	// （主路径已是 O(1) by (plan_id, bucket)，仅 bucket 不匹配时退化）。
+	usageByPlanID := make(map[uint]database.SubscriptionUsage, len(usages))
 	for _, u := range usages {
 		key := fmt.Sprintf("%d\x00%s", u.QuotaPlanID, u.ModelBucket)
 		usageByPlanBucket[key] = u
+		// 同 plan 多 bucket 时保留最后一条（与原线性扫描行为一致：break on first match）
+		if _, exists := usageByPlanID[u.QuotaPlanID]; !exists {
+			usageByPlanID[u.QuotaPlanID] = u
+		}
 	}
 	out := make([]subscriptionUsageSummary, 0, len(snap.Plans))
 	for _, p := range snap.Plans {
@@ -79,13 +86,10 @@ func buildSubscriptionUsageSummary(snapshotJSON string, usages []database.Subscr
 		key := fmt.Sprintf("%d\x00%s", p.ID, bucket)
 		u, hasUsage := usageByPlanBucket[key]
 		if !hasUsage {
-			for _, candidate := range usages {
-				if candidate.QuotaPlanID == p.ID {
-					u = candidate
-					bucket = candidate.ModelBucket
-					hasUsage = true
-					break
-				}
+			if candidate, ok := usageByPlanID[p.ID]; ok {
+				u = candidate
+				bucket = candidate.ModelBucket
+				hasUsage = true
 			}
 		}
 		mult := p.QuantityMultiplier

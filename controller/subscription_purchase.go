@@ -26,9 +26,6 @@ var errStackLimitExceeded = errors.New("subscription stack limit exceeded")
 // errInsufficientBalance 由购买套餐事务内条件 UPDATE 失败抛出（并发竞态）
 var errInsufficientBalance = errors.New("insufficient balance at commit (concurrent purchase race)")
 
-// errPriceOverflow 是购买路径金额累加溢出 sentinel。
-var errPriceOverflow = errors.New("price * qty overflow int64")
-
 // fix CRITICAL R23+3-C3（codex 第四轮）：事务内重读 package 后的校验失败 sentinel
 var (
 	errPackageGoneInTx           = errors.New("package vanished during transaction (admin deleted)")

@@ -175,7 +175,7 @@ func ChatCompletionProxyHandler(c *fiber.Ctx) error {
 
 	var engineDecision EngineDecision
 	if !isCountTokensRequest {
-		engineDecision, halt = gatewayRunPrecheck(c, auth, req, srcFormat, path, clientIP, startTime)
+		engineDecision, halt = gatewayRunPrecheck(c, auth, req, path, clientIP, startTime)
 		if halt {
 			return nil
 		}

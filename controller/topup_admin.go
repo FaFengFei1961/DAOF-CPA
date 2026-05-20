@@ -256,7 +256,7 @@ func AdminMarkTopupPaid(c *fiber.Ctx) error {
 			return fmt.Errorf("write billing entry: %w", err)
 		}
 
-		auditDetails, _ := json.Marshal(map[string]any{
+		auditDetails, err := json.Marshal(map[string]any{
 			"type":               "TOPUP_MANUAL_MARK_PAID",
 			"topup_order_id":     freshOrder.ID,
 			"out_trade_no":       freshOrder.OutTradeNo,
@@ -265,6 +265,9 @@ func AdminMarkTopupPaid(c *fiber.Ctx) error {
 			"money_fen":          freshOrder.MoneyRMB,
 			"reason":             reason,
 		})
+		if err != nil {
+			return fmt.Errorf("marshal audit details: %w", err)
+		}
 		return LogOperationByTx(tx, op.ID, freshOrder.UserID, "admin", "TOPUP_MANUAL_MARK_PAID", c.IP(), string(auditDetails))
 	})
 	if errors.Is(txErr, errAdminMarkRaced) {
@@ -562,7 +565,7 @@ func AdminRefundTopup(c *fiber.Ctx) error {
 			return fmt.Errorf("insert topup_refund: %w", err)
 		}
 
-		auditDetails, _ := json.Marshal(map[string]any{
+		auditDetails, err := json.Marshal(map[string]any{
 			"type":                "REFUND_TOPUP",
 			"admin_id":            op.ID,
 			"order_id":            order.ID,
@@ -574,6 +577,9 @@ func AdminRefundTopup(c *fiber.Ctx) error {
 			"external_refund_ref": req.ExternalRefundRef,
 			"reclaim_quota":       req.ReclaimQuota,
 		})
+		if err != nil {
+			return fmt.Errorf("marshal audit details: %w", err)
+		}
 		return LogOperationByTx(tx, op.ID, order.UserID, "admin", "REFUND_TOPUP", c.IP(), string(auditDetails))
 	})
 	if errors.Is(txErr, errAdminMarkRaced) {

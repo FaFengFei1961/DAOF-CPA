@@ -78,7 +78,7 @@ func TestValidateYifutCIDRConfig_RejectsInvalid(t *testing.T) {
 	withSysConfigOverride(t, map[string]string{
 		"yifut_notify_allowed_cidrs": "not_a_cidr,1.2.3.4,10.0.0.0/24",
 	}, func() {
-		if err := ValidateYifutNotifyCIDRConfig(); err == nil {
+		if err := validateYifutNotifyCIDRConfig(); err == nil {
 			t.Fatal("invalid CIDR config should be rejected")
 		}
 		if checkYifutNotifyIPAllowed("1.2.3.4") {

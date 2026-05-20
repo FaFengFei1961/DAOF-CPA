@@ -12,7 +12,6 @@ import (
 	"crypto/rand"
 	"encoding/hex"
 	"fmt"
-	"math"
 	"math/big"
 	"net/url"
 	"strconv"
@@ -188,10 +187,6 @@ func isSafeReturnPath(p string) bool {
 		return false
 	}
 	return true
-}
-
-func round2(v float64) float64 {
-	return math.Round(v*100) / 100
 }
 
 // parseRMBStringToFen 把 "12.34" / "12" / "12.3" 这类 RMB 元字符串解析为 fen 整数。

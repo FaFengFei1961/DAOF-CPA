@@ -125,7 +125,7 @@ func AdminRefundSubscription(c *fiber.Ctx) error {
 		})
 	}
 	purchasedPriceMicro := sub.PurchasedUnitPriceUSD
-	// fix CRITICAL（多模型审计第二十五轮）：严格 `>`，无容差。配合上方 round2 入口处理浮点。
+	// fix CRITICAL（多模型审计第二十五轮）：严格 `>`，无容差。退款金额比较走 int64 micro_usd 域。
 	// 任何 admin 想退超过实际支付的金额都必须明确出错（"退款≤已收"铁律不容许灰色地带）。
 	if refundAmountMicro > purchasedPriceMicro {
 		return c.Status(400).JSON(fiber.Map{
@@ -211,7 +211,7 @@ func AdminRefundSubscription(c *fiber.Ctx) error {
 		// 业务规则（用户 2026-05-10 第三次反馈定稿）：取消/退款**完全不触碰**优惠券。
 		// 已用券永远保持 'used'，admin 想补偿用户应独立走 AdminGrantCoupon 端点。
 		// 退款审计只记录"原 sub 当时用了哪张券"作为追溯线索，不做任何状态变更。
-		auditDetails, _ := json.Marshal(map[string]any{
+		auditDetails, err := json.Marshal(map[string]any{
 			"type":              "REFUND_SUBSCRIPTION",
 			"sub_id":            sub.ID,
 			"amount_micro_usd":  refundAmountMicro, // 精确审计（int64）
@@ -220,6 +220,9 @@ func AdminRefundSubscription(c *fiber.Ctx) error {
 			"package":           sub.PackageID,
 			"applied_coupon_id": sub.AppliedCouponID, // 仅信息：该 sub 当时用过哪张券（保持 used，不恢复）
 		})
+		if err != nil {
+			return fmt.Errorf("marshal audit details: %w", err)
+		}
 		return LogOperationByTx(tx, op.ID, sub.UserID, "admin", "REFUND_SUBSCRIPTION", c.IP(), string(auditDetails))
 	})
 
@@ -350,6 +353,10 @@ func AdminRevokeGrantedSubscription(c *fiber.Ctx) error {
 			return fmt.Errorf("lock user: %w", err)
 		}
 
+		// AdminRefundSubscription 不做这步是因为它的状态机靠条件 UPDATE 一步完成；
+		// 本接口需要在 UPDATE 前先读 fresh IsGranted/Status 决定 sentinel 错误码（区分
+		// "已不是 granted 了" vs "状态不在允许集"），所以必须先持锁读后再 UPDATE。
+		// FOR UPDATE 在 SQLite 上是 no-op（GORM 无害降级）但在 PG/MySQL 上锁定 sub 行。
 		var lockedSub database.UserSubscription
 		if err := tx.Clauses(clause.Locking{Strength: "UPDATE"}).First(&lockedSub, sub.ID).Error; err != nil {
 			return fmt.Errorf("lock sub: %w", err)
@@ -395,7 +402,7 @@ func AdminRevokeGrantedSubscription(c *fiber.Ctx) error {
 			return fmt.Errorf("write billing revoke grant: %w", err)
 		}
 
-		auditDetails, _ := json.Marshal(map[string]any{
+		auditDetails, err := json.Marshal(map[string]any{
 			"type":         "REVOKE_GRANTED_SUBSCRIPTION",
 			"sub_id":       lockedSub.ID,
 			"user_id":      lockedSub.UserID,
@@ -404,6 +411,9 @@ func AdminRevokeGrantedSubscription(c *fiber.Ctx) error {
 			"reason":       reason,
 			"prev":         lockedSub.Status,
 		})
+		if err != nil {
+			return fmt.Errorf("marshal audit details: %w", err)
+		}
 		return LogOperationByTx(tx, op.ID, lockedSub.UserID, "admin", "REVOKE_GRANTED_SUBSCRIPTION", c.IP(), string(auditDetails))
 	})
 

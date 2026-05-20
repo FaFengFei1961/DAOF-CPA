@@ -10,6 +10,11 @@ import (
 )
 
 // LogOperationBy 在已知操作者 ID 时使用——可追责到具体 admin。
+//
+// 设计：本函数是事务外的 fire-and-forget 包装，无返回值。
+// 失败时的告警来自下游 LogOperationByTxReturning 内 `[AUDIT-LOG-FAILED]` log（operation.go:41），
+// 这里的 `_ =` 仅是显式标注"caller 不在事务里、无法回滚，错误已在下游被日志化"——
+// 不要把 `_ =` 当成无信号的吞错。
 func LogOperationBy(operatorID, targetUserID uint, operatorRole, actionType, ipAddress string, details string) {
 	_ = LogOperationByTx(database.DB, operatorID, targetUserID, operatorRole, actionType, ipAddress, details)
 }

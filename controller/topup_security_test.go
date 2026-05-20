@@ -6,6 +6,7 @@ package controller
 
 import (
 	"bytes"
+	"math"
 	"net/http/httptest"
 	"testing"
 
@@ -34,7 +35,7 @@ func newAdminTopupTestApp(admin *database.User) *fiber.App {
 func seedPaidTopupOrder(t *testing.T, userID uint, rmb float64) *database.TopupOrder {
 	t.Helper()
 	rmbFen, _ := database.RMBToFen(rmb)
-	amountMicro, _ := database.USDToMicro(round2(rmb / 7.2))
+	amountMicro, _ := database.USDToMicro(math.Round(rmb/7.2*100) / 100)
 	o := database.TopupOrder{
 		OutTradeNo:                  "tp_test_" + itoaUint(userID),
 		UserID:                      userID,

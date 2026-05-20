@@ -1,8 +1,13 @@
 // Package controller / subscription.go
 //
-// 用户视角订阅查询 / 取消 + 共享 helper（lockUserForUpdate）。
-// 购买流程在 subscription_purchase.go；admin 视角在 subscription_admin.go；
-// 显示聚合在 subscription_view.go；快照构建在 subscription_snapshot.go。
+// 用户视角订阅查询 / 取消。
+//
+// 同一职责域的其他文件：
+//   - subscription_purchase.go 购买流程
+//   - subscription_admin.go    admin 视角（refund/revoke/list）
+//   - subscription_view.go     显示聚合
+//   - subscription_snapshot.go 快照构建
+//   - tx_helpers.go            跨流程共享的 lockUserForUpdate + sentinel
 package controller
 
 import (
@@ -16,42 +21,7 @@ import (
 	"daof-cpa/proxy"
 
 	"github.com/gofiber/fiber/v2"
-	"gorm.io/gorm"
-	"gorm.io/gorm/clause"
 )
-
-// lockUserForUpdate 跨数据库方言提供 user 行级排他锁。
-//
-// fix Major（codex 第九轮）：GORM SQLite 驱动会**忽略** clause.Locking{Strength: "UPDATE"}
-// 子句（FOR UPDATE 在 SQLite 不存在），所以 PostgreSQL 上有效的行锁在 SQLite 下完全失效，
-// 同 user 并发购买/创建 token 不能被串行化（snapshot isolation 让两个事务都读到 count=0
-// 后各自 INSERT，busy_timeout 仅延后 UPDATE 而非 SELECT）。
-//
-// 跨方言策略：
-//   - PostgreSQL/MySQL: clause.Locking → 真正的行级排他锁
-//   - SQLite: no-op UPDATE 触发 RESERVED 锁——立刻把事务从 reader 升级为 writer，
-//     让其他并发事务的"写"操作在 PRAGMA busy_timeout=5000ms 内排队。
-//     这等价于 BEGIN IMMEDIATE 的效果（GORM 不直接暴露事务模式）。
-//
-// 调用方必须在事务内（tx 必须是 *gorm.DB 的事务句柄）。
-func lockUserForUpdate(tx *gorm.DB, userID uint) error {
-	dialect := tx.Dialector.Name()
-	if dialect == "sqlite" {
-		// no-op UPDATE 触发 RESERVED → 升级 writer，与其他写事务串行化
-		res := tx.Exec("UPDATE users SET updated_at = updated_at WHERE id = ?", userID)
-		if res.Error != nil {
-			return res.Error
-		}
-		if res.RowsAffected == 0 {
-			return fmt.Errorf("user %d not found", userID)
-		}
-		return nil
-	}
-	// PostgreSQL / MySQL：FOR UPDATE 行锁
-	var u database.User
-	return tx.Clauses(clause.Locking{Strength: "UPDATE"}).
-		Where("id = ?", userID).First(&u).Error
-}
 
 
 // MySubscriptions 查询我的活跃订阅。批量预加载 usage + package name 避免 N+1。

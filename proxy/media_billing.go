@@ -38,13 +38,22 @@ type MediaBillingInput struct {
 	ChannelType    string
 	StatusCode     int
 
-	// ApiLog 多余字段（image 路径填 token 计数；video/gemini 留 0）
+	// ApiLog token 计数字段。三路 caller 的填值约定：
+	//   - image (image_billing.go DeductImageBalanceAndLog):
+	//       全部 7 个字段都按上游 usage 填（gpt-image-2 token-billing 模式才有意义）
+	//   - video (video_billing.go DeductVideoBalanceAndLog):
+	//       全部留 0（视频按 video_second 计费，无 token 概念）
+	//   - gemini (gemini_billing.go deductGeminiBalanceAndLog):
+	//       仅填 PromptTokens / CompletionTokens / CachedTokens / ReasoningTokens；
+	//       CacheWrite* 三个字段留 0（Gemini API 不区分 5m/1h cache write）
+	//
+	// 未来加新媒体类型前应明确每个字段的语义并补到这里。
 	PromptTokens       int
 	CompletionTokens   int
 	CachedTokens       int
-	CacheWriteTokens   int
-	CacheWrite5mTokens int
-	CacheWrite1hTokens int
+	CacheWriteTokens   int // image-only（OpenAI prompt caching 写入计数）
+	CacheWrite5mTokens int // image-only（Anthropic 5min cache）
+	CacheWrite1hTokens int // image-only（Anthropic 1h cache）
 	ReasoningTokens    int
 
 	// pending entry tokens_total（image=imageTokenTotal(price), video=int(price.Quantity), gemini=prompt+completion）

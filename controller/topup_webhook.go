@@ -380,7 +380,7 @@ func checkYifutNotifyIPAllowed(remoteIP string) bool {
 	return false
 }
 
-func ValidateYifutNotifyCIDRConfig() error {
+func validateYifutNotifyCIDRConfig() error {
 	csv := strings.TrimSpace(readStringConfig("yifut_notify_allowed_cidrs", ""))
 	if csv == "" {
 		log.Printf("[TOPUP-NOTIFY] WARN yifut_notify_allowed_cidrs is empty; webhook IP allowlist is disabled")

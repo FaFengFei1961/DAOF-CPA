@@ -131,7 +131,7 @@ func gatewayResolveRequest(c *fiber.Ctx, srcFormat sdktranslator.Format, path st
 // gatewayRunPrecheck 跑 Decide(IsPrecheck=true)，处理 subscription / balance fallback。
 // 成功返回 engineDecision（caller 用于后续 commit 阶段）。失败 send response + halt=true。
 // 非 count_tokens 请求才调用；count_tokens 是免费辅助接口，跳过精检。
-func gatewayRunPrecheck(c *fiber.Ctx, auth gatewayAuthCtx, req gatewayRequestCtx, srcFormat sdktranslator.Format, path, clientIP string, startTime time.Time) (EngineDecision, bool) {
+func gatewayRunPrecheck(c *fiber.Ctx, auth gatewayAuthCtx, req gatewayRequestCtx, path, clientIP string, startTime time.Time) (EngineDecision, bool) {
 	user := auth.User
 	token := auth.Token
 	modelName := req.ModelName
@@ -220,6 +220,13 @@ func gatewayRunPrecheck(c *fiber.Ctx, auth gatewayAuthCtx, req gatewayRequestCtx
 		}
 	}
 	// 决策结果暴露给后续 retry loop（subscription_decision locals 给 ApiLog 关联）
+	//
+	// 跨文件契约（Phase D-2 拆分后注释 — 2026-05-19）：
+	// 这条 c.Locals 写入会被 stream.go ChatCompletionProxyHandler 的 commit closure
+	// 通过 c.Locals("subscription_decision") 读回，用来把 EngineDecision 关联到
+	// ApiLog.SubscriptionID。helper 同时**返回**了 decision 给 caller，但 caller 也
+	// 必须保留这条 locals 写入——commit closure 在 helper 返回 *之后* 才会触发，
+	// 且不在同一作用域，没法直接拿到 decision 变量。
 	c.Locals("subscription_decision", decision)
 	return decision, false
 }
