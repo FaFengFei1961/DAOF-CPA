@@ -1,14 +1,11 @@
 package controller
 
 import (
-	"bytes"
 	"crypto/rand"
 	"crypto/sha256"
 	"encoding/base64"
 	"encoding/hex"
-	"encoding/json"
 	"fmt"
-	"io"
 	"log"
 	"net/http"
 	"regexp"
@@ -573,101 +570,24 @@ func GithubCallback(c *fiber.Ctx) error {
 		})
 	}
 
-	// 1. 获取动态系统级配置 (Client ID / Secret / Strategy)
+	// 1. 取风控配置（与 provider 无关，保留在 handler 层）
 	proxy.SysConfigMutex.RLock()
-	clientID := proxy.SysConfigCache["github_client_id"]
-	clientSecret := proxy.SysConfigCache["github_client_secret"]
 	regStrategy := proxy.SysConfigCache["reg_strategy"] // trust, strict, dynamic
 	regIpLimitStr := proxy.SysConfigCache["reg_ip_limit"]
 	proxy.SysConfigMutex.RUnlock()
 
-	if clientID == "" || clientSecret == "" {
-		return c.Status(500).JSON(fiber.Map{"success": false, "message": "暂时无法提供该授权模式，请使用其他方式登录", "message_code": "ERR_GITHUB_NOT_CONFIGURED"})
-	}
-	redirectURI, err := buildAbsoluteURL("/oauth/github")
-	if err != nil {
-		log.Printf("[OAUTH] invalid redirect_uri config: %v", err)
-		return c.Status(500).JSON(fiber.Map{"success": false, "message_code": "ERR_SERVER_ADDRESS_NOT_CONFIGURED"})
-	}
-
-	// 2. 用 Code 换取远程 Access Token
-	reqBody := map[string]string{
-		"client_id":     clientID,
-		"client_secret": clientSecret,
-		"code":          code,
-		"redirect_uri":  redirectURI,
-		"code_verifier": codeVerifier,
-	}
-	bodyBytes, err := json.Marshal(reqBody)
-	if err != nil {
-		log.Printf("[OAUTH] marshal token req failed: %v", err)
-		return c.Status(500).JSON(fiber.Map{"success": false, "message_code": "ERR_GITHUB_INTERNAL"})
-	}
-	// fix B-H1 / B-L1：用 RequestWithContext + 限读响应体，防 OOM + 客户端断开
-	// 不释放上游 socket。
-	req, err := http.NewRequestWithContext(c.UserContext(), "POST", githubTokenEndpoint, bytes.NewBuffer(bodyBytes))
-	if err != nil {
-		log.Printf("[OAUTH] build token req failed: %v", err)
-		return c.Status(500).JSON(fiber.Map{"success": false, "message_code": "ERR_GITHUB_INTERNAL"})
-	}
-	req.Header.Set("Content-Type", "application/json")
-	req.Header.Set("Accept", "application/json")
-
-	resp, err := githubHTTPClient.Do(req)
-	if err != nil {
-		log.Printf("[OAUTH] token exchange failed: %v", err)
-		return c.Status(502).JSON(fiber.Map{"success": false, "message": "第三方服务响应超时(502)", "message_code": "ERR_GITHUB_CONN"})
-	}
-	defer resp.Body.Close()
-
-	tokenBody, err := io.ReadAll(io.LimitReader(resp.Body, githubResponseLimit))
-	if err != nil {
-		log.Printf("[OAUTH] read token resp failed (status=%d): %v", resp.StatusCode, err)
-		return c.Status(502).JSON(fiber.Map{"success": false, "message_code": "ERR_GITHUB_DECODE"})
-	}
-	var tokenRes map[string]interface{}
-	if err := json.Unmarshal(tokenBody, &tokenRes); err != nil {
-		log.Printf("[OAUTH] decode token resp failed (status=%d): %v", resp.StatusCode, err)
-		return c.Status(502).JSON(fiber.Map{"success": false, "message_code": "ERR_GITHUB_DECODE"})
-	}
-	accessToken, ok := tokenRes["access_token"].(string)
+	// 2-3. 通过 OAuthProvider 抽象完成 code → identity 交换（H-2 重构：原 inline HTTP 调用搬到
+	// oauth_provider_github.go）。
+	provider, ok := GetOAuthProvider(database.OAuthProviderGitHub)
 	if !ok {
-		return c.Status(401).JSON(fiber.Map{"success": false, "message": "第三方颁发的客户端授权码已过期失效", "message_code": "ERR_GITHUB_CODE_EXPIRED"})
+		return c.Status(500).JSON(fiber.Map{"success": false, "message": "GitHub OAuth 适配器未注册", "message_code": "ERR_GITHUB_NOT_CONFIGURED"})
 	}
-
-	// 3. 获取用户极客身份
-	req2, err := http.NewRequestWithContext(c.UserContext(), "GET", githubUserEndpoint, nil)
+	identity, err := provider.Exchange(c.UserContext(), code, codeVerifier)
 	if err != nil {
-		log.Printf("[OAUTH] build user req failed: %v", err)
-		return c.Status(500).JSON(fiber.Map{"success": false, "message_code": "ERR_GITHUB_INTERNAL"})
+		return mapOAuthProviderErrorGitHub(c, err)
 	}
-	req2.Header.Set("Authorization", "Bearer "+accessToken)
-	resp2, err := githubHTTPClient.Do(req2)
-	if err != nil {
-		log.Printf("[OAUTH] fetch user failed: %v", err)
-		return c.Status(502).JSON(fiber.Map{"success": false, "message": "无法同步上游服务器资料", "message_code": "ERR_GITHUB_PROFILE_FAIL"})
-	}
-	defer resp2.Body.Close()
-
-	// 读取 Body 二进制以便解析（限读防 OOM）
-	userBody, err := io.ReadAll(io.LimitReader(resp2.Body, githubResponseLimit))
-	if err != nil {
-		log.Printf("[OAUTH] read user body failed: %v", err)
-		return c.Status(502).JSON(fiber.Map{"success": false, "message_code": "ERR_GITHUB_PROFILE_FAIL"})
-	}
-	var ghUser map[string]interface{}
-	if err := json.Unmarshal(userBody, &ghUser); err != nil {
-		log.Printf("[OAUTH] unmarshal user body failed (status=%d, body=%.200q): %v", resp2.StatusCode, string(userBody), err)
-		return c.Status(502).JSON(fiber.Map{"success": false, "message_code": "ERR_GITHUB_PROFILE_DECODE"})
-	}
-
-	// float64 因为 json default 是 float64
-	ghIDFloat, ok := ghUser["id"].(float64)
-	if !ok {
-		return c.Status(401).JSON(fiber.Map{"success": false, "message": "第三方接口同步异常", "message_code": "ERR_GITHUB_PROFILE_EXCEPTION"})
-	}
-	ghID := fmt.Sprintf("%.0f", ghIDFloat)
-	ghName, _ := ghUser["login"].(string)
+	ghID := identity.ExternalID
+	ghName := identity.Username
 
 	// ====== 核心逻辑：查询该 Github ID 是否已经存在 ======
 	var existingUser database.User
