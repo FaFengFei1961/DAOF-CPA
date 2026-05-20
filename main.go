@@ -306,6 +306,10 @@ func main() {
 	adminApi := api.Group("/admin", middleware.LanGuard, middleware.AdminGuard)
 	adminApi.Get("/config", controller.GetSysConfigs)
 	adminApi.Post("/config", controller.BatchUpdateSysConfigs)
+	// Phase G-1.6 邮件配置专用 API（password 不回显）
+	adminApi.Get("/email/config", controller.GetAdminEmailConfig)
+	adminApi.Put("/email/config", middleware.CSRFGuard, controller.UpdateAdminEmailConfig)
+	adminApi.Post("/email/test-send", middleware.CSRFGuard, controller.SendAdminEmailTest)
 	adminApi.Post("/moderation/test", controller.TestModerationConfig)
 	adminApi.Post("/moderation/evaluate", controller.EvaluateModerationDryRun)
 	adminApi.Post("/moderation/keywords/generate", controller.GenerateModerationKeywords)
