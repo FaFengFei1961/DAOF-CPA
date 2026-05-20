@@ -35,6 +35,7 @@ const StatisticsDash = lazy(() => import('./components/StatisticsDash'));
 const PricingDash = lazy(() => import('./components/PricingDash'));
 const Topup = lazy(() => import('./components/Topup'));
 const TopupResult = lazy(() => import('./components/TopupResult'));
+const VerifyEmailPage = lazy(() => import('./components/VerifyEmailPage'));
 const BillsPage = lazy(() => import('./components/BillsPage'));
 const Tickets = lazy(() => import('./components/Tickets'));
 
@@ -59,6 +60,7 @@ const I18nManagement = lazy(() => import('./components/I18nManagement'));
 // Admin system form pages.
 const OAuthPage = lazy(() => import('./pages/admin/system/OAuthPage'));
 const SmsPage = lazy(() => import('./pages/admin/system/SmsPage'));
+const EmailPage = lazy(() => import('./pages/admin/system/EmailPage'));
 const ModerationPage = lazy(() => import('./pages/admin/system/ModerationPage'));
 const CouponsPage = lazy(() => import('./pages/admin/system/CouponsPage'));
 const SyncPage = lazy(() => import('./pages/admin/system/SyncPage'));
@@ -82,6 +84,8 @@ const router = createBrowserRouter([
       { index: true,    element: <Dashboard /> },
       { path: 'pricing',element: <PricingDash /> },
       { path: 'topup-result', element: <TopupResult /> },
+      // Phase G-1.8：邮箱验证落地页（用户从邮件链接进入）
+      { path: 'verify-email', element: <VerifyEmailPage /> },
       // fix P2（codex review verify-1 + verify-r4 + verify-r5）：后端 notification_links.go
       // 仍生成 `/upgrade?pane=mine|store` 用于通知 action_url。/upgrade 路由删除后这些通知按钮
       // silent 跳全局 404。
@@ -123,6 +127,7 @@ const router = createBrowserRouter([
 
       { path: 'oauth',           element: <OAuthPage /> },
       { path: 'sms',             element: <SmsPage /> },
+      { path: 'email',           element: <EmailPage /> },
       { path: 'moderation',      element: <ModerationPage /> },
       { path: 'coupons',         element: <CouponsPage /> },
       { path: 'sync',            element: <SyncPage /> },

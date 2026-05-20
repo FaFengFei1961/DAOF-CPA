@@ -12,6 +12,7 @@ import {
   Receipt, MessageSquare, Settings as SettingsIcon,
   Network, Activity, Layers, Package as PackageIcon,
   ShieldAlert, Users, BarChart3, Bell, Globe, Key, Shield, ShieldCheck,
+  Mail,
 } from 'lucide-react';
 
 // ─── User-side ───────────────────────────────────────────────────
@@ -81,6 +82,7 @@ export const adminNav = [
       { id: 'general',        standalone: true, path: '/admin/general',       icon: SettingsIcon, labelKey: 'SETTINGS.TAB_GENERAL',   labelFallback: '常规设置' },
       { id: 'oauth',          standalone: true, path: '/admin/oauth',         icon: Key,          labelKey: 'SETTINGS.TAB_OAUTH',     labelFallback: 'OAuth' },
       { id: 'sms',            standalone: true, path: '/admin/sms',           icon: MessageSquare,labelKey: 'SETTINGS.TAB_SMS',       labelFallback: '短信' },
+      { id: 'email',          standalone: true, path: '/admin/email',         icon: Mail,         labelKey: 'SETTINGS.TAB_EMAIL',     labelFallback: '邮件' },
       { id: 'risk',           standalone: true, path: '/admin/risk',          icon: ShieldCheck,  labelKey: 'SETTINGS.TAB_RISK',      labelFallback: '风控' },
       { id: 'notifications',  standalone: true, path: '/admin/notifications', icon: Bell,         labelKey: 'NOTIF.ADMIN.TAB',        labelFallback: '通知管理' },
       { id: 'admin_tickets',  standalone: true, path: '/admin/tickets',       icon: MessageSquare,labelKey: 'TICKET.ADMIN.TAB',       labelFallback: '工单管理' },

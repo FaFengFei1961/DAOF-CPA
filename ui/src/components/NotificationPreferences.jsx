@@ -74,6 +74,10 @@ const NotificationPreferences = () => {
   const [usageThresholds, setUsageThresholds] = useState(() => (
     Array.isArray(cached?.usage_thresholds) ? cached.usage_thresholds : [80, 100]
   ));
+  // Phase G-1.7：邮件 channel 偏好（per-category 开关）。空 map = 全关。
+  const [enabledEmailCategories, setEnabledEmailCategories] = useState(() => cached?.enabled_email_categories || {});
+  // 后端告知是否能用邮件 channel（master enable + 邮箱已验证）。
+  const [emailChannelAvailable, setEmailChannelAvailable] = useState(() => !!cached?.email_channel_available);
   const [loading, setLoading] = useState(() => !cached);
   const [saving, setSaving] = useState(false);
 
@@ -86,6 +90,8 @@ const NotificationPreferences = () => {
     if (cachedPref) {
       setEnabledCategories(cachedPref.enabled_categories || {});
       setUsageThresholds(Array.isArray(cachedPref.usage_thresholds) ? cachedPref.usage_thresholds : []);
+      setEnabledEmailCategories(cachedPref.enabled_email_categories || {});
+      setEmailChannelAvailable(!!cachedPref.email_channel_available);
       setLoading(false);
       if (!force && isPageCacheFresh(cacheKey, NOTIF_PREF_CACHE_TTL_MS)) return;
     } else {
@@ -97,6 +103,8 @@ const NotificationPreferences = () => {
         writePageCache(cacheKey, json.data);
         setEnabledCategories(json.data.enabled_categories || {});
         setUsageThresholds(Array.isArray(json.data.usage_thresholds) ? json.data.usage_thresholds : []);
+        setEnabledEmailCategories(json.data.enabled_email_categories || {});
+        setEmailChannelAvailable(!!json.data.email_channel_available);
       }
     } catch {
       // Use cached/default preferences when the preference endpoint is unavailable.
@@ -111,6 +119,12 @@ const NotificationPreferences = () => {
     const current = enabledCategories[key];
     const next = current === false ? true : false;
     setEnabledCategories({ ...enabledCategories, [key]: next });
+  };
+
+  // Phase G-1.7：邮件 channel 是保守 opt-in，缺失/false 都视为关。
+  const isEmailEnabled = (key) => enabledEmailCategories[key] === true;
+  const toggleEmailCategory = (key) => {
+    setEnabledEmailCategories({ ...enabledEmailCategories, [key]: !isEmailEnabled(key) });
   };
 
   const toggleThreshold = (val) => {
@@ -129,6 +143,7 @@ const NotificationPreferences = () => {
         body: {
           enabled_categories: enabledCategories,
           usage_thresholds: usageThresholds,
+          enabled_email_categories: enabledEmailCategories,
         },
       });
       if (json.success) {
@@ -137,6 +152,8 @@ const NotificationPreferences = () => {
           writePageCache(cacheKey, json.data);
           setEnabledCategories(json.data.enabled_categories || {});
           setUsageThresholds(Array.isArray(json.data.usage_thresholds) ? json.data.usage_thresholds : []);
+          setEnabledEmailCategories(json.data.enabled_email_categories || {});
+          setEmailChannelAvailable(!!json.data.email_channel_available);
         }
       } else {
         toast.error(json.message || t('NOTIF.PREF.SAVE_FAIL', '保存失败'));
@@ -167,18 +184,26 @@ const NotificationPreferences = () => {
 
 
       <div className="rounded-overlay border border-outline-variant bg-surface-container p-4 space-y-3">
-        <div className="text-xs font-semibold text-on-surface-variant uppercase tracking-wide">
-          {t('NOTIF.PREF.CATEGORIES_LABEL', '通知类别')}
+        <div className="flex items-center justify-between">
+          <div className="text-xs font-semibold text-on-surface-variant uppercase tracking-wide">
+            {t('NOTIF.PREF.CATEGORIES_LABEL', '通知类别')}
+          </div>
+          <div className="hidden md:flex items-center gap-6 text-[10px] font-semibold text-on-surface-variant uppercase tracking-wide">
+            <span className="w-12 text-center">{t('NOTIF.PREF.CHANNEL_INAPP', '站内')}</span>
+            <span className="w-12 text-center">
+              {t('NOTIF.PREF.CHANNEL_EMAIL', '邮件')}
+            </span>
+          </div>
         </div>
+        {!emailChannelAvailable && (
+          <p className="text-[11px] text-on-surface-variant bg-black/20 border border-outline-variant/60 rounded-control px-3 py-2">
+            {t('NOTIF.PREF.EMAIL_UNAVAILABLE_HINT',
+              '邮件 channel 不可用：管理员未启用邮箱功能，或您的邮箱尚未验证。请先在【账号】里绑定并验证邮箱。')}
+          </p>
+        )}
         {TOGGLABLE_CATEGORIES.map(cat => (
-          <label key={cat.key} className="flex items-start gap-3 cursor-pointer group">
-            <input
-              type="checkbox"
-              checked={isCatEnabled(cat.key)}
-              onChange={() => toggleCategory(cat.key)}
-              className="mt-1 w-4 h-4 accent-primary"
-            />
-            <div className="flex-1">
+          <div key={cat.key} className="flex items-start gap-3">
+            <div className="flex-1 group">
               <div className="text-sm text-on-surface group-hover:text-primary transition">
                 {getCategoryLabel(cat.key, t)}
               </div>
@@ -186,15 +211,42 @@ const NotificationPreferences = () => {
                 {getCategoryHint(cat.key, t)}
               </div>
             </div>
-          </label>
+            <label className="w-12 flex items-center justify-center cursor-pointer" title={t('NOTIF.PREF.CHANNEL_INAPP_HINT', '站内通知')}>
+              <input
+                type="checkbox"
+                checked={isCatEnabled(cat.key)}
+                onChange={() => toggleCategory(cat.key)}
+                className="w-4 h-4 accent-primary"
+              />
+            </label>
+            <label className={`w-12 flex items-center justify-center ${emailChannelAvailable ? 'cursor-pointer' : 'cursor-not-allowed opacity-40'}`}
+              title={emailChannelAvailable
+                ? t('NOTIF.PREF.CHANNEL_EMAIL_HINT', '邮件通知（需先绑定并验证邮箱）')
+                : t('NOTIF.PREF.EMAIL_UNAVAILABLE_HINT_SHORT', '需先验证邮箱')}>
+              <input
+                type="checkbox"
+                disabled={!emailChannelAvailable}
+                checked={isEmailEnabled(cat.key)}
+                onChange={() => toggleEmailCategory(cat.key)}
+                className="w-4 h-4 accent-primary"
+              />
+            </label>
+          </div>
         ))}
         {FORCED_CATEGORIES.map(cat => (
           <div key={cat.i18n} className="flex items-start gap-3 opacity-70">
-            <div className="mt-1 w-4 h-4 rounded-control border border-outline-variant bg-on-surface/[0.06] flex items-center justify-center">
-              <span className="text-[10px] text-on-surface-variant">✓</span>
+            <div className="flex-1">
+              <div className="text-sm text-on-surface-variant">
+                {getForcedCategoryLabel(cat.i18n, t)}
+              </div>
             </div>
-            <div className="text-sm text-on-surface-variant">
-              {getForcedCategoryLabel(cat.i18n, t)}
+            <div className="w-12 flex items-center justify-center">
+              <div className="w-4 h-4 rounded-control border border-outline-variant bg-on-surface/[0.06] flex items-center justify-center">
+                <span className="text-[10px] text-on-surface-variant">✓</span>
+              </div>
+            </div>
+            <div className="w-12 flex items-center justify-center text-[10px] text-on-surface-variant">
+              {t('NOTIF.PREF.OPT_IN', 'opt-in')}
             </div>
           </div>
         ))}

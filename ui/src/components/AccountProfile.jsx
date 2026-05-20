@@ -5,6 +5,7 @@ import toast from 'react-hot-toast';
 import { useConfirm } from '../context/ConfirmContext';
 import { authFetch, readAuthState } from '../utils/authFetch';
 import { isPageCacheFresh, readPageCache, writePageCache } from '../utils/pageCache';
+import UserEmailBinding from './UserEmailBinding';
 
 const PROFILE_CACHE_TTL_MS = 30000;
 const MICRO_PER_USD = 1_000_000;
@@ -163,6 +164,8 @@ const AccountProfile = () => {
                 </div>
 
 
+
+                {profile.role !== 'admin' && <UserEmailBinding />}
 
                 {profile.role !== 'admin' && (
                     <div className="bg-surface-container-high border border-outline rounded-overlay p-6">
