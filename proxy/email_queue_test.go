@@ -163,26 +163,30 @@ func TestDedup_HitWithinTTL(t *testing.T) {
 	key := "verify:user-1:2026-05-20"
 	now := time.Now()
 
-	if dedupHit(key) {
-		t.Error("first check should miss")
+	// 首次 claim：应成功
+	if !tryClaimDedupSlot(key) {
+		t.Error("first claim should succeed (slot empty)")
 	}
-	recordDedup(key, now)
-	if !dedupHit(key) {
-		t.Error("immediate re-check should hit")
+	// 立即再 claim：应被 dedup（同一 key + TTL 内）
+	if tryClaimDedupSlot(key) {
+		t.Error("immediate re-claim should fail (TTL not elapsed)")
 	}
 
-	// 超过 TTL 后应 miss + map 自动清理
+	// 把时间戳人为推回 TTL 之外，再 claim 应成功且 map 内是新时间戳
 	emailDedupMu.Lock()
 	emailDedupMap[key] = now.Add(-emailDedupTTL - time.Minute)
 	emailDedupMu.Unlock()
-	if dedupHit(key) {
-		t.Error("after TTL expiry should miss")
+	if !tryClaimDedupSlot(key) {
+		t.Error("after TTL expiry should succeed (slot re-occupied)")
 	}
 	emailDedupMu.Lock()
-	_, stillThere := emailDedupMap[key]
+	stored, ok := emailDedupMap[key]
 	emailDedupMu.Unlock()
-	if stillThere {
-		t.Error("expired entry should be GCed")
+	if !ok {
+		t.Error("after re-claim the slot must still hold the new timestamp")
+	}
+	if time.Since(stored) > time.Minute {
+		t.Errorf("after re-claim the stored timestamp should be fresh; got %v ago", time.Since(stored))
 	}
 }
 

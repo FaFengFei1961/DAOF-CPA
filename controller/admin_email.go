@@ -312,9 +312,9 @@ func SendAdminEmailTest(c *fiber.Ctx) error {
 		})
 	}
 
-	// admin 测试也走限流（防一个面板手抖几十次）
+	// admin 测试也走限流（防一个面板手抖几十次）— 原子 check + 占用（fix HIGH H-3）
 	clientIP := c.IP()
-	if err := proxy.CheckEmailRateLimit(to, clientIP); err != nil {
+	if err := proxy.CheckAndConsumeEmailRateLimit(to, clientIP); err != nil {
 		return c.Status(429).JSON(fiber.Map{"success": false, "message_code": "ERR_EMAIL_RATE_LIMIT"})
 	}
 
@@ -351,7 +351,7 @@ func SendAdminEmailTest(c *fiber.Ctx) error {
 			"detail": proxy.SanitizeErrorMessage(err.Error(), 240),
 		})
 	}
-	proxy.RegisterEmailSent(to, clientIP)
+	// rate-limit 已在入口 CheckAndConsume 时原子占用
 	LogOperationBy(op.ID, op.ID, "admin", "ADMIN_EMAIL_TEST_SEND", c.IP(),
 		fmt.Sprintf(`[{"type":"ADMIN_EMAIL_TEST_SEND","to":%q}]`, maskEmailForAdmin(to)))
 

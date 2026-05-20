@@ -35,6 +35,7 @@ import (
 	"log"
 	"strconv"
 	"strings"
+	"sync/atomic"
 	"time"
 
 	"daof-cpa/database"
@@ -79,9 +80,11 @@ func ForgotPassword(c *fiber.Ctx) error {
 	}
 
 	clientIP := c.IP()
-	// 邮件级限流（额外一道防滥发）—— 此处同步做，攻击者拿到 429 但响应内容仍是同一 message_code。
-	// 配额已消费，时间侧信道不受影响（拿不到延迟差，因为 send-mail 路径在 goroutine 里）。
-	if err := proxy.CheckEmailRateLimit(email, clientIP); err != nil {
+	// 邮件级限流（额外一道防滥发）—— 原子 check + 占用（fix HIGH H-3）。
+	// 即使触发限流也走"枚举防御"返回路径：响应与正常路径完全相同。
+	// 配额一旦消费即记账，后续 goroutine 不再 Register；这样防止两个并发 caller 都通过
+	// check 各自 register +1 突破限制（旧 TOCTOU 漏洞）。
+	if err := proxy.CheckAndConsumeEmailRateLimit(email, clientIP); err != nil {
 		log.Printf("[FORGOT-PWD] rate-limited email=%s ip=%s: %v", maskEmailForAdmin(email), clientIP, err)
 		return successPasswordResetEmailSent(c)
 	}
@@ -89,7 +92,7 @@ func ForgotPassword(c *fiber.Ctx) error {
 	// 抓取 fiber.Ctx 上需要的字段，启动 goroutine —— ctx 在 handler 返回后会被 reuse。
 	userAgent := truncateUserAgent(c.Get("User-Agent"))
 	locale := emailLocaleFromCtx(c)
-	if forgotPasswordSyncForTest {
+	if forgotPasswordSyncForTest.Load() {
 		// 测试模式：同步执行让 assertion 能立即看到 DB 状态
 		processForgotPasswordRequest(email, clientIP, userAgent, locale)
 	} else {
@@ -102,11 +105,13 @@ func ForgotPassword(c *fiber.Ctx) error {
 
 // forgotPasswordSyncForTest 控制 ForgotPassword 是否同步执行内部工作。
 // 仅用于单元测试 —— 生产路径恒为 false。SetForgotPasswordSyncForTest 设置。
-var forgotPasswordSyncForTest bool
+// fix HIGH H-2：用 atomic.Bool 避免 -race 报 data race（test goroutine 写 / handler goroutine 读）。
+var forgotPasswordSyncForTest atomic.Bool
 
 // SetForgotPasswordSyncForTest 测试 hook：true → 同步执行 processForgotPasswordRequest，
 // false → 走 production 的 fire-and-forget goroutine 路径。
-func SetForgotPasswordSyncForTest(sync bool) { forgotPasswordSyncForTest = sync }
+// 参数命名避免 shadow stdlib `sync` 包（M-5）。
+func SetForgotPasswordSyncForTest(enabled bool) { forgotPasswordSyncForTest.Store(enabled) }
 
 // processForgotPasswordRequest 是 ForgotPassword 的异步实际处理。
 // 在 goroutine 里跑，所有错误只走 server-side log，不影响客户端响应。
@@ -199,7 +204,7 @@ func processForgotPasswordRequest(email, clientIP, userAgent, locale string) {
 		log.Printf("[FORGOT-PWD] enqueue failed user=%d: %v", user.ID, err)
 		return
 	}
-	proxy.RegisterEmailSent(user.Email, clientIP)
+	// rate-limit 已在 handler 入口 CheckAndConsume 时原子占用
 	LogOperationBy(0, user.ID, "system", "PASSWORD_RESET_REQUEST", clientIP,
 		fmt.Sprintf(`[{"type":"PASSWORD_RESET_REQUEST","email":%q}]`, maskEmailForAdmin(user.Email)))
 }

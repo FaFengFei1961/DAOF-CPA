@@ -206,34 +206,39 @@ func EnqueueEmail(task EmailTask) error {
 
 // SendEmailDeduped 在入队前检查 dedupKey 是否命中。命中 → 返回 ErrEmailDedup 不入队。
 // dedupKey 为空 → 直接入队（无 dedup）。
+//
+// **原子性保证**（fix HIGH H-1, 2026-05-20）：check + record 必须在同一把锁下完成。
+// 旧实现 check 与 record 分离，两个并发 goroutine 持同一 dedupKey 时都能通过 check、
+// 都成功入队、再各自 record → 重复发送。新实现把 record 提前到 check 通过时立刻执行；
+// 后续 enqueue 失败也不回滚 record（caller 拿到 ErrEmailQueueFull 已经知道）。
+//
+// 极端 corner case：record 已写但 enqueue 失败 → 下次相同 dedupKey 会被错误 dedup。
+// 这是可接受的——dedup TTL 5 分钟内只丢一次重发，比"双发"风险小得多。
 func SendEmailDeduped(task EmailTask) error {
 	if task.DedupKey != "" {
-		if dedupHit(task.DedupKey) {
+		if !tryClaimDedupSlot(task.DedupKey) {
 			return ErrEmailDedup
 		}
 	}
-	if err := EnqueueEmail(task); err != nil {
-		return err
-	}
-	if task.DedupKey != "" {
-		recordDedup(task.DedupKey, time.Now())
-	}
-	return nil
+	return EnqueueEmail(task)
 }
 
-// dedupHit 检查 key 是否在 TTL 内已记录。同时顺便清理过期项（lazy GC）。
-func dedupHit(key string) bool {
+// tryClaimDedupSlot 在 TTL 窗口内尝试占用一个 dedup 槽位。
+// 槽位空 / 槽位已过期 → 写入新时间戳并返回 true（caller 应继续 enqueue）。
+// 槽位仍在 TTL 内 → 返回 false（caller 应 ErrEmailDedup）。
+//
+// 同时做 lazy GC：map 过大时整体扫一遍清掉过期项。
+func tryClaimDedupSlot(key string) bool {
 	now := time.Now()
 	emailDedupMu.Lock()
 	defer emailDedupMu.Unlock()
 	if t, ok := emailDedupMap[key]; ok {
 		if now.Sub(t) < emailDedupTTL {
-			return true
+			return false
 		}
-		// expired：顺手清掉
-		delete(emailDedupMap, key)
+		// 过期：本次重新占用
 	}
-	// lazy GC：发现 map 太大时整体清一遍
+	emailDedupMap[key] = now
 	if len(emailDedupMap) > 1024 {
 		for k, v := range emailDedupMap {
 			if now.Sub(v) > emailDedupTTL {
@@ -241,22 +246,17 @@ func dedupHit(key string) bool {
 			}
 		}
 	}
-	return false
-}
-
-func recordDedup(key string, at time.Time) {
-	emailDedupMu.Lock()
-	emailDedupMap[key] = at
-	emailDedupMu.Unlock()
+	return true
 }
 
 // CheckEmailRateLimit 校验 email + IP 都没超限，超了返回 ErrEmailRateLimitExceeded。
-// 调用方在执行 SMTP send 前调本函数；成功 enqueue 后调 RegisterEmailSent 计数。
+// CheckEmailRateLimit 仅检查 email + IP 是否已超限；**不**占用配额。配额在
+// RegisterEmailSent 时消费。**有 TOCTOU**：两个并发 caller 可能都通过 check，
+// 都各自 Register 一次，最终 count = limit + 1。如果想原子 check + 占用，调
+// CheckAndConsumeEmailRateLimit。
 //
-// email 应已小写规范化。clientIP 是 c.IP()。
-//
-// 校验通过 != 已发送：caller 可能在拿到许可后才发现配置缺失等，所以本函数不"占用"配额。
-// 配额只在 RegisterEmailSent 时被消费，这是为了让"check-then-send"逻辑可重入。
+// 保留这个函数是为了 forgot-password 这种"先确认能发再做重活"的路径——它在
+// goroutine 里跑，重活失败时也不消费配额。
 func CheckEmailRateLimit(email, clientIP string) error {
 	emailLimit, ipLimit := loadEmailRateLimits()
 
@@ -277,11 +277,47 @@ func CheckEmailRateLimit(email, clientIP string) error {
 	return nil
 }
 
+// CheckAndConsumeEmailRateLimit 在同一把锁下做 check + 占用，原子地防 TOCTOU。
+// 用于 bind / resend / set-password 等"一次性、同步、必须严格限流"的场景。
+//
+// 成功 → 返回 nil，桶已 +1。
+// 失败 → 返回 ErrEmailRateLimitExceeded，桶未动。
+//
+// fix HIGH H-3（2026-05-20）：原 Check + Register 分离 → 并发 caller 都通过 check
+// 都各 +1，limit 实际成了 limit × N。本函数把两步合并到单个锁区。
+func CheckAndConsumeEmailRateLimit(email, clientIP string) error {
+	emailLimit, ipLimit := loadEmailRateLimits()
+
+	emailRateLimitMu.Lock()
+	defer emailRateLimitMu.Unlock()
+
+	now := time.Now()
+	if email != "" {
+		if b, ok := emailSentByEmail[email]; ok && !rateBucketExpired(b, now) && b.count >= emailLimit {
+			return fmt.Errorf("%w: per-email limit %d/hour reached", ErrEmailRateLimitExceeded, emailLimit)
+		}
+	}
+	if clientIP != "" {
+		if b, ok := emailSentByIP[clientIP]; ok && !rateBucketExpired(b, now) && b.count >= ipLimit {
+			return fmt.Errorf("%w: per-IP limit %d/hour reached", ErrEmailRateLimitExceeded, ipLimit)
+		}
+	}
+	registerEmailSentLocked(email, clientIP, now)
+	return nil
+}
+
 // RegisterEmailSent 在邮件成功入队后调用，给桶 +1。
+// 推荐用 CheckAndConsumeEmailRateLimit 一次性完成 check + 占用，除非你有
+// "先 check、做重活、最后 Register"的特殊语义需求（例如 ForgotPassword 在
+// goroutine 内最终调）。
 func RegisterEmailSent(email, clientIP string) {
 	emailRateLimitMu.Lock()
 	defer emailRateLimitMu.Unlock()
-	now := time.Now()
+	registerEmailSentLocked(email, clientIP, time.Now())
+}
+
+// registerEmailSentLocked 是 +1 + GC 的实际逻辑，要求 caller 已持 emailRateLimitMu。
+func registerEmailSentLocked(email, clientIP string, now time.Time) {
 	if email != "" {
 		b, ok := emailSentByEmail[email]
 		if !ok || rateBucketExpired(b, now) {
@@ -298,15 +334,15 @@ func RegisterEmailSent(email, clientIP string) {
 		}
 		b.count++
 	}
-	// lazy GC：当 map 过大时清一遍
-	if len(emailSentByEmail) > 4096 {
+	// lazy GC：当 map 过大时清一遍（fix M-9 阈值 4096→512，减少内存峰值）
+	if len(emailSentByEmail) > 512 {
 		for k, v := range emailSentByEmail {
 			if rateBucketExpired(v, now) {
 				delete(emailSentByEmail, k)
 			}
 		}
 	}
-	if len(emailSentByIP) > 4096 {
+	if len(emailSentByIP) > 512 {
 		for k, v := range emailSentByIP {
 			if rateBucketExpired(v, now) {
 				delete(emailSentByIP, k)

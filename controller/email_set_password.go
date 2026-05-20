@@ -71,7 +71,8 @@ func RequestSetPassword(c *fiber.Ctx) error {
 	}
 
 	clientIP := c.IP()
-	if err := proxy.CheckEmailRateLimit(user.Email, clientIP); err != nil {
+	// 原子 check + 占用版（fix HIGH H-3）
+	if err := proxy.CheckAndConsumeEmailRateLimit(user.Email, clientIP); err != nil {
 		return c.Status(429).JSON(fiber.Map{"success": false, "message_code": "ERR_EMAIL_RATE_LIMIT"})
 	}
 
@@ -138,7 +139,7 @@ func RequestSetPassword(c *fiber.Ctx) error {
 		log.Printf("[SET-PWD-REQ] enqueue failed user=%d: %v", user.ID, err)
 		return c.Status(503).JSON(fiber.Map{"success": false, "message_code": "ERR_EMAIL_SEND_FAIL"})
 	}
-	proxy.RegisterEmailSent(user.Email, clientIP)
+	// rate-limit 已在入口 CheckAndConsume 时原子占用，无需再 Register
 	LogOperationBy(0, user.ID, "user", "SET_PASSWORD_REQUEST", clientIP,
 		fmt.Sprintf(`[{"type":"SET_PASSWORD_REQUEST","email":%q}]`, maskEmailForAdmin(user.Email)))
 	return c.JSON(fiber.Map{"success": true, "message_code": "SUCCESS_SET_PASSWORD_EMAIL_SENT"})

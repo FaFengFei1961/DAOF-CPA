@@ -86,9 +86,10 @@ func BindEmail(c *fiber.Ctx) error {
 		})
 	}
 
-	// 限流（per-email + per-IP）
+	// 限流（per-email + per-IP）— 用原子 check + 占用版（fix HIGH H-3）。
+	// 并发情况下不再有 TOCTOU 让多个 caller 都通过 check 然后各自 +1 突破限制。
 	clientIP := c.IP()
-	if err := proxy.CheckEmailRateLimit(email, clientIP); err != nil {
+	if err := proxy.CheckAndConsumeEmailRateLimit(email, clientIP); err != nil {
 		return c.Status(429).JSON(fiber.Map{"success": false, "message_code": "ERR_EMAIL_RATE_LIMIT"})
 	}
 
@@ -164,7 +165,7 @@ func BindEmail(c *fiber.Ctx) error {
 		log.Printf("[EMAIL-BIND] enqueue failed user=%d: %v", user.ID, err)
 		return c.Status(503).JSON(fiber.Map{"success": false, "message_code": "ERR_EMAIL_SEND_FAIL"})
 	}
-	proxy.RegisterEmailSent(email, clientIP)
+	// rate-limit 已在入口 CheckAndConsume 时原子占用，这里无需再 Register
 	return c.JSON(fiber.Map{"success": true, "message_code": "SUCCESS_EMAIL_BIND_SENT"})
 }
 
@@ -285,7 +286,8 @@ func ResendVerificationEmail(c *fiber.Ctx) error {
 	}
 	email := user.Email
 	clientIP := c.IP()
-	if err := proxy.CheckEmailRateLimit(email, clientIP); err != nil {
+	// 原子 check + 占用版（fix HIGH H-3）
+	if err := proxy.CheckAndConsumeEmailRateLimit(email, clientIP); err != nil {
 		return c.Status(429).JSON(fiber.Map{"success": false, "message_code": "ERR_EMAIL_RATE_LIMIT"})
 	}
 
@@ -310,9 +312,12 @@ func ResendVerificationEmail(c *fiber.Ctx) error {
 			Where("user_id = ? AND purpose = ? AND consumed_at IS NULL AND expires_at > ?",
 				user.ID, database.EmailVerificationPurposeVerify, now).
 			Update("consumed_at", now).Error; err != nil {
-			return err
+			return fmt.Errorf("invalidate prior verify tokens: %w", err)
 		}
-		return tx.Create(&verification).Error
+		if err := tx.Create(&verification).Error; err != nil {
+			return fmt.Errorf("insert verify token: %w", err)
+		}
+		return nil
 	})
 	if txErr != nil {
 		log.Printf("[EMAIL-RESEND] tx failed user=%d: %v", user.ID, txErr)
@@ -344,7 +349,7 @@ func ResendVerificationEmail(c *fiber.Ctx) error {
 		log.Printf("[EMAIL-RESEND] enqueue failed user=%d: %v", user.ID, err)
 		return c.Status(503).JSON(fiber.Map{"success": false, "message_code": "ERR_EMAIL_SEND_FAIL"})
 	}
-	proxy.RegisterEmailSent(email, clientIP)
+	// rate-limit 已在入口 CheckAndConsume 时原子占用，这里无需再 Register
 	return c.JSON(fiber.Map{"success": true, "message_code": "SUCCESS_EMAIL_BIND_SENT"})
 }
 
