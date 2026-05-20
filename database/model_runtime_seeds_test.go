@@ -274,16 +274,14 @@ func TestSeedModelRuntimeDefaults_TotalCount(t *testing.T) {
 	// OfficialStatus=alias_or_unofficial（admin 启用前手动确认 pricing + 切 Supported=true）。
 	// 2026-05-19 调整：对齐 CPA /v1/models 实际暴露，移除 CPA 不再暴露的 alias，新增
 	// CPA 新出现的 antigravity alias (gemini-3.5-flash-low / gemini-3-flash-agent)。
-	// 2026-05-20 增量：CPA 新增 Google 官方 gemini-3.5-flash（type=gemini, owned_by=google），
-	// pricing 待确认 → 暂归 uncommitted。
+	// 2026-05-20 增量：gemini-3.5-flash 官方 pricing 已查实 → 已搬到 official_exact 启用区，
+	// 不再归 uncommitted。
 	uncommitted := []string{
 		// Gemini text alias (CPA antigravity 路径暴露)
 		"gemini-3-flash", "gemini-3-flash-agent",
 		"gemini-3-pro-low", "gemini-3-pro-high", "gemini-3-pro-preview",
 		"gemini-3.1-pro-low", "gemini-3.5-flash-low",
 		"gemini-pro-agent",
-		// CPA 上游 2026-05-20 新增的 Google 官方模型（pricing 未确认）
-		"gemini-3.5-flash",
 		// Gemini image (CPA antigravity 路径，DAOF /v1beta/models 接通)
 		"gemini-3.1-flash-image",
 		// xAI alias (CPA registry 暴露但 docs.x.ai 当前列表不含)
@@ -326,15 +324,15 @@ func TestSeedModelRuntimeDefaults_TotalCount(t *testing.T) {
 	if err := DB.Model(&ChannelModel{}).Where("status = ?", 1).Count(&enabledChannelCount).Error; err != nil {
 		t.Fatalf("count enabled channel_models: %v", err)
 	}
-	if enabledChannelCount != 27 {
-		t.Fatalf("enabled channel_models=%d want 27 (text+price 全启用，image/video+无价 alias 全停用)", enabledChannelCount)
+	if enabledChannelCount != 28 {
+		t.Fatalf("enabled channel_models=%d want 28 (text+price 全启用，image/video+无价 alias 全停用)", enabledChannelCount)
 	}
 	var disabledChannelCount int64
 	if err := DB.Model(&ChannelModel{}).Where("status = ?", 2).Count(&disabledChannelCount).Error; err != nil {
 		t.Fatalf("count disabled channel_models: %v", err)
 	}
-	if disabledChannelCount != 17 {
-		t.Fatalf("disabled channel_models=%d want 17", disabledChannelCount)
+	if disabledChannelCount != 16 {
+		t.Fatalf("disabled channel_models=%d want 16", disabledChannelCount)
 	}
 }
 
