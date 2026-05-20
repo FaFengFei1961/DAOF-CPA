@@ -17,8 +17,11 @@ import (
 
 // preferenceUpdateRequest PUT 请求体结构
 type preferenceUpdateRequest struct {
-	EnabledCategories map[string]bool `json:"enabled_categories"`
-	UsageThresholds   []int           `json:"usage_thresholds"`
+	EnabledCategories      map[string]bool `json:"enabled_categories"`
+	UsageThresholds        []int           `json:"usage_thresholds"`
+	// EnabledEmailCategories：per-category 邮件 channel 开关。Phase G-1.7。
+	// 指针 nil（JSON 缺失）= 不修改；非 nil（含空 map）= 整体覆盖。
+	EnabledEmailCategories *map[string]bool `json:"enabled_email_categories"`
 }
 
 // GetMyNotificationPreference GET /api/notifications/preference
@@ -31,8 +34,11 @@ func GetMyNotificationPreference(c *fiber.Ctx) error {
 	return c.JSON(fiber.Map{
 		"success": true,
 		"data": fiber.Map{
-			"enabled_categories": view.EnabledCategories,
-			"usage_thresholds":   view.UsageThresholds,
+			"enabled_categories":       view.EnabledCategories,
+			"usage_thresholds":         view.UsageThresholds,
+			"enabled_email_categories": view.EnabledEmailCategories,
+			// 提示前端：当前用户是否能收邮件（即 master switch + 邮箱已验证）
+			"email_channel_available": proxy.IsEmailEnabled() && user.EmailVerifiedAt != nil,
 		},
 	})
 }
@@ -54,8 +60,17 @@ func UpdateMyNotificationPreference(c *fiber.Ctx) error {
 	if req.UsageThresholds == nil {
 		req.UsageThresholds = []int{}
 	}
+	// EnabledEmailCategories：nil（字段缺失）→ 传 nil 给 SavePreference（不修改）；
+	// 非 nil 指针 → 解引用传入 map（含空 map）；显式覆盖。
+	var emailCats map[string]bool
+	if req.EnabledEmailCategories != nil {
+		emailCats = *req.EnabledEmailCategories
+		if emailCats == nil {
+			emailCats = map[string]bool{}
+		}
+	}
 
-	if err := database.SavePreference(user.ID, req.EnabledCategories, req.UsageThresholds); err != nil {
+	if err := database.SavePreference(user.ID, req.EnabledCategories, req.UsageThresholds, emailCats); err != nil {
 		log.Printf("[NOTIF-PREF] save user=%d failed: %v", user.ID, err)
 		return c.Status(500).JSON(fiber.Map{"success": false, "message_code": "ERR_DB_UPDATE"})
 	}
@@ -68,8 +83,10 @@ func UpdateMyNotificationPreference(c *fiber.Ctx) error {
 		"success":      true,
 		"message_code": "SUCCESS_SAVED",
 		"data": fiber.Map{
-			"enabled_categories": view.EnabledCategories,
-			"usage_thresholds":   view.UsageThresholds,
+			"enabled_categories":       view.EnabledCategories,
+			"usage_thresholds":         view.UsageThresholds,
+			"enabled_email_categories": view.EnabledEmailCategories,
+			"email_channel_available":  proxy.IsEmailEnabled() && user.EmailVerifiedAt != nil,
 		},
 	})
 }

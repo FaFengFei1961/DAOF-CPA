@@ -20,6 +20,8 @@ var NotificationSysConfigDefaults = map[string]string{
 	"notif_default_categories": `{"subscription_expiring":true,"subscription_usage_warn":true,"refund":true,"ticket_message":true}`,
 	// CSV 形式的阈值数组，业务层解析；空字符串=全关
 	"notif_default_thresholds_csv": "80,100",
+	// Phase G-1.7：邮件 channel 默认偏好（保守 opt-in，默认全空 → 用户必须在偏好里显式开启）
+	"notif_default_email_categories": `{}`,
 
 	// ── 触发器文案（admin 可改）──
 	"notif_usage_warn_title":            "套餐用量提醒",

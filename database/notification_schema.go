@@ -34,6 +34,11 @@ type NotificationPreference struct {
 
 	EnabledCategories string `gorm:"type:text;not null;default:'{}'" json:"enabled_categories"`
 	UsageThresholds   string `gorm:"type:text;not null;default:'[80,100]'" json:"usage_thresholds"`
+	// EnabledEmailCategories：JSON 对象，与 EnabledCategories 并行 —— 控制"哪些类别走邮件 channel"。
+	// 缺失的 key 视为**禁用**（保守默认：邮件需要用户显式 opt-in 每类）。
+	// security / system / broadcast 等 forceDeliverCategories 也受此控制（admin 不希望强制送达=轰炸用户邮箱）。
+	// Phase G-1.7（2026-05-20）：邮件 channel 集成。
+	EnabledEmailCategories string `gorm:"type:text;not null;default:'{}'" json:"enabled_email_categories"`
 
 	CreatedAt time.Time `json:"created_at"`
 	UpdatedAt time.Time `json:"updated_at"`

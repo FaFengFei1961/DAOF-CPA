@@ -217,6 +217,8 @@ func Dispatch(userID uint, category, severity, title, body, actionURL, actionTex
 			userID, category, severity, title, body,
 			actionURL, actionText, relatedType, relatedID, dedupKey,
 		)
+		// 邮件 channel：即使 in-app 强制送达，邮件仍按用户偏好（保守 opt-in）
+		dispatchEmailIfEligible(userID, category, title, body, dedupKey)
 		return
 	}
 
@@ -232,4 +234,72 @@ func Dispatch(userID uint, category, severity, title, body, actionURL, actionTex
 			actionURL, actionText, relatedType, relatedID, dedupKey,
 		)
 	})
+	// 邮件 channel 与 in-app 解耦：用户开了 in-app 不等于开了 email；
+	// 邮件偏好独立判断（保守 opt-in），不复用 dispatchAsync 队列（用 EmailTask 自己的队列）。
+	dispatchEmailIfEligible(userID, category, title, body, dedupKey)
+}
+
+// dispatchEmailIfEligible 检查并入队邮件通知。所有失败仅 log，不影响主流程。
+//
+// 触发条件（全部 true 才发邮件）：
+//  1. 邮件功能 master switch（SysConfig email_enabled）已开
+//  2. 用户已绑定邮箱且已验证（User.Email != "" && EmailVerifiedAt != nil）
+//  3. 用户偏好里该 category 在 EnabledEmailCategories 中显式启用（IsEmailCategoryEnabled）
+//  4. SMTP 配置完整（LoadSMTPConfig().IsConfigured）—— 否则跳过避免空队列
+//
+// 入队走 SendEmailDeduped + dedupKey（如果 caller 传了），避免一条 in-app 通知触发多封邮件。
+func dispatchEmailIfEligible(userID uint, category, title, body string, dedupKey *string) {
+	if !IsEmailEnabled() {
+		return
+	}
+	// 单独查 user.Email / EmailVerifiedAt：DB 直查（频率低 + 避免在 AuthCache 上维护 userID→user 反向索引）
+	var user database.User
+	if database.DB == nil {
+		return
+	}
+	if err := database.DB.Select("id, username, email, email_verified_at").
+		Where("id = ? AND status = ?", userID, 1).
+		First(&user).Error; err != nil {
+		return // 用户不存在 / 被封禁 / DB 故障 → 静默跳过
+	}
+	if user.Email == "" || user.EmailVerifiedAt == nil {
+		return
+	}
+	view := GetPrefCached(userID)
+	if !database.IsEmailCategoryEnabled(view, category) {
+		return
+	}
+	// 渲染通用 notification 模板。subject / body 通过 Extra 注入。
+	msg, err := RenderEmail(EmailTplNotification, "", EmailVars{
+		UserName:  user.Username,
+		UserEmail: user.Email,
+		AppName:   AppNameFromConfig(),
+		Extra: map[string]string{
+			"notif_title": title,
+			"notif_body":  body,
+		},
+	})
+	if err != nil {
+		// IsEmailEnabled 已在上面校验，到这里 err 通常是模板字段问题
+		log.Printf("[DISPATCH-EMAIL] render failed user=%d category=%s: %v", userID, category, err)
+		return
+	}
+	// dedup：避免同一通知（同 dedupKey）短时间内多次入队邮件
+	emailDedup := ""
+	if dedupKey != nil && *dedupKey != "" {
+		emailDedup = "email:" + *dedupKey
+	}
+	task := EmailTask{
+		To:       user.Email,
+		Message:  msg,
+		DedupKey: emailDedup,
+		Label:    "notification:" + category,
+	}
+	if err := SendEmailDeduped(task); err != nil {
+		// 队列满 / dedup hit 都是非错误结果，只 log
+		log.Printf("[DISPATCH-EMAIL] enqueue user=%d category=%s skipped: %v", userID, category, err)
+		return
+	}
+	// 不限流计数：这是系统触发的通知，与用户主动 bind/resend 的限流分开
+	// （否则一个用户订阅多个套餐 + 用量预警，会被限流误屏蔽真实通知）
 }

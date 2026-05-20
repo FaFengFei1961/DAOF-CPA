@@ -27,9 +27,13 @@ import (
 // PreferenceView 是 LoadPreference 返回的内存对象，已解析 JSON 字段。
 // 修改它不会回写 DB；写库走 SavePreference。
 type PreferenceView struct {
-	UserID            uint            `json:"user_id"`
-	EnabledCategories map[string]bool `json:"enabled_categories"`
-	UsageThresholds   []int           `json:"usage_thresholds"`
+	UserID                 uint            `json:"user_id"`
+	EnabledCategories      map[string]bool `json:"enabled_categories"`
+	UsageThresholds        []int           `json:"usage_thresholds"`
+	// EnabledEmailCategories：per-category 邮件 channel 开关。
+	// 默认值（loadPreferenceDefaults）按 SysConfig notif_default_email_categories；
+	// 缺失的 key 在 IsEmailCategoryEnabled 里视为**禁用**（保守 opt-in）。
+	EnabledEmailCategories map[string]bool `json:"enabled_email_categories"`
 }
 
 // 强制送达类：永远忽略偏好。
@@ -48,9 +52,10 @@ var forceDeliverCategories = map[string]bool{
 func LoadPreference(userID uint) *PreferenceView {
 	defaults := loadPreferenceDefaults()
 	view := &PreferenceView{
-		UserID:            userID,
-		EnabledCategories: defaults.EnabledCategories,
-		UsageThresholds:   defaults.UsageThresholds,
+		UserID:                 userID,
+		EnabledCategories:      defaults.EnabledCategories,
+		UsageThresholds:        defaults.UsageThresholds,
+		EnabledEmailCategories: defaults.EnabledEmailCategories,
 	}
 	if DB == nil || userID == 0 {
 		return view
@@ -71,6 +76,14 @@ func LoadPreference(userID uint) *PreferenceView {
 			log.Printf("[NOTIF-PREF] user=%d invalid EnabledCategories json: %v (raw=%q)", userID, err, pref.EnabledCategories)
 		}
 	}
+	if pref.EnabledEmailCategories != "" {
+		var cats map[string]bool
+		if err := json.Unmarshal([]byte(pref.EnabledEmailCategories), &cats); err == nil {
+			view.EnabledEmailCategories = cats
+		} else {
+			log.Printf("[NOTIF-PREF] user=%d invalid EnabledEmailCategories json: %v (raw=%q)", userID, err, pref.EnabledEmailCategories)
+		}
+	}
 	if pref.UsageThresholds != "" {
 		var thr []int
 		if err := json.Unmarshal([]byte(pref.UsageThresholds), &thr); err == nil {
@@ -84,7 +97,11 @@ func LoadPreference(userID uint) *PreferenceView {
 }
 
 // SavePreference 保存用户偏好（upsert）。caller 写完应调 proxy.InvalidatePrefCache(uid)。
-func SavePreference(userID uint, enabledCategories map[string]bool, usageThresholds []int) error {
+//
+// fix Phase G-1.7（2026-05-20）：新增 enabledEmailCategories 参数。nil 表示
+// "不修改邮箱 channel 偏好"（保留 DB 现有值或默认 {}）；非 nil（含空 map）
+// 覆盖整个邮件类别开关 map。
+func SavePreference(userID uint, enabledCategories map[string]bool, usageThresholds []int, enabledEmailCategories map[string]bool) error {
 	if DB == nil {
 		return fmt.Errorf("database not initialized")
 	}
@@ -117,13 +134,22 @@ func SavePreference(userID uint, enabledCategories map[string]bool, usageThresho
 		EnabledCategories: string(catsJSON),
 		UsageThresholds:   string(thrJSON),
 	}
+	updateCols := []string{
+		"enabled_categories",
+		"usage_thresholds",
+		"updated_at",
+	}
+	if enabledEmailCategories != nil {
+		emailJSON, err := json.Marshal(enabledEmailCategories)
+		if err != nil {
+			return fmt.Errorf("marshal email categories: %w", err)
+		}
+		pref.EnabledEmailCategories = string(emailJSON)
+		updateCols = append(updateCols, "enabled_email_categories")
+	}
 	if err := DB.Clauses(clause.OnConflict{
-		Columns: []clause.Column{{Name: "user_id"}},
-		DoUpdates: clause.AssignmentColumns([]string{
-			"enabled_categories",
-			"usage_thresholds",
-			"updated_at",
-		}),
+		Columns:   []clause.Column{{Name: "user_id"}},
+		DoUpdates: clause.AssignmentColumns(updateCols),
 	}).Create(&pref).Error; err != nil {
 		return fmt.Errorf("upsert preference: %w", err)
 	}
@@ -144,6 +170,26 @@ func IsCategoryEnabled(view *PreferenceView, category string) bool {
 	enabled, exists := view.EnabledCategories[category]
 	if !exists {
 		return true // 未明确配置=启用
+	}
+	return enabled
+}
+
+// IsEmailCategoryEnabled 检查某类别是否在用户偏好里启用邮件 channel。
+// 与 in-app 不同：邮件 channel 默认**保守 opt-in**——缺失的 key 视为禁用，
+// 用户必须显式打开（避免一注册就被邮件轰炸）。
+//
+// security / system 等强制送达类**也受此偏好控制**——即使 in-app 强制送达，
+// 邮件 channel 仍按用户偏好。这是有意设计：用户可能不想被 security 邮件吵醒，
+// 但 in-app 必须可见。
+//
+// Phase G-1.7（2026-05-20）。
+func IsEmailCategoryEnabled(view *PreferenceView, category string) bool {
+	if view == nil || view.EnabledEmailCategories == nil {
+		return false // 没配 → 不发邮件
+	}
+	enabled, exists := view.EnabledEmailCategories[category]
+	if !exists {
+		return false // 缺失 → 不发邮件（保守）
 	}
 	return enabled
 }
@@ -179,6 +225,8 @@ func loadPreferenceDefaults() *PreferenceView {
 			"refund":                  true,
 		},
 		UsageThresholds: []int{80, 100},
+		// 默认所有邮件类别都关：用户必须显式 opt-in 才收邮件
+		EnabledEmailCategories: map[string]bool{},
 	}
 	if DB == nil {
 		return view
@@ -192,6 +240,12 @@ func loadPreferenceDefaults() *PreferenceView {
 	}
 	if raw := readSysConfigPlain("notif_default_thresholds_csv"); raw != "" {
 		view.UsageThresholds = parseThresholdCSV(raw)
+	}
+	if raw := readSysConfigPlain("notif_default_email_categories"); raw != "" {
+		var cats map[string]bool
+		if err := json.Unmarshal([]byte(raw), &cats); err == nil {
+			view.EnabledEmailCategories = cats
+		}
 	}
 	return view
 }

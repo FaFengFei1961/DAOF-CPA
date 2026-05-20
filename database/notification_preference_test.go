@@ -40,7 +40,7 @@ func TestSavePreference_ConcurrentFirstSave(t *testing.T) {
 			defer wg.Done()
 			errs <- SavePreference(42, map[string]bool{
 				"subscription_usage_warn": i%2 == 0,
-			}, []int{80, 100, i})
+			}, []int{80, 100, i}, nil)
 		}()
 	}
 	wg.Wait()
