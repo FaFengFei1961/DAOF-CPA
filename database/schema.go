@@ -18,13 +18,24 @@ type User struct {
 	ID           uint   `gorm:"primaryKey" json:"id"`
 	GithubID     string `gorm:"index;default:null" json:"github_id"` // 唯一性由 sqlite.go partial unique index 保证
 	Phone        string `gorm:"index;default:null" json:"phone"`     // 唯一性由 sqlite.go partial unique index 保证
+	Email        string `gorm:"index;default:null;size:254" json:"email"` // RFC 5321 max 254；唯一性由 partial unique index 保证（Phase G-1）
 	Username     string `gorm:"uniqueIndex;not null" json:"username"`
-	PasswordHash string `json:"-"` // 作为管理员的特有降神凭证
+	// PasswordHash 是 bcrypt 哈希。两个角色都可能使用：
+	//   - admin：从初始化开始就必有（admin 登录用）
+	//   - user：Phase G-2 邮箱+密码登录引入后，绑邮箱并设置密码的普通用户也会有
+	// 空字符串表示未设密码（GH OAuth 用户绑邮箱但尚未启用 email-login）
+	PasswordHash string `json:"-"`
 	// fix MEDIUM M19-5（codex 第十九轮）：注册路径 registerMu 临界区里要做 COUNT(*) WHERE role='user'
 	// 检查注册总数上限——表大了之后 SQLite/PG 都会做全表 scan，单次几十毫秒。`index` 让该 COUNT
 	// 走 index-only 扫描或至少减少 IO。BulkAdjustQuota 也按 role='user' 过滤，同样受益。
 	Role  string `gorm:"index;default:'user'" json:"role"`  // 'admin' 或 'user'
 	Token string `gorm:"uniqueIndex;not null" json:"token"` // 直通代理鉴权令牌，如 sk-daof-xxx
+	// Phase G-1 邮箱字段：
+	//   - EmailVerifiedAt: 非 nil 表示用户已点击邮箱验证链接；未验证的 email 不会被后台用于通知或登录
+	//   - EmailLoginEnabled: 用户级开关，允许用 email+password 登录（默认 false；用户在设置里手动打开）
+	//                       注意还需 admin 在 SysConfig 里同时开 email_enabled + email_login_enabled
+	EmailVerifiedAt   *time.Time `gorm:"index" json:"email_verified_at"`
+	EmailLoginEnabled bool       `gorm:"default:false" json:"email_login_enabled"`
 	// fix MAJOR M22-A1（codex 第二十三轮）：所有金额字段统一为 int64 micro_usd（USD * 1e6）。
 	// 原因：float64 在长尾累加（千万级 API 调用 × 微小 cost）下出现累加误差，账目对不上；
 	// int64 全程整数运算杜绝浮点漂移。前端展示时除以 1e6 显示 USD。

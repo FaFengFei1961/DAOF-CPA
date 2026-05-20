@@ -96,6 +96,8 @@ func InitDB() {
 		&CouponTemplate{}, &UserCoupon{},
 		// Sprint5-M6 分布式锁（cliproxy_usage_sync 单实例化）+ Sprint5-M1 浏览器 session（OAuth + Logout 真吊销）
 		&DistributedLock{}, &UserSession{},
+		// Phase G-1.1 邮箱验证 / 密码重置 token 事实表
+		&EmailVerification{},
 	)
 	if err != nil {
 		log.Fatalf("数据库结构自动迁移失败: %v", err)
@@ -251,6 +253,11 @@ func InitDB() {
 		ON users(phone) WHERE phone IS NOT NULL AND phone <> ''`)
 	DB.Exec(`CREATE UNIQUE INDEX IF NOT EXISTS uniq_users_github_id_nonempty
 		ON users(github_id) WHERE github_id IS NOT NULL AND github_id <> ''`)
+	// Phase G-1.1：email 同 phone/github_id 采用 partial unique index，允许多个 "" 共存
+	// （未绑定邮箱），真实邮箱保证全局唯一。注意是大小写规范化后的值，所有写路径必须先
+	// 调 strings.ToLower(strings.TrimSpace(...)) 再入库。
+	DB.Exec(`CREATE UNIQUE INDEX IF NOT EXISTS uniq_users_email_nonempty
+		ON users(email) WHERE email IS NOT NULL AND email <> ''`)
 
 	// fix Suggestion Phase 4-codex（第二十四轮）：DB 层 partial index 兜底"零金额类型 invariant"。
 	//
