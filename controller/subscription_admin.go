@@ -460,12 +460,13 @@ func AdminRevokeGrantedSubscription(c *fiber.Ctx) error {
 //     消费率反映 plan 的"周期内最大用量"（如每月 100 万 token），但退款是看"还剩多少天"。
 //     现在把"剩余天数 + 建议退款金额"作为主决策字段，消费率仅作辅助参考（识别"已耗尽"边缘场景）。
 type adminSubItem struct {
-	ID                uint       `json:"id"`
-	UserID            uint       `json:"user_id"`
-	Username          string     `json:"username"`
-	UserPhone         string     `json:"user_phone"` // 已 maskPhone 脱敏
-	UserGithubID      string     `json:"user_github_id"`
-	PackageID         uint       `json:"package_id"`
+	ID        uint   `json:"id"`
+	UserID    uint   `json:"user_id"`
+	Username  string `json:"username"`
+	UserPhone string `json:"user_phone"` // 已 maskPhone 脱敏
+	// Phase H-3b：原 user_github_id 字段已删；改提供活跃 OAuth 绑定列表
+	UserOAuthIdentities []AdminOAuthIdentitySummary `json:"user_oauth_identities"`
+	PackageID           uint                        `json:"package_id"`
 	PackageName       string     `json:"package_name"`        // 从 snapshot 提取（套餐改名/删除后仍准确）
 	ProductType       string     `json:"product_type"`        // 始终是 subscription
 	PurchasedPriceUSD float64    `json:"purchased_price_usd"` // 从 snapshot 提取购买时价格
@@ -545,7 +546,9 @@ func AdminListSubscriptions(c *fiber.Ctx) error {
 		// fix Minor（codex 第十六轮）：Pluck 错误必须冒泡，DB 故障时不能让 admin 看到"无结果"
 		// 假象（实际是查不到）。
 		if err := database.DB.Model(&database.User{}).
-			Where(`username LIKE ? ESCAPE '\' OR phone LIKE ? ESCAPE '\' OR github_id LIKE ? ESCAPE '\'`, like, like, like).
+			Where(`username LIKE ? ESCAPE '\' OR phone LIKE ? ESCAPE '\' OR `+
+				`id IN (SELECT user_id FROM oauth_identities WHERE external_id LIKE ? ESCAPE '\' AND unlinked_at IS NULL)`,
+				like, like, like).
 			Limit(500).
 			Pluck("id", &uids).Error; err != nil {
 			log.Printf("[ADMIN-SUBS] user search failed q=%q: %v", qStr, err)
@@ -586,7 +589,7 @@ func AdminListSubscriptions(c *fiber.Ctx) error {
 	// fail-closed：任一查询失败立即 500，不渲染半成品给 admin 做决策。
 	var users []database.User
 	if len(userIDs) > 0 {
-		if err := database.DB.Select("id, username, phone, github_id").Where("id IN ?", userIDs).Find(&users).Error; err != nil {
+		if err := database.DB.Select("id, username, phone").Where("id IN ?", userIDs).Find(&users).Error; err != nil {
 			log.Printf("[ADMIN-SUBS] users batch load failed: %v", err)
 			return c.Status(500).JSON(fiber.Map{"success": false, "message_code": "ERR_DB_QUERY"})
 		}
@@ -595,6 +598,8 @@ func AdminListSubscriptions(c *fiber.Ctx) error {
 	for _, u := range users {
 		userByID[u.ID] = u
 	}
+	// Phase H-3b：批量预加载活跃 OAuth 绑定，让每条 adminSubItem 能展示用户的第三方账号。
+	identitiesByUser := loadActiveOAuthIdentitiesForUsers(users)
 
 	var allUsages []database.SubscriptionUsage
 	if len(subIDs) > 0 {
@@ -644,7 +649,7 @@ func AdminListSubscriptions(c *fiber.Ctx) error {
 		if u, ok := userByID[sub.UserID]; ok {
 			item.Username = u.Username
 			item.UserPhone = maskPhone(u.Phone)
-			item.UserGithubID = u.GithubID
+			item.UserOAuthIdentities = identitiesByUser[u.ID]
 		}
 		// 从 snapshot 解出 package_name / product_type / plans
 		var snap struct {

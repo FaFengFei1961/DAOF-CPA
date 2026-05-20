@@ -15,10 +15,12 @@ import (
 
 // UserUsageRow 是聚合后单个用户的使用量统计
 type UserUsageRow struct {
-	UserID           uint             `json:"user_id"`
-	Username         string           `json:"username"`
-	GithubID         string           `json:"github_id"`
-	Phone            string           `json:"phone"`
+	UserID uint   `json:"user_id"`
+	Username string `json:"username"`
+	// Phase H-3b（2026-05-20）：原 GithubID 单字段已删；改为活跃 OAuth 绑定列表，
+	// 让 admin UI 能展示"该用户已绑 GitHub / Google / ..."徽章。
+	OAuthIdentities  []AdminOAuthIdentitySummary `json:"oauth_identities"`
+	Phone            string                      `json:"phone"`
 	Role             string           `json:"role"`
 	Status           int              `json:"status"`
 	Quota            float64          `json:"quota"`
@@ -127,6 +129,9 @@ func GetUsersUsage(c *fiber.Ctx) error {
 		modelMap = loadUserModelBreakdown(cutoff)
 	}
 
+	// 3b. 批量加载活跃 OAuth 绑定（Phase H-3b）
+	identitiesByUser := loadActiveOAuthIdentitiesForUsers(users)
+
 	// 4. 组装输出 + 总览
 	rows := make([]UserUsageRow, 0, len(users))
 	var (
@@ -157,9 +162,9 @@ func GetUsersUsage(c *fiber.Ctx) error {
 		rowChargedCost := database.MicroToUSD(effectiveAggregateChargedCost(agg.ChargedCost, agg.Cost))
 
 		rows = append(rows, UserUsageRow{
-			UserID:   u.ID,
-			Username: u.Username,
-			GithubID: u.GithubID,
+			UserID:          u.ID,
+			Username:        u.Username,
+			OAuthIdentities: identitiesByUser[u.ID],
 			// fix Major（自审第六轮）：admin 聚合统计接口不应批量回显未脱敏手机号。
 			// PIPL/GDPR 合规要求 PII 默认最小暴露；admin session 被盗即可批量泄露所有用户手机号。
 			Phone:            maskPhone(u.Phone),

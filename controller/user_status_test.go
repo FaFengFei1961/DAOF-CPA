@@ -107,7 +107,7 @@ func TestUserStatus_OnlyRejectsStatusTwo(t *testing.T) {
 	t.Run("oauth existing user status two gets appeal session", func(t *testing.T) {
 		setupOAuthControllerTestDB(t)
 		setOAuthSysConfigForTest(t)
-		user := database.User{Username: "oauth_status2", GithubID: "12345", Role: "user", Token: "sk-oauth-status2", Status: 1}
+		user := database.User{Username: "oauth_status2", Role: "user", Token: "sk-oauth-status2", Status: 1}
 		if err := database.DB.Create(&user).Error; err != nil {
 			t.Fatalf("create user: %v", err)
 		}
@@ -171,7 +171,7 @@ func TestUserStatus_OnlyRejectsStatusTwo(t *testing.T) {
 	t.Run("oauth existing user allows status three", func(t *testing.T) {
 		setupOAuthControllerTestDB(t)
 		setOAuthSysConfigForTest(t)
-		user := database.User{Username: "oauth_status3", GithubID: "12345", Role: "user", Token: "sk-oauth-status3", Status: 1}
+		user := database.User{Username: "oauth_status3", Role: "user", Token: "sk-oauth-status3", Status: 1}
 		if err := database.DB.Create(&user).Error; err != nil {
 			t.Fatalf("create user: %v", err)
 		}

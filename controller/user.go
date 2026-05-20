@@ -78,13 +78,17 @@ func GetUsers(c *fiber.Ctx) error {
 	db := database.DB.Model(&database.User{})
 
 	if searchQuery != "" {
-		// 模糊匹配：Username，Phone 或者 GithubID
+		// 模糊匹配：Username / Phone / OAuth external_id（任一 active 第三方绑定的外部 ID）
 		// 转义 LIKE 通配符 + ESCAPE 子句（codex 第十六轮）：SQLite/Postgres LIKE 默认不识别 \ 转义，
 		// 必须显式 ESCAPE '\\' 才能让 \% 匹配字面 %。
+		//
+		// Phase H-3b：原直接 LIKE users.github_id 已删；改用子查询命中 oauth_identities，
+		// 这样不论 provider 是 github / google 都能搜到。
 		escaped := strings.NewReplacer("\\", "\\\\", "%", "\\%", "_", "\\_").Replace(searchQuery)
 		searchParam := "%" + escaped + "%"
 		db = db.Where(
-			"username LIKE ? ESCAPE '\\' OR phone LIKE ? ESCAPE '\\' OR github_id LIKE ? ESCAPE '\\'",
+			"username LIKE ? ESCAPE '\\' OR phone LIKE ? ESCAPE '\\' OR "+
+				"id IN (SELECT user_id FROM oauth_identities WHERE external_id LIKE ? ESCAPE '\\' AND unlinked_at IS NULL)",
 			searchParam, searchParam, searchParam,
 		)
 	}
@@ -119,16 +123,65 @@ func GetUsers(c *fiber.Ctx) error {
 	// fix CRITICAL Sprint2-M1：admin bulk 视图 scrub 敏感字段。
 	// 旧实现外传完整 User struct（含 Token / PasswordHash），admin 可看到所有用户的
 	// API token 明文。token 一旦被任意 admin 看到，等同于横向越权能调任意用户配额。
-	// PasswordHash / Token / GithubID（PII）一并清零，仅保留 admin 决策所需字段。
+	// PasswordHash / Token 一并清零，仅保留 admin 决策所需字段。
 	for i := range users {
 		users[i].PasswordHash = ""
 		users[i].Token = ""
 	}
+	// Phase H-3b：把每个 user 的活跃 OAuth identities 一并 attach，让 admin UI 显示
+	// "已绑 GitHub / Google" 之类标签。Best-effort 加载——DB 失败时 attach 空列表，
+	// 不阻塞用户列表展示。
+	identitiesByUser := loadActiveOAuthIdentitiesForUsers(users)
+	out := make([]AdminUserListItem, len(users))
+	for i, u := range users {
+		out[i] = AdminUserListItem{User: u, OAuthIdentities: identitiesByUser[u.ID]}
+	}
 	return c.JSON(fiber.Map{
 		"success": true,
-		"data":    users,
+		"data":    out,
 		"meta":    fiber.Map{"page": page, "page_size": pageSize, "total": total},
 	})
+}
+
+// AdminUserListItem 是 admin 用户列表的 wire 投影：嵌入 User 字段 + 附带活跃 OAuth 绑定。
+type AdminUserListItem struct {
+	database.User
+	OAuthIdentities []AdminOAuthIdentitySummary `json:"oauth_identities"`
+}
+
+// AdminOAuthIdentitySummary 是 admin 视角下单条绑定的最小信息。
+type AdminOAuthIdentitySummary struct {
+	Provider   string `json:"provider"`
+	ExternalID string `json:"external_id"`
+}
+
+// loadActiveOAuthIdentitiesForUsers 批量加载一组 user 的活跃 OAuth 绑定。
+// 一次查询返回 map[user_id] -> []summary，按 (provider, external_id) 排序保持稳定。
+// 失败时 log + 返回空 map（best-effort，不阻塞调用方）。
+func loadActiveOAuthIdentitiesForUsers(users []database.User) map[uint][]AdminOAuthIdentitySummary {
+	result := map[uint][]AdminOAuthIdentitySummary{}
+	if len(users) == 0 {
+		return result
+	}
+	userIDs := make([]uint, len(users))
+	for i, u := range users {
+		userIDs[i] = u.ID
+	}
+	var rows []database.OAuthIdentity
+	if err := database.DB.
+		Where("user_id IN ? AND unlinked_at IS NULL", userIDs).
+		Order("user_id ASC, provider ASC, linked_at ASC").
+		Find(&rows).Error; err != nil {
+		log.Printf("[USERS-LIST] load oauth_identities failed: %v", err)
+		return result
+	}
+	for _, r := range rows {
+		result[r.UserID] = append(result[r.UserID], AdminOAuthIdentitySummary{
+			Provider:   r.Provider,
+			ExternalID: r.ExternalID,
+		})
+	}
+	return result
 }
 
 // 用户增量操作 Payload。Quota 是 API wire 层 USD float，handler 内转 micro_usd。
@@ -955,7 +1008,7 @@ func BulkDeleteUsers(c *fiber.Ctx) error {
 	deleted := 0
 	for _, u := range users {
 		change, _ := json.Marshal([]map[string]interface{}{
-			{"type": "BULK_DELETE", "target": u.Username, "user_id": u.ID, "github_id": u.GithubID},
+			{"type": "BULK_DELETE", "target": u.Username, "user_id": u.ID},
 		})
 		err := database.DB.Transaction(func(tx *gorm.DB) error {
 			if err := tx.Delete(&database.User{}, u.ID).Error; err != nil {

@@ -480,12 +480,22 @@ const UserManagement = () => {
                         {
                             key: 'binding',
                             header: t('USER_MGMT.TABLE.BINDING'),
-                            render: u => (
-                                <div className="flex flex-col gap-1">
-                                    {u.github_id ? <span className="text-xs text-on-surface-variant bg-surface-variant px-2 py-0.5 rounded-control w-max">{t('USER_MGMT.GITHUB_BOUND', { id: u.github_id })}</span> : <span className="text-xs text-outline-variant italic">{t('USER_MGMT.GITHUB_UNBOUND')}</span>}
-                                    {u.phone ? <span className="text-xs text-warning bg-warning/10 px-2 py-0.5 rounded-control w-max">{t('USER_MGMT.PHONE_BOUND', { phone: u.phone })}</span> : <span className="text-xs text-outline-variant italic">{t('USER_MGMT.PHONE_UNBOUND')}</span>}
-                                </div>
-                            )
+                            render: u => {
+                                // Phase H-3b：u.github_id 已删；改读 u.oauth_identities 数组（多 provider 都展示）
+                                const identities = Array.isArray(u.oauth_identities) ? u.oauth_identities : [];
+                                return (
+                                    <div className="flex flex-col gap-1">
+                                        {identities.length === 0 ? (
+                                            <span className="text-xs text-outline-variant italic">{t('USER_MGMT.OAUTH_UNBOUND', { defaultValue: '未绑定第三方账号' })}</span>
+                                        ) : identities.map(id => (
+                                            <span key={`${id.provider}:${id.external_id}`} className="text-xs text-on-surface-variant bg-surface-variant px-2 py-0.5 rounded-control w-max">
+                                                {t('USER_MGMT.OAUTH_BOUND', { provider: id.provider, id: id.external_id, defaultValue: `${id.provider}: ${id.external_id}` })}
+                                            </span>
+                                        ))}
+                                        {u.phone ? <span className="text-xs text-warning bg-warning/10 px-2 py-0.5 rounded-control w-max">{t('USER_MGMT.PHONE_BOUND', { phone: u.phone })}</span> : <span className="text-xs text-outline-variant italic">{t('USER_MGMT.PHONE_UNBOUND')}</span>}
+                                    </div>
+                                );
+                            }
                         },
                         {
                             key: 'reg_time',
@@ -656,11 +666,16 @@ const UserManagement = () => {
                                                                     if (c.type === 'CREATE') return t('USER_MGMT.LOG_CREATE', { target: c.target, quota: formatCurrency(Number(c.quota), 2) });
                                                                     if (c.type === 'DELETE') return t('USER_MGMT.LOG_DELETE', { target: c.target });
                                                                     if (c.type === 'LOGIN') return t('USER_MGMT.LOG_LOGIN', '通过 [{{via}}] 登录回归', { via: c.via || 'unknown' });
-                                                                    if (c.type === 'REGISTER') return t('USER_MGMT.LOG_REGISTER', '经 [{{via}}] 完成注册（用户名 [{{username}}]{{extra}}）', {
-                                                                        via: c.via || 'unknown',
-                                                                        username: c.username,
-                                                                        extra: `${c.github_id ? `, gh:${c.github_id}` : ''}${c.phone ? `, phone:${c.phone}` : ''}`,
-                                                                    });
+                                                                    if (c.type === 'REGISTER') {
+                                                                        // Phase H-3b：oauth.go 写 external_id 而非 github_id；老记录仍可能有 github_id
+                                                                        const oauthExt = c.external_id || c.github_id;
+                                                                        const oauthLabel = c.via && c.via !== 'sms' && c.via !== 'email' ? c.via : 'gh';
+                                                                        return t('USER_MGMT.LOG_REGISTER', '经 [{{via}}] 完成注册（用户名 [{{username}}]{{extra}}）', {
+                                                                            via: c.via || 'unknown',
+                                                                            username: c.username,
+                                                                            extra: `${oauthExt ? `, ${oauthLabel}:${oauthExt}` : ''}${c.phone ? `, phone:${c.phone}` : ''}${c.email ? `, email:${c.email}` : ''}`,
+                                                                        });
+                                                                    }
                                                                     if (c.type === 'CREATE_TOKEN') return t('USER_MGMT.LOG_CREATE_TOKEN', '创建 API 令牌 [{{name}}]，限额 {{quota}}（0 表示不限）', { name: c.name, quota: formatCurrency(Number(c.quota_limit) || 0, 2) });
                                                                     if (c.type === 'UPDATE_TOKEN') return t('USER_MGMT.LOG_UPDATE_TOKEN', '修改 API 令牌 [{{name}}]（ID {{id}}）', { name: c.name, id: c.token_id });
                                                                     if (c.type === 'DELETE_TOKEN') return t('USER_MGMT.LOG_DELETE_TOKEN', '删除 API 令牌 [{{name}}]（ID {{id}}）', { name: c.token_name, id: c.token_id });

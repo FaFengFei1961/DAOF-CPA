@@ -90,7 +90,8 @@ const UsersUsageOverviewPage = () => {
     const q = searchTerm.toLowerCase();
     return data.users.filter(u =>
       u.username?.toLowerCase().includes(q)
-      || u.github_id?.toLowerCase().includes(q)
+      // Phase H-3b：原 u.github_id 单字段已删；改搜任意 oauth_identities.external_id
+      || (Array.isArray(u.oauth_identities) && u.oauth_identities.some(id => id.external_id?.toLowerCase().includes(q)))
       || u.phone?.toLowerCase().includes(q)
       || String(u.user_id).includes(q),
     );
@@ -123,12 +124,17 @@ const UsersUsageOverviewPage = () => {
   }, [chart]);
 
   const userColumns = [
-    { key: 'username', header: '用户', render: u => (
-      <div className="min-w-0">
-        <div className="font-medium text-on-surface truncate">{u.username || `#${u.user_id}`}</div>
-        <div className="text-[11px] text-on-surface-variant truncate">{u.github_id || u.phone || '-'}</div>
-      </div>
-    ) },
+    { key: 'username', header: '用户', render: u => {
+      // Phase H-3b：用 oauth_identities 第一条的 external_id 兜底显示；否则手机号
+      const firstOAuth = Array.isArray(u.oauth_identities) && u.oauth_identities[0];
+      const secondary = firstOAuth ? `${firstOAuth.provider}:${firstOAuth.external_id}` : (u.phone || '-');
+      return (
+        <div className="min-w-0">
+          <div className="font-medium text-on-surface truncate">{u.username || `#${u.user_id}`}</div>
+          <div className="text-[11px] text-on-surface-variant truncate">{secondary}</div>
+        </div>
+      );
+    } },
     { key: 'requests',  header: '请求数', align: 'right', render: u => (u.total_requests || 0).toLocaleString() },
     { key: 'failed',    header: '失败', align: 'right', render: u => {
       const r = u.total_requests || 0;

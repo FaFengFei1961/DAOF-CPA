@@ -14,9 +14,11 @@ import (
 // 索引仍生效——空字符串两个用户都写 "" 后第二个 INSERT 撞约束。partial unique index
 // 在 sqlite.go 加了，但**额外**索引而非替换 GORM 的，普通约束仍在。
 // 修复：去掉 GORM uniqueIndex，让 sqlite.go 的 partial unique（WHERE x <> ”）成为唯一约束。
+//
+// Phase H-3b（2026-05-20）：删 GithubID 字段。OAuth 身份现一律走 oauth_identities 表，
+// User 表不再持 provider-specific 列。sqlite.go 里有 ALTER TABLE DROP COLUMN 兜底老库。
 type User struct {
 	ID           uint   `gorm:"primaryKey" json:"id"`
-	GithubID     string `gorm:"index;default:null" json:"github_id"` // 唯一性由 sqlite.go partial unique index 保证
 	Phone        string `gorm:"index;default:null" json:"phone"`     // 唯一性由 sqlite.go partial unique index 保证
 	Email        string `gorm:"index;default:null;size:254" json:"email"` // RFC 5321 max 254；唯一性由 partial unique index 保证（Phase G-1）
 	Username     string `gorm:"uniqueIndex;not null" json:"username"`
@@ -64,7 +66,7 @@ type User struct {
 	DeletedAt gorm.DeletedAt `gorm:"index" json:"-"`
 }
 
-// fix MAJOR M-B9（codex 第二十一轮）：GithubID / Phone 标记 uniqueIndex+default:null，
+// fix MAJOR M-B9（codex 第二十一轮）：Phone 标记 uniqueIndex+default:null，
 // 但 Go string 零值是 ""，任何 Save(&user) 写空串后第二个 INSERT 会撞 unique。
 // 兜底方案见 sqlite.go：手工建 partial unique index 排除空串，让多个 ""（视为未绑定）共存。
 // schema 长期应改 *string，当前先用 DB 层 partial index 防御。

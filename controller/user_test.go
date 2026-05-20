@@ -52,6 +52,8 @@ func setupUserControllerTestDB(t *testing.T) {
 		&database.NotificationPreference{},
 		&database.Ticket{},
 		&database.TicketMessage{},
+		// Phase H-3b：GetUsers / GetUsersUsage 现需要 oauth_identities 表（即使 0 行也要存在）
+		&database.OAuthIdentity{},
 	); err != nil {
 		t.Fatalf("migrate: %v", err)
 	}

@@ -39,7 +39,8 @@ func initializeMegaTestDB() *fiber.App {
 		&database.TopupOrder{}, &database.TopupRefund{}, &database.PaymentWebhookReceipt{}, &database.NotificationPreference{},
 		&database.Ticket{}, &database.TicketMessage{},
 		&database.BillingEntry{}, &database.BillingReconciliation{}, // C2/C3 fix + Sprint5-M8 对账事实表
-
+		// Phase H-3b：GetUsers 子查询 oauth_identities，即使是 0 行也得让表存在
+		&database.OAuthIdentity{},
 	)
 
 	// Clear out memory DB state
@@ -811,8 +812,16 @@ func TestOAuthMega(t *testing.T) {
 	// 3. good nick, bad token
 	sendRequest(app, "POST", "/api/auth/complete-profile", map[string]interface{}{"username": "tester", "tmp_token": "broken"}, "")
 
-	// Valid token testing via utils.Encrypt
-	validToken, _ := utils.Encrypt("clean|12345|testName|999999999")
-	database.DB.Create(&database.User{Username: "testName", GithubID: "123456"})
-	sendRequest(app, "POST", "/api/auth/complete-profile", map[string]interface{}{"username": "validName", "tmp_token": validToken}, "") // should pass because githubid 12345 isn't 123456
+	// Valid token testing via utils.Encrypt（Phase H-2 6 段格式：clean|provider|ext|user|ref|ts）
+	validToken, _ := utils.Encrypt("clean|github|12345|testName||999999999")
+	seedUser := database.User{Username: "testName", Token: "sk-testName", Role: "user", Status: 1}
+	if err := database.DB.Create(&seedUser).Error; err != nil {
+		t.Fatalf("seed user: %v", err)
+	}
+	// 模拟"已有用户绑定外部 github_id=123456"，这样新请求的 ext=12345 不应冲突
+	database.DB.Create(&database.OAuthIdentity{
+		UserID: seedUser.ID, Provider: database.OAuthProviderGitHub,
+		ExternalID: "123456", LinkedAt: time.Now(),
+	})
+	sendRequest(app, "POST", "/api/auth/complete-profile", map[string]interface{}{"username": "validName", "tmp_token": validToken}, "") // should pass because external_id 12345 isn't 123456
 }

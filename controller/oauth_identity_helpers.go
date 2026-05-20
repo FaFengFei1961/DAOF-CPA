@@ -3,9 +3,8 @@
 // OAuth identity 查找 / 创建 helper。Phase H-3（2026-05-20）。
 //
 // 这层把 oauth_identities 表的查询封装起来，让 callback / risk / profile handler 不
-// 直接接触 GORM SQL。同时保留对旧 User.GithubID 列的"双写"，让 admin UI（按 github_id
-// 搜索、显示）继续工作；H-3b/H-5 阶段会移除 User.GithubID 并把 admin UI 切到读
-// oauth_identities。
+// 直接接触 GORM SQL。Phase H-3b 后 User.GithubID 列已删除，所有 OAuth 身份信息
+// 仅存于本表。
 package controller
 
 import (

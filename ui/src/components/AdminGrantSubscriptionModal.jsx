@@ -24,7 +24,7 @@ const adminGrantApiMessage = (code, t) => {
  *
  * Admin dialog for granting subscriptions.
  * Form fields:
- *   - user picker, searchable by username / phone / github_id
+ *   - user picker, searchable by username / phone / OAuth external_id（任意 provider）
  *   - package picker from /api/admin/packages
  *   - quantity
  *   - optional custom validity seconds for compensation grants

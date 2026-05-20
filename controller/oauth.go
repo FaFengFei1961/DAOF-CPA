@@ -939,12 +939,6 @@ func CompleteRisk(c *fiber.Ctx) error {
 		BalanceConsumeLimitUSD:      readDefaultBalanceConsumeLimitMicroUSD(),
 		BalanceConsumeWindowSeconds: int(readInt64Config("balance_consume_default_window_secs", 2592000)),
 	}
-	// 过渡期：GitHub provider 同时写 User.GithubID，让 admin UI 的"按 github_id 搜索 / 显示"
-	// 继续工作（H-3b/H-5 会移除 User.GithubID）。其它 provider 不写。
-	if providerKey == database.OAuthProviderGitHub {
-		newUser.GithubID = externalID
-	}
-
 	// fix CRITICAL C19-2（codex 第十九轮）：user 创建 + signup_bonus 账单原子化
 	if err := createUserWithSignupBonus(&newUser, signupBonusMicro, "sms"); err != nil {
 		log.Printf("[REGISTER-SMS] tx failed username=%s: %v", newUser.Username, err)
@@ -1106,11 +1100,6 @@ func CompleteProfile(c *fiber.Ctx) error {
 		BalanceConsumeLimitUSD:      readDefaultBalanceConsumeLimitMicroUSD(),
 		BalanceConsumeWindowSeconds: int(readInt64Config("balance_consume_default_window_secs", 2592000)),
 	}
-	// 过渡：GitHub provider 同时双写 User.GithubID（admin UI 兼容）。其它 provider 不写。
-	if providerKey == database.OAuthProviderGitHub {
-		newUser.GithubID = externalID
-	}
-
 	// fix CRITICAL C19-2（codex 第十九轮）：user 创建 + signup_bonus 账单原子化
 	if err := createUserWithSignupBonus(&newUser, signupBonusMicro, providerKey); err != nil {
 		log.Printf("[REGISTER-OAUTH] tx failed provider=%s username=%s: %v", providerKey, newUser.Username, err)

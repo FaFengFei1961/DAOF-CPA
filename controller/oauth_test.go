@@ -289,11 +289,11 @@ func TestPrepareOAuthState_ReturnsChallenge(t *testing.T) {
 func TestGithubCallback_RejectsReusedState(t *testing.T) {
 	setupOAuthControllerTestDB(t)
 	setOAuthSysConfigForTest(t)
-	user := database.User{Username: "octo", GithubID: "12345", Role: "user", Token: "sk-daof-octo", Status: 1}
+	user := database.User{Username: "octo", Role: "user", Token: "sk-daof-octo", Status: 1}
 	if err := database.DB.Create(&user).Error; err != nil {
 		t.Fatalf("create user: %v", err)
 	}
-	// H-3：oauth_identities 才是 lookup 真相
+	// H-3b：User.GithubID 已删；OAuth 身份信息只存于 oauth_identities
 	if err := database.DB.Create(&database.OAuthIdentity{
 		UserID: user.ID, Provider: database.OAuthProviderGitHub, ExternalID: "12345",
 		LinkedAt: time.Now(),
@@ -342,7 +342,7 @@ func TestGithubCallback_RejectsReusedState(t *testing.T) {
 func TestGithubCallback_RejectsMismatchedVerifier(t *testing.T) {
 	setupOAuthControllerTestDB(t)
 	setOAuthSysConfigForTest(t)
-	user := database.User{Username: "octo", GithubID: "12345", Role: "user", Token: "sk-daof-octo", Status: 1}
+	user := database.User{Username: "octo", Role: "user", Token: "sk-daof-octo", Status: 1}
 	if err := database.DB.Create(&user).Error; err != nil {
 		t.Fatalf("create user: %v", err)
 	}
@@ -402,8 +402,14 @@ func TestCompleteProfile_UsesBalanceConsumeDefaultLimitMicroUSD(t *testing.T) {
 		t.Fatalf("complete profile status=%d", resp.StatusCode)
 	}
 
+	// H-3b：通过 oauth_identities 找回新建用户
+	var identity database.OAuthIdentity
+	if err := database.DB.Where("provider = ? AND external_id = ? AND unlinked_at IS NULL",
+		database.OAuthProviderGitHub, "gh-limit-default").First(&identity).Error; err != nil {
+		t.Fatalf("load created oauth identity: %v", err)
+	}
 	var user database.User
-	if err := database.DB.Where("github_id = ?", "gh-limit-default").First(&user).Error; err != nil {
+	if err := database.DB.First(&user, identity.UserID).Error; err != nil {
 		t.Fatalf("load created user: %v", err)
 	}
 	if !user.BalanceConsumeEnabled {

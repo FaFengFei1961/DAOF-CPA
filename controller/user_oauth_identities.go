@@ -180,13 +180,6 @@ func UnlinkMyOAuthIdentity(c *fiber.Ctx) error {
 		return c.Status(500).JSON(fiber.Map{"success": false, "message_code": "ERR_DB_UPDATE"})
 	}
 
-	// 过渡期：GitHub 解绑同时清空 User.GithubID（让 admin UI 一致；H-3b 后该字段会被删，这段
-	// 代码会变 no-op，但留着以避免列还存在时数据漂移）
-	if providerKey == database.OAuthProviderGitHub {
-		if err := database.DB.Model(&database.User{}).Where("id = ?", user.ID).Update("github_id", "").Error; err != nil {
-			log.Printf("[OAUTH-UNLINK] clear User.GithubID failed user=%d: %v", user.ID, err)
-		}
-	}
 	proxy.RefreshUserAuth(user.ID)
 	LogOperationBy(0, user.ID, "user", "OAUTH_UNLINK", c.IP(),
 		fmt.Sprintf(`[{"type":"OAUTH_UNLINK","provider":%q,"external_id":%q}]`, providerKey, row.ExternalID))
@@ -242,12 +235,6 @@ func finishOAuthLinkToExistingUser(c *fiber.Ctx, userID uint, providerKey string
 		return c.Status(500).JSON(fiber.Map{"success": false, "message_code": "ERR_DB_INSERT_FAILED"})
 	}
 
-	// 过渡：GitHub 同时双写 User.GithubID
-	if providerKey == database.OAuthProviderGitHub {
-		if err := database.DB.Model(&database.User{}).Where("id = ?", userID).Update("github_id", identity.ExternalID).Error; err != nil {
-			log.Printf("[OAUTH-LINK] write User.GithubID failed user=%d: %v", userID, err)
-		}
-	}
 	proxy.RefreshUserAuth(userID)
 	LogOperationBy(0, userID, "user", "OAUTH_LINK", c.IP(),
 		fmt.Sprintf(`[{"type":"OAUTH_LINK","provider":%q,"external_id":%q}]`, providerKey, identity.ExternalID))

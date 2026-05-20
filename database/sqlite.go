@@ -239,23 +239,20 @@ func InitDB() {
 	// 单次几十毫秒。新部署 schema 标签生成索引；老库的"已存在表无索引"用 IF NOT EXISTS 兜底。
 	mustExecIndex("idx_users_role", `CREATE INDEX IF NOT EXISTS idx_users_role ON users(role)`)
 
-	// fix MAJOR M-B9 / M22-2（codex 第二十一/二十二轮）：GithubID/Phone 唯一性走 partial unique index。
+	// fix MAJOR M-B9 / M22-2（codex 第二十一/二十二轮）：Phone 唯一性走 partial unique index。
 	//
 	// schema.go 已去掉 GORM `uniqueIndex` tag 改成 `index`，所以 AutoMigrate 不再创建普通 unique 索引。
-	// 旧库可能仍有 GORM 早期版本生成的 `idx_users_github_id` / `idx_users_phone` unique 索引——
+	// 旧库可能仍有 GORM 早期版本生成的 `idx_users_phone` unique 索引——
 	// 用 DROP INDEX IF EXISTS 兜底清理。然后用 partial unique 替代（排除空串）。
 	//
 	// 效果：
-	//   - 多个用户 github_id="" / phone="" 都允许（视为"未绑定"，与 NULL 同义）
-	//   - 真实绑定值（如某 GitHub 用户名）仍唯一
+	//   - 多个用户 phone="" 都允许（视为"未绑定"，与 NULL 同义）
+	//   - 真实绑定值仍唯一
 	//   - NULL 仍允许多个共存（partial unique 默认行为）
-	DB.Exec(`DROP INDEX IF EXISTS idx_users_github_id`)
 	DB.Exec(`DROP INDEX IF EXISTS idx_users_phone`)
 	DB.Exec(`CREATE UNIQUE INDEX IF NOT EXISTS uniq_users_phone_nonempty
 		ON users(phone) WHERE phone IS NOT NULL AND phone <> ''`)
-	DB.Exec(`CREATE UNIQUE INDEX IF NOT EXISTS uniq_users_github_id_nonempty
-		ON users(github_id) WHERE github_id IS NOT NULL AND github_id <> ''`)
-	// Phase G-1.1：email 同 phone/github_id 采用 partial unique index，允许多个 "" 共存
+	// Phase G-1.1：email 同 phone 采用 partial unique index，允许多个 "" 共存
 	// （未绑定邮箱），真实邮箱保证全局唯一。注意是大小写规范化后的值，所有写路径必须先
 	// 调 strings.ToLower(strings.TrimSpace(...)) 再入库。
 	DB.Exec(`CREATE UNIQUE INDEX IF NOT EXISTS uniq_users_email_nonempty
@@ -268,20 +265,36 @@ func InitDB() {
 	DB.Exec(`CREATE UNIQUE INDEX IF NOT EXISTS uniq_oauth_identity_active
 		ON oauth_identities(provider, external_id) WHERE unlinked_at IS NULL`)
 
-	// Phase H-1 一次性 backfill：把旧 User.GithubID 列同步成 oauth_identities 行。
-	// 幂等：已存在的 active (github, ext) 行不重复 INSERT。
-	// 用 NOT EXISTS subquery 保证幂等；time.Now() 作为 linked_at 表示"backfill 那一刻"。
-	// 此 SQL 跑完，oauth_identities 与 User.GithubID 数据等价。
-	// 注：本步骤要在 schema migration 之后跑（表已存在），但 GithubID 列还在
-	//（H-3 才删列）。
-	DB.Exec(`INSERT INTO oauth_identities (user_id, provider, external_id, email_at_link, username_at_link, linked_at)
-		SELECT u.id, ?, u.github_id, COALESCE(u.email, ''), u.username, u.created_at
-		FROM users u
-		WHERE u.github_id IS NOT NULL AND u.github_id <> ''
-		  AND NOT EXISTS (
-		    SELECT 1 FROM oauth_identities oi
-		    WHERE oi.provider = ? AND oi.external_id = u.github_id AND oi.unlinked_at IS NULL
-		  )`, OAuthProviderGitHub, OAuthProviderGitHub)
+	// Phase H-3b（2026-05-20）：彻底删 users.github_id 列。
+	//
+	// 顺序约束：
+	//   1. AutoMigrate 已建好 oauth_identities 表（schema.go 走 GORM tag 自动注册）
+	//   2. 这里先做旧数据回填：把任何残留 users.github_id 同步进 oauth_identities
+	//   3. 再 DROP 旧索引 + DROP COLUMN（SQLite 3.35+ 支持）
+	//
+	// 幂等：
+	//   - PRAGMA table_info(users) 用来探测列是否存在；不存在则跳过回填和 drop
+	//   - 回填用 NOT EXISTS 子查询保幂等
+	//   - DROP COLUMN / DROP INDEX 都用 IF EXISTS
+	if sqliteColumnExists("users", "github_id") {
+		// 回填残留数据（H-1 已跑过，但旧库重启可能仍有：保险起见再来一次）
+		DB.Exec(`INSERT INTO oauth_identities (user_id, provider, external_id, email_at_link, username_at_link, linked_at)
+			SELECT u.id, ?, u.github_id, COALESCE(u.email, ''), u.username, u.created_at
+			FROM users u
+			WHERE u.github_id IS NOT NULL AND u.github_id <> ''
+			  AND NOT EXISTS (
+			    SELECT 1 FROM oauth_identities oi
+			    WHERE oi.provider = ? AND oi.external_id = u.github_id AND oi.unlinked_at IS NULL
+			  )`, OAuthProviderGitHub, OAuthProviderGitHub)
+		// 删旧索引
+		DB.Exec(`DROP INDEX IF EXISTS idx_users_github_id`)
+		DB.Exec(`DROP INDEX IF EXISTS uniq_users_github_id_nonempty`)
+		// 删列。SQLite 3.35+（2021-03）支持 ALTER TABLE DROP COLUMN，
+		// 项目内嵌 mattn/go-sqlite3 自带较新 SQLite，足够。
+		if err := DB.Exec(`ALTER TABLE users DROP COLUMN github_id`).Error; err != nil {
+			log.Printf("[H-3b] DROP COLUMN users.github_id failed: %v", err)
+		}
+	}
 
 	// fix Suggestion Phase 4-codex（第二十四轮）：DB 层 partial index 兜底"零金额类型 invariant"。
 	//
