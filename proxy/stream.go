@@ -153,186 +153,37 @@ func ChatCompletionProxyHandler(c *fiber.Ctx) error {
 	path := strings.Clone(c.Path())
 	srcFormat := inferSourceFormat(path)
 
-	// 1. High Speed Auth Verification
-	authHeader := string([]byte(c.Get("Authorization")))
-	token := ""
-	if strings.HasPrefix(strings.TrimSpace(authHeader), "Bearer ") {
-		token = strings.TrimSpace(strings.TrimPrefix(strings.TrimSpace(authHeader), "Bearer "))
-	}
-	if token == "" && srcFormat == sdktranslator.FormatGemini {
-		token = strings.TrimSpace(c.Get("x-goog-api-key"))
-	}
+	// fix Phase D-2 (2026-05-19)：把 setup 阶段（auth / request 解析 / precheck /
+	// route 选择）拆到 stream_handler_helpers.go。helpers 失败时已 send response，
+	// halt=true → main return nil。retry loop + commit 仍保留在本函数（state 太重）。
 
-	// fix CRITICAL Sprint4-M2：user + subToken 在同一 RLock 段内读，保证一致快照
-	// （AuthCache 与 AuthTokenCache 来自同一次 SyncCacheConfig 合并发布）
-	authSnapshotMutex.RLock()
-	user, exists := AuthCache[token]
-	subToken, isSubToken := AuthTokenCache[token]
-	authSnapshotMutex.RUnlock()
+	auth, halt := gatewayResolveAuth(c, srcFormat, clientIP, path, startTime)
+	if halt {
+		return nil
+	}
+	user, token, subToken, isSubToken := auth.User, auth.Token, auth.SubToken, auth.IsSubToken
 
-	if !exists {
-		if shouldRecordInvalidAuthApiLog(clientIP) {
-			recordProxyApiLog(0, token, "unknown", 401, clientIP, startTime, path, "auth_error", "Invalid API Key")
-		}
-		return c.Status(401).JSON(fiber.Map{"error": fiber.Map{"message": "Invalid API Key", "type": "auth_error"}})
+	req, halt := gatewayResolveRequest(c, srcFormat, path, auth, clientIP, startTime)
+	if halt {
+		return nil
 	}
-	// fix Major（codex 第五轮）：纵深防御——即使 RefreshUserAuth 漏过封禁用户的清理（DB 异步竞态），
-	// 入口也要二次验证 user.Status==1，让封禁用户的旧 token 在到达 LLM 上游前被拦截。
-	if user.Status != 1 {
-		authSnapshotMutex.Lock()
-		delete(AuthCache, token)
-		authSnapshotMutex.Unlock()
-		recordProxyApiLog(user.ID, token, "unknown", 403, clientIP, startTime, path, "auth_error", "Account suspended")
-		return c.Status(403).JSON(fiber.Map{"error": fiber.Map{"message": "Account suspended", "type": "auth_error"}})
-	}
-
-	// Intercept Sub-token lifespan and quota logic
-	if isSubToken {
-		if subToken.Status != 1 {
-			recordProxyApiLog(user.ID, token, "unknown", 401, clientIP, startTime, path, "auth_error", "API Key is disabled or frozen")
-			return c.Status(401).JSON(fiber.Map{"error": fiber.Map{"message": "API Key is disabled or frozen", "type": "auth_error"}})
-		}
-		if subToken.ExpiredAt != nil && time.Now().After(*subToken.ExpiredAt) {
-			recordProxyApiLog(user.ID, token, "unknown", 401, clientIP, startTime, path, "auth_error", "API Key has expired")
-			return c.Status(401).JSON(fiber.Map{"error": fiber.Map{"message": "API Key has expired", "type": "auth_error"}})
-		}
-		if subToken.QuotaLimit > 0 && subToken.UsedQuota >= subToken.QuotaLimit {
-			recordProxyApiLog(user.ID, token, "unknown", 403, clientIP, startTime, path, "quota_exceeded", "API Key has reached its quota limit")
-			return c.Status(403).JSON(fiber.Map{"error": fiber.Map{"message": "API Key has reached its quota limit", "type": "quota_exceeded"}})
-		}
-	}
-
-	// 2. Extract Model from Body
-	rawBody := c.Body()
-	body := make([]byte, len(rawBody))
-	copy(body, rawBody)
-	fallbackUserOptIn := parseAllowFallbackHeader(c)
-
-	modelResult := gjson.GetBytes(body, "model")
-	modelName := strings.TrimSpace(modelResult.String())
-	if modelName == "" && srcFormat == sdktranslator.FormatGemini {
-		modelName = extractGeminiModelFromPath(path)
-	}
-	if modelName == "" {
-		recordProxyApiLog(user.ID, token, "unknown", 400, clientIP, startTime, path, "invalid_request", "Model is required")
-		return c.Status(400).JSON(fiber.Map{"error": fiber.Map{"message": "Model is required", "type": "invalid_request"}})
-	}
-	isCountTokensRequest := isClaudeCountTokensPath(path)
-	isStream := gjson.GetBytes(body, "stream").Bool()
-	if srcFormat == sdktranslator.FormatGemini && isGeminiStreamPath(path) {
-		isStream = true
-	}
+	body := req.Body
+	modelName := req.ModelName
+	isStream := req.IsStream
+	isCountTokensRequest := req.IsCountTokensRequest
+	fallbackUserOptIn := req.FallbackUserOptIn
 
 	var engineDecision EngineDecision
 	if !isCountTokensRequest {
-		// fix CRITICAL C1（codex 第十五轮）：precheck 必须传**估算的 token 数**，非 0。
-		// Anthropic /messages/count_tokens 是官方免费辅助接口，不进入额度预检或扣费链路。
-		precheckInputTokens := estimatePrecheckTokens(body)
-		// fix CRITICAL R23+3-C1（codex 第四轮）：precheck 阶段给 OutputTokens 一个保守上界估算。
-		precheckOutputTokens := 4096 // 默认保守上界
-		if maxTok := gjson.GetBytes(body, "max_tokens").Int(); maxTok > 0 {
-			precheckOutputTokens = int(maxTok)
-		} else if maxTok := gjson.GetBytes(body, "max_output_tokens").Int(); maxTok > 0 {
-			precheckOutputTokens = int(maxTok) // OpenAI Responses API
-		} else if maxTok := gjson.GetBytes(body, "max_completion_tokens").Int(); maxTok > 0 {
-			precheckOutputTokens = int(maxTok)
-		} else if maxTok := gjson.GetBytes(body, "generationConfig.maxOutputTokens").Int(); maxTok > 0 {
-			precheckOutputTokens = int(maxTok)
+		engineDecision, halt = gatewayRunPrecheck(c, auth, req, srcFormat, path, clientIP, startTime)
+		if halt {
+			return nil
 		}
-		// 客户端可能传巨大值想绕开预检，cap 到合理上限（与窗口相比仍是有意义的占位）
-		if precheckOutputTokens > 100000 {
-			precheckOutputTokens = 100000
-		}
-		precheckCostMicroUSD := estimatePrecheckBalanceDelta(modelName, precheckInputTokens, precheckOutputTokens)
-		precheckBilling := ResolveBillingRules(modelName, body, 0, "", fallbackUserOptIn).WithCosts(precheckCostMicroUSD)
-		engineDecision = Decide(EngineRequest{
-			UserID:       user.ID,
-			ModelName:    modelName,
-			InputTokens:  precheckInputTokens,
-			OutputTokens: precheckOutputTokens,
-			CostMicroUSD: precheckBilling.ChargedCostMicroUSD,
-			IsPrecheck:   true,
-		})
-		if !engineDecision.Allowed {
-			msg := engineDecision.BlockMessage
-			if msg == "" {
-				msg = "您的订阅额度已用尽，请购买套餐或充值余额"
-			}
-			// fix CRITICAL R23+2-C3：DB 加载失败 fail-closed 503（让客户端 backoff），
-			// 而不是 402 让用户以为"额度用尽"
-			if engineDecision.NeedsRetry {
-				recordProxyApiLog(user.ID, token, modelName, 503, clientIP, startTime, path, "subscription_load_failed", msg)
-				return c.Status(503).JSON(fiber.Map{"error": fiber.Map{"message": msg, "type": "service_unavailable", "code": "subscription_load_failed"}})
-			}
-			if engineDecision.BlockQuotaPlanID != 0 {
-				msg = precheckLimitMessage(engineDecision, precheckBilling)
-				recordProxyApiLogWithPrecheck(user.ID, token, modelName, 402, clientIP, startTime, path, "request_estimate_exceeds_window_remaining", msg, precheckInputTokens, precheckOutputTokens, precheckBilling, engineDecision)
-				return c.Status(402).JSON(precheckLimitErrorPayload(msg, engineDecision, precheckInputTokens, precheckOutputTokens, precheckBilling))
-			}
-			recordProxyApiLog(user.ID, token, modelName, 402, clientIP, startTime, path, "subscription_required", msg)
-			return c.Status(402).JSON(fiber.Map{"error": fiber.Map{"message": msg, "type": "subscription_required"}})
-		}
-		// fallback 到余额：必须 (1) BalanceConsumeEnabled (2) 窗口限额未用尽 (3) 余额>0。
-		// 项目未上线，不保留绕过余额消费开关的旧直扣路径。
-		if engineDecision.FallbackToBalance {
-			if !user.BalanceConsumeEnabled {
-				if engineDecision.BlockQuotaPlanID != 0 {
-					msg := precheckLimitMessage(engineDecision, precheckBilling)
-					recordProxyApiLogWithPrecheck(user.ID, token, modelName, 402, clientIP, startTime, path, "request_estimate_exceeds_window_remaining", msg, precheckInputTokens, precheckOutputTokens, precheckBilling, engineDecision)
-					return c.Status(402).JSON(precheckLimitErrorPayload(msg, engineDecision, precheckInputTokens, precheckOutputTokens, precheckBilling))
-				}
-				recordProxyApiLog(user.ID, token, modelName, 402, clientIP, startTime, path, "subscription_required", "subscription quota unavailable and balance consume disabled")
-				return c.Status(402).JSON(fiber.Map{"error": fiber.Map{
-					"message":      "当前请求无法使用订阅额度。请购买套餐，或在「账号设置 → 余额消费控制」中开启余额消费。",
-					"type":         "subscription_required",
-					"message_code": "ERR_QUOTA_EXHAUSTED_BALANCE_DISABLED",
-				}})
-			}
-			// 余额预检使用 rawCost：用户预付美元按上游真实成本扣，不应用订阅权重。
-			if !CheckBalanceConsumeAllowed(user, precheckBilling.RawCostMicroUSD) {
-				recordProxyApiLog(user.ID, token, modelName, 402, clientIP, startTime, path, "balance_limit_reached", "balance consume window limit reached")
-				return c.Status(402).JSON(fiber.Map{"error": fiber.Map{
-					"message":      "本周期余额消费已达上限，请提高限额或等待下次重置。",
-					"type":         "balance_limit_reached",
-					"message_code": "ERR_BALANCE_LIMIT_REACHED",
-				}})
-			}
-			if user.Quota <= 0 {
-				recordProxyApiLog(user.ID, token, modelName, 403, clientIP, startTime, path, "quota_exceeded", "insufficient balance")
-				return c.Status(403).JSON(fiber.Map{"error": fiber.Map{
-					"message":      "余额不足，请充值",
-					"type":         "quota_exceeded",
-					"message_code": "ERR_INSUFFICIENT_BALANCE",
-				}})
-			}
-		}
-		// 把决策结果存到 locals，事后 ApiLog 关联订阅 / plan 用
-		c.Locals("subscription_decision", engineDecision)
 	}
 
-	// 3. Fast Routing & Weight calculation
-	// fix CRITICAL Sprint4-M2：route + channel 在同一 RLock 段内读，保证一致快照
-	// （旧实现两次独立 RLock，并发 SyncCacheConfig 可在中间换新 channel map，
-	// 导致 routes 引用的 ChannelID 在新 ChannelMapCache 中查不到 → 路由失败）。
-	gatewayMutex.RLock()
-	routes, hasRoute := RouteCache[modelName]
-	channelMapRef := ChannelMapCache
-	gatewayMutex.RUnlock()
-
-	if !hasRoute || len(routes) == 0 {
-		recordProxyApiLog(user.ID, token, modelName, 404, clientIP, startTime, path, "model_not_found", "Model not available via any channel")
-		return c.Status(404).JSON(fiber.Map{"error": fiber.Map{"message": "Model not available via any channel", "type": "model_not_found"}})
-	}
-	if filteredRoutes, blocked := filterRoutesByEndpointPolicy(routes, path, isStream); len(filteredRoutes) == 0 && blocked > 0 {
-		msg := unsupportedEndpointMessage(modelName, path, isStream)
-		recordProxyApiLog(user.ID, token, modelName, 400, clientIP, startTime, path, "unsupported_endpoint", msg)
-		return c.Status(400).JSON(fiber.Map{"error": fiber.Map{
-			"message":      msg,
-			"type":         "unsupported_endpoint",
-			"message_code": "ERR_MODEL_ENDPOINT_UNSUPPORTED",
-		}})
-	} else if blocked > 0 {
-		routes = filteredRoutes
+	routes, channelMapRef, halt := gatewayResolveRoutes(c, auth, req, path, clientIP, startTime)
+	if halt {
+		return nil
 	}
 
 	// 4. 内容审核（per-ChannelModel 风控）
