@@ -366,6 +366,22 @@ func main() {
 	})
 	api.Post("/auth/email/reset-password", emailResetPwdLimiter, controller.ResetPassword)
 
+	// Phase G-2.5 OAuth 用户凭 set_password token 完成首次设密码限流（同 reset：per-IP 10/hour）
+	emailSetPwdLimiter := limiter.New(limiter.Config{
+		Max:        10,
+		Expiration: 1 * time.Hour,
+		KeyGenerator: func(c *fiber.Ctx) string {
+			return "email-set-pwd:" + utils.RealClientIP(c)
+		},
+		LimitReached: func(c *fiber.Ctx) error {
+			return c.Status(429).JSON(fiber.Map{
+				"success":      false,
+				"message_code": "ERR_RATE_LIMIT",
+			})
+		},
+	})
+	api.Post("/auth/email/set-password", emailSetPwdLimiter, controller.SetPassword)
+
 	// Admin 高权限隔离区 (换用 LanGuard + AdminGuard)
 	adminApi := api.Group("/admin", middleware.LanGuard, middleware.AdminGuard)
 	adminApi.Get("/config", controller.GetSysConfigs)
@@ -522,6 +538,9 @@ func main() {
 	api.Post("/user/email/verify", middleware.UserGuard, middleware.CSRFGuard, controller.VerifyEmail)
 	api.Post("/user/email/resend-verification", middleware.UserGuard, middleware.CSRFGuard, controller.ResendVerificationEmail)
 	api.Delete("/user/email", middleware.UserGuard, middleware.CSRFGuard, controller.UnbindEmail)
+	// Phase G-2.5：OAuth 用户申请发"设置密码"邮件（要求 logged-in 且 PasswordHash 为空）
+	api.Post("/user/email/request-set-password",
+		middleware.UserGuard, middleware.CSRFGuard, controller.RequestSetPassword)
 	// Phase G-2.1：用户级开关（控制是否允许邮箱+密码登录；admin master 是另一道闸）
 	api.Put("/user/email-login-enabled", middleware.UserGuard, middleware.CSRFGuard, controller.PutMyEmailLoginEnabled)
 
