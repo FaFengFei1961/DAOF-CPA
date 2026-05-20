@@ -16,7 +16,6 @@
 package controller
 
 import (
-	"errors"
 	"log"
 	"strings"
 	"unicode"
@@ -170,10 +169,6 @@ func PutMyEmailLoginEnabled(c *fiber.Ctx) error {
 		"enabled":      req.Enabled,
 	})
 }
-
-// errEmailAuthDisabled 是 SysConfig email_enabled / email_login_enabled / email_signup_enabled
-// 关闭时各登录/注册路径返回的 sentinel（G-2.2/2.3 复用，避免每个 handler 复写一遍）。
-var errEmailAuthDisabled = errors.New("email auth feature disabled by admin")
 
 // requireEmailFeatureEnabled 检查 master + 指定子开关都打开。
 // childKey 例如 "email_login_enabled" / "email_signup_enabled"；空字符串只检查 master。

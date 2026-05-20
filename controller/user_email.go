@@ -166,6 +166,9 @@ func BindEmail(c *fiber.Ctx) error {
 		return c.Status(503).JSON(fiber.Map{"success": false, "message_code": "ERR_EMAIL_SEND_FAIL"})
 	}
 	// rate-limit 已在入口 CheckAndConsume 时原子占用，这里无需再 Register
+	// fix M-6：审计 — 绑邮件操作进 OperationLog
+	LogOperationBy(0, user.ID, "user", "EMAIL_BIND_REQUEST", clientIP,
+		fmt.Sprintf(`[{"type":"EMAIL_BIND_REQUEST","email":%q}]`, maskEmailForAdmin(email)))
 	return c.JSON(fiber.Map{"success": true, "message_code": "SUCCESS_EMAIL_BIND_SENT"})
 }
 
@@ -265,6 +268,9 @@ func VerifyEmail(c *fiber.Ctx) error {
 
 	// 刷新 AuthCache 里的 user 对象，让后续 /api/user/me 看到最新 email/verified
 	proxy.RefreshUserAuth(user.ID)
+	// fix M-6：审计 — 验证成功进 OperationLog
+	LogOperationBy(0, user.ID, "user", "EMAIL_VERIFY_DONE", c.IP(),
+		fmt.Sprintf(`[{"type":"EMAIL_VERIFY_DONE","email":%q}]`, maskEmailForAdmin(verification.Email)))
 	return c.JSON(fiber.Map{
 		"success":      true,
 		"message_code": "SUCCESS_EMAIL_VERIFIED",
@@ -395,6 +401,11 @@ func UnbindEmail(c *fiber.Ctx) error {
 		return c.Status(500).JSON(fiber.Map{"success": false, "message_code": "ERR_DB_TRANSACTION"})
 	}
 	proxy.RefreshUserAuth(user.ID)
+	// fix M-6：审计 — 解绑邮件操作进 OperationLog。
+	// 解绑是敏感操作（清 email_login_enabled + 作废所有 pending token），
+	// 必须留下"何时 / 何 IP"记录便于事后追溯（用户怀疑账号被劫持时）。
+	LogOperationBy(0, user.ID, "user", "EMAIL_UNBIND", c.IP(),
+		fmt.Sprintf(`[{"type":"EMAIL_UNBIND","old_email":%q}]`, maskEmailForAdmin(user.Email)))
 	return c.JSON(fiber.Map{"success": true, "message_code": "SUCCESS_EMAIL_UNBOUND"})
 }
 
