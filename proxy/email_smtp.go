@@ -25,6 +25,7 @@ import (
 	"crypto/tls"
 	"errors"
 	"fmt"
+	"log"
 	"net"
 	"net/smtp"
 	"strconv"
@@ -259,8 +260,11 @@ func SendEmailViaSMTP(cfg SMTPConfig, msg EmailMessage) error {
 	}
 
 	if err := client.Quit(); err != nil {
-		// QUIT 失败不影响"邮件已送到上游"的事实，但记日志
-		return fmt.Errorf("smtp quit: %w", err)
+		// fix M-13：QUIT 后邮件已在 wc.Close() 时被 SMTP server 接受（250 OK on DATA close）。
+		// 此处的 QUIT 失败仅意味"礼貌断开"出错，**邮件本身已送达上游**。
+		// 旧实现返回 error 会让 caller 误判为发送失败，触发 [EMAIL-QUEUE-SEND-FAIL] 与潜在的
+		// 重试逻辑 → 假阴性。改为仅 log 不返回 error。
+		log.Printf("[SMTP] quit error (message already accepted by server): %v", err)
 	}
 	return nil
 }

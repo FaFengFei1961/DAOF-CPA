@@ -140,7 +140,9 @@ func EmailSignup(c *fiber.Ctx) error {
 
 	// 立即发验证邮件（与 G-1.5 BindEmail 逻辑相同，但 user 已存在所以略简）
 	if err := sendInitialVerifyEmail(c, &newUser); err != nil {
-		// 邮件发不出不阻塞注册成功 — 用户可在登录页用"重新发送验证邮件"重试
+		// 邮件发不出不阻塞注册成功 — 用户可在登录页用"重新发送验证邮件"重试。
+		// fix M-10：递增 ops 计数器，让 admin 通过 proxy.EmailOpsStats() 看到累计失败。
+		proxy.IncEmailSendFailCount()
 		log.Printf("[EMAIL-SIGNUP] send verify email failed user=%d: %v", newUser.ID, err)
 	}
 

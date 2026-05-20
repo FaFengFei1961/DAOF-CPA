@@ -65,7 +65,23 @@ var (
 	// nil 时走 SendEmailViaSMTP 原始实现。
 	sendEmailViaSMTPHook   func(cfg SMTPConfig, msg EmailMessage) error
 	sendEmailViaSMTPHookMu sync.RWMutex
+
+	// fix M-10 / M-12：ops 可见性 ——
+	// 邮件 send 失败次数与 queue drop 次数累计。供 admin / 监控查询，
+	// 让 SMTP 配错或队列拥塞不再"完全静默"。
+	emailSendFailCount atomic.Int64
+	emailQueueDropCount atomic.Int64
 )
+
+// EmailOpsStats 返回邮件 pipeline 的累计 ops 指标（自进程启动起）。
+// 给 admin 监控 / 调试用——失败率高 = SMTP 配错 / 网络问题；drop 高 = 队列拥塞需扩容。
+func EmailOpsStats() (sendFails, queueDrops int64) {
+	return emailSendFailCount.Load(), emailQueueDropCount.Load()
+}
+
+// IncEmailSendFailCount 让外部 caller（如 signup 流程 fire-and-forget 发邮件失败）
+// 也能贡献给同一份 ops 计数器。无需返回值。
+func IncEmailSendFailCount() { emailSendFailCount.Add(1) }
 
 // SetEmailQueueSyncForTest 让 EnqueueEmail / SendEmailDeduped 同步执行 processEmailTask。
 // 仅测试用；caller 负责测试结束后 reset。
@@ -154,8 +170,9 @@ func processEmailTask(task EmailTask) {
 	msg := task.Message
 	msg.To = task.To
 	if err := sendEmailViaSMTPDispatch(cfg, msg); err != nil {
-		log.Printf("[EMAIL-QUEUE-SEND-FAIL] label=%s to=%s err=%v",
-			task.Label, maskEmail(task.To), err)
+		fails := emailSendFailCount.Add(1)
+		log.Printf("[EMAIL-QUEUE-SEND-FAIL] label=%s to=%s total_fails=%d err=%v",
+			task.Label, maskEmail(task.To), fails, err)
 		return
 	}
 	log.Printf("[EMAIL-QUEUE-SENT] label=%s to=%s", task.Label, maskEmail(task.To))
@@ -198,8 +215,9 @@ func EnqueueEmail(task EmailTask) error {
 	case emailQueue <- task:
 		return nil
 	default:
-		log.Printf("[EMAIL-QUEUE-DROP] queue full (cap=%d) label=%s to=%s",
-			emailQueueCap, task.Label, maskEmail(task.To))
+		dropped := emailQueueDropCount.Add(1)
+		log.Printf("[EMAIL-QUEUE-DROP] queue full (cap=%d) label=%s to=%s total_drops=%d",
+			emailQueueCap, task.Label, maskEmail(task.To), dropped)
 		return ErrEmailQueueFull
 	}
 }

@@ -386,7 +386,14 @@ func persistAdminEmailConfigUpdates(updates map[string]string) error {
 			}
 			var existing database.SysConfig
 			res := tx.Where("key = ?", k).First(&existing)
-			if res.RowsAffected > 0 {
+			// fix HIGH SF-1：不能仅靠 RowsAffected 判定"是否存在"。
+			// 只有 ErrRecordNotFound 才表示"该 key 不存在"；其它 DB 错误（lock timeout / disk full /
+			// connection 断）也会让 RowsAffected = 0，旧代码 fallthrough 到 Create 会试图插入重复 key
+			// → 要么静默成功导致重复行，要么 unique 冲突报错但掩盖了原因。
+			if res.Error != nil && !errors.Is(res.Error, gorm.ErrRecordNotFound) {
+				return fmt.Errorf("lookup %s: %w", k, res.Error)
+			}
+			if res.Error == nil {
 				existing.Value = enc
 				if err := tx.Save(&existing).Error; err != nil {
 					return fmt.Errorf("save %s: %w", k, err)

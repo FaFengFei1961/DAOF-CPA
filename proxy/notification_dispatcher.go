@@ -13,6 +13,7 @@
 package proxy
 
 import (
+	"errors"
 	"log"
 	"net/url"
 	"runtime/debug"
@@ -21,6 +22,8 @@ import (
 	"sync/atomic"
 
 	"daof-cpa/database"
+
+	"gorm.io/gorm"
 )
 
 // fix Major（codex 第四轮）：原 Dispatch 每条通知 `go func()`，无队列、无并发上限、无背压。
@@ -260,7 +263,13 @@ func dispatchEmailIfEligible(userID uint, category, title, body string, dedupKey
 	if err := database.DB.Select("id, username, email, email_verified_at").
 		Where("id = ? AND status = ?", userID, 1).
 		First(&user).Error; err != nil {
-		return // 用户不存在 / 被封禁 / DB 故障 → 静默跳过
+		// fix HIGH SF-2：区分"用户不存在 / 被封禁"（正常静默）与"DB 故障"（必须日志）。
+		// DB 短暂故障下，security / refund / system 等强制类邮件会全部静默丢失，运维不可见。
+		if !errors.Is(err, gorm.ErrRecordNotFound) {
+			log.Printf("[DISPATCH-EMAIL] DB lookup failed user=%d category=%s: %v",
+				userID, category, err)
+		}
+		return
 	}
 	if user.Email == "" || user.EmailVerifiedAt == nil {
 		return
