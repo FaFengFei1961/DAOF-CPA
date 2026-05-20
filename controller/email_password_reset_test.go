@@ -13,6 +13,7 @@ import (
 	"encoding/json"
 	"io"
 	"net/http/httptest"
+	"sync"
 	"testing"
 	"time"
 
@@ -40,6 +41,7 @@ func setupResetPwdTestDB(t *testing.T) {
 	if err := db.AutoMigrate(
 		&database.User{}, &database.EmailVerification{},
 		&database.OperationLog{}, &database.SysConfig{},
+		&database.UserSession{}, // Tier 5 T-1：session revocation 测试要 migrate
 	); err != nil {
 		t.Fatalf("migrate: %v", err)
 	}
@@ -398,6 +400,135 @@ func TestResetPassword_Success(t *testing.T) {
 	database.DB.First(&consumed, v.ID)
 	if consumed.ConsumedAt == nil {
 		t.Error("token should be marked consumed")
+	}
+}
+
+// Tier 5 T-1：密码重置后必须作废所有 browser session（防 stolen-session 持续）。
+func TestResetPassword_RevokesActiveSessions(t *testing.T) {
+	utils.InitCrypto()
+	setupResetPwdTestDB(t)
+	user := seedResetUser(t, resetUserOpts{
+		username: "alice", password: "oldpass1", email: "alice@example.com", verified: true,
+	})
+	// 预先种 2 个活跃 session
+	sid1, err := database.CreateUserSession(user.ID, "ua1", "127.0.0.1")
+	if err != nil {
+		t.Fatalf("create session 1: %v", err)
+	}
+	sid2, err := database.CreateUserSession(user.ID, "ua2", "127.0.0.2")
+	if err != nil {
+		t.Fatalf("create session 2: %v", err)
+	}
+
+	// seed reset token
+	rawToken, tokenHash, _ := generateEmailToken()
+	now := time.Now()
+	v := database.EmailVerification{
+		UserID:    user.ID,
+		Email:     user.Email,
+		TokenHash: tokenHash,
+		Purpose:   database.EmailVerificationPurposeResetPassword,
+		ExpiresAt: now.Add(15 * time.Minute),
+		CreatedAt: now,
+	}
+	if err := database.DB.Create(&v).Error; err != nil {
+		t.Fatalf("seed token: %v", err)
+	}
+
+	app := newResetPwdTestApp()
+	status, _ := resetPwdDoJSON(t, app, "/reset-password", map[string]string{
+		"token": rawToken, "new_password": "newpass1",
+	})
+	if status != 200 {
+		t.Fatalf("reset failed status=%d", status)
+	}
+
+	// 两个 session 都应已 revoke：LookupUserBySession 返回 false
+	if _, ok := database.LookupUserBySession(sid1); ok {
+		t.Error("session 1 should be revoked after password reset")
+	}
+	if _, ok := database.LookupUserBySession(sid2); ok {
+		t.Error("session 2 should be revoked after password reset")
+	}
+	// DB 层面 revoked_at 应非 nil
+	var sessions []database.UserSession
+	database.DB.Where("user_id = ?", user.ID).Find(&sessions)
+	for _, s := range sessions {
+		if s.RevokedAt == nil {
+			t.Errorf("session_id=%s revoked_at should be non-nil after password reset", s.SessionID)
+		}
+	}
+}
+
+// Tier 5 T-2：并发消费同一 token 必须严格单胜（一次成功一次拒绝）。
+// 旧 sequential ReplayRejected 只测了"先后"的 race；这里测真正的同时。
+func TestResetPassword_ConcurrentConsumption_OnlyOneWins(t *testing.T) {
+	utils.InitCrypto()
+	setupResetPwdTestDB(t)
+	user := seedResetUser(t, resetUserOpts{
+		username: "alice", password: "oldpass1", email: "alice@example.com", verified: true,
+	})
+	rawToken, tokenHash, _ := generateEmailToken()
+	now := time.Now()
+	v := database.EmailVerification{
+		UserID: user.ID, Email: user.Email, TokenHash: tokenHash,
+		Purpose: database.EmailVerificationPurposeResetPassword,
+		ExpiresAt: now.Add(15 * time.Minute), CreatedAt: now,
+	}
+	if err := database.DB.Create(&v).Error; err != nil {
+		t.Fatalf("seed token: %v", err)
+	}
+
+	app := newResetPwdTestApp()
+	const N = 6
+	var wg sync.WaitGroup
+	statuses := make([]int, N)
+	bodies := make([]map[string]any, N)
+	start := make(chan struct{})
+
+	for i := 0; i < N; i++ {
+		wg.Add(1)
+		go func(idx int) {
+			defer wg.Done()
+			<-start // 同步起跑线
+			statuses[idx], bodies[idx] = resetPwdDoJSON(t, app, "/reset-password", map[string]string{
+				"token": rawToken, "new_password": "newpass1",
+			})
+		}(i)
+	}
+	close(start)
+	wg.Wait()
+
+	var success, conflict, other int
+	for i, st := range statuses {
+		switch st {
+		case 200:
+			if bodies[i]["message_code"] != "SUCCESS_PASSWORD_RESET" {
+				t.Errorf("worker %d got status=200 but msg=%v", i, bodies[i])
+			}
+			success++
+		case 409:
+			if bodies[i]["message_code"] != "ERR_EMAIL_TOKEN_CONSUMED" {
+				t.Errorf("worker %d got status=409 but msg=%v", i, bodies[i])
+			}
+			conflict++
+		default:
+			t.Errorf("worker %d unexpected status=%d body=%v", i, st, bodies[i])
+			other++
+		}
+	}
+	// 严格不变量：恰好一个成功 + 其余全 409。
+	if success != 1 {
+		t.Errorf("expected exactly 1 success, got %d (conflict=%d other=%d)", success, conflict, other)
+	}
+	if conflict != N-1 {
+		t.Errorf("expected %d conflict, got %d (success=%d)", N-1, conflict, success)
+	}
+	// 密码确实被改了
+	var u database.User
+	database.DB.First(&u, user.ID)
+	if !utils.CheckHash("newpass1", u.PasswordHash) {
+		t.Error("password should have been updated by the single winner")
 	}
 }
 

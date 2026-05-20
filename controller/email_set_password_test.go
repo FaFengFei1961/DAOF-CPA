@@ -35,6 +35,7 @@ func setupSetPwdTestDB(t *testing.T) {
 	if err := db.AutoMigrate(
 		&database.User{}, &database.EmailVerification{},
 		&database.OperationLog{}, &database.SysConfig{},
+		&database.UserSession{}, // Tier 5 T-1：session revocation 测试要 migrate
 	); err != nil {
 		t.Fatalf("migrate: %v", err)
 	}
@@ -282,6 +283,59 @@ func TestSetPassword_Success(t *testing.T) {
 	database.DB.First(&consumed, v.ID)
 	if consumed.ConsumedAt == nil {
 		t.Error("token should be consumed")
+	}
+}
+
+// Tier 5 T-1：set-password 完成后必须作废所有 browser session。
+// 与 ResetPassword 同样的安全要求：密码变更 → 旧 session 全失效。
+func TestSetPassword_RevokesActiveSessions(t *testing.T) {
+	utils.InitCrypto()
+	setupSetPwdTestDB(t)
+	user := seedSetPwdUser(t, setPwdUserOpts{
+		username: "github_user", password: "", email: "gh@example.com", verified: true,
+	})
+	// OAuth 用户登录之后有 session（虽然没密码）
+	sid1, err := database.CreateUserSession(user.ID, "ua1", "127.0.0.1")
+	if err != nil {
+		t.Fatalf("create session 1: %v", err)
+	}
+	sid2, err := database.CreateUserSession(user.ID, "ua2", "127.0.0.2")
+	if err != nil {
+		t.Fatalf("create session 2: %v", err)
+	}
+
+	rawToken, tokenHash, _ := generateEmailToken()
+	now := time.Now()
+	v := database.EmailVerification{
+		UserID: user.ID, Email: user.Email, TokenHash: tokenHash,
+		Purpose: database.EmailVerificationPurposeSetPassword,
+		ExpiresAt: now.Add(15 * time.Minute), CreatedAt: now,
+	}
+	if err := database.DB.Create(&v).Error; err != nil {
+		t.Fatalf("seed token: %v", err)
+	}
+
+	app := newSetPwdApp()
+	status, _ := setPwdDoJSON(t, app, "/set-password", map[string]string{
+		"token": rawToken, "new_password": "validpass1",
+	})
+	if status != 200 {
+		t.Fatalf("set-password failed status=%d", status)
+	}
+
+	// 两个 session 都应已 revoke
+	if _, ok := database.LookupUserBySession(sid1); ok {
+		t.Error("session 1 should be revoked after set-password")
+	}
+	if _, ok := database.LookupUserBySession(sid2); ok {
+		t.Error("session 2 should be revoked after set-password")
+	}
+	var sessions []database.UserSession
+	database.DB.Where("user_id = ?", user.ID).Find(&sessions)
+	for _, s := range sessions {
+		if s.RevokedAt == nil {
+			t.Errorf("session_id=%s revoked_at should be non-nil after set-password", s.SessionID)
+		}
 	}
 }
 
