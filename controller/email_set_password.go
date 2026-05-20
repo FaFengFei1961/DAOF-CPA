@@ -245,6 +245,12 @@ func SetPassword(c *fiber.Ctx) error {
 		return c.Status(500).JSON(fiber.Map{"success": false, "message_code": "ERR_DB_TRANSACTION"})
 	}
 
+	// 安全：密码已设 → 作废所有 browser session。
+	// 普通 OAuth 用户的 session 不一定基于 PasswordHash，但既然密码已成为登录凭据，
+	// 同样要求重新认证（防 stolen-session 持续有效）。
+	if err := database.RevokeSessionsForUser(user.ID); err != nil {
+		log.Printf("[SET-PWD] revoke sessions failed user=%d: %v", user.ID, err)
+	}
 	proxy.RefreshUserAuth(user.ID)
 	LogOperationBy(0, user.ID, "user", "SET_PASSWORD_DONE", c.IP(),
 		fmt.Sprintf(`[{"type":"SET_PASSWORD_DONE","email":%q}]`, maskEmailForAdmin(user.Email)))
@@ -256,20 +262,7 @@ func SetPassword(c *fiber.Ctx) error {
 var errPasswordAlreadySetInTx = errors.New("password already set by concurrent path")
 
 // buildPasswordSetURL 拼装前端"首次设置密码"页面 URL。
-// 与 buildPasswordResetURL 类似但走独立 SysConfig key 让前端能分两个页面处理。
+// 共用 buildFrontendTokenURL，仅差路径 config key。
 func buildPasswordSetURL(rawToken string) (string, error) {
-	base := strings.TrimSpace(readSysConfigCached("server_address", ""))
-	if base == "" {
-		return "", fmt.Errorf("server_address SysConfig not configured")
-	}
-	if readBoolConfig("server_address_require_https", true) {
-		if !strings.HasPrefix(strings.ToLower(base), "https://") {
-			return "", fmt.Errorf("server_address must use https:// (got %q)", base)
-		}
-	}
-	path := strings.TrimSpace(readSysConfigCached("email_set_url_path", "/set-password"))
-	if !strings.HasPrefix(path, "/") {
-		path = "/" + path
-	}
-	return strings.TrimRight(base, "/") + path + "?token=" + rawToken, nil
+	return buildFrontendTokenURL("email_set_url_path", "/set-password", rawToken)
 }

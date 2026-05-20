@@ -123,7 +123,8 @@ func EmailSignup(c *fiber.Ctx) error {
 
 	if err := createUserWithSignupBonus(&newUser, signupBonusMicro, "email"); err != nil {
 		// unique 冲突的最后兜底：partial unique index 拦下并发竞态
-		if strings.Contains(strings.ToLower(err.Error()), "unique") {
+		// 用 GORM 的 driver-agnostic sentinel；fallback 仍保留 string-match 兼容旧驱动
+		if errors.Is(err, gorm.ErrDuplicatedKey) || strings.Contains(strings.ToLower(err.Error()), "unique") {
 			return c.Status(409).JSON(fiber.Map{"success": false, "message_code": "ERR_EMAIL_TAKEN"})
 		}
 		log.Printf("[EMAIL-SIGNUP] tx failed username=%s email=%s: %v", newUser.Username, maskEmailForAdmin(email), err)
@@ -173,21 +174,20 @@ func sendInitialVerifyEmail(c *fiber.Ctx, user *database.User) error {
 	}
 	ttl := loadEmailVerifyTTL()
 
-	txErr := database.DB.Transaction(func(tx *gorm.DB) error {
-		// 注册路径下 user 才刚创建，理论上没有旧 token，但保险起见仍 invalidate（与 BindEmail 一致）
-		// 跳过 "consume_at='replaced'" 步骤——这是首次发，肯定没旧 token
-		row := database.EmailVerification{
-			UserID:    user.ID,
-			Email:     user.Email,
-			TokenHash: tokenHash,
-			Purpose:   database.EmailVerificationPurposeVerify,
-			ExpiresAt: time.Now().Add(ttl),
-			ClientIP:  c.IP(),
-			UserAgent: truncateUserAgent(c.Get("User-Agent")),
-			CreatedAt: time.Now(),
-		}
-		return tx.Create(&row).Error
-	})
+	// 注册路径下 user 才刚创建，**不可能**有旧 verify token，直接 INSERT 即可。
+	// 与 BindEmail 不同：BindEmail 要"作废旧 + 插新"是因为同一用户可能多次申请；
+	// 这里 user 是 fresh 的，无需事务，无需先 invalidate。
+	row := database.EmailVerification{
+		UserID:    user.ID,
+		Email:     user.Email,
+		TokenHash: tokenHash,
+		Purpose:   database.EmailVerificationPurposeVerify,
+		ExpiresAt: time.Now().Add(ttl),
+		ClientIP:  c.IP(),
+		UserAgent: truncateUserAgent(c.Get("User-Agent")),
+		CreatedAt: time.Now(),
+	}
+	txErr := database.DB.Create(&row).Error
 	if txErr != nil {
 		return fmt.Errorf("insert verification: %w", txErr)
 	}

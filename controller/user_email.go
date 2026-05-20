@@ -465,6 +465,17 @@ func loadEmailVerifyTTL() time.Duration {
 // buildEmailVerifyURL 拼装前端验证页 URL。server_address 未配置 → 报错。
 // 强制 https://，与 buildAbsoluteURL（topup_webhook.go）逻辑一致。
 func buildEmailVerifyURL(rawToken string) (string, error) {
+	return buildFrontendTokenURL("email_verify_url_path", "/verify-email", rawToken)
+}
+
+// buildFrontendTokenURL 是 verify / reset / set 三种邮件链接共用的 URL 构造器。
+// pathConfigKey: SysConfig key（如 "email_verify_url_path"）
+// defaultPath:   缺省路径（如 "/verify-email"）
+// rawToken:      token 明文（base64url，安全字符集；不再 url-encode）
+//
+// 校验：server_address 必须有值；当 server_address_require_https=true 时强制 https://。
+// 校验失败返回 error，调用方应转 503 + ERR_SERVER_ADDRESS_NOT_CONFIGURED。
+func buildFrontendTokenURL(pathConfigKey, defaultPath, rawToken string) (string, error) {
 	base := strings.TrimSpace(readSysConfigCached("server_address", ""))
 	if base == "" {
 		return "", fmt.Errorf("server_address SysConfig not configured")
@@ -474,11 +485,10 @@ func buildEmailVerifyURL(rawToken string) (string, error) {
 			return "", fmt.Errorf("server_address must use https:// (got %q)", base)
 		}
 	}
-	path := strings.TrimSpace(readSysConfigCached("email_verify_url_path", "/verify-email"))
+	path := strings.TrimSpace(readSysConfigCached(pathConfigKey, defaultPath))
 	if !strings.HasPrefix(path, "/") {
 		path = "/" + path
 	}
-	// token 是 base64url，安全字符集；不需要进一步 url-encode
 	return strings.TrimRight(base, "/") + path + "?token=" + rawToken, nil
 }
 

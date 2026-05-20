@@ -129,6 +129,9 @@ func LookupUserBySession(sessionID string) (*User, bool) {
 	if err := DB.First(&user, session.UserID).Error; err != nil {
 		return nil, false
 	}
+	// 注：这里**不**按 user.Status 过滤。banned 用户（status=2）的 session 必须能解析
+	// 到 user 对象，否则 middleware.UserGuardAllowBanned 无法走 /api/user/me 等申诉端点。
+	// 实际"封禁拒绝"在 middleware.UserGuard 层完成（通过 c.Locals("user_banned")）。
 	if now.Sub(session.LastUsedAt) > lastUsedAtRefreshInterval {
 		db := DB
 		go func(sessionID string) {

@@ -58,6 +58,10 @@ type resetPasswordRequest struct {
 //
 // 用户输入邮箱，服务端发重置链接邮件。
 // **永远返回相同的 SUCCESS_PASSWORD_RESET_EMAIL_SENT** —— 不泄漏邮箱存在性。
+//
+// 时间侧信道防御：所有"真正发邮件"的重活（DB 事务 + token 生成 + 邮件渲染 + enqueue）
+// 都在 goroutine 里异步完成，handler 同步路径只做格式校验 + 限流检查就立刻返回响应。
+// 这样攻击者无法通过响应延迟区分"邮箱存在"与"邮箱不存在"。
 func ForgotPassword(c *fiber.Ctx) error {
 	// Gate：master only
 	if !proxy.IsEmailEnabled() {
@@ -75,46 +79,69 @@ func ForgotPassword(c *fiber.Ctx) error {
 	}
 
 	clientIP := c.IP()
-	// 邮件级限流（额外一道防滥发）
+	// 邮件级限流（额外一道防滥发）—— 此处同步做，攻击者拿到 429 但响应内容仍是同一 message_code。
+	// 配额已消费，时间侧信道不受影响（拿不到延迟差，因为 send-mail 路径在 goroutine 里）。
 	if err := proxy.CheckEmailRateLimit(email, clientIP); err != nil {
-		// 注意：这里仍走"枚举防御"返回路径——攻击者从响应看不出邮箱是否存在。
-		// 但我们仍消费了限流配额，下次同 IP/邮箱会更快碰到顶。
 		log.Printf("[FORGOT-PWD] rate-limited email=%s ip=%s: %v", maskEmailForAdmin(email), clientIP, err)
 		return successPasswordResetEmailSent(c)
 	}
 
-	// 查用户。lookup by lower(email)。复用 email_login 的策略：用户不存在/未验证/无密码
-	// 都不真正发邮件，但响应保持一致。
+	// 抓取 fiber.Ctx 上需要的字段，启动 goroutine —— ctx 在 handler 返回后会被 reuse。
+	userAgent := truncateUserAgent(c.Get("User-Agent"))
+	locale := emailLocaleFromCtx(c)
+	if forgotPasswordSyncForTest {
+		// 测试模式：同步执行让 assertion 能立即看到 DB 状态
+		processForgotPasswordRequest(email, clientIP, userAgent, locale)
+	} else {
+		go processForgotPasswordRequest(email, clientIP, userAgent, locale)
+	}
+
+	// 立即返回 generic 响应——攻击者拿不到时间差，无法枚举邮箱。
+	return successPasswordResetEmailSent(c)
+}
+
+// forgotPasswordSyncForTest 控制 ForgotPassword 是否同步执行内部工作。
+// 仅用于单元测试 —— 生产路径恒为 false。SetForgotPasswordSyncForTest 设置。
+var forgotPasswordSyncForTest bool
+
+// SetForgotPasswordSyncForTest 测试 hook：true → 同步执行 processForgotPasswordRequest，
+// false → 走 production 的 fire-and-forget goroutine 路径。
+func SetForgotPasswordSyncForTest(sync bool) { forgotPasswordSyncForTest = sync }
+
+// processForgotPasswordRequest 是 ForgotPassword 的异步实际处理。
+// 在 goroutine 里跑，所有错误只走 server-side log，不影响客户端响应。
+//
+// 处理逻辑：
+//   - 查 user（必须 status=1 活跃；email_verified 非 nil；PasswordHash 非空）
+//   - 任一不符 → silent no-op（日志即可）
+//   - 全符 → tx invalidate prior + insert new token + render + enqueue email
+func processForgotPasswordRequest(email, clientIP, userAgent, locale string) {
 	var user database.User
-	lookupErr := database.DB.Where("email = ?", email).First(&user).Error
+	lookupErr := database.DB.Where("email = ? AND status = ?", email, 1).First(&user).Error
 	switch {
 	case lookupErr == nil:
-		// 用户存在；继续判断是否真正发邮件
+		// 继续判断是否真正发邮件
 	case errors.Is(lookupErr, gorm.ErrRecordNotFound):
-		log.Printf("[FORGOT-PWD] user not found email=%s — silently no-op", maskEmailForAdmin(email))
-		return successPasswordResetEmailSent(c)
+		log.Printf("[FORGOT-PWD] user not found / non-active email=%s — silent no-op", maskEmailForAdmin(email))
+		return
 	default:
-		log.Printf("[FORGOT-PWD] DB lookup failed: %v", lookupErr)
-		return c.Status(500).JSON(fiber.Map{"success": false, "message_code": "ERR_DB_QUERY"})
+		log.Printf("[FORGOT-PWD] DB lookup failed email=%s: %v", maskEmailForAdmin(email), lookupErr)
+		return
 	}
 
-	// 必须已验证邮箱（否则攻击者可往任意邮箱发垃圾）
 	if user.EmailVerifiedAt == nil {
-		log.Printf("[FORGOT-PWD] email not verified user=%d — silently no-op", user.ID)
-		return successPasswordResetEmailSent(c)
+		log.Printf("[FORGOT-PWD] email not verified user=%d — silent no-op", user.ID)
+		return
 	}
-	// 必须已设密码（OAuth-only 用户走 G-2.5 set-password 流程，不在这里）
 	if user.PasswordHash == "" {
-		log.Printf("[FORGOT-PWD] user has no password (OAuth-only) user=%d — silently no-op", user.ID)
-		return successPasswordResetEmailSent(c)
+		log.Printf("[FORGOT-PWD] user has no password (OAuth-only) user=%d — silent no-op", user.ID)
+		return
 	}
 
-	// 真正发邮件
 	rawToken, tokenHash, err := generateEmailToken()
 	if err != nil {
 		log.Printf("[FORGOT-PWD] token gen failed user=%d: %v", user.ID, err)
-		// 内部错误仍走 generic 响应——避免泄漏哪些用户能触发
-		return successPasswordResetEmailSent(c)
+		return
 	}
 
 	ttl := loadEmailResetTTL()
@@ -126,11 +153,10 @@ func ForgotPassword(c *fiber.Ctx) error {
 		Purpose:   database.EmailVerificationPurposeResetPassword,
 		ExpiresAt: now.Add(ttl),
 		ClientIP:  clientIP,
-		UserAgent: truncateUserAgent(c.Get("User-Agent")),
+		UserAgent: userAgent,
 		CreatedAt: now,
 	}
 	txErr := database.DB.Transaction(func(tx *gorm.DB) error {
-		// 作废 prior 未消费 reset token（同 BindEmail/ResendVerification 模式）
 		if err := tx.Model(&database.EmailVerification{}).
 			Where("user_id = ? AND purpose = ? AND consumed_at IS NULL AND expires_at > ?",
 				user.ID, database.EmailVerificationPurposeResetPassword, now).
@@ -144,16 +170,14 @@ func ForgotPassword(c *fiber.Ctx) error {
 	})
 	if txErr != nil {
 		log.Printf("[FORGOT-PWD] tx failed user=%d: %v", user.ID, txErr)
-		return successPasswordResetEmailSent(c)
+		return
 	}
 
 	resetURL, err := buildPasswordResetURL(rawToken)
 	if err != nil {
 		log.Printf("[FORGOT-PWD] build URL failed: %v", err)
-		return successPasswordResetEmailSent(c)
+		return
 	}
-
-	locale := emailLocaleFromCtx(c)
 	msg, err := proxy.RenderEmail(proxy.EmailTplResetPassword, locale, proxy.EmailVars{
 		UserName:  user.Username,
 		UserEmail: user.Email,
@@ -163,7 +187,7 @@ func ForgotPassword(c *fiber.Ctx) error {
 	})
 	if err != nil {
 		log.Printf("[FORGOT-PWD] render failed user=%d: %v", user.ID, err)
-		return successPasswordResetEmailSent(c)
+		return
 	}
 	dedupKey := fmt.Sprintf("reset:%d:%s", user.ID, user.Email)
 	if err := proxy.SendEmailDeduped(proxy.EmailTask{
@@ -173,13 +197,11 @@ func ForgotPassword(c *fiber.Ctx) error {
 		Label:    "password_reset",
 	}); err != nil && !errors.Is(err, proxy.ErrEmailDedup) {
 		log.Printf("[FORGOT-PWD] enqueue failed user=%d: %v", user.ID, err)
-		// 仍走 generic 响应
-		return successPasswordResetEmailSent(c)
+		return
 	}
 	proxy.RegisterEmailSent(user.Email, clientIP)
-	LogOperationBy(0, user.ID, "user", "PASSWORD_RESET_REQUEST", clientIP,
+	LogOperationBy(0, user.ID, "system", "PASSWORD_RESET_REQUEST", clientIP,
 		fmt.Sprintf(`[{"type":"PASSWORD_RESET_REQUEST","email":%q}]`, maskEmailForAdmin(user.Email)))
-	return successPasswordResetEmailSent(c)
 }
 
 // ResetPassword POST /api/auth/email/reset-password
@@ -265,8 +287,12 @@ func ResetPassword(c *fiber.Ctx) error {
 		return c.Status(500).JSON(fiber.Map{"success": false, "message_code": "ERR_DB_TRANSACTION"})
 	}
 
-	// 刷新 AuthCache：让该用户的所有现存 session 失效（PasswordHash 变了 → 强烈建议作废 session）
-	// 当前 AuthCache 只缓存 user 对象（不直接挂 session），所以 RefreshUserAuth 已够。
+	// 安全：密码已改 → 作废所有 browser session（防 stolen-session 持续有效）。
+	// RefreshUserAuth 只刷新 token-based AuthCache，不动 UserSession 表 —— 必须显式 revoke。
+	if err := database.RevokeSessionsForUser(user.ID); err != nil {
+		// 非致命：reset 已成功；只记日志便于审计
+		log.Printf("[RESET-PWD] revoke sessions failed user=%d: %v", user.ID, err)
+	}
 	proxy.RefreshUserAuth(user.ID)
 	LogOperationBy(0, user.ID, "user", "PASSWORD_RESET_DONE", c.IP(),
 		fmt.Sprintf(`[{"type":"PASSWORD_RESET_DONE","email":%q}]`, maskEmailForAdmin(user.Email)))
@@ -293,20 +319,7 @@ func loadEmailResetTTL() time.Duration {
 }
 
 // buildPasswordResetURL 拼装前端"设置新密码"页面 URL。
-// 与 buildEmailVerifyURL 一样要求 server_address + https。
+// 共用 buildFrontendTokenURL，仅差路径 config key。
 func buildPasswordResetURL(rawToken string) (string, error) {
-	base := strings.TrimSpace(readSysConfigCached("server_address", ""))
-	if base == "" {
-		return "", fmt.Errorf("server_address SysConfig not configured")
-	}
-	if readBoolConfig("server_address_require_https", true) {
-		if !strings.HasPrefix(strings.ToLower(base), "https://") {
-			return "", fmt.Errorf("server_address must use https:// (got %q)", base)
-		}
-	}
-	path := strings.TrimSpace(readSysConfigCached("email_reset_url_path", "/reset-password"))
-	if !strings.HasPrefix(path, "/") {
-		path = "/" + path
-	}
-	return strings.TrimRight(base, "/") + path + "?token=" + rawToken, nil
+	return buildFrontendTokenURL("email_reset_url_path", "/reset-password", rawToken)
 }

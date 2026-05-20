@@ -139,9 +139,11 @@ func TestForgotPassword_Success(t *testing.T) {
 		captured = append(captured, msg.To)
 		return nil
 	})
+	SetForgotPasswordSyncForTest(true)
 	defer func() {
 		proxy.SetEmailQueueSyncForTest(false)
 		proxy.SetSendEmailViaSMTPHookForTest(nil)
+		SetForgotPasswordSyncForTest(false)
 	}()
 
 	app := newResetPwdTestApp()
@@ -171,9 +173,11 @@ func TestForgotPassword_NonexistentEmail_SilentNoOp(t *testing.T) {
 		captured = append(captured, msg.To)
 		return nil
 	})
+	SetForgotPasswordSyncForTest(true)
 	defer func() {
 		proxy.SetEmailQueueSyncForTest(false)
 		proxy.SetSendEmailViaSMTPHookForTest(nil)
+		SetForgotPasswordSyncForTest(false)
 	}()
 
 	app := newResetPwdTestApp()
@@ -209,9 +213,11 @@ func TestForgotPassword_UnverifiedEmail_SilentNoOp(t *testing.T) {
 		captured = append(captured, msg.To)
 		return nil
 	})
+	SetForgotPasswordSyncForTest(true)
 	defer func() {
 		proxy.SetEmailQueueSyncForTest(false)
 		proxy.SetSendEmailViaSMTPHookForTest(nil)
+		SetForgotPasswordSyncForTest(false)
 	}()
 
 	app := newResetPwdTestApp()
@@ -242,9 +248,11 @@ func TestForgotPassword_NoPassword_OAuthUser_SilentNoOp(t *testing.T) {
 		captured = append(captured, msg.To)
 		return nil
 	})
+	SetForgotPasswordSyncForTest(true)
 	defer func() {
 		proxy.SetEmailQueueSyncForTest(false)
 		proxy.SetSendEmailViaSMTPHookForTest(nil)
+		SetForgotPasswordSyncForTest(false)
 	}()
 
 	app := newResetPwdTestApp()
@@ -301,9 +309,11 @@ func TestForgotPassword_InvalidatesPriorTokens(t *testing.T) {
 	})
 	proxy.SetEmailQueueSyncForTest(true)
 	proxy.SetSendEmailViaSMTPHookForTest(func(cfg proxy.SMTPConfig, msg proxy.EmailMessage) error { return nil })
+	SetForgotPasswordSyncForTest(true)
 	defer func() {
 		proxy.SetEmailQueueSyncForTest(false)
 		proxy.SetSendEmailViaSMTPHookForTest(nil)
+		SetForgotPasswordSyncForTest(false)
 	}()
 
 	app := newResetPwdTestApp()

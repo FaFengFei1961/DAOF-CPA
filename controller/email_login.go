@@ -23,10 +23,11 @@
 package controller
 
 import (
-	"crypto/subtle"
 	"fmt"
 	"log"
 	"strings"
+	"sync"
+	"time"
 
 	"daof-cpa/database"
 	"daof-cpa/utils"
@@ -36,9 +37,21 @@ import (
 
 // dummyPasswordHashForTiming 是一个合法 bcrypt hash 字符串（cost=12 / "never-match"），
 // 用于"user 不存在"时仍然走一遍 bcrypt 验证，消除时间侧信道枚举。
-//
-// 不在乎其原文 —— 只要 CheckHash 总是 bcrypt 全过程即可。每次启动随机生成保持时间一致。
-var dummyPasswordHashForTiming = utils.GenerateHash("dummy-no-match-" + utils.GenerateRandomToken("seed"))
+// **lazy init**：避免 package-level var 在 import 期就跑 bcrypt（cost=12 约 250ms），
+// 导致 test 启动慢 + main() 启动延迟。每次启动随机生成保持时间一致。
+var (
+	dummyHashOnce sync.Once
+	dummyHash     string
+)
+
+// getDummyPasswordHashForTiming 懒加载并 cache 一个 bcrypt hash 用于失败路径的时间侧信道防御。
+// 若 bcrypt 异常返回空串，调用方需 fallback（loginFailedResponse 里有处理）。
+func getDummyPasswordHashForTiming() string {
+	dummyHashOnce.Do(func() {
+		dummyHash = utils.GenerateHash("dummy-no-match-" + utils.GenerateRandomToken("seed"))
+	})
+	return dummyHash
+}
 
 type emailLoginRequest struct {
 	Email    string `json:"email"`
@@ -123,12 +136,17 @@ func EmailLogin(c *fiber.Ctx) error {
 // 防邮箱枚举 + 时间侧信道。reason / email 仅进服务端 log。
 //
 // password 参数：若非空，对其调一次 bcrypt（与 dummy hash 比对，恒返 false），消除"是否走过 bcrypt"的时间差。
+// 若 dummy hash 因 bcrypt 异常为空（极少见），fallback 用固定 sleep 维持时间常量。
 func loginFailedResponse(c *fiber.Ctx, internalReason, email, password string) error {
 	if password != "" {
-		// 时间侧信道防御：故意走一遍 bcrypt 比较（结果丢弃）
-		_ = utils.CheckHash(password, dummyPasswordHashForTiming)
-		// fix MAJOR：用 subtle.ConstantTimeCompare 让"长度短路"也走完
-		_ = subtle.ConstantTimeCompare([]byte(password), []byte(dummyPasswordHashForTiming))
+		dummy := getDummyPasswordHashForTiming()
+		if dummy != "" {
+			// 时间侧信道防御：故意走一遍 bcrypt 比较（结果丢弃）
+			_ = utils.CheckHash(password, dummy)
+		} else {
+			// fallback：bcrypt 初始化失败 → 用 sleep 模拟 bcrypt cost=12 时间
+			time.Sleep(250 * time.Millisecond)
+		}
 	}
 	if email != "" {
 		log.Printf("[EMAIL-LOGIN] failed reason=%s email=%s ip=%s",
