@@ -319,6 +319,22 @@ func main() {
 	})
 	api.Post("/auth/email/login", emailLoginLimiter, controller.EmailLogin)
 
+	// Phase G-2.3 邮箱+密码注册限流：稍宽（per-IP 10次/hour）—— 注册较少而 login 可能因输错频繁
+	emailSignupLimiter := limiter.New(limiter.Config{
+		Max:        10,
+		Expiration: 1 * time.Hour,
+		KeyGenerator: func(c *fiber.Ctx) string {
+			return "email-signup:" + utils.RealClientIP(c)
+		},
+		LimitReached: func(c *fiber.Ctx) error {
+			return c.Status(429).JSON(fiber.Map{
+				"success":      false,
+				"message_code": "ERR_RATE_LIMIT",
+			})
+		},
+	})
+	api.Post("/auth/email/signup", emailSignupLimiter, controller.EmailSignup)
+
 	// Admin 高权限隔离区 (换用 LanGuard + AdminGuard)
 	adminApi := api.Group("/admin", middleware.LanGuard, middleware.AdminGuard)
 	adminApi.Get("/config", controller.GetSysConfigs)
