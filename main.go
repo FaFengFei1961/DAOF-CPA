@@ -302,6 +302,23 @@ func main() {
 	rootApi.Post("/setup", godLoginLimiter, controller.GodSetup)
 	rootApi.Post("/logout", controller.AdminLogout)
 
+	// Phase G-2.2 邮箱+密码登录限流：与 godLoginLimiter 同强度（5次/5min/IP）
+	// 不挂 LanGuard：普通用户从公网登录，必须开放公开
+	emailLoginLimiter := limiter.New(limiter.Config{
+		Max:        5,
+		Expiration: 5 * time.Minute,
+		KeyGenerator: func(c *fiber.Ctx) string {
+			return "email-login:" + utils.RealClientIP(c)
+		},
+		LimitReached: func(c *fiber.Ctx) error {
+			return c.Status(429).JSON(fiber.Map{
+				"success":      false,
+				"message_code": "ERR_RATE_LIMIT",
+			})
+		},
+	})
+	api.Post("/auth/email/login", emailLoginLimiter, controller.EmailLogin)
+
 	// Admin 高权限隔离区 (换用 LanGuard + AdminGuard)
 	adminApi := api.Group("/admin", middleware.LanGuard, middleware.AdminGuard)
 	adminApi.Get("/config", controller.GetSysConfigs)

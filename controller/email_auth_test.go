@@ -88,38 +88,51 @@ func TestIsAllSameRune(t *testing.T) {
 }
 
 func TestRequireEmailFeatureEnabled(t *testing.T) {
-	proxy.SysConfigMutex.Lock()
-	prev := proxy.SysConfigCache
+	// fix：原版在外层 Lock，子测试体内调 requireEmailFeatureEnabled → readBoolConfig
+	// → RLock 同一把锁 → 死锁。改为每个子测试 setup 时短临界区写入后立即解锁。
+	prev := func() map[string]string {
+		proxy.SysConfigMutex.RLock()
+		defer proxy.SysConfigMutex.RUnlock()
+		out := make(map[string]string, len(proxy.SysConfigCache))
+		for k, v := range proxy.SysConfigCache {
+			out[k] = v
+		}
+		return out
+	}()
 	defer func() {
 		proxy.SysConfigMutex.Lock()
 		proxy.SysConfigCache = prev
 		proxy.SysConfigMutex.Unlock()
 	}()
-	defer proxy.SysConfigMutex.Unlock()
+	setCache := func(m map[string]string) {
+		proxy.SysConfigMutex.Lock()
+		proxy.SysConfigCache = m
+		proxy.SysConfigMutex.Unlock()
+	}
 
 	t.Run("master off → both false", func(t *testing.T) {
-		proxy.SysConfigCache = map[string]string{}
+		setCache(map[string]string{})
 		childOK, masterOK := requireEmailFeatureEnabled("email_login_enabled")
 		if childOK || masterOK {
 			t.Errorf("got %v %v want both false", childOK, masterOK)
 		}
 	})
 	t.Run("master on child off", func(t *testing.T) {
-		proxy.SysConfigCache = map[string]string{"email_enabled": "true"}
+		setCache(map[string]string{"email_enabled": "true"})
 		childOK, masterOK := requireEmailFeatureEnabled("email_login_enabled")
 		if childOK || !masterOK {
 			t.Errorf("got %v %v want false true", childOK, masterOK)
 		}
 	})
 	t.Run("master + child on", func(t *testing.T) {
-		proxy.SysConfigCache = map[string]string{"email_enabled": "true", "email_login_enabled": "true"}
+		setCache(map[string]string{"email_enabled": "true", "email_login_enabled": "true"})
 		childOK, masterOK := requireEmailFeatureEnabled("email_login_enabled")
 		if !childOK || !masterOK {
 			t.Errorf("got %v %v want both true", childOK, masterOK)
 		}
 	})
 	t.Run("empty child = only check master", func(t *testing.T) {
-		proxy.SysConfigCache = map[string]string{"email_enabled": "true"}
+		setCache(map[string]string{"email_enabled": "true"})
 		childOK, masterOK := requireEmailFeatureEnabled("")
 		if !childOK || !masterOK {
 			t.Errorf("got %v %v want both true (empty child)", childOK, masterOK)
