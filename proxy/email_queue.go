@@ -56,7 +56,40 @@ var (
 	emailQueueOnce    sync.Once
 	emailQueueWG      sync.WaitGroup
 	emailQueueStopped atomic.Bool
+
+	// emailQueueSyncForTest 在测试期把"入队 + 异步发送"改成"同步直接发送"，让断言能确定看到结果。
+	// 同 recordApiLogRevenueSync 模式（参见 testmain_test.go）。production 永远是 false。
+	emailQueueSyncForTest atomic.Bool
+
+	// sendEmailViaSMTPHook 允许测试替换真实 SMTP 拨号 / 协议交互，捕获 cfg+msg 做断言。
+	// nil 时走 SendEmailViaSMTP 原始实现。
+	sendEmailViaSMTPHook   func(cfg SMTPConfig, msg EmailMessage) error
+	sendEmailViaSMTPHookMu sync.RWMutex
 )
+
+// SetEmailQueueSyncForTest 让 EnqueueEmail / SendEmailDeduped 同步执行 processEmailTask。
+// 仅测试用；caller 负责测试结束后 reset。
+func SetEmailQueueSyncForTest(b bool) {
+	emailQueueSyncForTest.Store(b)
+}
+
+// SetSendEmailViaSMTPHookForTest 注入一个 fake send 函数。传 nil 恢复默认（调真实 SMTP）。
+// 仅测试用；caller 负责在测试结束 reset。
+func SetSendEmailViaSMTPHookForTest(fn func(cfg SMTPConfig, msg EmailMessage) error) {
+	sendEmailViaSMTPHookMu.Lock()
+	sendEmailViaSMTPHook = fn
+	sendEmailViaSMTPHookMu.Unlock()
+}
+
+func sendEmailViaSMTPDispatch(cfg SMTPConfig, msg EmailMessage) error {
+	sendEmailViaSMTPHookMu.RLock()
+	hook := sendEmailViaSMTPHook
+	sendEmailViaSMTPHookMu.RUnlock()
+	if hook != nil {
+		return hook(cfg, msg)
+	}
+	return SendEmailViaSMTP(cfg, msg)
+}
 
 // rate-limit 桶：窗口起点 + 计数
 type emailRateBucket struct {
@@ -120,7 +153,7 @@ func processEmailTask(task EmailTask) {
 	}
 	msg := task.Message
 	msg.To = task.To
-	if err := SendEmailViaSMTP(cfg, msg); err != nil {
+	if err := sendEmailViaSMTPDispatch(cfg, msg); err != nil {
 		log.Printf("[EMAIL-QUEUE-SEND-FAIL] label=%s to=%s err=%v",
 			task.Label, maskEmail(task.To), err)
 		return
@@ -143,9 +176,16 @@ func StopEmailQueue() {
 
 // EnqueueEmail 把一封邮件丢进队列（无限流 / 无幂等，由 caller 负责前置校验）。
 // 满了或队列已停时返回 ErrEmailQueueFull。
+//
+// 测试 hook：emailQueueSyncForTest=true 时改为同步直接调 processEmailTask（无 channel
+// + goroutine），让 caller 在 EnqueueEmail 返回后可立刻断言副作用（捕获 hook、DB 状态）。
 func EnqueueEmail(task EmailTask) error {
 	if emailQueueStopped.Load() {
 		return ErrEmailQueueFull
+	}
+	if emailQueueSyncForTest.Load() {
+		processEmailTask(task)
+		return nil
 	}
 	ensureEmailQueue()
 	defer func() {

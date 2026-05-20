@@ -127,8 +127,12 @@ func LoadSMTPConfig() (SMTPConfig, error) {
 	return cfg, nil
 }
 
-// ssrfSafeSMTPDialContext 把 net.Dial 替换成走 safeDialContext 的版本。
-// 复用 url_safety.go 里的 IP 黑名单：内网/链路本地/loopback/cloud metadata 一律拒绝。
+// ssrfSafeSMTPDialContext 包装 net.Dial，强制 SMTP 服务器拨号目标不是内网 IP。
+//
+// SMTP 的 SSRF 模型比 LLM proxy 严格：admin 配置的 smtp_host 应该是外部 SMTP 服务商
+// （Gmail/SendGrid 等），永远不应该指向 127.0.0.1/10.x/192.168.x/169.254 等。
+// 因此用 yifut_client.go 的 isUnsafeIP（覆盖 loopback + RFC1918 + 链路本地 + 元数据），
+// 比 url_safety.go 里 cliproxy 上下文的 isForbiddenDestIP 更严格。
 //
 // 即使 admin 设置 smtp_host=169.254.169.254（试图让 SMTP password 泄漏给云元数据），
 // 这里也会在拨号阶段就报错拒绝。
@@ -137,21 +141,20 @@ func ssrfSafeSMTPDialContext(network, addr string, timeout time.Duration) (net.C
 	if err != nil {
 		return nil, fmt.Errorf("split host:port %q: %w", addr, err)
 	}
-	// 字面量 IP 走 isForbiddenDestIP；域名走 safeDialContext 内部的 LookupIPAddr+校验
+	// 字面量 IP：直接用 isUnsafeIP（loopback + RFC1918 + link-local + metadata 都拒绝）
 	if ip := net.ParseIP(host); ip != nil {
-		if isForbiddenDestIP(ip) {
-			return nil, fmt.Errorf("smtp dial blocked: dest IP %s is forbidden (cloud metadata / link-local / multicast)", ip)
+		if isUnsafeIP(ip) {
+			return nil, fmt.Errorf("smtp dial blocked: dest IP %s is forbidden (private/loopback/link-local/metadata)", ip)
 		}
 	}
-	// 复用 safeDialContext 但加 timeout
+	// 域名：先 dial，拨号成功后校验对端真实 IP（防 DNS rebinding）
 	d := net.Dialer{Timeout: timeout}
 	conn, err := d.Dial(network, addr)
 	if err != nil {
 		return nil, fmt.Errorf("smtp dial %s: %w", addr, err)
 	}
-	// 拨号成功后再校验对端 IP（防 DNS rebinding：拨号时返回真 IP，第二次连接返回 169.254）
 	tcpAddr, ok := conn.RemoteAddr().(*net.TCPAddr)
-	if ok && isForbiddenDestIP(tcpAddr.IP) {
+	if ok && isUnsafeIP(tcpAddr.IP) {
 		_ = conn.Close()
 		return nil, fmt.Errorf("smtp dial blocked: connected to forbidden IP %s", tcpAddr.IP)
 	}
