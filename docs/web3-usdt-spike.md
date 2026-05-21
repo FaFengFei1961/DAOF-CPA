@@ -1,8 +1,19 @@
 # Web3 USDT 支付集成 Spike
 
-**状态：已立项**（2026-05-21）。架构方案选定 epusdt sidecar，W-1 PaymentProvider 抽象进入实施。
+**状态：W-1 / W-3 已完成，W-2 待用户提供阻塞项**（2026-05-21）。
 
-> 决策落地见 §6。本文档不含代码；具体实现进度跟踪在 task #145+（W-1 ~ W-5）。
+实施进度：
+- ✅ W-0：spike 钉决策（commit 7e369c1）
+- ✅ W-1：PaymentProvider 抽象 + TopupOrder.Provider 字段（commit fa06838）
+- ✅ W-3-P1：webhook 抽象接口 + yifut adapter ParseAndVerifyWebhook（commit a69b142）
+- ✅ W-3-P3：通用 ProcessPaymentWebhook + YifutNotify 薄壳化（commit b5df14f）
+- ✅ W-3-P2：epusdtProvider adapter 完整实现（commit ade493a）
+- ⏳ W-2：epusdt sidecar 部署 — 部署模板见 `deploy/epusdt/`，等用户补 3 链地址 + admin 口令
+- ⏳ W-4：前端 Topup UI 增加 Web3 USDT 卡片（依赖 W-2）
+- ⏳ W-5：上线 + 监控（依赖 W-2 + W-4）
+
+> 后端代码层已全部就绪。admin 在 SysConfig 配齐 `epusdt_endpoint` / `epusdt_pid` /
+> `epusdt_secret_key` / `epusdt_enabled_chains` 即激活，无需重启进程。
 
 ## 1. 背景与目标
 

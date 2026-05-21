@@ -1,0 +1,50 @@
+# epusdt sidecar 部署 sample（DAOF-CPA W-2 phase）
+#
+# 使用方法：
+#   1. 复制 .env.example 为 .env，填写真实钱包地址 + 链 RPC URL + DAOF webhook URL
+#   2. docker compose -f deploy/epusdt/docker-compose.yaml up -d
+#   3. 在 DAOF admin 后台 SysConfig 配齐：
+#        epusdt_endpoint     = http://<容器主机 IP 或 docker bridge gw>:8000
+#        epusdt_pid          = （epusdt admin 后台拿到的 PID）
+#        epusdt_secret_key   = （同上）
+#        epusdt_enabled_chains = tron,ethereum,bsc,polygon
+#   4. 首次启动后访问 http://localhost:8000/admin 完成 epusdt 自身的 admin 引导
+#      （设置 admin 口令、配收款钱包地址、启用链）
+#
+# 安全注意：
+#   - epusdt 8000 端口应仅绑定本机 / 内网，不要暴露到公网
+#     （DAOF 通过 SysConfig epusdt_endpoint 走内网调用即可）
+#   - epusdt 自带 admin 后台口令必须强密码（首次启动通过环境变量 install_token 设置）
+#   - 钱包私钥不进 epusdt（用 watch-only 模式：admin 配地址，链上事件触发回调）
+
+services:
+  epusdt:
+    image: gmwallet/epusdt:latest
+    container_name: daof-epusdt
+    restart: unless-stopped
+    ports:
+      # 仅绑定 localhost；DAOF 通过 http://localhost:8000 访问
+      # 如果 DAOF 与 epusdt 不同机，改用 --network host 或 docker network
+      - "127.0.0.1:8000:8000"
+    env_file:
+      - .env
+    volumes:
+      - ./runtime:/app/runtime
+      - ./logs:/app/logs
+    healthcheck:
+      test: ["CMD", "wget", "--spider", "-q", "http://localhost:8000/health"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 20s
+
+# 可选：MySQL 替代 SQLite（单实例 < 10K 订单/天 SQLite 完全够用）
+#  mysql:
+#    image: mysql:8
+#    container_name: daof-epusdt-mysql
+#    restart: unless-stopped
+#    environment:
+#      MYSQL_ROOT_PASSWORD: change-me
+#      MYSQL_DATABASE: epusdt
+#    volumes:
+#      - ./mysql-data:/var/lib/mysql
