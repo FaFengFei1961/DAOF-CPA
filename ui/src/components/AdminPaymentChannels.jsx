@@ -11,12 +11,59 @@ const FIELDS = [
   { key: 'yifut_platform_public_key',  label: 'FIELD_PUBLIC_KEY',       type: 'pem',        hint: 'FIELD_PUBLIC_KEY_HINT' },
   { key: 'yifut_notify_allowed_cidrs', label: 'FIELD_NOTIFY_CIDRS',     type: 'textarea',   hint: 'FIELD_NOTIFY_CIDRS_HINT' },
   { key: 'yifut_enabled_methods',      label: 'FIELD_ENABLED_METHODS',  type: 'methods' },
-  // Sprint4-M3: amounts are stored as integer fen; admin enters fen directly to avoid floats.
-  { key: 'yifut_preset_amounts_fen',   label: 'FIELD_PRESETS',          type: 'text', hint: 'FIELD_PRESETS_FEN_HINT' },
-  { key: 'yifut_min_amount_fen',       label: 'FIELD_MIN',              type: 'number', hint: 'FIELD_FEN_HINT' },
-  { key: 'yifut_max_amount_fen',       label: 'FIELD_MAX',              type: 'number', hint: 'FIELD_FEN_HINT' },
+  // 后端键名 *_fen（整数分），但 label / hint 都是 RMB（元）—— admin 输入元，
+  // load/save 各 ÷100 / ×100 做一次单位换算（见 fenToRMBDisplay /
+  // rmbDisplayToFen），保证 admin 直觉输入跟用户 /topup 看到的金额一致。
+  // 用户反馈"我后台填 1 元最低，/topup 上写 0.01 - 10000.00"就是这条路径
+  // 之前漏了换算，直接把元当分写进了 sysconfig。
+  { key: 'yifut_preset_amounts_fen',   label: 'FIELD_PRESETS',          type: 'rmb-csv', hint: 'FIELD_PRESETS_RMB_HINT' },
+  { key: 'yifut_min_amount_fen',       label: 'FIELD_MIN',              type: 'rmb',     hint: 'FIELD_RMB_HINT' },
+  { key: 'yifut_max_amount_fen',       label: 'FIELD_MAX',              type: 'rmb',     hint: 'FIELD_RMB_HINT' },
   { key: 'yifut_product_name',         label: 'FIELD_PRODUCT_NAME',     type: 'text' },
 ];
+
+// fen ↔ RMB 单位换算辅助。
+//
+// 后端 SysConfig 一直以整数 fen 存档（与订单表、支付宝/微信对账保持精度），
+// admin 表单显示 RMB（元）便于直觉操作。两个方向：
+//   - fenToRMBDisplay("100")          === "1"
+//   - fenToRMBDisplay("150")          === "1.5"
+//   - fenToRMBDisplay("")             === ""           （空值往返）
+//   - rmbDisplayToFen("1")            === "100"
+//   - rmbDisplayToFen("1.5")          === "150"
+//   - rmbDisplayToFen("0.5")          === "50"
+//   - rmbDisplayToFen("")             === ""           （空值清除）
+// 非数字保留原值原样回显，让 admin 看到错误自己改。
+const fenToRMBDisplay = (raw) => {
+  const v = String(raw ?? '').trim();
+  if (v === '') return '';
+  const n = Number(v);
+  if (!Number.isFinite(n)) return v;
+  const rmb = n / 100;
+  return Number.isInteger(rmb) ? String(rmb) : String(rmb);
+};
+
+const rmbDisplayToFen = (raw) => {
+  const v = String(raw ?? '').trim();
+  if (v === '') return '';
+  const n = Number(v);
+  if (!Number.isFinite(n)) return v;
+  return String(Math.round(n * 100));
+};
+
+const csvFenToRMBDisplay = (raw) => String(raw ?? '')
+  .split(',')
+  .map((s) => s.trim())
+  .filter((s) => s !== '')
+  .map(fenToRMBDisplay)
+  .join(',');
+
+const csvRMBDisplayToFen = (raw) => String(raw ?? '')
+  .split(',')
+  .map((s) => s.trim())
+  .filter((s) => s !== '')
+  .map(rmbDisplayToFen)
+  .join(',');
 
 // All payment methods supported by Yifut V2 RSA, aligned with controller/topup.go::allowedPayTypes.
 // fix Major Codex UX review round 25: the old V1 comment was wrong; backend has moved to V2/RSA.
@@ -50,7 +97,12 @@ const AdminPaymentChannels = () => {
       const json = await authFetch('/api/admin/config');
       if (json.success && json.data) {
         const next = {};
-        for (const f of FIELDS) next[f.key] = json.data[f.key] ?? '';
+        for (const f of FIELDS) {
+          const raw = json.data[f.key] ?? '';
+          if (f.type === 'rmb') next[f.key] = fenToRMBDisplay(raw);
+          else if (f.type === 'rmb-csv') next[f.key] = csvFenToRMBDisplay(raw);
+          else next[f.key] = raw;
+        }
         setValues(next);
       }
     } catch {
@@ -66,8 +118,14 @@ const AdminPaymentChannels = () => {
     setSaving(true);
     try {
       // Send only this panel's yifut_* fields to avoid overwriting other config panels.
+      // RMB ↔ fen 换算在 boundary 做：admin 输入元 → 这里 ×100 转 fen 落进 SysConfig。
       const payload = {};
-      for (const f of FIELDS) payload[f.key] = values[f.key] ?? '';
+      for (const f of FIELDS) {
+        const v = values[f.key] ?? '';
+        if (f.type === 'rmb') payload[f.key] = rmbDisplayToFen(v);
+        else if (f.type === 'rmb-csv') payload[f.key] = csvRMBDisplayToFen(v);
+        else payload[f.key] = v;
+      }
       // ?allow_empty=1 lets empty strings mean "clear"; otherwise the backend skips empty fields.
       const json = await authFetch('/api/admin/config?allow_empty=1', {
         method: 'POST',
@@ -169,14 +227,21 @@ const AdminPaymentChannels = () => {
                   )}
                 </div>
               ) : (
-                <div className="relative">
-                  <input
-                    id={fieldId}
-                    type="text"
-                    value={values[f.key] || ''}
-                    onChange={e => setValues({ ...values, [f.key]: e.target.value })}
-                    className="w-full h-10 bg-surface-container border border-outline rounded-control px-3 text-sm text-on-surface focus:border-primary outline-none font-mono"
-                  />
+                <div className="space-y-1">
+                  <div className="relative">
+                    <input
+                      id={fieldId}
+                      type="text"
+                      value={values[f.key] || ''}
+                      onChange={e => setValues({ ...values, [f.key]: e.target.value })}
+                      className="w-full h-10 bg-surface-container border border-outline rounded-control px-3 text-sm text-on-surface focus:border-primary outline-none font-mono"
+                    />
+                  </div>
+                  {f.hint && (
+                    <span className="text-[11px] text-on-surface-variant">
+                      {t(`PAY_ADMIN.${f.hint}`)}
+                    </span>
+                  )}
                 </div>
               )}
             </div>
