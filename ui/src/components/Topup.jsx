@@ -89,9 +89,18 @@ const Topup = () => {
   // W-4：providers[] 多 provider 支持
   const [selectedProvider, setSelectedProvider] = useState('');
   const [amount, setAmount] = useState('');
+  // 输入币种：'CNY' 用户输元，按汇率换 fen；'USD' 用户输美元，× 汇率 × 100 转 fen
+  // 用户反馈"想充值 200 刀没办法快速选，得手算 RMB 等于多少美元"——加切换器。
+  // 后端 amount_fen 始终是 CNY 口径（订单存储 + 网关结算单位都是 CNY），
+  // USD 模式仅是输入端便利层，落地前换算成 amount_fen 提交。
+  const [inputCurrency, setInputCurrency] = useState('CNY');
   const [payType, setPayType] = useState('');  // 通用 "method key"：yifut 是 alipay/wxpay；epusdt 是 trc20-usdt 等
   const [submitting, setSubmitting] = useState(false);
   const [orderResult, setOrderResult] = useState(null); // {provider, gateway_pay_type, pay_info, ...}
+
+  // USD 模式下的预设档（固定列表）。$5/$10/$20/$50/$100/$200 覆盖主流单次充值需求。
+  // 用户实际支付的人民币 = preset × 当前汇率，UI 顺便提示等额 RMB。
+  const USD_PRESETS = [5, 10, 20, 50, 100, 200];
 
   // 计算当前选中 provider 的配置（presets / methods / min / max）。
   // 优先从 opts.providers[] (W-1 新字段) 取；fallback 到顶层 opts（向后兼容老后端）。
@@ -283,7 +292,19 @@ const Topup = () => {
       toast.error(t('TOPUP.ERR_AMOUNT', '金额不在允许范围内'));
       return;
     }
-    const amountFen = Math.round(amt * 100);
+    // USD 模式下输入是美元，× 汇率 × 100 折成 amount_fen（CNY 口径）。
+    // CNY 模式下输入就是元，直接 × 100。
+    let amountFen;
+    if (inputCurrency === 'USD') {
+      const rateMicros = opts?.exchange_rate_rmb_per_usd_micros;
+      if (!rateMicros || rateMicros <= 0) {
+        toast.error(t('TOPUP.ERR_EXCHANGE_RATE_MISSING', '汇率未配置，请联系管理员'));
+        return;
+      }
+      amountFen = Math.round(amt * (rateMicros / 1_000_000) * 100);
+    } else {
+      amountFen = Math.round(amt * 100);
+    }
     if (amountFen < providerOpts.min_amount_fen || amountFen > providerOpts.max_amount_fen) {
       toast.error(t('TOPUP.ERR_AMOUNT', '金额不在允许范围内'));
       return;
@@ -339,12 +360,30 @@ const Topup = () => {
     }
   };
 
-  const usdEstimate = (() => {
-    const amt = parseFloat(amount);
+  // 汇率（RMB / USD）—— 不依赖用户输入，options 加载完就能算，给"始终展示汇率"
+  // 这条 UX 用。用户反馈"未实时显示汇率，选金额后才显示"——这里独立成 const，
+  // 让汇率行哪怕输入框是空的也能显示。
+  const exchangeRateRmbPerUsd = (() => {
     const rateMicros = opts?.exchange_rate_rmb_per_usd_micros;
-    if (isNaN(amt) || !rateMicros || rateMicros <= 0) return null;
-    return (amt * 1_000_000 / rateMicros).toFixed(2);
+    if (!rateMicros || rateMicros <= 0) return null;
+    return rateMicros / 1_000_000;
   })();
+
+  // CNY 模式下输入元 → 折美元；USD 模式下输入美元 → 折人民币。两个换算都从同一
+  // 个 exchangeRateRmbPerUsd 推出，避免符号搞错。
+  const conversionLabel = (() => {
+    const amt = parseFloat(amount);
+    if (isNaN(amt) || amt <= 0 || !exchangeRateRmbPerUsd) return null;
+    if (inputCurrency === 'USD') {
+      const rmb = amt * exchangeRateRmbPerUsd;
+      return { kind: 'rmb', value: rmb.toFixed(2) };
+    }
+    const usd = amt / exchangeRateRmbPerUsd;
+    return { kind: 'usd', value: usd.toFixed(2) };
+  })();
+
+  // 兼容旧 usdEstimate 调用点（epusdt 提示等）：CNY 模式下还是 USD 数字字符串。
+  const usdEstimate = conversionLabel?.kind === 'usd' ? conversionLabel.value : null;
 
   // W-4：epusdt 订单详情解析（pay_info 是 JSON 字符串：receive_address/actual_amount/token/network/expire_at）
   const epusdtPayDetails = useMemo(() => {
@@ -459,28 +498,63 @@ const Topup = () => {
         )}
 
         <div className="space-y-3">
-          <label htmlFor="topup-amount" className="text-xs font-semibold text-on-surface-variant uppercase tracking-wide">
-            {selectedProvider === 'epusdt'
-              ? t('TOPUP.AMOUNT_LABEL_USDT', '充值金额（按汇率折 USDT）')
-              : t('TOPUP.AMOUNT_LABEL', '充值金额（人民币）')}
-          </label>
+          <div className="flex items-center justify-between flex-wrap gap-2">
+            <label htmlFor="topup-amount" className="text-xs font-semibold text-on-surface-variant uppercase tracking-wide">
+              {selectedProvider === 'epusdt'
+                ? t('TOPUP.AMOUNT_LABEL_USDT', '充值金额（按汇率折 USDT）')
+                : inputCurrency === 'USD'
+                  ? t('TOPUP.AMOUNT_LABEL_USD', '充值金额（美元，自动折人民币）')
+                  : t('TOPUP.AMOUNT_LABEL', '充值金额（人民币）')}
+            </label>
+            {/* CNY/USD 货币切换器 —— epusdt provider 不展示（它本来就走 USDT 单位）。
+                用户反馈"想充值 200 刀没办法快速选"。 */}
+            {selectedProvider !== 'epusdt' && exchangeRateRmbPerUsd && (
+              <div role="tablist" aria-label={t('TOPUP.CURRENCY_SWITCH_LABEL', '切换输入币种')} className="inline-flex rounded-control border border-outline-variant overflow-hidden text-[11px] font-semibold">
+                {['CNY', 'USD'].map((c) => {
+                  const active = inputCurrency === c;
+                  return (
+                    <button
+                      key={c}
+                      type="button"
+                      role="tab"
+                      aria-selected={active}
+                      onClick={() => { setInputCurrency(c); setAmount(''); }}
+                      className={`px-3 py-1 transition ${
+                        active
+                          ? 'bg-primary text-on-primary'
+                          : 'bg-surface-container text-on-surface-variant hover:text-primary'
+                      }`}
+                    >
+                      {c === 'CNY' ? t('TOPUP.CURRENCY_CNY', '¥ 人民币') : t('TOPUP.CURRENCY_USD', '$ 美元')}
+                    </button>
+                  );
+                })}
+              </div>
+            )}
+          </div>
 
           <div className="flex items-center gap-2">
-            <span className="text-lg text-on-surface-variant font-semibold" aria-hidden="true">¥</span>
+            <span className="text-lg text-on-surface-variant font-semibold" aria-hidden="true">
+              {inputCurrency === 'USD' ? '$' : '¥'}
+            </span>
             <TextInput
               id="topup-amount"
               type="number"
-              step="0.01"
-              min={(providerOpts.min_amount_fen / 100).toFixed(2)}
-              max={(providerOpts.max_amount_fen / 100).toFixed(2)}
+              step={inputCurrency === 'USD' ? '0.01' : '0.01'}
               value={amount}
               onChange={e => { setAmount(e.target.value); }}
-              placeholder={`${(providerOpts.min_amount_fen / 100).toFixed(2)} - ${(providerOpts.max_amount_fen / 100).toFixed(2)}`}
+              placeholder={
+                inputCurrency === 'USD' && exchangeRateRmbPerUsd
+                  ? `${(providerOpts.min_amount_fen / 100 / exchangeRateRmbPerUsd).toFixed(2)} - ${(providerOpts.max_amount_fen / 100 / exchangeRateRmbPerUsd).toFixed(2)}`
+                  : `${(providerOpts.min_amount_fen / 100).toFixed(2)} - ${(providerOpts.max_amount_fen / 100).toFixed(2)}`
+              }
               className="flex-1 font-mono"
             />
           </div>
 
-          {(providerOpts.presets_fen || []).length > 0 && (
+          {/* Presets：CNY 模式用 admin 配的人民币档位；USD 模式用固定 USD_PRESETS 档位。
+              不混用避免出现"¥10 → $1.46"这种奇怪小数。 */}
+          {inputCurrency === 'CNY' && (providerOpts.presets_fen || []).length > 0 && (
             <div className="flex flex-wrap gap-2">
               {providerOpts.presets_fen.map(fen => {
                 const yuan = fen / 100;
@@ -502,30 +576,74 @@ const Topup = () => {
               })}
             </div>
           )}
-
-          <div className="flex items-center justify-between text-xs">
-            <span className="text-on-surface-variant">
-              {t('TOPUP.RANGE_HINT', {
-                min: (providerOpts.min_amount_fen / 100).toFixed(2),
-                max: (providerOpts.max_amount_fen / 100).toFixed(2),
-                defaultValue: '可充值范围：¥{{min}} - ¥{{max}}',
+          {inputCurrency === 'USD' && (
+            <div className="flex flex-wrap gap-2">
+              {USD_PRESETS.map(usd => {
+                const active = parseFloat(amount) === usd;
+                return (
+                  <button
+                    key={usd}
+                    type="button"
+                    onClick={() => setAmount(String(usd))}
+                    className={`px-4 py-2 rounded-control text-sm font-semibold border transition ${
+                      active
+                        ? 'bg-primary text-on-primary border-primary'
+                        : 'bg-surface-container text-on-surface-variant border-outline-variant hover:border-primary hover:text-primary'
+                    }`}
+                  >
+                    ${usd}
+                  </button>
+                );
               })}
+            </div>
+          )}
+
+          <div className="flex items-center justify-between text-xs flex-wrap gap-2">
+            <span className="text-on-surface-variant">
+              {inputCurrency === 'USD' && exchangeRateRmbPerUsd
+                ? t('TOPUP.RANGE_HINT_USD', {
+                    min: (providerOpts.min_amount_fen / 100 / exchangeRateRmbPerUsd).toFixed(2),
+                    max: (providerOpts.max_amount_fen / 100 / exchangeRateRmbPerUsd).toFixed(2),
+                    defaultValue: '可充值范围：约 ${{min}} - ${{max}} USD',
+                  })
+                : t('TOPUP.RANGE_HINT', {
+                    min: (providerOpts.min_amount_fen / 100).toFixed(2),
+                    max: (providerOpts.max_amount_fen / 100).toFixed(2),
+                    defaultValue: '可充值范围：¥{{min}} - ¥{{max}}',
+                  })}
             </span>
-            {usdEstimate && (
-              <span className="text-primary font-semibold">
-                {selectedProvider === 'epusdt'
-                  ? t('TOPUP.ESTIMATED_USDT', {
-                      amount: usdEstimate,
-                      defaultValue: '约 {{amount}} USDT',
-                    })
-                  : t('TOPUP.ESTIMATED_USD', {
-                      amount: usdEstimate,
-                      rate: (opts.exchange_rate_rmb_per_usd_micros / 1_000_000).toFixed(4),
-                      defaultValue: '预计入账 {{amount}} USD（汇率 {{rate}}）',
-                    })}
+            {/* 始终展示汇率参考 —— 之前只在用户填了金额后才出现，被用户吐槽"未实时显示"。
+                输入框有金额时再额外加一条具体的换算结果。 */}
+            {exchangeRateRmbPerUsd && (
+              <span className="text-on-surface-variant">
+                {t('TOPUP.EXCHANGE_RATE_LABEL', {
+                  rate: exchangeRateRmbPerUsd.toFixed(4),
+                  defaultValue: '汇率：1 USD = ¥{{rate}}',
+                })}
               </span>
             )}
           </div>
+
+          {/* 当前输入金额对应的"另一边"币种估算（CNY 输入显示 USD，反之亦然）。
+              用户在 USD 模式下尤其需要看到"我会被收多少人民币"。 */}
+          {conversionLabel && (
+            <div className="text-xs text-primary font-semibold">
+              {selectedProvider === 'epusdt' && usdEstimate
+                ? t('TOPUP.ESTIMATED_USDT', {
+                    amount: usdEstimate,
+                    defaultValue: '约 {{amount}} USDT',
+                  })
+                : conversionLabel.kind === 'usd'
+                  ? t('TOPUP.ESTIMATED_USD_SHORT', {
+                      amount: conversionLabel.value,
+                      defaultValue: '预计入账 {{amount}} USD',
+                    })
+                  : t('TOPUP.ESTIMATED_RMB_SHORT', {
+                      amount: conversionLabel.value,
+                      defaultValue: '实际扣款 ¥{{amount}} 人民币',
+                    })}
+            </div>
+          )}
         </div>
 
 
@@ -561,6 +679,21 @@ const Topup = () => {
           </div>
         </div>
 
+
+        {/* 手续费说明 —— admin 在后台 yifut_fee_disclaimer 字段配置自由文本，
+            前端原样展示（保留换行）。空字符串则整段不渲染。
+            用户反馈"必须告知用户 3% 手续费 + 退款不返"——这一栏就是为此而生。 */}
+        {providerOpts.fee_disclaimer && providerOpts.fee_disclaimer.trim() && (
+          <div
+            role="note"
+            className="rounded-control border border-warning/30 bg-warning/10 px-3 py-2 text-[12px] text-warning whitespace-pre-wrap leading-relaxed"
+          >
+            <span className="font-semibold mr-1">
+              {t('TOPUP.FEE_DISCLAIMER_PREFIX', '⚠ 手续费说明：')}
+            </span>
+            {providerOpts.fee_disclaimer.trim()}
+          </div>
+        )}
 
         <button
           type="button"

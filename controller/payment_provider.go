@@ -291,6 +291,12 @@ type PaymentProviderPublicOptions struct {
 
 	// IconKey 前端按此 key 选内置 brand SVG（"yifut" / "epusdt" / "fallback"）。
 	IconKey string `json:"icon_key"`
+
+	// FeeDisclaimer admin 在后台配置的"手续费说明"自由文本。
+	// 用户反馈"易付通 3% 费率得明确告诉用户、退款时不返还"——这里给个全 provider
+	// 通用的 disclaimer 字段，admin 写啥前端显示啥（多行也行）。空字符串则前端
+	// 不显示这一栏。
+	FeeDisclaimer string `json:"fee_disclaimer,omitempty"`
 }
 
 // ErrPayment* 是 PaymentProvider 错误的标准 sentinel。

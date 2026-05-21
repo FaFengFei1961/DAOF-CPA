@@ -126,15 +126,16 @@ func (p *YifutPaymentProvider) PublicOptions() PaymentProviderPublicOptions {
 	}
 
 	return PaymentProviderPublicOptions{
-		Key:          database.TopupProviderYifut,
-		Label:        "易付通 (CNY)",
-		Configured:   cfg.IsConfigured(),
-		Currency:     "CNY",
-		PresetsFen:   presets,
-		MinAmountFen: readInt64Config("yifut_min_amount_fen", 100),
-		MaxAmountFen: readInt64Config("yifut_max_amount_fen", 1_000_000),
-		Methods:      methods,
-		IconKey:      "yifut",
+		Key:           database.TopupProviderYifut,
+		Label:         "易付通 (CNY)",
+		Configured:    cfg.IsConfigured(),
+		Currency:      "CNY",
+		PresetsFen:    presets,
+		MinAmountFen:  readInt64Config("yifut_min_amount_fen", 100),
+		MaxAmountFen:  readInt64Config("yifut_max_amount_fen", 1_000_000),
+		Methods:       methods,
+		IconKey:       "yifut",
+		FeeDisclaimer: readStringConfig("yifut_fee_disclaimer", ""),
 	}
 }
 

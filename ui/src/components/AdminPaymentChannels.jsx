@@ -20,6 +20,10 @@ const FIELDS = [
   { key: 'yifut_min_amount_fen',       label: 'FIELD_MIN',              type: 'rmb',     hint: 'FIELD_RMB_HINT' },
   { key: 'yifut_max_amount_fen',       label: 'FIELD_MAX',              type: 'rmb',     hint: 'FIELD_RMB_HINT' },
   { key: 'yifut_product_name',         label: 'FIELD_PRODUCT_NAME',     type: 'text' },
+  // 手续费说明（任意文本，多行）—— 用户充值页会展示在支付按钮上方做提醒。
+  // 用户反馈"易付通费率 3%、退款不返手续费得提前告知用户"——独立字段方便
+  // admin 任意编辑，将来换 provider / 改费率不用动代码。
+  { key: 'yifut_fee_disclaimer',       label: 'FIELD_FEE_DISCLAIMER',   type: 'textarea', hint: 'FIELD_FEE_DISCLAIMER_HINT' },
   // SSRF 旁路开关。默认 false：拒 198.18/15 (RFC 2544 benchmark)、100.64/10
   // (CGNAT)、2002::/16 + 2001::/32 (IPv6 transition) 这些"代理虚拟 egress"段。
   // admin 在本机走 Clash TUN / Cloudflare WARP / V2Ray TUN 时打开此开关，
