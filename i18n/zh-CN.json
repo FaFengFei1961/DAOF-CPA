@@ -1807,9 +1807,11 @@
   "DASH": {
     "ADMIN_HINT": "当前为管理员模式，可前往管理控制台查看渠道、用户与计费",
     "ADMIN_ENTER": "进入控制台",
+    "GUEST_EYEBROW": "DAOF-CPA 控制台",
     "GUEST_TITLE": "探索 DAOF-CPA 模型矩阵",
     "GUEST_SUBTITLE": "一站式聚合 Claude / Codex / Gemini / xAI 等主流模型，按你的预算和容量挑选合适的套餐。",
     "GUEST_CTA": "登录开始",
+    "HERO_EYEBROW": "账户全景",
     "HERO_GREET_MORNING": "早上好",
     "HERO_GREET_AFTERNOON": "下午好",
     "HERO_GREET_EVENING": "晚上好",

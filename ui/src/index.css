@@ -103,11 +103,17 @@
   --space-xxl: 24px;
   --space-xxxl: 32px;
 
-  /* ─── 字号（4 个语义值） ──────────────────────────────────── */
+  /* ─── 字号（5 个语义值，Sprint J-3 batch 3 增加 hero 档） ─────
+   * J-3 反馈：原来 display 26px 跟正文区别不大 — hero 页面（Dashboard /
+   * 落地页）需要真正的展示型字号才有"被设计过"的感觉。Linear / Vercel /
+   * Anthropic Console 上 hero 普遍 40-56px；我们走 44px（移动 32px）。
+   * 旧 page-title 升到 32px（移动 26px）作为常规页头。
+   */
   --font-caption: 12px;     /* 标签 / 表头 / hint */
-  --font-body: 13.5px;      /* 正文（规范明确 13.5，比 14 更密） */
+  --font-body: 13.5px;      /* 正文 */
   --font-heading: 18px;     /* section 标题 */
-  --font-display: 26px;     /* 页面 H1 */
+  --font-display: 32px;     /* 页面 H1（常规） */
+  --font-hero: 44px;        /* hero H1（Dashboard / Landing） */
 
   /* ─── 字体栈（Geist 主，PingFang/Noto 中文 fallback） ──────── */
   --font-sans:
@@ -284,6 +290,24 @@
   border-radius: var(--radius-overlay);
 }
 
+/* Sprint J-3 batch 3：spotlight card — 给 hero 区域里的"主角"卡多一层
+ * 视觉权重。Dark 模式用顶部 1px 高光线（Vercel/Anthropic Console 套路），
+ * 不破坏"无 gradient"铁律。Light 模式只加 0.5% 主色染色，几乎不可见但
+ * 让卡片不再是死灰白。*/
+.card-spotlight {
+  background-color: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-overlay);
+  position: relative;
+}
+.dark .card-spotlight {
+  background-color: color-mix(in srgb, var(--surface) 100%, var(--accent) 1%);
+  box-shadow: inset 0 1px 0 0 rgb(255 255 255 / 0.04);
+}
+:root:not(.dark) .card-spotlight {
+  background-color: color-mix(in srgb, var(--surface) 99%, var(--accent) 1%);
+}
+
 /* Section title（用在 card 内分块） */
 .section-title {
   font-size: var(--font-heading);
@@ -301,29 +325,54 @@
   color: var(--t3);
 }
 
-/* Page 容器 */
+/* Page 容器（Sprint J-3 batch 3：留白加大，与字号同步） */
 .page {
-  padding: 24px 32px 56px;
-  max-width: 1280px;
+  padding: 40px 48px 96px;
+  max-width: 1320px;
   margin: 0 auto;
+}
+@media (max-width: 1024px) {
+  .page {
+    padding: 32px 32px 80px;
+  }
 }
 @media (max-width: 768px) {
   .page {
-    padding: 16px;
+    padding: 20px 18px 64px;
   }
 }
 
-/* Page header */
+/* Page header — 常规 H1，32px (mobile 24px)，hero 用 .page-title-hero */
 .page-title {
   font-size: var(--font-display);
   font-weight: 600;
-  letter-spacing: -0.015em;
+  letter-spacing: -0.02em;
+  line-height: 1.1;
   color: var(--t1);
 }
+@media (max-width: 640px) {
+  .page-title { font-size: 24px; }
+}
+
+/* Hero H1 — Dashboard / Landing 用，44px (mobile 32px)
+ * 关键差异：用更紧的 letter-spacing + 600 字重的 Geist，避免"散"。 */
+.page-title-hero {
+  font-size: var(--font-hero);
+  font-weight: 600;
+  letter-spacing: -0.03em;
+  line-height: 1.05;
+  color: var(--t1);
+}
+@media (max-width: 640px) {
+  .page-title-hero { font-size: 30px; letter-spacing: -0.025em; }
+}
+
 .page-subtitle {
-  font-size: 13px;
+  font-size: 14px;
   color: var(--t2);
-  margin-top: 4px;
+  margin-top: 8px;
+  line-height: 1.55;
+  max-width: 60ch;
 }
 
 /* Sprint J-3：Stat card / trend chip / dot status — 真重设计阶段
@@ -334,12 +383,12 @@
   position: relative;
   display: flex;
   flex-direction: column;
-  gap: 8px;
-  padding: 18px 20px;
+  gap: 12px;
+  padding: 22px 24px;
   background-color: var(--surface);
   border: 1px solid var(--border);
   border-radius: var(--radius-overlay);
-  transition: border-color 0.15s ease;
+  transition: border-color 0.15s ease, background-color 0.15s ease;
 }
 .stat:hover {
   border-color: var(--border-strong);
@@ -354,22 +403,48 @@
   font-size: 12px;
   font-weight: 500;
   color: var(--t3);
-  letter-spacing: 0.01em;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
 }
 .stat-value {
   font-family: var(--font-mono);
   font-variant-numeric: tabular-nums;
-  font-size: 28px;
-  line-height: 1.1;
+  font-size: 32px;
+  line-height: 1.05;
   font-weight: 600;
-  letter-spacing: -0.015em;
+  letter-spacing: -0.025em;
   color: var(--t1);
 }
-.stat-value.lg { font-size: 34px; }
+.stat-value.lg { font-size: 48px; line-height: 1; letter-spacing: -0.035em; }
 .stat-hint {
   font-size: 12px;
   color: var(--t3);
   min-height: 16px;
+}
+
+/* Sprint J-3 batch 3：spotlight stat — 用在 Dashboard bento 主角余额卡，
+ * 卡片本身变高、padding 加大，配合 .stat-value.lg 的 48px 字号撑场。*/
+.stat-spotlight {
+  position: relative;
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+  padding: 28px 28px 24px;
+  background-color: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-overlay);
+  min-height: 200px;
+  transition: border-color 0.15s ease;
+}
+.dark .stat-spotlight {
+  background-color: color-mix(in srgb, var(--surface) 100%, var(--accent) 1.5%);
+  box-shadow: inset 0 1px 0 0 rgb(255 255 255 / 0.05);
+}
+:root:not(.dark) .stat-spotlight {
+  background-color: color-mix(in srgb, var(--surface) 98%, var(--accent) 2%);
+}
+.stat-spotlight:hover {
+  border-color: var(--border-strong);
 }
 
 /* Dot status — 颜色化的小圆点，用来标识"健康 / 警告 / 异常" */
@@ -406,19 +481,36 @@
 .chip-error   { border-color: rgb(239 68 68 / 0.35); color: rgb(239 68 68); background-color: rgb(239 68 68 / 0.08); }
 .chip-accent  { border-color: color-mix(in srgb, var(--accent) 35%, transparent); color: var(--accent); background-color: color-mix(in srgb, var(--accent) 10%, transparent); }
 
-/* Hero — 仪表盘大标题 + 副标的容器；同时给两侧留一个可放 CTA / chip 的位置 */
+/* Hero — 仪表盘 / 落地页用。J-3 batch 3：上下留白大幅加大，让 hero 真"在场"。 */
 .hero {
   display: flex;
   flex-direction: column;
-  gap: 4px;
-  padding: 4px 0 12px;
+  gap: 8px;
+  padding: 24px 0 32px;
+}
+@media (max-width: 640px) {
+  .hero { padding: 12px 0 20px; }
 }
 .hero-row {
   display: flex;
   align-items: flex-end;
   justify-content: space-between;
-  gap: 16px;
+  gap: 24px;
   flex-wrap: wrap;
+}
+.hero-eyebrow {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 11px;
+  font-weight: 500;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: var(--accent);
+  margin-bottom: 8px;
+}
+.hero-eyebrow .dot {
+  width: 6px; height: 6px;
 }
 
 /* Button（取代 .fl-btn-*；4 个 variant + 3 个尺寸） */
@@ -447,7 +539,7 @@
   cursor: not-allowed;
 }
 .btn-md { height: 32px; padding: 0 14px; }
-.btn-lg { height: 38px; padding: 0 18px; font-weight: 600; }
+.btn-lg { height: 44px; padding: 0 22px; font-size: 14px; font-weight: 600; }
 
 .btn-primary {
   background-color: var(--accent);

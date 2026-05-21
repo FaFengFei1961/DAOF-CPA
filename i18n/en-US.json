@@ -1807,9 +1807,11 @@
   "DASH": {
     "ADMIN_HINT": "You are in admin mode. Open the admin console to view channels, users, and billing.",
     "ADMIN_ENTER": "Enter Console",
+    "GUEST_EYEBROW": "DAOF-CPA console",
     "GUEST_TITLE": "Explore the DAOF-CPA model matrix",
     "GUEST_SUBTITLE": "One-stop aggregation of Claude / Codex / Gemini / xAI and more. Pick a plan that fits your budget and capacity.",
     "GUEST_CTA": "Sign in to get started",
+    "HERO_EYEBROW": "Account overview",
     "HERO_GREET_MORNING": "Good morning",
     "HERO_GREET_AFTERNOON": "Good afternoon",
     "HERO_GREET_EVENING": "Good evening",

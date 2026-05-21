@@ -35,7 +35,7 @@ const UserShell = () => {
 
       <UserSidebar />
 
-      <div className="flex-1 min-w-0 lg:ml-60 flex flex-col h-screen overflow-y-auto pb-20 lg:pb-8">
+      <div className="flex-1 min-w-0 lg:ml-[272px] flex flex-col h-screen overflow-y-auto pb-20 lg:pb-8">
         <BannedBanner />
         <TopBar
           isAuthenticated={isAuthenticated}
