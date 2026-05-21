@@ -1835,7 +1835,13 @@
     "WINDOW_SECONDS": "{{count}} seconds",
     "PLAN_TITLE_API_CREDIT": "{{window}} API-equivalent credit",
     "PLAN_TITLE_REQUESTS": "{{window}} request count",
-    "PLAN_TITLE_TOKENS": "{{window}} Token quota"
+    "PLAN_TITLE_TOKENS": "{{window}} Token quota",
+    "BUCKET_DEFAULT": "Models: general quota",
+    "BUCKET_COMBO_ALL": "Models: Claude + Codex + Gemini + Grok shared bundle",
+    "BUCKET_CLAUDE": "Models: Claude family",
+    "BUCKET_CODEX": "Models: GPT / Codex family",
+    "BUCKET_GEMINI": "Models: Gemini family",
+    "BUCKET_GROK": "Models: xAI Grok family"
   },
   "DASH": {
     "ADMIN_HINT": "You are in admin mode. Open the admin console to view channels, users, and billing.",

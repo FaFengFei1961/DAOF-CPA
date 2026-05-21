@@ -1835,7 +1835,13 @@
     "WINDOW_SECONDS": "{{count}} 秒",
     "PLAN_TITLE_API_CREDIT": "{{window}} API 等值额度",
     "PLAN_TITLE_REQUESTS": "{{window}} 调用次数",
-    "PLAN_TITLE_TOKENS": "{{window}} Token 额度"
+    "PLAN_TITLE_TOKENS": "{{window}} Token 额度",
+    "BUCKET_DEFAULT": "适用模型：通用额度",
+    "BUCKET_COMBO_ALL": "适用模型：Claude + Codex + Gemini + Grok 全部模型共享",
+    "BUCKET_CLAUDE": "适用模型：Claude 系列",
+    "BUCKET_CODEX": "适用模型：GPT / Codex 系列",
+    "BUCKET_GEMINI": "适用模型：Gemini 系列",
+    "BUCKET_GROK": "适用模型：xAI Grok 系列"
   },
   "DASH": {
     "ADMIN_HINT": "当前为管理员模式，可前往管理控制台查看渠道、用户与计费",

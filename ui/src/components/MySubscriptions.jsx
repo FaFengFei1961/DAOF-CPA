@@ -302,7 +302,12 @@ const UsageMeter = ({ usage, formatMeterCurrency }) => {
       <div className="flex items-start justify-between gap-4 mb-2">
         <div className="min-w-0">
           <div className="text-sm font-semibold text-on-surface break-words leading-snug">{formatPlanTitle(usage, t)}</div>
-          <div className="mt-1 text-xs text-outline font-mono break-words [overflow-wrap:anywhere]">{usage.model_bucket || 'default'}</div>
+          <div
+            className="mt-1 text-xs text-on-surface-variant break-words [overflow-wrap:anywhere]"
+            title={usage.model_bucket || 'default'}
+          >
+            {formatModelBucket(usage.model_bucket, t)}
+          </div>
         </div>
         <div className="text-right shrink-0">
           {isExpired ? (
@@ -439,6 +444,27 @@ const formatPlanTitle = (usage, t) => {
   if (usage.unit === 'request_count') return t('MY_SUBS.PLAN_TITLE_REQUESTS', '{{window}} 调用次数', { window: windowText });
   if (usage.unit?.includes('tokens')) return t('MY_SUBS.PLAN_TITLE_TOKENS', '{{window}} Token 额度', { window: windowText });
   return usage.plan_name || windowText;
+};
+
+// formatModelBucket 把 plan 的 model_bucket 机器码（subscription_seeds 里挂的
+// "combo:all" / "claude-*" / "default" 等）翻译成用户能看懂的文案。
+//
+// 用户反馈"这里的英文是个什么情况"——之前 UsageMeter 直接把原始 bucket
+// 字符串当 mono 文本展示，给用户看 "combo:all" 完全不知道是啥。
+// 不认识的 bucket 仍然返回原值（保留信息，不静默吞掉）。
+const formatModelBucket = (bucket, t) => {
+  const b = String(bucket || '').trim().toLowerCase();
+  if (!b || b === 'default') return t('MY_SUBS.BUCKET_DEFAULT', '适用模型：通用额度');
+  if (b === 'combo:all') {
+    return t('MY_SUBS.BUCKET_COMBO_ALL', '适用模型：Claude + Codex + Gemini + Grok 全部模型共享');
+  }
+  if (b.startsWith('claude')) return t('MY_SUBS.BUCKET_CLAUDE', '适用模型：Claude 系列');
+  if (b.startsWith('gpt') || b.startsWith('codex')) {
+    return t('MY_SUBS.BUCKET_CODEX', '适用模型：GPT / Codex 系列');
+  }
+  if (b.startsWith('gemini')) return t('MY_SUBS.BUCKET_GEMINI', '适用模型：Gemini 系列');
+  if (b.startsWith('grok')) return t('MY_SUBS.BUCKET_GROK', '适用模型：xAI Grok 系列');
+  return bucket; // unknown bucket：原值兜底，避免静默丢信息
 };
 
 const formatWindow = (seconds, t) => {
