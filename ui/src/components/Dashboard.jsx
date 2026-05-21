@@ -131,13 +131,27 @@ const StatStrip = ({ me, recentLogs, formatCurrency, i18n, t }) => {
     ? t('DASH.STAT_SNAPSHOT_N', { n: totalReqs, defaultValue: '近 {{n}} 条快照' })
     : t('DASH.STAT_NO_DATA', '暂无数据');
 
+  // IA audit M-J1 fix: signed-in users with $0/negative balance previously saw
+  // no path back to topup; turn the balance "hint" into an actionable link
+  // when the account is empty so first-time users + just-spent users have
+  // an obvious next step.
+  const isEmptyBalance = me && Number(me.quota ?? 0) <= 0;
+  const balanceHint = isEmptyBalance ? (
+    <Link
+      to="/topup"
+      className="inline-flex items-center gap-1 text-primary hover:underline"
+    >
+      {t('DASH.STAT_BALANCE_GO_TOPUP', '余额不足，去充值 →')}
+    </Link>
+  ) : (me?.username || '');
+
   return (
     <section>
       <div className="fl-card grid grid-cols-2 md:grid-cols-4 divide-y md:divide-y-0 md:divide-x divide-outline-variant/30 overflow-hidden">
         <Stat
           label={t('DASH.STAT_BALANCE', '账户余额')}
           value={me ? formatCurrency(me.quota ?? 0, 2) : '—'}
-          hint={me?.username || ''}
+          hint={balanceHint}
           prominent
         />
         <Stat

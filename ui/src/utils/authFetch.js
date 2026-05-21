@@ -7,10 +7,27 @@
 // 调用方拿到的是已经 .json() 后的对象，失败时抛出 Error；
 // 401/403 也作为正常 json 返回让调用方决策（避免破坏现有 success/false 响应链路）。
 
+import React from 'react';
 import toast from 'react-hot-toast';
+import i18n from '../i18n';
 
 const ADMIN_FLAG_KEY = 'daof_admin_unlocked';
 const USER_TOKEN_KEY = 'daof_token';
+
+// 402-handler signal: keep the helper outside React so any caller path
+// (lazy chunks, non-component utilities, etc.) gets identical behavior.
+// IA audit C3 fix: was hardcoded `'余额不足，请前往充值页面补充余额或购买套餐。'`.
+const TOPUP_PATH = '/topup';
+const goToTopupIfNotThere = () => {
+  if (typeof window === 'undefined') return;
+  try {
+    if (window.location.pathname !== TOPUP_PATH) {
+      window.location.assign(TOPUP_PATH);
+    }
+  } catch {
+    // Ignore — non-fatal best-effort navigation hint.
+  }
+};
 
 /**
  * @returns {{ isAdmin: boolean, userToken: string | null }}
@@ -77,9 +94,43 @@ export const authFetch = async (url, init = {}) => {
 
   // 始终把 HTTP status 透传给调用方，便于区分 401/403/4xx/5xx
   const ct = res.headers.get('Content-Type') || '';
-  
+
   if (res.status === 402) {
-    toast('余额不足，请前往充值页面补充余额或购买套餐。', { duration: 5000 });
+    // i18n via the standalone i18next instance — react-hot-toast renders outside
+    // the React tree, so the useTranslation hook isn't available here.
+    const message = i18n.t('COMMON.ERR_INSUFFICIENT_BALANCE_GO_TOPUP');
+    toast.error(
+      // ESM doesn't have require(); use React.createElement so this .js file
+      // doesn't need JSX. The "去充值"按钮 makes the previous bare-text toast
+      // actionable so users aren't told to navigate without a link.
+      (toastObj) => React.createElement(
+        'span',
+        { style: { display: 'inline-flex', alignItems: 'center', gap: '0.75rem' } },
+        message,
+        React.createElement(
+          'button',
+          {
+            type: 'button',
+            onClick: () => {
+              toast.dismiss(toastObj.id);
+              goToTopupIfNotThere();
+            },
+            style: {
+              background: 'var(--primary, #4f46e5)',
+              color: '#fff',
+              border: 'none',
+              borderRadius: '5px',
+              padding: '2px 10px',
+              fontSize: '12px',
+              fontWeight: 500,
+              cursor: 'pointer',
+            },
+          },
+          i18n.t('COMMON.GO_TOPUP'),
+        ),
+      ),
+      { duration: 6000 },
+    );
   }
 
   if (!ct.includes('application/json')) {

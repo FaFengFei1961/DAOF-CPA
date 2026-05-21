@@ -1,31 +1,23 @@
 import React, { useState } from 'react';
 import { useTranslation } from 'react-i18next';
+// IA audit M-IA2 fix: theme-mode + seed-color controls deleted from this
+// page; Settings.jsx is now the single source. useTheme + SEED_COLORS no
+// longer imported. Monitor stays — it's the PageHeader icon.
 import { Monitor, Server, Save, Eye, EyeOff, ShieldCheck } from 'lucide-react';
 import { PageContainer, PageHeader, Section } from '../../../components/ui';
 import TextInput from '../../../components/ui/TextInput';
 import { useAdminConfigs } from '../../../hooks/useAdminConfigs';
-import { useTheme } from '../../../context/ThemeContext';
 import { useAuth } from '../../../context/AuthContext';
 import { authFetch } from '../../../utils/authFetch';
 import toast from 'react-hot-toast';
 
-const SEED_COLORS = [
-  { hex: '#7c5cff', nameKey: 'ADMIN_SYS.GENERAL.SEED_COLOR_PURPLE' },
-  { hex: '#2563eb', nameKey: 'ADMIN_SYS.GENERAL.SEED_COLOR_BLUE' },
-  { hex: '#059669', nameKey: 'ADMIN_SYS.GENERAL.SEED_COLOR_CYAN' },
-  { hex: '#ea580c', nameKey: 'ADMIN_SYS.GENERAL.SEED_COLOR_ORANGE' },
-  { hex: '#dc2626', nameKey: 'ADMIN_SYS.GENERAL.SEED_COLOR_RED' },
-  { hex: '#0891b2', nameKey: 'ADMIN_SYS.GENERAL.SEED_COLOR_TEAL' },
-  { hex: '#a16207', nameKey: 'ADMIN_SYS.GENERAL.SEED_COLOR_GOLD' },
-  { hex: '#475569', nameKey: 'ADMIN_SYS.GENERAL.SEED_COLOR_GRAY' },
-];
-
 /**
- * Admin general settings for appearance and CLIProxyAPI connection details.
+ * Admin general settings for CLIProxyAPI connection details and admin
+ * credentials. Appearance moved out — see Settings.jsx for the single
+ * source of theme + seed color controls.
  */
 const GeneralAdminPage = () => {
   const { t } = useTranslation();
-  const { themePref, changeTheme, seedColor, changeSeedColor } = useTheme();
   const { configs, loading, handleChange } = useAdminConfigs();
   const { signOut } = useAuth();
   const [showClipKey, setShowClipKey] = useState(false);
@@ -190,54 +182,14 @@ const GeneralAdminPage = () => {
         </div>
       </Section>
 
-      <Section title={t('ADMIN_SYS.GENERAL.APPEARANCE_TITLE')} sub={t('ADMIN_SYS.GENERAL.APPEARANCE_DESC')}>
-        <div className="flex flex-col md:flex-row md:items-center justify-between gap-4 py-2">
-          <span className="text-sm text-on-surface">{t('ADMIN_SYS.GENERAL.THEME_MODE_LABEL')}</span>
-          <div role="radiogroup" aria-label={t('ADMIN_SYS.GENERAL.THEME_MODE_LABEL')}
-            className="inline-flex rounded-control border border-outline-variant bg-surface p-0.5"
-          >
-            {[
-              { v: 'light', label: t('ADMIN_SYS.GENERAL.THEME_LIGHT') },
-              { v: 'dark',  label: t('ADMIN_SYS.GENERAL.THEME_DARK') },
-              { v: 'system', label: t('ADMIN_SYS.GENERAL.THEME_SYSTEM') },
-            ].map(({ v, label }) => (
-              <button key={v} type="button" role="radio" aria-checked={themePref === v}
-                onClick={() => changeTheme(v)}
-                className={`px-3 py-1.5 text-sm rounded-control transition ${
-                  themePref === v ? 'bg-primary text-on-primary font-medium' : 'text-on-surface-variant hover:text-on-surface'
-                }`}
-              >{label}</button>
-            ))}
-          </div>
-        </div>
-
-        <div className="flex flex-col md:flex-row md:items-center justify-between gap-4 py-3 border-t border-outline-variant/30">
-          <div className="flex flex-col gap-1">
-            <span className="text-sm text-on-surface">{t('ADMIN_SYS.GENERAL.SEED_COLOR_LABEL')}</span>
-            <span className="text-xs text-on-surface-variant">{t('ADMIN_SYS.GENERAL.SEED_COLOR_HINT')}</span>
-          </div>
-          <div className="flex items-center gap-2 flex-wrap">
-            {SEED_COLORS.map(({ hex, nameKey }) => {
-              const name = t(nameKey);
-              return (
-              <button
-                key={hex} type="button" onClick={() => changeSeedColor(hex)}
-                title={name} aria-label={t('ADMIN_SYS.GENERAL.SEED_COLOR_ARIA', { name })}
-                className={`w-7 h-7 rounded-full border-2 transition ${
-                  seedColor.toLowerCase() === hex.toLowerCase()
-                    ? 'border-on-surface scale-110' : 'border-outline-variant hover:scale-110'
-                }`}
-                style={{ background: hex }}
-              />
-              );
-            })}
-            <label className="w-7 h-7 rounded-full border-2 border-dashed border-outline-variant flex items-center justify-center cursor-pointer hover:border-primary text-[10px] text-on-surface-variant" title={t('ADMIN_SYS.GENERAL.SEED_COLOR_CUSTOM')}>
-              <input type="color" value={seedColor} onChange={(e) => changeSeedColor(e.target.value)} className="w-0 h-0 opacity-0" />
-              +
-            </label>
-          </div>
-        </div>
-      </Section>
+      {/*
+        IA audit M-IA2 fix: dropped the duplicate theme-mode + seed-color
+        controls that mirrored what Settings.jsx already exposes (and the
+        same useTheme() context already drives globally from the TopBar
+        currency/language toggle area). Two control surfaces for one piece
+        of state was confusing — admin should change appearance from the
+        same place every user does.
+      */}
 
       <Section
         title={t('ADMIN_SYS.GENERAL.CLIPROXY_TITLE')}

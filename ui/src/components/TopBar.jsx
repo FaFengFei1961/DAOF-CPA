@@ -1,7 +1,7 @@
 import React, { useState, useEffect, useRef } from 'react';
 import { useTranslation } from 'react-i18next';
 import { useNavigate, Link } from 'react-router-dom';
-import { User, LogOut, Globe, Search, ShieldAlert, ChevronDown, DollarSign, Check } from 'lucide-react';
+import { User, LogOut, Globe, Search, ShieldAlert, ChevronDown, DollarSign, Check, Settings } from 'lucide-react';
 import { useCurrency } from '../context/CurrencyContext';
 import { useConfirm } from '../context/ConfirmContext';
 import { logger } from '../utils/logger';
@@ -233,6 +233,25 @@ const TopBar = ({ isAuthenticated, onOpenAuth, isAdmin, profile }) => {
                     </div>
                   )}
                 </div>
+
+                {/* IA audit M-IA3 fix: account menu now includes a Settings
+                    shortcut — previously users had to close the menu and
+                    hunt for the cog in the sidebar (or take two taps on
+                    mobile via More). Hidden for admins since /admin has
+                    its own settings rail. */}
+                {profile && profile.role !== 'admin' && (
+                  <div className="border-t border-outline-variant/40 py-1">
+                    <Link
+                      to="/settings"
+                      onClick={() => setMenuOpen(false)}
+                      role="menuitem"
+                      className="w-full flex items-center gap-2.5 px-4 py-2 text-sm text-on-surface hover:bg-on-surface/[0.06] transition"
+                    >
+                      <Settings size={15} className="text-on-surface-variant" />
+                      <span>{t('TOPBAR.GO_SETTINGS', '设置')}</span>
+                    </Link>
+                  </div>
+                )}
 
                 {/* Logout */}
                 <div className="border-t border-outline-variant/40 py-1">

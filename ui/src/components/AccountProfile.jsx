@@ -1,8 +1,12 @@
 import React, { useState, useEffect, useMemo } from 'react';
 import { useTranslation } from 'react-i18next';
-import { User, Copy, Lock, ShieldAlert, Gift, UserPlus } from 'lucide-react';
+// IA audit M-IA1 fix: dropped Lock + ShieldAlert + useConfirm — the admin
+// credentials form that used them lived in two places (here and
+// pages/admin/system/GeneralAdminPage). AccountProfile is a user-facing
+// page; admin credential rotation belongs only at /admin/general so we
+// don't have two ways to wipe the only-admin account.
+import { User, Copy, Gift, UserPlus } from 'lucide-react';
 import toast from 'react-hot-toast';
-import { useConfirm } from '../context/ConfirmContext';
 import { authFetch, readAuthState } from '../utils/authFetch';
 import { isPageCacheFresh, readPageCache, writePageCache } from '../utils/pageCache';
 import UserEmailBinding from './UserEmailBinding';
@@ -43,21 +47,12 @@ const formatWindowDays = (secondsValue) => {
 };
 
 const AccountProfile = () => {
-    const confirm = useConfirm();
     const { t } = useTranslation();
     const profileCacheKey = useMemo(getProfileCacheKey, []);
     const cachedProfile = readPageCache(profileCacheKey);
     const [profile, setProfile] = useState(() => cachedProfile);
     const [loading, setLoading] = useState(() => !cachedProfile);
     const [publicConfig, setPublicConfig] = useState(null);
-
-
-    // Admin form state
-    const [adminForm, setAdminForm] = useState(() => ({
-        username: cachedProfile?.role === 'admin' ? cachedProfile.username : '',
-        password: ''
-    }));
-    const [updatingAdmin, setUpdatingAdmin] = useState(false);
 
     useEffect(() => {
         let alive = true;
@@ -80,7 +75,6 @@ const AccountProfile = () => {
         const cached = readPageCache(profileCacheKey);
         if (cached) {
             setProfile(cached);
-            if (cached.role === 'admin') setAdminForm({ username: cached.username, password: '' });
             setLoading(false);
             if (isPageCacheFresh(profileCacheKey, PROFILE_CACHE_TTL_MS)) return;
         }
@@ -89,9 +83,6 @@ const AccountProfile = () => {
                 if (data.success) {
                     writePageCache(profileCacheKey, data.data);
                     setProfile(data.data);
-                    if (data.data.role === 'admin') {
-                        setAdminForm({ username: data.data.username, password: '' });
-                    }
                 } else if (data.message_code === 'ERR_BANNED' || (data.message && data.message.includes(BANNED_MARKER))) {
                     return;
                 }
@@ -100,32 +91,9 @@ const AccountProfile = () => {
             .catch(() => setLoading(false));
     }, [profileCacheKey]);
 
-
-
-    const handleAdminUpdate = async (e) => {
-        e.preventDefault();
-        if (!(await confirm(t('ACCOUNT.ADMIN_UPDATE_WARN', { username: adminForm.username })))) {
-            return;
-        }
-        setUpdatingAdmin(true);
-        try {
-            const data = await authFetch('/api/admin/credentials', {
-                method: 'PUT',
-                body: adminForm,
-            });
-            if (data.success) {
-                toast.success(t('ACCOUNT.SAVE_SUCCESS') + "\n" + t('ACCOUNT.NEW_ENTRY_POINT', { username: adminForm.username }), { duration: 5000 });
-                localStorage.removeItem('daof_admin_unlocked');
-                await fetch('/api/root/logout', { method: 'POST', credentials: 'include' }).catch(() => {});
-                window.location.href = `/?sys=${adminForm.username}`;
-            } else {
-                toast.error((data.message_code ? t('API.' + data.message_code) : data.message));
-            }
-        } catch {
-            toast.error(t('ACCOUNT.REQ_ERROR'));
-        }
-        setUpdatingAdmin(false);
-    };
+    // M-IA1 removed: handleAdminUpdate + adminForm state + the JSX block
+    // below. Admin credentials are owned by /admin/general now; this
+    // component is the user-facing AccountProfile only.
 
     if (loading) return <div className="text-on-surface-variant p-8 text-center ">{t('ACCOUNT.LOADING')}</div>;
     if (!profile) return <div className="bg-error/10 border border-error/30 text-error p-6 rounded-overlay text-center">{t('ACCOUNT.LOAD_FAILED')}</div>;
@@ -252,54 +220,6 @@ const AccountProfile = () => {
 
 
 
-                {profile.role === 'admin' && (
-                    <div className="bg-surface-container-high border border-error/30 rounded-overlay p-6">
-                        <div className="flex items-start gap-3 mb-6">
-                            <ShieldAlert className="text-error shrink-0 mt-0.5" size={20} />
-                            <div>
-                                <h3 className="text-lg font-bold text-on-surface tracking-tight">{t('ACCOUNT.ROOT_OVERRIDE_TITLE')}</h3>
-                                <p className="text-sm text-on-surface-variant mt-1 leading-relaxed">
-                                    {t('ACCOUNT.ROOT_OVERRIDE_DESC')}
-                                </p>
-                            </div>
-                        </div>
-
-                        <form onSubmit={handleAdminUpdate} className="space-y-4">
-                            <div className="flex flex-col md:flex-row gap-4">
-                                <div className="flex-1 space-y-1.5">
-                                    <label htmlFor="profile-admin-username" className="text-xs font-semibold text-on-surface-variant">{t('ACCOUNT.NEW_USERNAME_LABEL')}</label>
-                                    <input
-                                        id="profile-admin-username"
-                                        type="text" required
-                                        value={adminForm.username}
-                                        onChange={e => setAdminForm({...adminForm, username: e.target.value})}
-                                        className="w-full h-11 bg-black/50 border border-outline rounded-control px-4 text-sm text-on-surface focus:border-error focus:bg-surface outline-none "
-                                        placeholder={t('ACCOUNT.NEW_USERNAME_PLACEHOLDER')}
-                                    />
-                                </div>
-                                <div className="flex-1 space-y-1.5">
-                                    <label htmlFor="profile-admin-password" className="text-xs font-semibold text-on-surface-variant">{t('ACCOUNT.NEW_PASSWORD_LABEL')}</label>
-                                    <input
-                                        id="profile-admin-password"
-                                        type="password" required autoComplete="new-password"
-                                        value={adminForm.password}
-                                        onChange={e => setAdminForm({...adminForm, password: e.target.value})}
-                                        className="w-full h-11 bg-black/50 border border-outline rounded-control px-4 text-sm text-on-surface focus:border-error focus:bg-surface outline-none "
-                                        placeholder={t('ACCOUNT.NEW_PASSWORD_PLACEHOLDER')}
-                                    />
-                                </div>
-                            </div>
-                            <button
-                                type="submit"
-                                disabled={updatingAdmin}
-                                className="h-11 px-6 bg-error hover:bg-error disabled:opacity-50 disabled:cursor-not-allowed text-on-surface font-medium rounded-control flex items-center justify-center gap-2 mt-4"
-                            >
-                                <Lock size={18} />
-                                {updatingAdmin ? t('ACCOUNT.BTN_UPDATING') : t('ACCOUNT.BTN_UPDATE')}
-                            </button>
-                        </form>
-                    </div>
-                )}
             </div>
         </div>
     );

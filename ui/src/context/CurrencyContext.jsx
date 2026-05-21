@@ -47,24 +47,54 @@ export const CurrencyProvider = ({ children }) => {
         });
     };
 
-    const formatCurrency = (usdAmount, maxDecimals = 3) => {
+    /**
+     * IA audit M-V3/M-V4/M-V5/M-V6 fix.
+     *
+     * formatCurrency is the single source of truth for currency display:
+     *
+     *   - Trailing zeros are preserved (previous Number(toFixed) collapsed
+     *     $1.00 → $1 and $0.10 → $0.1, breaking stable layout).
+     *   - Tiered decimals when the caller does not pin a value: large amounts
+     *     (≥ $1) get 2 digits; small amounts get 4; very-small amounts get 6.
+     *     Was admin-only via makeFormatMeterCost; now usable on Dashboard,
+     *     Topup, BillsPage, AdminTopupOrders, audit pages, etc.
+     *   - Thousand-separator via toLocaleString.
+     *
+     * Callers that need an exact width pass `decimals` explicitly. Callers
+     * that pass nothing (default) get the tier rule.
+     */
+    const pickDecimalsForUSD = (usd) => {
+        const abs = Math.abs(usd);
+        if (abs === 0) return 2;
+        if (abs >= 1) return 2;
+        if (abs >= 0.001) return 4;
+        return 6;
+    };
+
+    const formatNumberWithDecimals = (value, locale, decimals) => (
+        value.toLocaleString(locale, {
+            minimumFractionDigits: decimals,
+            maximumFractionDigits: decimals,
+        })
+    );
+
+    const formatCurrency = (usdAmount, decimals) => {
         if (typeof usdAmount !== 'number' || !Number.isFinite(usdAmount)) return usdAmount;
+        const usdDecimals = typeof decimals === 'number' ? decimals : pickDecimalsForUSD(usdAmount);
 
         if (displayCurrency === 'CNY') {
             const cnyAmount = usdAmount * exchangeRate;
-            return `￥${Number(cnyAmount.toFixed(maxDecimals))}`;
+            // For CNY rendering we use the same number of digits as the USD
+            // tier so the table column width stays stable when toggling currency.
+            return `￥${formatNumberWithDecimals(cnyAmount, 'zh-CN', usdDecimals)}`;
         }
-        return `$${Number(usdAmount.toFixed(maxDecimals))}`;
+        return `$${formatNumberWithDecimals(usdAmount, 'en-US', usdDecimals)}`;
     };
 
-    const formatCurrencyFixed = (usdAmount, decimals = 3) => {
-        if (typeof usdAmount !== 'number' || !Number.isFinite(usdAmount)) return usdAmount;
-
-        if (displayCurrency === 'CNY') {
-            return `￥${(usdAmount * exchangeRate).toFixed(decimals)}`;
-        }
-        return `$${usdAmount.toFixed(decimals)}`;
-    };
+    // formatCurrencyFixed is the "no smart tier" entry point — useful when the
+    // caller already knows the exact decimal count it needs (e.g. table column
+    // alignment that must be uniform regardless of value).
+    const formatCurrencyFixed = (usdAmount, decimals = 3) => formatCurrency(usdAmount, decimals);
 
     return (
         <CurrencyContext.Provider value={{ exchangeRate, displayCurrency, toggleCurrency, formatCurrency, formatCurrencyFixed, loading }}>

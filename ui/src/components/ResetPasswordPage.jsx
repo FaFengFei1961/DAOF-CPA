@@ -10,6 +10,7 @@ import { useSearchParams, useNavigate } from 'react-router-dom';
 import { useTranslation } from 'react-i18next';
 import { CheckCircle, AlertTriangle, Loader2, Eye, EyeOff } from 'lucide-react';
 import toast from 'react-hot-toast';
+import { useAuth } from '../context/AuthContext';
 
 const STATUS_FORM = 'form';
 const STATUS_SUBMITTING = 'submitting';
@@ -20,6 +21,9 @@ const ResetPasswordPage = () => {
   const { t } = useTranslation();
   const [params] = useSearchParams();
   const navigate = useNavigate();
+  // IA audit C4 fix: opening login modal lets the user actually sign in
+  // with the new password instead of being dropped on a guest Dashboard.
+  const { openLogin } = useAuth();
   const token = params.get('token') || '';
   const [status, setStatus] = useState(token ? STATUS_FORM : STATUS_FAIL);
   const [errorCode, setErrorCode] = useState(token ? '' : 'ERR_EMAIL_TOKEN_INVALID');
@@ -143,7 +147,13 @@ const ResetPasswordPage = () => {
             </p>
             <div className="flex justify-center gap-2 mt-6">
               <button
-                onClick={() => navigate('/')}
+                onClick={() => {
+                  // Navigate home, then immediately open the login modal with
+                  // the email-login step pre-selected so the user can sign in
+                  // with their new password without an extra click.
+                  navigate('/');
+                  openLogin({ step: 'email-login' });
+                }}
                 className="h-9 px-4 bg-primary text-on-primary rounded-control text-sm font-medium"
               >
                 {t('EMAIL.RESET.GOTO_LOGIN', '去登录')}
