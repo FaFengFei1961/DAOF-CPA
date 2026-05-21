@@ -236,6 +236,12 @@ func installMockGitHub(t *testing.T, expectedVerifier string) *atomic.Int64 {
 			}
 			w.Header().Set("Content-Type", "application/json")
 			_, _ = w.Write([]byte(`{"id":12345,"login":"octo"}`))
+		case "/user/emails":
+			// H-Audit-3：默认 mock 返"用户未授 user:email scope"，让 fetch helper
+			// 走 fail-soft 路径（EmailVerified=false 退回旧行为）。如果某个测试需要验证
+			// verified primary 路径，应该自己 install mock with email override（见
+			// installMockGitHubWithEmails helper）。
+			w.WriteHeader(http.StatusNotFound)
 		default:
 			t.Errorf("unexpected GitHub mock path %s", r.URL.Path)
 			w.WriteHeader(http.StatusNotFound)
@@ -245,13 +251,16 @@ func installMockGitHub(t *testing.T, expectedVerifier string) *atomic.Int64 {
 
 	oldTokenEndpoint := githubTokenEndpoint
 	oldUserEndpoint := githubUserEndpoint
+	oldEmailsEndpoint := githubEmailsEndpoint
 	oldClient := oauthHTTPClient
 	githubTokenEndpoint = server.URL + "/login/oauth/access_token"
 	githubUserEndpoint = server.URL + "/user"
+	githubEmailsEndpoint = server.URL + "/user/emails"
 	oauthHTTPClient = server.Client()
 	t.Cleanup(func() {
 		githubTokenEndpoint = oldTokenEndpoint
 		githubUserEndpoint = oldUserEndpoint
+		githubEmailsEndpoint = oldEmailsEndpoint
 		oauthHTTPClient = oldClient
 	})
 	return &tokenHits

@@ -54,8 +54,9 @@ func TestGitHubProvider_PublicMetadata(t *testing.T) {
 		if meta.AuthorizeEndpoint != "https://github.com/login/oauth/authorize" {
 			t.Errorf("AuthorizeEndpoint=%q", meta.AuthorizeEndpoint)
 		}
-		if len(meta.DefaultParams) != 0 {
-			t.Errorf("DefaultParams should be empty for GitHub (default scope is enough), got %v", meta.DefaultParams)
+		// H-Audit-3：GitHub 申请 user:email scope，让 Exchange 能调 /user/emails 取 verified primary
+		if scope := meta.DefaultParams["scope"]; scope != "user:email" {
+			t.Errorf("DefaultParams[scope]=%q, want 'user:email' (H-Audit-3 requirement)", scope)
 		}
 		if meta.IconKey != "github" {
 			t.Errorf("IconKey=%q, want github", meta.IconKey)

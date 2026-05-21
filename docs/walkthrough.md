@@ -152,7 +152,7 @@ database/oauth_identities 表（append-only，soft-delete via unlinked_at）
 
 **关键文件**：
 - `controller/oauth_provider.go` — Provider 接口 + 注册表 + sentinel errors（ErrOAuthCodeExpired / ErrOAuthProviderNotConfigured 等）
-- `controller/oauth_provider_github.go` — GitHub 实现（email 保守取值，EmailVerified=false 即使 primary）
+- `controller/oauth_provider_github.go` — GitHub 实现（H-Audit-3：申请 user:email scope，调 /user/emails 找 verified primary；找不到时 fail-soft 退回 EmailVerified=false）
 - `controller/oauth_provider_google.go` — Google 实现（OIDC userinfo 格式 + scope: openid email profile）
 - `database/oauth_identity_schema.go` — OAuthIdentity 模型 + append-only 约束
 
@@ -162,7 +162,7 @@ database/oauth_identities 表（append-only，soft-delete via unlinked_at）
 ```
 
 **关键不变量**：
-- GitHub email 保守取值：EmailVerified=false（防 secondary public email 占位攻击）
+- GitHub email 通过 /user/emails endpoint（user:email scope）拿 `primary=true && verified=true`；fail-soft：scope 未授 / API 5xx / 无 verified primary 时退回 EmailVerified=false（让 partial unique index 兜底；防 secondary public email 占位攻击）
 - tmp_token 一次性消费（CompleteRisk / CompleteProfile 时消费，存 state 防 CSRF）
 - Provider credential 轮换：ClientID / ClientSecret 从 SysConfig 读取（无硬编码）
 

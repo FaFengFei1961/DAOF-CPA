@@ -55,8 +55,9 @@ var (
 	oauthStateCount    atomic.Int64
 	oauthStateMaxItems int64 = 10000
 
-	githubTokenEndpoint = "https://github.com/login/oauth/access_token"
-	githubUserEndpoint  = "https://api.github.com/user"
+	githubTokenEndpoint  = "https://github.com/login/oauth/access_token"
+	githubUserEndpoint   = "https://api.github.com/user"
+	githubEmailsEndpoint = "https://api.github.com/user/emails" // H-Audit-3：需 user:email scope
 	// fix B-H1 (2026-05-19)：加 SafeTransport + RedirectGuard 防 DNS rebinding /
 	// open redirect 把 OAuth 流量重定向到内网；下游 io.ReadAll 也需要 LimitReader
 	// 防 OOM。

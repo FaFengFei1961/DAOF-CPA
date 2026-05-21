@@ -54,6 +54,9 @@ func (p *GitHubProvider) IsConfigured() bool {
 
 // PublicMetadata 返回前端渲染 GitHub 登录按钮 + 拼 authorize URL 所需的元数据。
 // fix H-Audit L8（2026-05-21）：让前端不再 hardcode GitHub-specific 参数。
+// fix H-Audit-3（2026-05-21）：scope=user:email 让 Exchange 能调 /user/emails 拿
+// verified primary，进而把 EmailVerified=true 设给真正已验证的邮箱（让 H-6 跨 provider
+// 邮箱冲突防御 + H-Audit-2 自动 sync user.email 对 GitHub 也生效）。
 func (p *GitHubProvider) PublicMetadata() OAuthProviderPublicMetadata {
 	proxy.SysConfigMutex.RLock()
 	clientID := proxy.SysConfigCache["github_client_id"]
@@ -63,9 +66,11 @@ func (p *GitHubProvider) PublicMetadata() OAuthProviderPublicMetadata {
 		Label:             "GitHub",
 		ClientID:          clientID,
 		AuthorizeEndpoint: "https://github.com/login/oauth/authorize",
-		// GitHub OAuth 默认 scope 即可拿到 primary email；前端无需追加 query
-		DefaultParams: map[string]string{},
-		IconKey:       "github",
+		DefaultParams: map[string]string{
+			// H-Audit-3：申请 user:email scope，调 /user/emails 拿 verified primary
+			"scope": "user:email",
+		},
+		IconKey: "github",
 	}
 }
 
@@ -167,30 +172,90 @@ func (p *GitHubProvider) Exchange(ctx context.Context, code, codeVerifier string
 	ghEmail, _ := ghUser["email"].(string) // 可能为空：用户未公开 primary email
 	avatar, _ := ghUser["avatar_url"].(string)
 
+	// 3. /user/emails 取 verified primary
+	//
+	// Phase H-Audit-3（2026-05-21）：申请 user:email scope 后调 /user/emails，按
+	// `primary=true && verified=true` 找权威邮箱。这一步是必要的：
+	//   - GitHub /user.email 字段是用户公开设置（profile email），可能是 secondary
+	//     未验证邮箱（攻击者可在 GitHub 加 secondary 邮箱、设为 public，让它在
+	//     /user.email 露出。H-Audit H-1 因此把 EmailVerified 保守置 false）
+	//   - /user/emails 列表带 verified 标识，能可靠区分。primary+verified 才是
+	//     真正属于用户的邮箱
+	//
+	// fail-soft 策略：/user/emails 失败（用户未授权 user:email scope / GitHub API
+	// 间歇 5xx）→ 退回 EmailVerified=false（fail-closed 防御性默认）。不让 OAuth
+	// 流程因为 emails 查询失败而整体失败。
+	primaryEmail, primaryVerified := fetchGitHubVerifiedPrimaryEmail(ctx, accessToken)
+	if primaryVerified {
+		// 找到 verified primary：覆盖 /user 拿到的 ghEmail（防 user 的 public email 是
+		// secondary 未验证邮箱的场景）
+		return &OAuthIdentityData{
+			Provider:      database.OAuthProviderGitHub,
+			ExternalID:    ghID,
+			Email:         primaryEmail,
+			Username:      ghLogin,
+			AvatarURL:     avatar,
+			EmailVerified: true,
+		}, nil
+	}
+	// /user/emails 失败 / 未授权 / 无 verified primary：保留 /user.email 作展示值，
+	// EmailVerified=false（H-6 跨 provider 冲突预检会跳过；uniq_users_email_nonempty
+	// partial unique index 是最终兜底）。
 	return &OAuthIdentityData{
-		Provider:   database.OAuthProviderGitHub,
-		ExternalID: ghID,
-		Email:      ghEmail,
-		Username:   ghLogin,
-		AvatarURL:  avatar,
-		// Phase H-Audit H-1（2026-05-20）：保守置 false。
-		//
-		// 历史：H-6 时把 EmailVerified 设为 `ghEmail != ""`，假设 GitHub /user.email
-		// 一定是 verified primary。审查发现 GitHub 实际允许用户把 secondary public
-		// email 设为公开邮箱，且 /user.email 仅返"primary 公开 OR 未设公开 secondary"，
-		// 并非保证 verified——攻击者可在 GitHub 加未验证 secondary、设为 public，
-		// 让其在 /user.email 出现并冒充受害者邮箱占位 DAOF 账号（DoS）。
-		//
-		// 修复：除非扩 `user:email` scope 调 /user/emails 显式拿 verified=true，
-		// 否则一律按"未验证"处理。H-6 跨 provider 邮箱冲突预检会因此对 GitHub
-		// bypass，但这是 fail-closed 的设计：宁可漏检（让 partial unique index
-		// 兜底）也不要被 secondary email 占位骗过。
-		//
-		// 若未来需要让 GitHub 也参与冲突检测，应扩 scope 到 `user:email`，调
-		// GET /user/emails 找 `primary=true && verified=true` 的条目，并仅在此
-		// 字段标 EmailVerified=true。
+		Provider:      database.OAuthProviderGitHub,
+		ExternalID:    ghID,
+		Email:         ghEmail,
+		Username:      ghLogin,
+		AvatarURL:     avatar,
 		EmailVerified: false,
 	}, nil
+}
+
+// fetchGitHubVerifiedPrimaryEmail 调 GitHub /user/emails 端点找 verified primary email。
+// 需要 user:email scope（PublicMetadata.DefaultParams 已申请）。
+//
+// 返回 (email, true) 表示找到 verified primary；(<任意>, false) 表示失败 / 未授权 /
+// 无 verified primary。caller 应在 false 时退回 EmailVerified=false 路径。
+func fetchGitHubVerifiedPrimaryEmail(ctx context.Context, accessToken string) (string, bool) {
+	req, err := http.NewRequestWithContext(ctx, "GET", githubEmailsEndpoint, nil)
+	if err != nil {
+		log.Printf("[OAUTH-GITHUB-EMAILS] build req failed: %v", err)
+		return "", false
+	}
+	req.Header.Set("Authorization", "Bearer "+accessToken)
+	req.Header.Set("Accept", "application/vnd.github+json")
+	resp, err := oauthHTTPClient.Do(req)
+	if err != nil {
+		log.Printf("[OAUTH-GITHUB-EMAILS] fetch failed: %v", err)
+		return "", false
+	}
+	defer resp.Body.Close()
+	// 用户没授 user:email scope → 404；GitHub 间歇 5xx → 也走这条路径
+	if resp.StatusCode != http.StatusOK {
+		log.Printf("[OAUTH-GITHUB-EMAILS] status=%d (user:email scope possibly missing)", resp.StatusCode)
+		return "", false
+	}
+	body, err := io.ReadAll(io.LimitReader(resp.Body, oauthUpstreamResponseLimit))
+	if err != nil {
+		log.Printf("[OAUTH-GITHUB-EMAILS] read body failed: %v", err)
+		return "", false
+	}
+	var emails []struct {
+		Email    string `json:"email"`
+		Primary  bool   `json:"primary"`
+		Verified bool   `json:"verified"`
+	}
+	if err := json.Unmarshal(body, &emails); err != nil {
+		log.Printf("[OAUTH-GITHUB-EMAILS] decode body failed: %v", err)
+		return "", false
+	}
+	for _, e := range emails {
+		if e.Primary && e.Verified && e.Email != "" {
+			return e.Email, true
+		}
+	}
+	// primary 不 verified 也回 false：宁可漏检也不冒充验证
+	return "", false
 }
 
 // fix H-Audit L6（2026-05-20）：mapOAuthProviderErrorGitHub 已删，所有 provider
