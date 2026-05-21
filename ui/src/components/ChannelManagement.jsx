@@ -6,6 +6,7 @@ import toast from 'react-hot-toast';
 import { authFetch } from '../utils/authFetch';
 import { useConfirm } from '../context/ConfirmContext';
 import { useModalA11y } from '../hooks/useModalA11y';
+import { invalidatePublicPricing } from '../hooks/usePublicPricing';
 import { DestructiveIconButton, PageHeader } from './ui';
 import DataTable from './ui/DataTable';
 import StatusBadge from './ui/StatusBadge';
@@ -469,6 +470,10 @@ const ChannelManagement = () => {
             const data = await authFetch(url, { method, body: payload });
             if (data.success) {
                 fetchChannels();
+                // 用户反馈"admin 改了 channel /pricing 还显示旧的"：admin 任何
+                // channel 写操作都立即作废前端 public pricing 缓存，让 /pricing
+                // 跟 sidebar 模型计数 chip 实时同步，不要等 TTL。
+                invalidatePublicPricing();
                 setIsChanModalOpen(false);
                 toast.success(currentChannel
                     ? t('CHANNEL_MGMT.CHANNEL_UPDATED', '渠道已更新')
@@ -489,6 +494,7 @@ const ChannelManagement = () => {
             const data = await authFetch(`/api/admin/channels/${id}`, { method: 'DELETE' });
             if (data.success) {
                 fetchChannels();
+                invalidatePublicPricing();
                 toast.success(t('CHANNEL_MGMT.CHANNEL_DELETED', '渠道已删除'));
             } else {
                 toast.error(data.message || t('API.' + data.message_code));
@@ -520,6 +526,7 @@ const ChannelManagement = () => {
             });
             if (data.success) {
                 fetchChannels();
+                invalidatePublicPricing();
                 toast.success(nextStatus === 1
                     ? t('CHANNEL_MGMT.CHANNEL_ENABLED', '渠道已启用')
                     : t('CHANNEL_MGMT.CHANNEL_DISABLED', '渠道已禁用'));
@@ -643,6 +650,7 @@ const ChannelManagement = () => {
             const data = await authFetch(url, { method, body: payload });
             if (data.success) {
                 fetchModels(selectedChannel.id);
+                invalidatePublicPricing();
                 setIsModelModalOpen(false);
                 toast.success(currentModel
                     ? t('CHANNEL_MGMT.MODEL_UPDATED', '模型已更新')
@@ -717,6 +725,7 @@ const ChannelManagement = () => {
             const data = await authFetch(`/api/admin/channel-models/${model.id}`, { method: 'PUT', body: payload });
             if (data.success) {
                 fetchModels(selectedChannel.id);
+                invalidatePublicPricing();
                 toast.success(nextStatus === 1
                     ? t('CHANNEL_MGMT.MODEL_ENABLED', '模型已启用')
                     : t('CHANNEL_MGMT.MODEL_DISABLED', '模型已禁用'));
@@ -736,6 +745,7 @@ const ChannelManagement = () => {
             const data = await authFetch(`/api/admin/channel-models/${id}`, { method: 'DELETE' });
             if (data.success) {
                 fetchModels(selectedChannel.id);
+                invalidatePublicPricing();
                 toast.success(t('CHANNEL_MGMT.MODEL_DELETED', '模型已删除'));
             } else {
                 toast.error(data.message || t('API.' + data.message_code));
