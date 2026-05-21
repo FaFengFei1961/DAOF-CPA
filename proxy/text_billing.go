@@ -523,9 +523,29 @@ func CommitTextTurn(ctx CommitTextContext, usage TextUsage, status int, delivere
 		apiLogPersisted = false
 	}
 
-	// P8 起：SSE/WS 两条路径都写 ApiLogUsageLine（原 SSE 路径漏写）
+	// P8 起：SSE/WS 两条路径都写 ApiLogUsageLine（原 SSE 路径漏写）。
+	// 2026-05-21 扩展：原本只写 input(=promptTokens) + output 两条线，整段
+	// promptTokens 全按 inputPricePico 估价，但实际 checkedCostMicroUSD 把
+	// prompt 拆 standard / cached / cache_write_5m / cache_write_1h 四档分别
+	// 计费 —— 导致 admin 审计详情里 usage_lines 总和系统性低于 ApiLog.Cost
+	// （例：cache_write tokens × 1.25 倍率没体现，1MTok Opus 缓存写约 $0.128
+	// 静默落差）。现按 4 + 1 五条线写，逐行覆盖全额。quantity=0 的档自动跳过。
 	if apiLogPersisted && !failedRequest && (promptTokens > 0 || completionTokens > 0) {
-		writeTextUsageLines(apiLog.ID, ctx.ModelName, ctx.Path, promptTokens, completionTokens, inputPricePico, outputPricePico)
+		writeTextUsageLines(TextUsageLineInput{
+			APILogID:                   apiLog.ID,
+			ModelName:                  ctx.ModelName,
+			RequestPath:                ctx.Path,
+			StandardInputTokens:        standardInputTokens,
+			CachedTokens:               cachedTokens,
+			CacheWrite5mTokens:         cacheWrite5mTokens,
+			CacheWrite1hTokens:         cacheWrite1hTokens,
+			CompletionTokens:           completionTokens,
+			InputPricePico:             inputPricePico,
+			CachedInputPricePico:       cachedInputPricePico,
+			CacheWriteInputPricePico:   cacheWriteInputPricePico,
+			CacheWrite1hInputPricePico: cacheWrite1hInputPricePico,
+			OutputPricePico:            outputPricePico,
+		})
 	}
 
 	// commit 阶段订阅决策（与 precheck 解耦）
@@ -783,52 +803,82 @@ func commitTextBalanceTurn(ctx CommitTextContext, apiLogID uint, apiLogPersisted
 	return 0
 }
 
-// writeTextUsageLines 写一对 ApiLogUsageLine（input + output token）。
-// P8 起 SSE/WS 两条路径都写，让 admin UI 能看到 token 计量明细。
+// TextUsageLineInput 把 CommitTextTurn 文本 pipeline 算好的 5 类 token + 它们
+// 各自的 pico/token 价位打包传给 writeTextUsageLines。
 //
-// fix D2 (2026-05-19)：原实现用 floor (`tokens × pico / 1e9`)，与 CommitTextTurn 主路径
-// checkedCostMicroUSD 的 ceil-div 不一致，每 1M token 差 1 micro_usd 级别 → admin
-// 报表"按 usage line"vs"按 api_log.cost"系统性差额。现统一改 ceil-div。
-func writeTextUsageLines(apiLogID uint, modelName, requestPath string, promptTokens, completionTokens int, inputPricePico, outputPricePico int64) {
+// 设计意图：让 ApiLogUsageLine 逐行加总能严格等于 ApiLog.Cost，而不是把整段
+// promptTokens 用 inputPricePico 估一个跟主路径不一致的"伪 input 金额"。
+//
+// CompletionTokens 不再单独拆 reasoning —— CommitTextTurn 的主路径里 reasoning
+// 已统一按 outputPricePico 计费（见 checkedCostMicroUSD 调用），usage_lines 也
+// 按这条单口径走，行数少且数学闭环。
+type TextUsageLineInput struct {
+	APILogID                   uint
+	ModelName                  string
+	RequestPath                string
+	StandardInputTokens        int   // = promptTokens - cachedTokens - cacheWriteTokens
+	CachedTokens               int   // 缓存命中（cache read）
+	CacheWrite5mTokens         int   // 5min 缓存写入
+	CacheWrite1hTokens         int   // 1h 缓存写入
+	CompletionTokens           int   // 输出（含 reasoning，统一按 output 价）
+	InputPricePico             int64 // standard input 价位
+	CachedInputPricePico       int64 // cache hit 价位（通常 ≈ 0.1×）
+	CacheWriteInputPricePico   int64 // cache write 5m 价位（通常 1.25×）
+	CacheWrite1hInputPricePico int64 // cache write 1h 价位（通常 2×）
+	OutputPricePico            int64
+}
+
+// writeTextUsageLines 把一次文本请求按 5 个 token 档位写成最多 5 条
+// ApiLogUsageLine（standard input / cache_read / cache_write_5m /
+// cache_write_1h / output），quantity=0 的档自动跳过。
+//
+// 历史：
+//   - P8.1 起 SSE/WS 两条路径都写 usage line，让 admin UI 能看到 token 明细。
+//   - D2 fix (2026-05-19)：原 floor 算法（tokens × pico / 1e9）跟 CommitTextTurn
+//     主路径的 ceil-div 每 1M token 系统性差 1 micro_usd，统一改 ceil-div。
+//   - 2026-05-21 用户反馈"媒体用量"section 跟总额不平：原实现整段 promptTokens
+//     都按 inputPricePico 写一条，导致 cache_read / cache_write 价差缺失 ——
+//     1 个 Anthropic 缓存重请求里 cache_write 倍率 ×1.25 凭空丢 $0.128。
+//     重构成 5 条 line 后逐行加总严格 == ApiLog.Cost。
+//
+// fix SF-C1 (2026-05-19) 保留：写失败不静默丢，记 [BILLING-USAGE-LINE-LOST]
+// 让 admin 能从日志反查（usage_lines 不影响真实扣费，只影响审计报表）。
+func writeTextUsageLines(in TextUsageLineInput) {
 	now := time.Now()
-	// fix SF-C1 (2026-05-19)：原 `_ = DB.Create().Error` 静默丢弃错误。usage lines
-	// 不影响真实扣费（金额已在 ApiLog.cost 落地），但 admin token-level 报表是
-	// 按 ApiLogUsageLine 聚合的，写失败会让 admin 看到 0 且无任何告警。改为
-	// 记 `[BILLING-USAGE-LINE-LOST]` 日志，便于后期对账。
-	if promptTokens > 0 {
-		amountMicro := ceilDivPicoToMicro(int64(promptTokens), inputPricePico)
-		if err := database.DB.Create(&database.ApiLogUsageLine{
-			ApiLogID:       apiLogID,
-			ModelName:      modelName,
-			RequestPath:    sanitizeError(requestPath, 160),
-			Unit:           "token",
-			Direction:      "input",
-			Quantity:       int64(promptTokens),
-			UnitPriceMicro: inputPricePico / int64(1_000_000_000),
-			AmountMicroUSD: amountMicro,
-			CostSource:     "upstream_usage",
-			CreatedAt:      now,
-		}).Error; err != nil {
-			log.Printf("[BILLING-USAGE-LINE-LOST] api_log_id=%d direction=input tokens=%d amount_micro=%d: %v",
-				apiLogID, promptTokens, amountMicro, err)
-		}
+	cleanPath := sanitizeError(in.RequestPath, 160)
+
+	type lineSpec struct {
+		direction string
+		quantity  int64
+		pricePico int64
 	}
-	if completionTokens > 0 {
-		amountMicro := ceilDivPicoToMicro(int64(completionTokens), outputPricePico)
+	specs := [...]lineSpec{
+		{"input", int64(in.StandardInputTokens), in.InputPricePico},
+		{"cache_read", int64(in.CachedTokens), in.CachedInputPricePico},
+		{"cache_write_5m", int64(in.CacheWrite5mTokens), in.CacheWriteInputPricePico},
+		{"cache_write_1h", int64(in.CacheWrite1hTokens), in.CacheWrite1hInputPricePico},
+		{"output", int64(in.CompletionTokens), in.OutputPricePico},
+	}
+
+	for _, s := range specs {
+		if s.quantity <= 0 {
+			continue
+		}
+		amountMicro := ceilDivPicoToMicro(s.quantity, s.pricePico)
 		if err := database.DB.Create(&database.ApiLogUsageLine{
-			ApiLogID:       apiLogID,
-			ModelName:      modelName,
-			RequestPath:    sanitizeError(requestPath, 160),
+			ApiLogID:       in.APILogID,
+			ModelName:      in.ModelName,
+			RequestPath:    cleanPath,
 			Unit:           "token",
-			Direction:      "output",
-			Quantity:       int64(completionTokens),
-			UnitPriceMicro: outputPricePico / int64(1_000_000_000),
+			Direction:      s.direction,
+			Quantity:       s.quantity,
+			UnitPriceMicro: s.pricePico / int64(1_000_000_000),
 			AmountMicroUSD: amountMicro,
 			CostSource:     "upstream_usage",
 			CreatedAt:      now,
 		}).Error; err != nil {
-			log.Printf("[BILLING-USAGE-LINE-LOST] api_log_id=%d direction=output tokens=%d amount_micro=%d: %v",
-				apiLogID, completionTokens, amountMicro, err)
+			log.Printf("[BILLING-USAGE-LINE-LOST] api_log_id=%d direction=%s tokens=%d amount_micro=%d: %v",
+				in.APILogID, s.direction, s.quantity, amountMicro, err)
 		}
 	}
 }
