@@ -6,6 +6,8 @@ import { useCurrency } from '../context/CurrencyContext';
 import { HealthMonitor } from './HealthMonitor';
 import { authFetch } from '../utils/authFetch';
 import { formatUsageLine, formatUsageLinesSummary, usageLinesOf } from '../utils/usageLines';
+import Drawer from './ui/Drawer';
+import Section from './ui/Section';
 
 const CHART_COLORS = ['#3b82f6', '#10b981', '#f59e0b', '#ef4444', '#8b5cf6', '#ec4899', '#06b6d4', '#f97316', '#14b8a6'];
 const STATS_CACHE_TTL_MS = 30000;
@@ -163,6 +165,10 @@ const StatisticsDash = ({ isAdmin = false, isAuthenticated = true }) => {
     const [refreshing, setRefreshing] = useState(false);
     const [selectedModels, setSelectedModels] = useState([]);
     const [logsPage, setLogsPage] = useState(1);
+    // 用户点行展开详情用。用户反馈"请求事件明细一行扁平看不清，改成 admin 那样的右侧面板吧"。
+    // 但不要泄上游账号 / 内部 cost 归因 —— 详情面板只渲安全字段（PublicApiLog 已先过一层 DTO，
+    // 这里 UI 再选一遍渲染哪些，双重保护）。
+    const [selectedLog, setSelectedLog] = useState(null);
     const fetchSeqRef = useRef(0);
 
     // Filters for request events
@@ -830,7 +836,12 @@ const StatisticsDash = ({ isAdmin = false, isAuthenticated = true }) => {
                             </tr></thead>
                             <tbody>
                                 {paginatedLogs.map((log) => (
-                                    <tr key={log.id} className="border-b border-outline-variant/30 hover:bg-surface-variant/50">
+                                    <tr
+                                        key={log.id}
+                                        onClick={() => setSelectedLog(log)}
+                                        className="border-b border-outline-variant/30 hover:bg-surface-variant/50 cursor-pointer transition"
+                                        title={t('STATS.ROW_CLICK_HINT', '点击查看完整请求详情')}
+                                    >
                                         <td className="px-4 py-3 text-xs text-on-surface-variant font-mono whitespace-nowrap">{new Date(log.created_at).toLocaleString()}</td>
                                         <td className="px-4 py-3 text-xs font-mono">
                                             <span className={`px-2 py-0.5 rounded-control flex items-center justify-center w-max text-[10px] font-bold ${log.status >= 200 && log.status < 300 ? 'bg-success/20 text-success' : 'bg-error/20 text-error'}`}>
@@ -874,8 +885,177 @@ const StatisticsDash = ({ isAdmin = false, isAuthenticated = true }) => {
                     </div>
                 )}
             </div>
+
+            {/* 请求详情 Drawer —— 跟 admin 同款侧栏，但只渲安全字段。 */}
+            <Drawer
+                open={!!selectedLog}
+                onClose={() => setSelectedLog(null)}
+                title={selectedLog ? `${t('STATS.DETAIL_TITLE_PREFIX', '请求')} #${selectedLog.id}` : ''}
+                description={selectedLog ? new Date(selectedLog.created_at).toLocaleString() : ''}
+                size="lg"
+            >
+                {selectedLog && (
+                    <UserLogDetail
+                        log={selectedLog}
+                        formatMeterCost={formatMeterCost}
+                        t={t}
+                    />
+                )}
+            </Drawer>
         </div>
     );
 };
+
+/**
+ * UserLogDetail — 用户视角的请求详情面板。
+ *
+ * 设计原则（用户反馈"改成 admin 同款但别暴露隐私"）：
+ *   - 只渲染 PublicApiLog DTO 里"用户能看懂 + 不泄漏平台内部"的字段
+ *   - 故意不展示：raw_cost / health_multiplier / billing_rules_version /
+ *     fallback_reason / precheck_* / block_reason —— 这些要么是平台内部计费
+ *     状态、要么会泄上游 channel 健康度
+ *   - upstream_provider / upstream_auth_index 这类字段后端 PublicApiLog DTO
+ *     已经直接 drop 掉（见 database/public_log_dto.go），UI 层无需再防
+ *   - 展示：错误（如失败）/ 基本信息 / 计费摘要 / Token 明细 / 上游计量行
+ */
+const UserLogDetail = ({ log, formatMeterCost, t }) => {
+    const isError = !(log.status >= 200 && log.status < 300);
+    const totalTokens = (log.prompt_tokens || 0) + (log.completion_tokens || 0);
+    const lines = usageLinesOf(log);
+    const modelMigrated = log.requested_model && log.served_model && log.requested_model !== log.served_model;
+    return (
+        <div className="space-y-5">
+            {/* 状态条 */}
+            <div className={`rounded-overlay border px-4 py-3 ${
+                isError ? 'bg-error/10 border-error/30' : 'bg-success/10 border-success/30'
+            }`}>
+                <div className={`text-sm font-semibold ${isError ? 'text-error' : 'text-success'}`}>
+                    {isError
+                        ? t('STATS.DETAIL_STATUS_FAIL', { status: log.status, defaultValue: 'HTTP {{status}} · 请求失败' })
+                        : t('STATS.DETAIL_STATUS_OK', { status: log.status, defaultValue: 'HTTP {{status}} · 请求成功' })}
+                </div>
+                {log.error_type && (
+                    <div className="text-xs text-on-surface-variant mt-1 break-all font-mono">
+                        {log.error_type}
+                    </div>
+                )}
+            </div>
+
+            {/* 基本信息 */}
+            <Section flat noPadding>
+                <UserLogField
+                    label={t('STATS.DETAIL_MODEL_LABEL', '模型')}
+                    mono
+                    value={modelMigrated
+                        ? `${log.requested_model} → ${log.served_model}`
+                        : (log.served_model || log.model_name || '-')}
+                />
+                <UserLogField
+                    label={t('STATS.DETAIL_PATH', '接口路径')}
+                    mono
+                    value={log.request_path || '-'}
+                />
+                <UserLogField
+                    label={t('STATS.DETAIL_TOKEN_SOURCE', 'Token Source')}
+                    mono
+                    value={log.token_name || '-'}
+                />
+                <UserLogField
+                    label={t('STATS.DETAIL_IP', '客户端 IP')}
+                    mono
+                    value={log.ip_address || '-'}
+                />
+                <UserLogField
+                    label={t('STATS.DETAIL_LATENCY', '延迟')}
+                    value={formatLatency(log.latency ?? log.latency_ms)}
+                />
+                {log.fallback_user_opt_in && (
+                    <UserLogField
+                        label={t('STATS.DETAIL_FALLBACK_LABEL', 'Fallback')}
+                        value={t('STATS.DETAIL_FALLBACK_OPT_IN', '已开启自动降级')}
+                    />
+                )}
+            </Section>
+
+            {/* 计费摘要 —— 只暴露最终扣减 + 倍率，不暴露 raw / 营收 / 规则版本 */}
+            <Section title={t('STATS.DETAIL_SECTION_BILLING', '计费摘要')} flat>
+                <div className="grid grid-cols-2 gap-x-4">
+                    <UserLogField
+                        label={t('STATS.DETAIL_CHARGED_COST', '实际扣减')}
+                        mono
+                        highlight
+                        value={formatMeterCost(log.charged_cost ?? log.cost ?? 0)}
+                    />
+                    <UserLogField
+                        label={t('STATS.DETAIL_MODEL_WEIGHT', '模型权重')}
+                        mono
+                        value={`×${Number(log.model_weight || 1).toFixed(2)}`}
+                    />
+                </div>
+            </Section>
+
+            {/* Token 明细 */}
+            <Section title={t('STATS.DETAIL_SECTION_TOKEN', 'Token 明细')} flat>
+                <div className="grid grid-cols-2 gap-x-4">
+                    <UserLogField label={t('STATS.DETAIL_INPUT', '输入')} mono value={(log.prompt_tokens || 0).toLocaleString()} />
+                    <UserLogField label={t('STATS.DETAIL_OUTPUT', '输出')} mono value={(log.completion_tokens || 0).toLocaleString()} />
+                    <UserLogField label={t('STATS.DETAIL_REASONING', '思考 (reasoning)')} mono value={(log.reasoning_tokens || 0).toLocaleString()} />
+                    <UserLogField label={t('STATS.DETAIL_CACHE_READ', '缓存读')} mono value={(log.cached_tokens || 0).toLocaleString()} />
+                    <UserLogField label={t('STATS.DETAIL_CACHE_WRITE', '缓存写')} mono value={(log.cache_write_tokens || 0).toLocaleString()} />
+                    <UserLogField label={t('STATS.DETAIL_TOTAL_TOKENS', '总 Token')} mono value={totalTokens.toLocaleString()} highlight />
+                </div>
+            </Section>
+
+            {/* 上游计量明细（有就显示） */}
+            {lines.length > 0 && (
+                <Section
+                    title={t('STATS.DETAIL_SECTION_USAGE', '上游计量明细')}
+                    flat
+                    sub={t('STATS.DETAIL_SECTION_USAGE_SUB', '逐行记录 token / 图片 / 视频用量与单价')}
+                >
+                    <div className="space-y-2">
+                        {lines.map((line) => (
+                            <div
+                                key={line.id || `${line.unit}-${line.direction}-${line.quantity}`}
+                                className="rounded-control border border-outline-variant bg-surface-container/40 px-3 py-2"
+                            >
+                                <div className="flex items-center justify-between gap-3">
+                                    <span className="text-xs text-on-surface font-mono truncate" title={formatUsageLine(line, formatMeterCost)}>
+                                        {formatUsageLine(line, formatMeterCost)}
+                                    </span>
+                                    <span className="text-[10px] text-on-surface-variant shrink-0">{line.direction || '-'}</span>
+                                </div>
+                            </div>
+                        ))}
+                    </div>
+                </Section>
+            )}
+
+            {/* 错误详情（仅失败请求） */}
+            {(log.error_type || log.error_message) && (
+                <Section title={t('STATS.DETAIL_SECTION_ERROR', '错误详情')} flat>
+                    <UserLogField label="error_type" mono value={log.error_type || '-'} />
+                    {log.error_message && (
+                        <div className="mt-2 text-[11px] text-error font-mono whitespace-pre-wrap break-all bg-error/5 border border-error/20 rounded-control p-2">
+                            {log.error_message}
+                        </div>
+                    )}
+                </Section>
+            )}
+        </div>
+    );
+};
+
+const UserLogField = ({ label, value, mono, highlight }) => (
+    <div className="flex items-center justify-between gap-3 py-1.5 border-b border-outline-variant/20 last:border-0 min-w-0">
+        <span className="text-xs text-on-surface-variant shrink-0">{label}</span>
+        <span
+            className={`text-xs ${mono ? 'font-mono' : ''} ${highlight ? 'text-primary font-semibold' : 'text-on-surface'} truncate min-w-0 text-right`}
+            title={String(value)}
+        >
+            {value}
+        </span>
+    </div>
+);
 
 export default StatisticsDash;
