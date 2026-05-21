@@ -651,6 +651,25 @@ func main() {
 	api.Get("/payment/notify/yifut", yifutNotifyLimiter, controller.YifutNotify)
 	api.Get("/payment/return/yifut", yifutReturnLimiter, controller.YifutReturn)
 
+	// Phase W-3-P2（2026-05-21）：epusdt sidecar webhook（USDT/USDC 多链收款）
+	//
+	// epusdt 协议是 POST JSON（与 yifut GET query 不同），路由用 Post + 复用 ProcessPaymentWebhook。
+	// 限流：epusdt 重试节奏指数退避（最大 5min），单 IP 60/min 足够，与 yifut 一致。
+	// 无 return 路径：epusdt 收银台直接渲染收款地址 + 金额，用户在自己钱包付款，不经 DAOF 跳转。
+	epusdtNotifyLimiter := limiter.New(limiter.Config{
+		Max:        60,
+		Expiration: 1 * time.Minute,
+		KeyGenerator: func(c *fiber.Ctx) string {
+			return "epusdt-notify:" + utils.RealClientIP(c)
+		},
+		LimitReached: func(c *fiber.Ctx) error {
+			return c.Status(429).SendString("rate_limit")
+		},
+	})
+	api.Post("/payment/notify/epusdt", epusdtNotifyLimiter, func(c *fiber.Ctx) error {
+		return controller.ProcessPaymentWebhook(c, "epusdt")
+	})
+
 	// Admin 系统通知群发
 	adminApi.Post("/notifications/broadcasts", controller.AdminCreateBroadcast)
 	adminApi.Get("/notifications/broadcasts", controller.AdminListBroadcasts)
