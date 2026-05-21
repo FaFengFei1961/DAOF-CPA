@@ -231,29 +231,30 @@ const TokenManager = ({ isAuthenticated }) => {
 
     const renderTokens = () => (
         <div className="space-y-6">
-            <div className="bg-surface border border-outline-variant rounded-overlay p-6 relative overflow-hidden">
-                <div className="absolute top-0 right-0 w-32 h-32 bg-primary/5 rounded-full blur-3xl -mr-10 -mt-10 pointer-events-none"></div>
-                <div className="relative z-10 flex flex-col md:flex-row md:items-center justify-between gap-4">
-                    <div>
-                        <h2 className="text-xl font-bold flex items-center gap-2">
-                            <Key className="text-primary" size={24} />
+            {/* Sprint J-3：Token 创建卡 — 用 .card / .input / .btn-primary 原语，
+                去掉 bg-primary/5 blur-3xl 装饰，避免主色发散的 noise */}
+            <div className="card p-6">
+                <div className="flex flex-col md:flex-row md:items-center justify-between gap-4">
+                    <div className="min-w-0">
+                        <h2 className="text-xl font-bold tracking-tight text-on-surface flex items-center gap-2">
+                            <Key className="text-primary" size={20} />
                             {t('TOKEN_MGMT.CREATE_CARD_TITLE')}
                         </h2>
                         <p className="text-sm text-on-surface-variant mt-1">{t('TOKEN_MGMT.CREATE_CARD_DESC')}</p>
                     </div>
-                    <div className="flex w-full md:w-auto items-center gap-3 flex-wrap md:flex-nowrap mt-4 md:mt-0">
+                    <div className="flex w-full md:w-auto items-center gap-2 flex-wrap md:flex-nowrap mt-4 md:mt-0">
                         <input
                             ref={newTokenNameRef}
                             type="text"
                             placeholder={t('TOKEN_MGMT.INPUT_PLACEHOLDER')}
-                            className="w-full md:w-[150px] bg-surface-container-high border border-outline rounded-overlay px-4 py-2 text-sm outline-none focus:border-primary "
+                            className="input w-full md:w-[180px]"
                             value={newTokenName}
                             onChange={e => setNewTokenName(e.target.value)}
                         />
                         <input
                             type="number"
                             placeholder={t('TOKEN_MGMT.LIMIT', 'Quota($)')}
-                            className="w-[110px] bg-surface-container-high border border-outline rounded-overlay px-3 py-2 text-sm outline-none focus:border-primary"
+                            className="input w-[110px]"
                             value={newQuotaLimit}
                             onChange={e => setNewQuotaLimit(e.target.value)}
                             min="0"
@@ -261,42 +262,43 @@ const TokenManager = ({ isAuthenticated }) => {
                         />
                         <input
                             type="datetime-local"
-                            className="w-[160px] bg-surface-container-high border border-outline rounded-overlay px-2 py-2 text-sm outline-none focus:border-primary text-on-surface-variant font-mono"
+                            className="input w-[180px] font-mono"
                             value={newExpiredAt}
                             onChange={e => setNewExpiredAt(e.target.value)}
                         />
                         <button
                             onClick={handleCreateToken}
                             disabled={isCreating}
-                            className="bg-primary text-on-primary hover:bg-primary-container hover:text-on-primary-container px-4 py-2 rounded-overlay font-medium text-sm flex items-center gap-2 disabled:opacity-50 whitespace-nowrap "
+                            className="btn btn-primary btn-md whitespace-nowrap"
                         >
-                            <Plus size={16} />
+                            <Plus size={14} />
                             {isCreating ? t('TOKEN_MGMT.BTN_CREATING') : t('TOKEN_MGMT.BTN_CREATE')}
                         </button>
                     </div>
                 </div>
             </div>
 
-            <div className="bg-surface border border-outline-variant rounded-overlay p-6 flex flex-col md:flex-row md:items-center justify-between gap-4 relative overflow-hidden">
-                <div className="flex items-center gap-4 relative z-10">
-                    <div className="p-3 bg-primary/10 rounded-overlay text-primary">
-                        <Link size={24} />
+            {/* Base URL 卡 — 同样换 .card 原语，避免重复的样式声明 */}
+            <div className="card p-5 flex flex-col md:flex-row md:items-center justify-between gap-4">
+                <div className="flex items-center gap-3 min-w-0">
+                    <div className="w-10 h-10 rounded-control bg-primary/10 text-primary flex items-center justify-center shrink-0">
+                        <Link size={18} />
                     </div>
-                    <div>
+                    <div className="min-w-0">
                         <h3 className="text-sm font-semibold text-on-surface">{t('TOKEN_MGMT.BASE_URL_TITLE')}</h3>
-                        <p className="text-xs text-on-surface-variant mt-1">{t('TOKEN_MGMT.BASE_URL_DESC')}</p>
+                        <p className="text-xs text-on-surface-variant mt-0.5">{t('TOKEN_MGMT.BASE_URL_DESC')}</p>
                     </div>
                 </div>
-                <div className="flex bg-surface-container-high border border-outline rounded-overlay overflow-hidden font-mono text-sm group relative z-10 w-full md:w-auto">
-                    <div className="px-4 py-3 text-on-surface-variant border-r border-outline tracking-tight truncate max-w-full md:max-w-md w-full">
+                <div className="flex bg-surface-container-high border border-outline-variant rounded-control overflow-hidden font-mono text-sm w-full md:w-auto">
+                    <div className="px-3 py-2 text-on-surface tracking-tight truncate max-w-full md:max-w-md w-full">
                         {window.location.origin}/v1
                     </div>
                     <button
                         onClick={() => handleCopy(`${window.location.origin}/v1`)}
-                        className="px-4 py-3 text-primary hover:bg-white/5 flex items-center justify-center shrink-0"
+                        className="px-3 py-2 text-primary hover:bg-on-surface/[0.05] border-l border-outline-variant flex items-center justify-center shrink-0"
                         title={t('TOKEN_MGMT.COPY_URL')}
                     >
-                        <Copy size={16} />
+                        <Copy size={14} />
                     </button>
                 </div>
             </div>
@@ -364,8 +366,17 @@ const TokenManager = ({ isAuthenticated }) => {
                                     </td>
                                     <td className="p-4">
                                         <div className="flex items-center gap-2">
-                                            <code className="text-xs text-primary bg-primary/20 px-2.5 py-1 rounded-control max-w-[180px] truncate">{token.key}</code>
-                                            <button onClick={() => handleCopy(token.key)} className="text-on-surface-variant hover:text-white p-1 rounded-control hover:bg-surface-container-high">
+                                            <code
+                                                className="text-xs font-mono text-on-surface bg-surface-container-high border border-outline-variant/60 px-2 py-1 rounded-control max-w-[180px] truncate"
+                                                title={token.key}
+                                            >
+                                                {token.key}
+                                            </code>
+                                            <button
+                                                onClick={() => handleCopy(token.key)}
+                                                className="text-on-surface-variant hover:text-on-surface p-1 rounded-control hover:bg-on-surface/[0.05]"
+                                                title={t('TOKEN_MGMT.COPY_TOKEN', '复制 token')}
+                                            >
                                                 <Copy size={14} />
                                             </button>
                                         </div>
