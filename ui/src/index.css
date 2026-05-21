@@ -1,22 +1,41 @@
 @import "tailwindcss";
 
 /*
- * 设计系统（Phase 8 — 极简专业控制台风）
+ * 设计系统 · Phase A 视觉基线（2026-05-21）
  *
- * 参考：Linear / Vercel / Stripe / Anthropic Console 共性
- *  - 单 accent 色（indigo #6366f1），其余全部中性灰阶
- *  - 4 个字号：caption(12) / body(14) / heading(20) / display(28)
- *  - 3 个字重：400 normal / 500 medium / 600 semibold
- *  - 2 个圆角：control(4px 按钮/输入) / overlay(8px 卡片/弹层)
- *  - 4px 网格 spacing
- *  - 中性 hover：bg 提亮 4-6%，不 transform、不 scale
- *  - 阴影仅用于 elevated（modal / popover），平面卡用 1px 边框分层
+ * 路线：Linear / Vercel / Anthropic Console / Stripe — 信息密度高、视觉决策少、专业克制。
  *
- * 不再使用：Mica / Acrylic / Reveal 光晕 / spring 弹跳 / brand 色大面积铺色
- *  这些都是 MS Store 的"商品橱窗"装饰，与 SaaS 控制台调性冲突。
+ * 6 条铁律：
+ *  1. 零装饰（无 gradient 大面积铺色 / 无 glow / 无 backdrop-blur / 无 spring 动画）
+ *  2. 单 accent（只有 indigo；其他全部中性灰阶）
+ *  3. 2 圆角 + 2 阴影（control=5px / overlay=8px，阴影仅 popover / modal）
+ *  4. 4 字号 + 3 字重（caption 12 / body 13.5 / heading 18 / display 26；400/500/600）
+ *  5. tabular-nums 强制开（所有数字必须等宽对齐）
+ *  6. 不写营销话术（说明文本只描述功能事实）
+ *
+ * Phase A 工程策略（关键）：
+ *  - 不替换现有 jsx 里的 Material 3 className（数千处，diff 噪声大、回归风险高）
+ *  - 改 token 的"值映射"：让 `--color-surface` / `--color-primary` / `--color-outline-variant`
+ *    等老 token 名字指向新规范的 Stone + Indigo 色板
+ *  - 同时加新规范的 token (`--bg / --t1 / --t2 / --accent`) 作为新代码原语
+ *  - 老 className（`bg-surface` / `text-on-surface-variant`）视觉立即变；
+ *    新代码（`bg-[var(--surface)]` / `text-[var(--t2)]`）用新命名
+ *  - Phase B 起新组件直接用新命名 + utility class（`.card` / `.btn` / `.badge-*` / `.input`）
  */
 
+/* ─── 字体加载（Geist + Geist Mono） ──────────────────────────────────
+ * 用 Google Fonts CDN。生产环境可换 self-host（开源 OFL-1.1 License）。
+ * 主字体：Geist 400/500/600（4 字号 × 3 字重）
+ * 数字字体：Geist Mono 400/500（模型 ID / Token / 金额 / UUID / 时间戳）
+ */
+@import url('https://fonts.googleapis.com/css2?family=Geist:wght@400;500;600&family=Geist+Mono:wght@400;500&display=swap');
+
 @theme {
+  /* ─── Material 3 token alias（保持 Tailwind 工具类生效） ────────────
+   * 这里只声明 Tailwind 用得到的 token 名；具体值在 @layer base 块里。
+   * 老 className 如 `bg-surface-container` `text-on-surface-variant` 等
+   * 继续可用，但渲染出来的是新规范的色彩。
+   */
   --color-primary: var(--color-primary);
   --color-on-primary: var(--color-on-primary);
   --color-primary-container: var(--color-primary-container);
@@ -26,6 +45,8 @@
   --color-on-surface: var(--color-on-surface);
   --color-surface-container: var(--color-surface-container);
   --color-surface-container-high: var(--color-surface-container-high);
+  --color-surface-container-highest: var(--color-surface-container-highest);
+  --color-surface-container-low: var(--color-surface-container-low);
 
   --color-surface-variant: var(--color-surface-variant);
   --color-on-surface-variant: var(--color-on-surface-variant);
@@ -35,6 +56,7 @@
 
   --color-error: var(--color-error);
   --color-on-error: var(--color-on-error);
+  --color-error-container: var(--color-error-container);
 
   --color-success: var(--color-success);
   --color-on-success: var(--color-on-success);
@@ -49,35 +71,27 @@
   --color-info: var(--color-info);
   --color-on-info: var(--color-on-info);
 
-  /* Clear default radii and shadows (Tailwind v4 way) */
+  --color-secondary: var(--color-secondary);
+  --color-tertiary: var(--color-tertiary);
+
+  /* ─── 圆角（2 档） ───────────────────────────────────────────
+   * Phase A：control 从 4px 改 5px（规范明确值，让按钮/输入更圆润但不软）
+   * overlay 8px 保持（卡片 / Drawer / Modal）
+   */
   --radius-*: initial;
   --radius-none: 0;
   --radius-full: 9999px;
-  --radius-control: 4px;
+  --radius-control: 5px;
   --radius-overlay: 8px;
 
+  /* ─── 阴影（仅 popover / modal 用） ──────────────────────────── */
   --shadow-*: initial;
   --shadow-none: none;
-  --shadow-modal: 0 25px 50px -12px rgb(0 0 0 / 0.4);
-  --shadow-dropdown: 0 10px 15px -3px rgb(0 0 0 / 0.3);
+  --shadow-pop: 0 4px 12px -2px rgb(0 0 0 / 0.08), 0 1px 3px rgb(0 0 0 / 0.04);
+  --shadow-modal: 0 24px 48px -12px rgb(0 0 0 / 0.18), 0 4px 12px rgb(0 0 0 / 0.06);
+  --shadow-dropdown: var(--shadow-pop);  /* alias */
 
-  /*
-   * Fluent 2 / Win11 圆角规则（Microsoft Learn 官方）：
-   *   - 4px：所有页内常规控件（Button、CheckBox、TextBox、ListView、ChipBar）
-   *   - 8px：所有顶级容器（卡片、Flyout、Dialog、TeachingTip）
-   *   - 0px：贴合边缘 / 窗口最大化时的边角
-   * 不存在 12px / 16px / 24px 圆角！我之前用 lg=12 xl=16 是错的。
-   */
-  /*
-   * Tailwind v4：@theme 块里以 --radius-{name} 命名的变量
-   * 自动注册为 rounded-{name} 工具类（rounded-control / rounded-overlay）。
-   */
-  --radius-control: 4px;
-  --radius-overlay: 8px;
-
-  /*
-   * Fluent v9 spacing scale（基于 4px 网格）。组件间距应取自这套，不要用任意值。
-   */
+  /* ─── 间距（4px 网格） ─────────────────────────────────────── */
   --space-xxs: 2px;
   --space-xs: 4px;
   --space-s-nudge: 6px;
@@ -89,125 +103,170 @@
   --space-xxl: 24px;
   --space-xxxl: 32px;
 
-  /*
-   * Phase 8 typography ramp — 收敛到 4 个语义字号 + 4 个数字字号
-   * 语义命名（首选，新代码用这套）：
-   *   --font-caption  12px  辅助/标签
-   *   --font-body     14px  正文（默认）
-   *   --font-heading  20px  section 标题
-   *   --font-display  28px  页面 H1
-   *
-   * 数字字号（向下兼容旧 Fluent 调用，逐步弃用）：
-   *   --font-caption2 / caption1 / body1 / body2 / subtitle2 / subtitle1 /
-   *   title3 / title2 / title1 / large-title 全部 alias 到上述 4 个
-   */
-  --font-caption: 12px;
-  --font-body: 14px;
-  --font-heading: 20px;
-  --font-display: 28px;
+  /* ─── 字号（4 个语义值） ──────────────────────────────────── */
+  --font-caption: 12px;     /* 标签 / 表头 / hint */
+  --font-body: 13.5px;      /* 正文（规范明确 13.5，比 14 更密） */
+  --font-heading: 18px;     /* section 标题 */
+  --font-display: 26px;     /* 页面 H1 */
 
-  /* 向下兼容 alias — 不要在新代码用 */
+  /* 向下兼容 alias（旧代码用 font-body1/title3 等仍能工作） */
   --font-caption2: 12px;
   --font-caption1: 12px;
-  --font-body1: 14px;
-  --font-body2: 14px;
-  --font-subtitle2: 14px;
-  --font-subtitle1: 20px;
-  --font-title3: 20px;
-  --font-title2: 28px;
-  --font-title1: 28px;
-  --font-large-title: 28px;
+  --font-body1: 13.5px;
+  --font-body2: 13.5px;
+  --font-subtitle2: 13.5px;
+  --font-subtitle1: 18px;
+  --font-title3: 18px;
+  --font-title2: 26px;
+  --font-title1: 26px;
+  --font-large-title: 26px;
 
-  /*
-   * Phase 7.7：字体栈彻底重做 — 最大单项视觉提升
-   *
-   * 旧栈：Segoe UI Variable / Segoe UI fallback → Windows 中文落到 Microsoft
-   * YaHei，屏幕渲染极丑。
-   *
-   * 新栈（按 OS 优雅退化）：
-   *   - macOS：-apple-system / SF Pro Text → PingFang SC（Apple 中文，最美）
-   *   - Windows：Segoe UI Variable → fallback 直接到 PingFang SC（如果系统装了
-   *     Apple Cloud / WeChat 会带）→ Source Han Sans / Noto Sans SC（Google
-   *     开源中文）→ 最差才到 Microsoft YaHei
-   *   - Linux：system-ui → Noto Sans CJK SC
-   *   - emoji 单独栈避免方框
-   *
-   * Inter 作为西文 fallback 而不是主字体（避免引入 web font 加载延迟，
-   * 用 system Inter 如果用户系统装了，否则走 system-ui）。
-   */
+  /* ─── 字体栈（Geist 主，PingFang/Noto 中文 fallback） ──────── */
   --font-sans:
+    'Geist',
     -apple-system, BlinkMacSystemFont,
-    "SF Pro Text", "Segoe UI Variable Text", "Segoe UI",
-    "Inter", "Helvetica Neue", Helvetica, Arial,
-    "PingFang SC", "Hiragino Sans GB",
-    "Source Han Sans SC", "Noto Sans SC", "Noto Sans CJK SC",
-    "Microsoft YaHei", sans-serif,
-    "Apple Color Emoji", "Segoe UI Emoji", "Noto Color Emoji";
+    'SF Pro Text', 'Segoe UI Variable Text', 'Segoe UI',
+    'Helvetica Neue', Helvetica, Arial,
+    'PingFang SC', 'Hiragino Sans GB',
+    'Source Han Sans SC', 'Noto Sans SC', 'Noto Sans CJK SC',
+    'Microsoft YaHei', sans-serif,
+    'Apple Color Emoji', 'Segoe UI Emoji', 'Noto Color Emoji';
+
+  --font-mono:
+    'Geist Mono',
+    ui-monospace, 'SF Mono', Menlo, Monaco, 'Cascadia Code',
+    'Roboto Mono', Consolas, 'Liberation Mono', monospace;
 }
 
 @layer base {
+  /* ─── Light 模式：规范 §1.1 浅色色板 ─────────────────────────
+   * 同时绑定 Material 3 老 token + 新规范 token，让两套命名共存。
+   */
   :root {
-    /* Fallback MD3 Light Theme before JS initialization */
-    --color-surface: #fdfcff;
-    --color-surface-container: #f3edf7;
-    --color-on-surface: #1a1c1e;
-    --color-primary: #0061a4;
-    --color-on-primary: #ffffff;
-    --color-primary-container: #d1e4ff;
-    --color-on-primary-container: #001d36;
-    --color-surface-variant: #dfe2eb;
-    --color-on-surface-variant: #43474e;
-    --color-outline: #73777f;
-    --color-outline-variant: #c3c6cf;
-    --color-error: #ba1a1a;
-    --color-on-error: #ffffff;
+    /* ─ 新规范 token（Phase B 起新代码用） ─ */
+    --bg: #FAFAF9;              /* canvas，warmer than white */
+    --surface: #FFFFFF;         /* 卡片底 */
+    --surface-2: #F5F5F4;       /* 嵌套卡片 / hover 态 */
+    --surface-3: #EEEEEC;       /* 强调嵌套（少用） */
+    --border: #E7E5E4;          /* 默认分割线 */
+    --border-strong: #D6D3D1;   /* 输入框 / 强分层 */
+    --overlay: rgb(28 25 23 / 0.55);  /* modal 遮罩 */
 
-    --color-success: #10b981;
-    --color-on-success: #ffffff;
-    --color-success-container: #d1fae5;
-    --color-on-success-container: #022c22;
-    --color-warning: #f59e0b;
-    --color-on-warning: #ffffff;
-    --color-warning-container: #fef3c7;
-    --color-on-warning-container: #451a03;
-    --color-info: #6366f1;
-    --color-on-info: #ffffff;
+    --t1: #1C1917;              /* 主文本 */
+    --t2: #57534E;              /* 次要 / 标签 */
+    --t3: #A8A29E;              /* 辅助 / placeholder（注意：对 --bg 仅 2.69:1，AA 不达，仅装饰用） */
+    --t-inv: #FAFAF9;
+
+    --accent: #4F46E5;          /* indigo-600 */
+    --accent-hover: #4338CA;
+    --accent-soft: #EEF2FF;
+    --accent-fg: #FFFFFF;
+    --accent-ring: rgb(79 70 229 / 0.18);
+
+    --success: #15803D;  --success-soft: #DCFCE7;
+    --warning: #B45309;  --warning-soft: #FEF3C7;
+    --danger:  #B91C1C;  --danger-soft:  #FEE2E2;
+    --info:    #1D4ED8;  --info-soft:    #DBEAFE;
+
+    /* ─ Material 3 老 token alias 到新色板（让现有 className 立即生效新色） ─ */
+    --color-surface: var(--bg);                       /* body 背景走 bg */
+    --color-surface-container: var(--surface);        /* 卡片底走 surface */
+    --color-surface-container-high: var(--surface-2); /* 嵌套 / hover */
+    --color-surface-container-highest: var(--surface-3);
+    --color-surface-container-low: var(--surface);
+    --color-surface-variant: var(--surface-2);
+    --color-on-surface: var(--t1);
+    --color-on-surface-variant: var(--t2);
+    --color-outline: var(--border-strong);
+    --color-outline-variant: var(--border);
+
+    --color-primary: var(--accent);
+    --color-on-primary: var(--accent-fg);
+    --color-primary-container: var(--accent-soft);
+    --color-on-primary-container: var(--accent);
+
+    --color-error: var(--danger);
+    --color-on-error: #FFFFFF;
+    --color-error-container: var(--danger-soft);
+    --color-success: var(--success);
+    --color-on-success: #FFFFFF;
+    --color-success-container: var(--success-soft);
+    --color-on-success-container: #14532D;
+    --color-warning: var(--warning);
+    --color-on-warning: #FFFFFF;
+    --color-warning-container: var(--warning-soft);
+    --color-on-warning-container: #78350F;
+    --color-info: var(--info);
+    --color-on-info: #FFFFFF;
+
+    /* 现有代码用到的 secondary/tertiary 退化为中性灰 */
+    --color-secondary: var(--surface-2);
+    --color-tertiary: var(--surface-3);
   }
 
+  /* ─── Dark 模式：规范 §1.1 深色色板 ─────────────────────────── */
   .dark {
-    /* Fallback MD3 Dark Theme — 接近 Win11 Mica 深色基调 (#202020) */
-    --color-surface: #1a1c1e;
-    --color-surface-container: #1e1e20;
-    --color-on-surface: #e2e2e6;
-    --color-primary: #94ccff;
-    --color-on-primary: #00335a;
-    --color-primary-container: #00497f;
-    --color-on-primary-container: #d1e4ff;
-    --color-surface-variant: #43474e;
-    --color-on-surface-variant: #c3c6cf;
-    --color-outline: #8d9199;
-    --color-outline-variant: #43474e;
-    --color-error: #ffb4ab;
-    --color-on-error: #690005;
+    --bg: #0B0A09;
+    --surface: #131210;
+    --surface-2: #1C1B19;
+    --surface-3: #26241F;
+    --border: #2B2825;
+    --border-strong: #44403C;
+    --overlay: rgb(0 0 0 / 0.7);
 
-    --color-success: #4ade80;
-    --color-success-container: #14532d;
-    --color-warning: #fbbf24;
-    --color-warning-container: #78350f;
+    --t1: #FAFAF9;
+    --t2: #A8A29E;
+    --t3: #78716C;
+    --t-inv: #0B0A09;
+
+    --accent: #818CF8;          /* indigo-400，深色稍浅保对比 */
+    --accent-hover: #6366F1;
+    --accent-soft: rgb(99 102 241 / 0.14);
+    --accent-fg: #0B0A09;
+
+    --success: #4ADE80;  --success-soft: rgb(74 222 128 / 0.13);
+    --warning: #FBBF24;  --warning-soft: rgb(251 191 36 / 0.13);
+    --danger:  #F87171;  --danger-soft:  rgb(248 113 113 / 0.13);
+    --info:    #60A5FA;  --info-soft:    rgb(96 165 250 / 0.13);
+
+    --color-surface: var(--bg);
+    --color-surface-container: var(--surface);
+    --color-surface-container-high: var(--surface-2);
+    --color-surface-container-highest: var(--surface-3);
+    --color-surface-container-low: var(--surface);
+    --color-surface-variant: var(--surface-2);
+    --color-on-surface: var(--t1);
+    --color-on-surface-variant: var(--t2);
+    --color-outline: var(--border-strong);
+    --color-outline-variant: var(--border);
+
+    --color-primary: var(--accent);
+    --color-on-primary: var(--accent-fg);
+    --color-primary-container: var(--accent-soft);
+    --color-on-primary-container: var(--accent);
+
+    --color-error: var(--danger);
+    --color-error-container: var(--danger-soft);
+    --color-success: var(--success);
+    --color-success-container: var(--success-soft);
+    --color-warning: var(--warning);
+    --color-warning-container: var(--warning-soft);
+    --color-info: var(--info);
+
+    --color-secondary: var(--surface-2);
+    --color-tertiary: var(--surface-3);
   }
 
   body {
-    background-color: var(--color-surface);
-    color: var(--color-on-surface);
+    background-color: var(--bg);
+    color: var(--t1);
     font-family: var(--font-sans);
-    font-size: var(--font-body1);
-    /* Fluent 推荐字重渐变：UI 默认 400，标题 600，键值 mono */
+    font-size: var(--font-body);
     font-feature-settings: "ss01", "cv11";
     /*
-     * Phase 7.5：Stripe / Vercel / Linear 全用 tabular-nums 做默认数字呈现 —
+     * tabular-nums slashed-zero 全局开：
      * 所有数字等宽对齐（金额/计数/时间/Token 数列对齐自然干净）；
      * slashed-zero 让 0/O 在 API key、订单号场景里可区分。
-     * Segoe UI Variable / SF / Inter 都支持，向下兼容浏览器自动忽略。
      */
     font-variant-numeric: tabular-nums slashed-zero;
     overflow-x: hidden;
@@ -215,47 +274,266 @@
     -webkit-font-smoothing: antialiased;
     -moz-osx-font-smoothing: grayscale;
     transition: background-color 0.2s ease, color 0.2s ease;
-    /*
-     * Phase 7.7：撤掉 Mica 多层 radial-gradient 装饰背景。
-     * Linear / Vercel / Stripe / Anthropic Console 都是纯单色背景让卡片自己
-     * 浮起来，渐变背景在 SaaS 控制台里反而显"花哨而不专业"。
-     * 装饰性 mica 留给 fl-mica / fl-acrylic 工具类按需启用，body 不强加。
-     */
   }
 
-  /* Fluent 焦点环：所有可交互元素统一 2px primary outline */
+  /* 焦点环：统一用 accent + 3px ring（规范 §2.2） */
   :focus-visible {
-    outline: 2px solid var(--color-primary);
+    outline: 2px solid var(--accent);
     outline-offset: 2px;
     border-radius: var(--radius-control);
   }
 }
 
-/*
- * fl-card — 平面卡片，design system 主原语
- * Phase 8：去掉 hover 上浮 transform + 重阴影（"商品橱窗"装饰），改为
- * Linear/Vercel 控制台的中性 hover —— 仅 bg 微亮 + border 加深，无位移。
+/* ─── 新规范原语（Phase B 起新组件用这套） ──────────────────────────
+ * 老的 .fl-card / .fl-btn 还在下面，继续兼容现有代码。
+ * 新代码请优先用这套。
+ */
+
+/* Card（取代 .fl-card；只用 1px 边框分层，无 box-shadow） */
+.card {
+  background-color: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-overlay);
+}
+
+/* Section title（用在 card 内分块） */
+.section-title {
+  font-size: var(--font-heading);
+  font-weight: 600;
+  letter-spacing: -0.01em;
+  color: var(--t1);
+}
+
+/* Eyebrow（小标签：KPI 副标题 / Section 分段标题） */
+.eyebrow {
+  font-size: 11px;
+  font-weight: 500;
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+  color: var(--t3);
+}
+
+/* Page 容器 */
+.page {
+  padding: 24px 32px 56px;
+  max-width: 1280px;
+  margin: 0 auto;
+}
+@media (max-width: 768px) {
+  .page {
+    padding: 16px;
+  }
+}
+
+/* Page header */
+.page-title {
+  font-size: var(--font-display);
+  font-weight: 600;
+  letter-spacing: -0.015em;
+  color: var(--t1);
+}
+.page-subtitle {
+  font-size: 13px;
+  color: var(--t2);
+  margin-top: 4px;
+}
+
+/* Button（取代 .fl-btn-*；4 个 variant + 3 个尺寸） */
+.btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  height: 28px;             /* 默认控制台密度 */
+  padding: 0 12px;
+  font-size: var(--font-body);
+  font-weight: 500;
+  border-radius: var(--radius-control);
+  border: 1px solid transparent;
+  cursor: pointer;
+  transition: background-color 0.1s ease, border-color 0.1s ease, color 0.1s ease;
+  user-select: none;
+  white-space: nowrap;
+}
+.btn:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
+}
+.btn:disabled {
+  opacity: 0.4;
+  cursor: not-allowed;
+}
+.btn-md { height: 32px; padding: 0 14px; }
+.btn-lg { height: 38px; padding: 0 18px; font-weight: 600; }
+
+.btn-primary {
+  background-color: var(--accent);
+  color: var(--accent-fg);
+}
+.btn-primary:hover:not(:disabled) {
+  background-color: var(--accent-hover);
+}
+
+.btn-secondary {
+  background-color: var(--surface);
+  color: var(--t1);
+  border-color: var(--border-strong);
+}
+.btn-secondary:hover:not(:disabled) {
+  background-color: var(--surface-2);
+}
+
+.btn-ghost {
+  background-color: transparent;
+  color: var(--t2);
+}
+.btn-ghost:hover:not(:disabled) {
+  background-color: var(--surface-2);
+  color: var(--t1);
+}
+
+.btn-danger {
+  background-color: var(--danger);
+  color: #FFFFFF;
+}
+.btn-danger:hover:not(:disabled) {
+  filter: brightness(0.92);
+}
+
+/* Input（取代散落的 input className）*/
+.input {
+  width: 100%;
+  height: 32px;
+  padding: 0 10px;
+  background-color: var(--surface);
+  color: var(--t1);
+  font-size: var(--font-body);
+  font-family: inherit;
+  border: 1px solid var(--border-strong);
+  border-radius: var(--radius-control);
+  transition: border-color 0.1s ease, box-shadow 0.1s ease;
+}
+.input::placeholder {
+  color: var(--t3);
+}
+.input:focus {
+  outline: none;
+  border-color: var(--accent);
+  box-shadow: 0 0 0 3px var(--accent-ring);
+}
+.input:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+/* textarea / select 共用 .input */
+textarea.input { height: auto; min-height: 72px; padding: 8px 10px; }
+select.input { padding-right: 28px; }
+
+/* Badge（5 种语义：neutral / accent / success / warning / danger）*/
+.badge {
+  display: inline-flex;
+  align-items: center;
+  height: 20px;
+  padding: 0 8px;
+  font-size: 11px;
+  font-weight: 500;
+  border-radius: 4px;
+  background-color: var(--surface-2);
+  color: var(--t2);
+  white-space: nowrap;
+}
+.badge-accent { background-color: var(--accent-soft); color: var(--accent); }
+.badge-success { background-color: var(--success-soft); color: var(--success); }
+.badge-warning { background-color: var(--warning-soft); color: var(--warning); }
+.badge-danger { background-color: var(--danger-soft); color: var(--danger); }
+.badge-info { background-color: var(--info-soft); color: var(--info); }
+
+.badge-dot::before {
+  content: "";
+  display: inline-block;
+  width: 6px;
+  height: 6px;
+  border-radius: 9999px;
+  background-color: currentColor;
+  margin-right: 6px;
+  vertical-align: middle;
+}
+
+/* KBD（键盘提示，搜索框右侧 ⌘K）*/
+.kbd {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-width: 20px;
+  height: 20px;
+  padding: 0 5px;
+  font-family: var(--font-mono);
+  font-size: 11px;
+  color: var(--t2);
+  background-color: var(--surface-2);
+  border: 1px solid var(--border);
+  border-radius: 4px;
+}
+
+/* Table 原语 */
+.t {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: var(--font-body);
+}
+.t thead th {
+  position: sticky;
+  top: 0;
+  background-color: var(--surface-2);
+  color: var(--t2);
+  font-size: 11px;
+  font-weight: 500;
+  text-transform: uppercase;
+  letter-spacing: 0.02em;
+  text-align: left;
+  padding: 8px 12px;
+  border-bottom: 1px solid var(--border);
+  z-index: 1;
+}
+.t tbody tr {
+  border-bottom: 1px solid var(--border);
+  transition: background-color 0.08s ease;
+}
+.t tbody tr:hover {
+  background-color: var(--surface-2);
+}
+.t tbody td {
+  padding: 10px 12px;
+  color: var(--t1);
+}
+.num-tabular {
+  font-variant-numeric: tabular-nums;
+  font-family: var(--font-mono);
+}
+
+/* Layout helpers */
+.row { display: flex; align-items: center; }
+.row.spread { justify-content: space-between; }
+.row.gap-2 { gap: 8px; }
+.row.gap-3 { gap: 12px; }
+.row.gap-4 { gap: 16px; }
+
+/* ─── 旧 Fluent 风格 utility class（保留，兼容现有代码） ──────────
+ * 这些 class 在数百个 .jsx 里被引用，Phase A 阶段保留并指向新色板。
+ * Phase B-G 会逐步迁移到新原语（.card / .btn / .badge-*）。
  */
 .fl-card {
   position: relative;
-  border: 1px solid var(--color-outline-variant);
-  background-color: var(--color-surface-container);
+  border: 1px solid var(--border);
+  background-color: var(--surface);
   border-radius: var(--radius-overlay);
   transition: background-color 0.15s ease, border-color 0.15s ease;
 }
 .fl-card:hover {
-  background-color: var(--color-surface-container-high);
-  border-color: var(--color-outline);
+  background-color: var(--surface-2);
+  border-color: var(--border-strong);
 }
 
-/*
- * Fluent Button - 按 prominent / standard / subtle 三档（与 Fluent 文档一致）
- * 直接用 class 应用，避免每个按钮重复 Tailwind 一长串
- */
-/*
- * fl-btn — Fluent Button 标准实现
- * 高度 32px，圆角 4px（Win11 spec），padding 6/14
- */
 .fl-btn {
   display: inline-flex;
   align-items: center;
@@ -263,8 +541,8 @@
   gap: var(--space-s);
   padding: 6px 14px;
   height: 32px;
-  font-size: var(--font-body1);
-  font-weight: 600;
+  font-size: var(--font-body);
+  font-weight: 500;
   border-radius: var(--radius-control);
   border: 1px solid transparent;
   cursor: pointer;
@@ -273,11 +551,8 @@
   white-space: nowrap;
 }
 .fl-btn:focus-visible {
-  outline: 2px solid var(--color-primary);
+  outline: 2px solid var(--accent);
   outline-offset: 2px;
-}
-.fl-btn:active {
-  transform: scale(0.98);
 }
 .fl-btn:disabled {
   opacity: 0.4;
@@ -285,34 +560,31 @@
 }
 
 .fl-btn-prominent {
-  background-color: var(--color-primary);
-  color: var(--color-on-primary);
+  background-color: var(--accent);
+  color: var(--accent-fg);
 }
 .fl-btn-prominent:hover:not(:disabled) {
-  filter: brightness(1.1);
+  background-color: var(--accent-hover);
 }
 
 .fl-btn-standard {
-  background-color: var(--color-surface-container-high);
-  color: var(--color-on-surface);
-  border-color: var(--color-outline-variant);
+  background-color: var(--surface);
+  color: var(--t1);
+  border-color: var(--border-strong);
 }
 .fl-btn-standard:hover:not(:disabled) {
-  background-color: var(--color-surface-variant);
+  background-color: var(--surface-2);
 }
 
 .fl-btn-subtle {
   background-color: transparent;
-  color: var(--color-on-surface);
+  color: var(--t2);
 }
 .fl-btn-subtle:hover:not(:disabled) {
-  background-color: var(--color-surface-container);
+  background-color: var(--surface-2);
+  color: var(--t1);
 }
 
-/*
- * fl-section-header — 全站统一的区块标题（厂商分组模式）
- * 用 button 包裹时点击跳详情；纯展示用 div。
- */
 .fl-section-header {
   display: flex;
   align-items: center;
@@ -323,10 +595,10 @@
   display: inline-flex;
   align-items: center;
   gap: 4px;
-  font-size: var(--font-subtitle1);
+  font-size: var(--font-heading);
   font-weight: 600;
   letter-spacing: -0.01em;
-  color: var(--color-on-surface);
+  color: var(--t1);
   background: none;
   border: none;
   padding: 4px 6px;
@@ -336,8 +608,8 @@
   transition: color 0.15s ease, background-color 0.15s ease;
 }
 .fl-section-title:hover {
-  color: var(--color-primary);
-  background-color: color-mix(in srgb, var(--color-on-surface) 4%, transparent);
+  color: var(--accent);
+  background-color: color-mix(in srgb, var(--t1) 4%, transparent);
 }
 .fl-section-title svg {
   opacity: 0.6;
@@ -348,7 +620,7 @@
   transform: translateX(2px);
 }
 
-/* Scrollbar — Fluent 风格细滚动条 */
+/* Scrollbar */
 ::-webkit-scrollbar {
   width: 8px;
   height: 8px;
@@ -357,78 +629,55 @@
   background: transparent;
 }
 ::-webkit-scrollbar-thumb {
-  background: var(--color-outline-variant);
+  background: var(--border);
   border-radius: var(--radius-control);
   border: 2px solid transparent;
   background-clip: content-box;
 }
 ::-webkit-scrollbar-thumb:hover {
-  background: var(--color-outline);
+  background: var(--border-strong);
   background-clip: content-box;
 }
-
-/* 隐藏滚动条但保留滚动能力（导航条等使用） */
 .no-scrollbar::-webkit-scrollbar { display: none; }
 .no-scrollbar { scrollbar-width: none; }
 
-/*
- * fl-scroll-chat — 聊天 / 长内容区域的强可视滚动条。
- * 默认全局滚动条是 8px 隐性的，对长聊天列表辨识度差；
- * 这里给消息容器一个更宽（10px）+ 更高对比的拇指条。
- * 同时保持深浅模式自适应。
- */
+/* 聊天 / 长内容滚动条 */
 .fl-scroll-chat::-webkit-scrollbar {
   width: 10px;
   height: 10px;
 }
 .fl-scroll-chat::-webkit-scrollbar-track {
-  background: color-mix(in srgb, var(--color-on-surface) 4%, transparent);
+  background: color-mix(in srgb, var(--t1) 4%, transparent);
   border-radius: 5px;
   margin: 4px 0;
 }
 .fl-scroll-chat::-webkit-scrollbar-thumb {
-  background: color-mix(in srgb, var(--color-on-surface) 25%, transparent);
+  background: color-mix(in srgb, var(--t1) 25%, transparent);
   border-radius: 5px;
   border: 2px solid transparent;
   background-clip: content-box;
   min-height: 32px;
 }
 .fl-scroll-chat::-webkit-scrollbar-thumb:hover {
-  background: color-mix(in srgb, var(--color-on-surface) 45%, transparent);
+  background: color-mix(in srgb, var(--t1) 45%, transparent);
   background-clip: content-box;
 }
-/* Firefox */
 .fl-scroll-chat {
   scrollbar-width: thin;
-  scrollbar-color: color-mix(in srgb, var(--color-on-surface) 25%, transparent) transparent;
+  scrollbar-color: color-mix(in srgb, var(--t1) 25%, transparent) transparent;
 }
 
-/*
- * ─── Phase 0.5 quick win utilities (gemini ccg 推荐) ────────────
- *
- * .fl-table-shell — 给所有裸 table 套外壳：边框 + 圆角 + 横滚边缘渐变
- *   解决 1960px 宽表"用户视觉不知道右侧还有数据"的问题
- *
- * 用法：
- *   <div class="fl-table-shell">
- *     <div class="fl-table-scroll">
- *       <table>...</table>
- *     </div>
- *   </div>
- */
+/* Table shell（保留） */
 .fl-table-shell {
-  border: 1px solid var(--color-outline-variant);
+  border: 1px solid var(--border);
   border-radius: var(--radius-overlay);
   overflow: hidden;
-  background-color: var(--color-surface-container);
+  background-color: var(--surface);
 }
-
 .fl-table-scroll {
   position: relative;
   overflow-x: auto;
 }
-
-/* 右边缘渐变阴影：内容超出视口时提示"右侧还有更多" */
 .fl-table-scroll::after {
   content: "";
   position: sticky;
@@ -440,49 +689,36 @@
   background: linear-gradient(
     to right,
     transparent,
-    color-mix(in srgb, var(--color-surface) 70%, transparent)
+    color-mix(in srgb, var(--bg) 70%, transparent)
   );
-  /* sticky after 不参与 normal flow；用 float 让它成为右上角覆盖 */
   float: right;
   margin-left: -24px;
 }
-
-/* sticky 表头：长表滚动时表头始终可见 */
 .fl-table-shell thead th {
   position: sticky;
   top: 0;
-  background-color: var(--color-surface-container-high);
+  background-color: var(--surface-2);
   z-index: 1;
 }
 
-/*
- * 产品线 brand accent token — 仅用于小尺寸 chip 标识（fl-brand-chip），
- * 不再用于大面积铺色 / hero 渐变 / 套餐卡顶色条。
- *
- * Phase 8：保留 token 但仅作为产品标识，主视觉走单 indigo accent。
+/* Brand chip — Provider 标识（A11 §7.4 允许的"数据可视化稳定标识"，不算 brand 色）
+ * 保留现有 token，但调淡（避免视觉抢夺单 accent 角色）
  */
 :root {
-  /* Claude — 深紫，Anthropic brand 色系 */
-  --brand-claude: 168 85 247;        /* #A855F7 */
-  --brand-claude-soft: 124 58 237;   /* #7C3AED */
-  /* Codex — 翠绿，OpenAI codex hint */
-  --brand-codex: 16 185 129;         /* #10B981 */
-  --brand-codex-soft: 5 150 105;     /* #059669 */
-  /* Gemini — 琥珀，Google brand 色派生 */
-  --brand-gemini: 245 158 11;        /* #F59E0B */
-  --brand-gemini-soft: 217 119 6;    /* #D97706 */
-  /* Combo — 青蓝，跨产品组合 */
-  --brand-combo: 14 165 233;         /* #0EA5E9 */
-  --brand-combo-soft: 2 132 199;     /* #0284C7 */
-  /* xAI — 暖黄，Grok / xAI 标识 */
-  --brand-xai: 250 204 21;           /* #FACC15 */
-  --brand-xai-soft: 202 138 4;       /* #CA8A04 */
-  /* Other — 中性灰 */
-  --brand-other: 148 163 184;        /* #94A3B8 */
-  --brand-other-soft: 100 116 139;   /* #64748B */
+  --brand-claude: 168 85 247;
+  --brand-claude-soft: 124 58 237;
+  --brand-codex: 16 185 129;
+  --brand-codex-soft: 5 150 105;
+  --brand-gemini: 245 158 11;
+  --brand-gemini-soft: 217 119 6;
+  --brand-combo: 14 165 233;
+  --brand-combo-soft: 2 132 199;
+  --brand-xai: 250 204 21;
+  --brand-xai-soft: 202 138 4;
+  --brand-other: 148 163 184;
+  --brand-other-soft: 100 116 139;
 }
 
-/* Brand chip — 产品线徽章（套餐卡角标 / sidebar group label） */
 .fl-brand-chip {
   display: inline-flex;
   align-items: center;
@@ -490,7 +726,7 @@
   padding: 2px 8px;
   border-radius: 9999px;
   font-size: 11px;
-  font-weight: 600;
+  font-weight: 500;
   letter-spacing: 0.02em;
   border: 1px solid currentColor;
   background-color: rgb(var(--brand) / 0.15);
@@ -502,4 +738,3 @@
 .fl-brand-chip[data-brand="combo"]   { --brand: var(--brand-combo); }
 .fl-brand-chip[data-brand="xai"]     { --brand: var(--brand-xai); }
 .fl-brand-chip[data-brand="other"]   { --brand: var(--brand-other); }
-
