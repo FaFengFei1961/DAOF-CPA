@@ -334,7 +334,9 @@
       "ACTION_BILLS": "查看账单",
       "ACTION_BILLS_DESC": "查看交易明细与记录",
       "RETRY": "重试充值",
-      "CONTACT_SUPPORT": "提交工单"
+      "CONTACT_SUPPORT": "提交工单",
+      "SESSION_LOST_TITLE": "支付已完成，请重新登录后查看余额",
+      "SESSION_LOST_DESC": "支付平台回跳过程中登录态可能丢失，不影响实际到账"
     }
   },
   "PAY_ADMIN": {

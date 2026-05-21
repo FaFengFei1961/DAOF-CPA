@@ -16,9 +16,10 @@ package proxy
 
 import "fmt"
 
-// 与 ui/src/App.jsx 的 allowedViews 严格对齐。
+// 通知 action_url 落点必须通过 NotificationCenter.isSafeNavigateURL 同源校验。
 //
-// 新增 / 重命名 view 必须同步两端，否则通知跳转死链。
+// Phase I-7 doc fix: 旧注释引用"ui/src/App.jsx 的 allowedViews"是过期信息 —
+// allowedViews 已经下线，前端按 path 同源 + 路由白名单做校验。
 //
 // IA audit Mi-3 cleanup: 移除 ViewUpgrade —— 前端 /upgrade 路由 + UpgradeRedirect
 // shim 删除后，"我的订阅"通知直接落 Dashboard ('/')，营销类落 Dashboard +

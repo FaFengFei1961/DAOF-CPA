@@ -334,7 +334,9 @@
       "ACTION_BILLS": "View billing",
       "ACTION_BILLS_DESC": "Review transactions and records",
       "RETRY": "Try top-up again",
-      "CONTACT_SUPPORT": "Open a ticket"
+      "CONTACT_SUPPORT": "Open a ticket",
+      "SESSION_LOST_TITLE": "Payment done. Please sign in again to see your balance.",
+      "SESSION_LOST_DESC": "Your session can be dropped during the payment gateway round-trip. This does not affect the actual top-up."
     }
   },
   "PAY_ADMIN": {

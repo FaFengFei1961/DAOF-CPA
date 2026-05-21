@@ -54,10 +54,19 @@ func InitDB() {
 	//   busy_timeout=5000：并发写时等待 5s 而非立即 SQLITE_BUSY 报错
 	//   cache_size=-65536：LRU 页缓存 64MB（负数=KB）
 	if sqlDB, dbErr := DB.DB(); dbErr == nil {
-		_, _ = sqlDB.Exec("PRAGMA journal_mode=WAL")
-		_, _ = sqlDB.Exec("PRAGMA synchronous=NORMAL")
-		_, _ = sqlDB.Exec("PRAGMA busy_timeout=5000")
-		_, _ = sqlDB.Exec("PRAGMA cache_size=-65536")
+		// Phase I-7 fix：原代码 `_, _ = sqlDB.Exec(...)` 静默丢错，WAL 模式 PRAGMA
+		// 失败会让 SQLite 退回到全库 DELETE journal（锁 heavy）整个进程生命周期没人知道。
+		// 至少 log，让运维启动时能立即看到性能配置异常。
+		for _, p := range []string{
+			"PRAGMA journal_mode=WAL",
+			"PRAGMA synchronous=NORMAL",
+			"PRAGMA busy_timeout=5000",
+			"PRAGMA cache_size=-65536",
+		} {
+			if _, err := sqlDB.Exec(p); err != nil {
+				log.Printf("[SQLITE] %s failed: %v — proceeding with engine defaults", p, err)
+			}
+		}
 
 		// fix Minor（gemini 第四轮）：限制 Go 数据库连接池，避免突发洪峰下耗尽 fd / SQLite locks。
 		// SQLite WAL：多读 + 单写串行；25 max open + 5 idle 是 Go+SQLite 主流配置。

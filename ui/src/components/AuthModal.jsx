@@ -134,9 +134,6 @@ const AuthModal = ({ isOpen, onClose, onLoginSuccess, initialStep = 'github', tm
     }
   };
 
-  const handleGithubLogin = () => handleOAuthLogin('github');
-  const handleGoogleLogin = () => handleOAuthLogin('google');
-
   const handleSendCode = async () => {
     if (!phone || sendingSms) return;
     if (!/^1[3-9]\d{9}$/.test(phone)) {
@@ -366,7 +363,7 @@ const AuthModal = ({ isOpen, onClose, onLoginSuccess, initialStep = 'github', tm
                    品牌按钮是合理破例 → 用 style 内联绕过 Tailwind lint。 */}
                <button
                   type="button"
-                  onClick={handleGithubLogin}
+                  onClick={() => handleOAuthLogin('github')}
                   disabled={loading}
                   style={{
                     backgroundColor: 'var(--github-btn-bg, #24292f)',
@@ -394,7 +391,7 @@ const AuthModal = ({ isOpen, onClose, onLoginSuccess, initialStep = 'github', tm
                    按钮是否显示由 publicConfig.oauth_provider_metadata 决定）。 */}
                <button
                   type="button"
-                  onClick={handleGoogleLogin}
+                  onClick={() => handleOAuthLogin('google')}
                   disabled={loading}
                   style={{
                     backgroundColor: '#ffffff',

@@ -1,15 +1,20 @@
 import React from 'react';
 import { useTranslation } from 'react-i18next';
 import { useNavigate, useSearchParams } from 'react-router-dom';
-import { CheckCircle2, Clock, XCircle, AlertTriangle } from 'lucide-react';
-
-
-
+import { CheckCircle2, Clock, XCircle, AlertTriangle, LogIn } from 'lucide-react';
+import { isLoggedIn } from '../utils/authFetch';
+import { useAuth } from '../context/AuthContext';
 
 const TopupResult = () => {
   const { t } = useTranslation();
   const navigate = useNavigate();
   const [searchParams] = useSearchParams();
+  // IA audit Mi-1 fix: /topup-result 是支付平台回跳页面（public 路由，不挂
+  // RouteGuard 是有意的——支付回跳时浏览器 cookie/Bearer 都可能丢）。
+  // 如果用户回跳时已经登出，原本会看到 success UI + 3 个按钮，但按钮点了
+  // 都被 RouteGuard 拦。现加 banner 显式提示登录。
+  const { openLogin } = useAuth();
+  const loggedIn = isLoggedIn();
   const status = searchParams.get('status') || 'pending';
   const outTradeNo = searchParams.get('out_trade_no') || '';
 
@@ -48,6 +53,27 @@ const TopupResult = () => {
 
   return (
     <div className="max-w-xl mx-auto py-12">
+      {!loggedIn && status === 'success' && (
+        <div className="card mb-4 p-4 row gap-3" style={{ borderColor: 'var(--accent)' }}>
+          <LogIn size={18} className="text-primary shrink-0" />
+          <div className="flex-1 min-w-0">
+            <div className="text-sm font-medium text-on-surface">
+              {t('TOPUP.RESULT.SESSION_LOST_TITLE', '支付已完成，请重新登录后查看余额')}
+            </div>
+            <div className="text-xs text-on-surface-variant mt-0.5">
+              {t('TOPUP.RESULT.SESSION_LOST_DESC', '支付平台回跳过程中登录态可能丢失，不影响实际到账')}
+            </div>
+          </div>
+          <button
+            type="button"
+            onClick={() => openLogin()}
+            className="btn btn-primary shrink-0"
+          >
+            {t('TOPBAR.LOGIN', '登录')}
+          </button>
+        </div>
+      )}
+
       <div className={`bg-surface-container-high border ${config.tone} rounded-overlay p-10 text-center`}>
         <div className="flex justify-center mb-4">{config.icon}</div>
         <h1 className="text-lg font-bold text-on-surface mb-2">{config.title}</h1>

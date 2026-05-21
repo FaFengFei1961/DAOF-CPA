@@ -89,7 +89,11 @@ func createAdminSession(c *fiber.Ctx, admin *database.User) (string, error) {
 		return "", err
 	}
 	if err := database.DB.Model(admin).Update("token", sessionID).Error; err != nil {
-		_ = database.RevokeSessionByID(sessionID)
+		// Phase I-7 fix：rollback 错误吞掉会留 orphan session 永久有效。
+		// 必须 log 让运维能查出 session leak。
+		if revokeErr := database.RevokeSessionByID(sessionID); revokeErr != nil {
+			log.Printf("[AUTH] rollback session revoke failed session_id=%s admin_id=%d: %v", sessionID, admin.ID, revokeErr)
+		}
 		return "", err
 	}
 	admin.Token = sessionID
