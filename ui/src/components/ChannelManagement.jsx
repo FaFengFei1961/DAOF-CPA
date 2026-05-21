@@ -6,7 +6,7 @@ import toast from 'react-hot-toast';
 import { authFetch } from '../utils/authFetch';
 import { useConfirm } from '../context/ConfirmContext';
 import { useModalA11y } from '../hooks/useModalA11y';
-import { DestructiveIconButton } from './ui';
+import { DestructiveIconButton, PageHeader } from './ui';
 import DataTable from './ui/DataTable';
 import StatusBadge from './ui/StatusBadge';
 import ChannelCircuitMonitor from './ChannelCircuitMonitor';
@@ -1576,17 +1576,17 @@ const ChannelManagement = () => {
     }
 
     // --- Channel List View ---
+    // Sprint J-3 batch 5: migrated hand-rolled `<h1 text-4xl font-black>` to
+    // the canonical PageHeader primitive so this page picks up the new
+    // 32px display font + standard icon block + sub treatment used by
+    // every other admin page.
     return (
         <div className="w-full animation-fade-in relative z-10">
-            <div className="mb-10">
-                <h1 className="text-4xl font-black text-on-surface mb-3 tracking-tight drop- flex items-center gap-3">
-                    <Network size={36} className="text-primary" />
-                    {t('CHANNEL_MGMT.TITLE')}
-                </h1>
-                <p className="text-on-surface-variant text-sm font-medium tracking-wide">
-                    {t('CHANNEL_MGMT.SUBTITLE')}
-                </p>
-            </div>
+            <PageHeader
+                title={t('CHANNEL_MGMT.TITLE')}
+                sub={t('CHANNEL_MGMT.SUBTITLE')}
+                icon={Network}
+            />
 
             <div className="flex flex-col md:flex-row justify-between items-start md:items-center gap-4 mb-6 relative z-20">
                 <div className="relative w-full md:w-96">

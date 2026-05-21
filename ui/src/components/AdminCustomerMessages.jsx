@@ -5,6 +5,7 @@ import toast from 'react-hot-toast';
 import { useConfirm } from '../context/ConfirmContext';
 import { authFetch } from '../utils/authFetch';
 import { logger } from '../utils/logger';
+import { PageHeader } from './ui';
 
 const STATUS_OPTIONS = [
   { value: 'open', label: 'FILTER_OPEN' },
@@ -291,40 +292,41 @@ const AdminCustomerMessages = () => {
   }
 
   // List view
+  // Sprint J-3 batch 5: 手卷 h2 → PageHeader；filter + refresh 放进 actions slot。
   return (
     <div className="space-y-4">
-      <header className="flex items-center justify-between">
-        <div className="flex items-center gap-3">
-          <MessageSquare size={24} className="text-primary" />
-          <h2 className="text-xl font-bold tracking-tight">
-            {t('TICKET.ADMIN.TITLE', '工单管理')}
-          </h2>
-        </div>
-        <div className="flex items-center gap-2">
-          <select
-            value={statusFilter}
-            onChange={e => setStatusFilter(e.target.value)}
-            className="h-9 bg-surface-container border border-outline-variant rounded-control px-3 text-sm"
-          >
-            {STATUS_OPTIONS.map(s => (
-              <option key={s.value} value={s.value}>
-                {s.label === 'FILTER_OPEN'
-                  ? t('TICKET.ADMIN.FILTER_OPEN', '进行中')
-                  : s.label === 'FILTER_CLOSED'
-                    ? t('TICKET.ADMIN.FILTER_CLOSED', '已关闭')
-                    : t('TICKET.ADMIN.FILTER_ALL', '全部')}
-              </option>
-            ))}
-          </select>
-          <button
-            type="button"
-            onClick={loadList}
-            className="h-9 w-9 flex items-center justify-center rounded-control bg-surface-container hover:bg-on-surface/[0.04]"
-          >
-            <RefreshCw size={14} className={loading ? 'animate-spin' : ''} />
-          </button>
-        </div>
-      </header>
+      <PageHeader
+        title={t('TICKET.ADMIN.TITLE', '工单管理')}
+        sub={t('TICKET.ADMIN.DESC', '用户提交的工单：实时回复、关闭与状态过滤。关闭后双方禁言，超 15 天自动清除。')}
+        icon={MessageSquare}
+        actions={
+          <>
+            <select
+              value={statusFilter}
+              onChange={e => setStatusFilter(e.target.value)}
+              className="h-9 bg-surface-container border border-outline-variant rounded-control px-3 text-sm"
+            >
+              {STATUS_OPTIONS.map(s => (
+                <option key={s.value} value={s.value}>
+                  {s.label === 'FILTER_OPEN'
+                    ? t('TICKET.ADMIN.FILTER_OPEN', '进行中')
+                    : s.label === 'FILTER_CLOSED'
+                      ? t('TICKET.ADMIN.FILTER_CLOSED', '已关闭')
+                      : t('TICKET.ADMIN.FILTER_ALL', '全部')}
+                </option>
+              ))}
+            </select>
+            <button
+              type="button"
+              onClick={loadList}
+              className="h-9 w-9 flex items-center justify-center rounded-control bg-surface-container hover:bg-on-surface/[0.04]"
+              aria-label={t('TICKET.ADMIN.REFRESH', '刷新')}
+            >
+              <RefreshCw size={14} className={loading ? 'animate-spin' : ''} />
+            </button>
+          </>
+        }
+      />
 
       <section className="bg-surface-container-high border border-outline-variant rounded-overlay overflow-hidden">
         {list.length === 0 ? (

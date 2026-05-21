@@ -17,6 +17,7 @@ import {
   AreaChart, Area, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer, Legend,
 } from 'recharts';
 import toast from 'react-hot-toast';
+import { useTranslation } from 'react-i18next';
 import {
   PageContainer, PageHeader, StatCard, DataTable, ChartContainer, useChartColors,
 } from '../../components/ui';
@@ -38,6 +39,7 @@ const chargedCostOf = (row) => Number(row?.charged_cost ?? row?.total_charged_co
 const costsDiffer = (raw, charged) => Math.abs(Number(raw || 0) - Number(charged || 0)) > 0.0000005;
 
 const UsersUsageOverviewPage = () => {
+  const { t } = useTranslation();
   const navigate = useNavigate();
   const { formatCurrencyFixed } = useCurrency();
   const formatMeterCost = makeFormatMeterCost(formatCurrencyFixed);
@@ -196,8 +198,8 @@ const UsersUsageOverviewPage = () => {
   return (
     <PageContainer>
       <PageHeader
-        title="用户用量大盘"
-        sub="按用户聚合的请求 / Token / 扣减 / 失败率 + 用户趋势。点击行跳转事件审计页查看明细。"
+        title={t('ADMIN.USAGE_OVERVIEW.TITLE')}
+        sub={t('ADMIN.USAGE_OVERVIEW.SUB')}
         actions={headerActions}
       />
 

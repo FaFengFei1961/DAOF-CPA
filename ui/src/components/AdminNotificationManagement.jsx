@@ -1,6 +1,7 @@
 import React, { useState, useEffect, useCallback } from 'react';
 import DataTable from './ui/DataTable';
 import StatusBadge from './ui/StatusBadge';
+import { PageHeader } from './ui';
 import { useTranslation } from 'react-i18next';
 import { Megaphone, Send, RefreshCw, AlertTriangle, Eye, Trash2 } from 'lucide-react';
 import toast from 'react-hot-toast';
@@ -159,12 +160,12 @@ const AdminNotificationManagement = () => {
 
   return (
     <div className="space-y-6">
-      <div className="flex items-center gap-3">
-        <Megaphone size={24} className="text-primary" />
-        <h2 className="text-xl font-bold text-on-surface tracking-tight">
-          {t('NOTIF.ADMIN.TAB', '通知管理')}
-        </h2>
-      </div>
+      {/* Sprint J-3 batch 5: 手卷 h2 → PageHeader */}
+      <PageHeader
+        title={t('NOTIF.ADMIN.TAB', '通知管理')}
+        sub={t('NOTIF.ADMIN.DESC', '管理员主动推送的系统级通知；创建后向选定用户群体下发，可在历史中查看投递与已读状态。')}
+        icon={Megaphone}
+      />
 
       {/* Create form */}
       <section className="bg-surface-container-high border border-outline-variant rounded-overlay p-6 space-y-4">

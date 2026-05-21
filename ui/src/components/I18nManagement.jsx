@@ -4,6 +4,7 @@ import { Upload, Download, Trash2, Globe, FileJson, RefreshCw, Plus } from 'luci
 import toast from 'react-hot-toast';
 import { useConfirm } from '../context/ConfirmContext';
 import { authFetch } from '../utils/authFetch';
+import { PageHeader } from './ui';
 
 const I18nManagement = () => {
     const confirm = useConfirm();
@@ -102,25 +103,23 @@ const I18nManagement = () => {
         document.body.removeChild(a);
     };
 
+    // Sprint J-3 batch 5：手卷 h1 → PageHeader 原语；上传按钮放进 actions slot。
+    // 顺便去掉 "bg-gradient-to-r from-blue-600 to-indigo-600" 那个跟新设计语言
+    // 冲突的彩色 gradient，换成 .btn btn-primary。
     return (
         <div className="w-full">
-            <div className="mb-8 border-b border-outline-variant pb-6 flex items-center justify-between">
-                <div>
-                    <h1 className="text-2xl font-bold tracking-tight text-on-surface flex items-center gap-3">
-                        {t('I18N_MGMT.TITLE')}
-                    </h1>
-                    <p className="text-on-surface-variant mt-2 text-sm">
-                        {t('I18N_MGMT.DESC')}
-                    </p>
-                </div>
-                <div>
-                   <label className="cursor-pointer bg-gradient-to-r from-blue-600 to-indigo-600 text-on-surface px-5 py-2.5 rounded-overlay font-medium flex items-center gap-2 hover:opacity-90 /20 ">
-                       {uploading ? <RefreshCw size={18} className="animate-spin" /> : <Upload size={18} />}
-                       <span>{t('I18N_MGMT.BTN_UPLOAD')}</span>
-                       <input type="file" accept=".json" className="hidden" onChange={handleFileUpload} disabled={uploading} />
-                   </label>
-                </div>
-            </div>
+            <PageHeader
+                title={t('I18N_MGMT.TITLE')}
+                sub={t('I18N_MGMT.DESC')}
+                icon={Globe}
+                actions={
+                    <label className="btn btn-primary btn-md cursor-pointer">
+                        {uploading ? <RefreshCw size={14} className="animate-spin" /> : <Upload size={14} />}
+                        <span>{t('I18N_MGMT.BTN_UPLOAD')}</span>
+                        <input type="file" accept=".json" className="hidden" onChange={handleFileUpload} disabled={uploading} />
+                    </label>
+                }
+            />
 
             <div className="fl-table-shell">
                 <div className="fl-table-scroll">

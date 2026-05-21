@@ -118,6 +118,7 @@
     },
     "ADMIN": {
       "TAB": "通知管理",
+      "DESC": "管理员主动推送的系统级通知；创建后向选定用户群体下发，可在历史中查看投递与已读状态。",
       "CREATE_TITLE": "创建系统通知",
       "HISTORY_TITLE": "历史群发",
       "FIELD_TITLE": "标题",
@@ -198,6 +199,8 @@
     "ADMIN": {
       "TAB": "工单管理",
       "TITLE": "工单管理",
+      "DESC": "用户提交的工单：实时回复、关闭与状态过滤。关闭后双方禁言，超 15 天自动清除。",
+      "REFRESH": "刷新",
       "EMPTY": "暂无工单",
       "FILTER_OPEN": "进行中",
       "FILTER_CLOSED": "已关闭",
@@ -1053,7 +1056,7 @@
     "TAB_ACCOUNT": "个人档案",
     "TAB_NOTIFICATION_PREFS": "通知偏好",
     "NOTIFICATION_PREFS_DESC": "配置站内铃铛、邮件、短信等通知渠道的接收偏好",
-    "TAB_USERS": "常规用户管理",
+    "TAB_USERS": "用户管理",
     "TAB_I18N": "界面语言管理",
     "TAB_AUTH": "认证管理",
     "TAB_MODERATION": "内容审核",
@@ -2429,7 +2432,15 @@
     "SHELL_TITLE": "管理控制台",
     "NAV_USAGE_OVERVIEW": "用户用量大盘",
     "NAV_UPSTREAM_MARGIN": "上游毛利",
-    "NAV_AUDIT_EVENTS": "请求审计",
+    "NAV_AUDIT_EVENTS": "请求事件审计",
+    "USAGE_OVERVIEW": {
+      "TITLE": "用户用量大盘",
+      "SUB": "按用户聚合的请求 / Token / 扣减 / 失败率 + 用户趋势。点击行跳转事件审计页查看明细。"
+    },
+    "UPSTREAM": {
+      "TITLE": "上游账号成本与毛利",
+      "SUB": "先按 CPA 凭证账号配置月成本与估算月容量；毛利报表再按 provider/auth_index 归因分摊平台成本。"
+    },
     "AUDIT": {
       "TITLE": "请求事件审计",
       "SUB": "按时间倒序的所有 LLM 请求事件。点击行查看完整字段（预检 / 上游归因 / 延迟 / 错误）。",

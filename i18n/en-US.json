@@ -118,6 +118,7 @@
     },
     "ADMIN": {
       "TAB": "Notification Management",
+      "DESC": "Admin-pushed system notifications. Create a broadcast to selected user cohorts and track delivery and read status in history.",
       "CREATE_TITLE": "Create System Notification",
       "HISTORY_TITLE": "Broadcast History",
       "FIELD_TITLE": "Title",
@@ -198,6 +199,8 @@
     "ADMIN": {
       "TAB": "Tickets",
       "TITLE": "Ticket Management",
+      "DESC": "User-submitted tickets — reply live, close threads, filter by status. Closed threads are read-only and auto-deleted after 15 days.",
+      "REFRESH": "Refresh",
       "EMPTY": "No tickets",
       "FILTER_OPEN": "Open",
       "FILTER_CLOSED": "Closed",
@@ -2429,7 +2432,15 @@
     "SHELL_TITLE": "Admin Console",
     "NAV_USAGE_OVERVIEW": "User Usage Overview",
     "NAV_UPSTREAM_MARGIN": "Upstream Margin",
-    "NAV_AUDIT_EVENTS": "Audit Events",
+    "NAV_AUDIT_EVENTS": "Request Event Audit",
+    "USAGE_OVERVIEW": {
+      "TITLE": "User usage overview",
+      "SUB": "Per-user aggregation of requests / tokens / deductions / failure rate plus user trends. Click a row to jump to the audit page for details."
+    },
+    "UPSTREAM": {
+      "TITLE": "Upstream account cost & margin",
+      "SUB": "Configure monthly cost and estimated monthly capacity per CPA credential account; the margin report then attributes platform cost by provider/auth_index."
+    },
     "AUDIT": {
       "TITLE": "Request event audit",
       "SUB": "All LLM request events sorted by time desc. Click a row to see full fields (precheck / upstream attribution / latency / error).",

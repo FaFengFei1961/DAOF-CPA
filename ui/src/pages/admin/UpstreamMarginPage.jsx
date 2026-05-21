@@ -9,6 +9,7 @@
  *   - 顶部"批量配置"action（多选行后弹同样 Drawer）
  */
 import React, { useEffect, useMemo, useState } from 'react';
+import { useTranslation } from 'react-i18next';
 import {
   Activity, Coins, Wallet, Zap, BarChart3, AlertTriangle, RefreshCw, Settings as SettingsIcon,
   Trash2, AlertOctagon, ChevronDown, ChevronUp,
@@ -44,6 +45,7 @@ const PeriodSwitch = ({ value, onChange }) => (
 );
 
 const UpstreamMarginPage = () => {
+  const { t } = useTranslation();
   const { formatCurrencyFixed } = useCurrency();
   const formatMeterCost = makeFormatMeterCost(formatCurrencyFixed);
   const confirm = useConfirm();
@@ -419,8 +421,8 @@ const UpstreamMarginPage = () => {
   return (
     <PageContainer>
       <PageHeader
-        title="上游账号成本与毛利"
-        sub="先按 CPA 凭证账号配置月成本与估算月容量；毛利报表再按 provider/auth_index 归因分摊平台成本。"
+        title={t('ADMIN.UPSTREAM.TITLE')}
+        sub={t('ADMIN.UPSTREAM.SUB')}
         actions={headerActions}
       />
 
