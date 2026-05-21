@@ -58,6 +58,15 @@ type OAuthIdentity struct {
 	UsernameAtLink string    `gorm:"size:64;<-:create" json:"username_at_link"`
 	LinkedAt       time.Time `gorm:"index;<-:create" json:"linked_at"`
 
+	// LinkMethod（H-Audit L7，2026-05-20）：标记本行是怎么写入的，用于审计追溯。
+	// 取值见 LinkMethod* 常量：
+	//   - "oauth_flow"：OAuth callback 注册新用户路径（CompleteRisk / CompleteProfile）
+	//   - "user_link"：已登录用户通过 /api/user/oauth/:provider/link/prepare 绑定
+	//   - "backfill"：H-1 启动 migration 从 User.GithubID 回填（历史）
+	//   - "admin_grant"：admin 手动协助绑定（未来支持）
+	// 空字符串视为 "oauth_flow"（向后兼容老数据；本字段在 H-Audit 后新增）。
+	LinkMethod string `gorm:"size:16;<-:create" json:"link_method,omitempty"`
+
 	// UnlinkedAt：nil = active link；非 nil = 用户手动解绑（软删）。
 	// 解绑的 identity 不再用于登录，但行本身保留作审计。
 	UnlinkedAt *time.Time `gorm:"index" json:"unlinked_at,omitempty"`
@@ -85,6 +94,9 @@ func (i *OAuthIdentity) BeforeUpdate(tx *gorm.DB) error {
 	if len(stmt.Selects) == 0 {
 		return ErrOAuthIdentityImmutable
 	}
+	// fix H-Audit L3（2026-05-20）：Select("*") / Select(clause.Associations) 等
+	// 含 GORM 通配符的写都视作"全列更新"，一律拒。这里只显式允许 unlinked_at
+	// 字面列名（GORM struct 字段名两种写法都接受）；其它任何 token（含 "*"）→ 拒。
 	for _, col := range stmt.Selects {
 		if col != "unlinked_at" && col != "UnlinkedAt" {
 			return ErrOAuthIdentityImmutable
@@ -110,4 +122,13 @@ func (OAuthIdentity) TableName() string { return "oauth_identities" }
 const (
 	OAuthProviderGitHub = "github"
 	OAuthProviderGoogle = "google"
+)
+
+// LinkMethod 常量。值持久化到 DB，**永不修改**。
+// fix H-Audit L7（2026-05-20）：用于审计追溯一条 identity 是怎么写入的。
+const (
+	LinkMethodOAuthFlow  = "oauth_flow"  // OAuth callback 新注册路径
+	LinkMethodUserLink   = "user_link"   // 已登录用户主动 link
+	LinkMethodBackfill   = "backfill"    // H-1 migration 回填
+	LinkMethodAdminGrant = "admin_grant" // admin 协助绑定（未来支持）
 )

@@ -278,14 +278,15 @@ func InitDB() {
 	//   - DROP COLUMN / DROP INDEX 都用 IF EXISTS
 	if sqliteColumnExists("users", "github_id") {
 		// 回填残留数据（H-1 已跑过，但旧库重启可能仍有：保险起见再来一次）
-		DB.Exec(`INSERT INTO oauth_identities (user_id, provider, external_id, email_at_link, username_at_link, linked_at)
-			SELECT u.id, ?, u.github_id, COALESCE(u.email, ''), u.username, u.created_at
+		// H-Audit L7：link_method 标记为 "backfill" 让审计能区分历史回填 vs 用户主动绑定
+		DB.Exec(`INSERT INTO oauth_identities (user_id, provider, external_id, email_at_link, username_at_link, linked_at, link_method)
+			SELECT u.id, ?, u.github_id, COALESCE(u.email, ''), u.username, u.created_at, ?
 			FROM users u
 			WHERE u.github_id IS NOT NULL AND u.github_id <> ''
 			  AND NOT EXISTS (
 			    SELECT 1 FROM oauth_identities oi
 			    WHERE oi.provider = ? AND oi.external_id = u.github_id AND oi.unlinked_at IS NULL
-			  )`, OAuthProviderGitHub, OAuthProviderGitHub)
+			  )`, OAuthProviderGitHub, LinkMethodBackfill, OAuthProviderGitHub)
 		// 删旧索引
 		DB.Exec(`DROP INDEX IF EXISTS idx_users_github_id`)
 		DB.Exec(`DROP INDEX IF EXISTS uniq_users_github_id_nonempty`)

@@ -274,7 +274,9 @@ func postGithubCallback(t *testing.T, app *fiber.App, code, state string) *http.
 }
 
 func TestPrepareOAuthState_ReturnsChallenge(t *testing.T) {
+	// fix H-Audit L4：用 t.Cleanup 注册清理，确保 panic / fail-out 时也能清 state store
 	resetOAuthStatesForTest()
+	t.Cleanup(resetOAuthStatesForTest)
 	state, verifier := prepareOAuthStateForTest(t)
 	if len(state) != 64 {
 		t.Fatalf("state length=%d, want 64", len(state))

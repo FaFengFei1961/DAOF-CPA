@@ -267,8 +267,10 @@ func finishOAuthLinkToExistingUser(c *fiber.Ctx, userID uint, providerKey string
 		}
 	}
 
-	// 4. 写 oauth_identities 行
-	if err := linkOAuthIdentityTx(database.DB, userID, *identity); err != nil {
+	// 4. 写 oauth_identities 行（H-Audit L7：标记为 user_link 来源）
+	identityWithMethod := *identity
+	identityWithMethod.LinkMethod = database.LinkMethodUserLink
+	if err := linkOAuthIdentityTx(database.DB, userID, identityWithMethod); err != nil {
 		log.Printf("[OAUTH-LINK] link failed user=%d provider=%s ext=%s: %v",
 			userID, providerKey, identity.ExternalID, err)
 		return c.Status(500).JSON(fiber.Map{"success": false, "message_code": "ERR_DB_INSERT_FAILED"})

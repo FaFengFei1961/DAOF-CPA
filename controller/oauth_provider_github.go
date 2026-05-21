@@ -14,7 +14,6 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
-	"errors"
 	"fmt"
 	"io"
 	"log"
@@ -22,8 +21,6 @@ import (
 
 	"daof-cpa/database"
 	"daof-cpa/proxy"
-
-	"github.com/gofiber/fiber/v2"
 )
 
 // init 注册 GitHub provider 到全局 registry。
@@ -179,40 +176,5 @@ func (p *GitHubProvider) Exchange(ctx context.Context, code, codeVerifier string
 	}, nil
 }
 
-// mapOAuthProviderErrorGitHub 把 Provider.Exchange 错误映射成 GitHub-flavored HTTP 响应。
-// 保留原 GithubCallback 的 status code + message_code 语义不变，兼容前端现有逻辑。
-//
-// 这是 H-2 过渡阶段——H-3 路由换 :provider 后，所有 provider 共用一个 generic mapper。
-func mapOAuthProviderErrorGitHub(c *fiber.Ctx, err error) error {
-	switch {
-	case errors.Is(err, ErrOAuthProviderNotConfigured):
-		return c.Status(500).JSON(fiber.Map{
-			"success":      false,
-			"message":      "暂时无法提供该授权模式，请使用其他方式登录",
-			"message_code": "ERR_GITHUB_NOT_CONFIGURED",
-		})
-	case errors.Is(err, ErrOAuthCodeExpired):
-		return c.Status(401).JSON(fiber.Map{
-			"success":      false,
-			"message":      "第三方颁发的客户端授权码已过期失效",
-			"message_code": "ERR_GITHUB_CODE_EXPIRED",
-		})
-	case errors.Is(err, ErrOAuthUpstreamUnavailable):
-		return c.Status(502).JSON(fiber.Map{
-			"success":      false,
-			"message":      "第三方服务响应超时(502)",
-			"message_code": "ERR_GITHUB_CONN",
-		})
-	case errors.Is(err, ErrOAuthUpstreamMalformed):
-		return c.Status(502).JSON(fiber.Map{
-			"success":      false,
-			"message":      "第三方接口同步异常",
-			"message_code": "ERR_GITHUB_PROFILE_EXCEPTION",
-		})
-	default:
-		return c.Status(500).JSON(fiber.Map{
-			"success":      false,
-			"message_code": "ERR_GITHUB_INTERNAL",
-		})
-	}
-}
+// fix H-Audit L6（2026-05-20）：mapOAuthProviderErrorGitHub 已删，所有 provider
+// 共用 controller/oauth.go 的 mapOAuthProviderErrorGeneric。错误码 ERR_OAUTH_*。

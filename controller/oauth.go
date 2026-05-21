@@ -778,12 +778,10 @@ func consumeOAuthCallbackInputs(c *fiber.Ctx) (cb oauthCallbackInputs, done bool
 func runProviderExchange(c *fiber.Ctx, provider OAuthProvider, providerKey, code, codeVerifier string) (identity *OAuthIdentityData, done bool) {
 	id, err := provider.Exchange(c.UserContext(), code, codeVerifier)
 	if err != nil {
-		// GitHub 路径保留旧 ERR_GITHUB_* 错误码不变；其它 provider 用 generic 映射
-		if providerKey == database.OAuthProviderGitHub {
-			_ = mapOAuthProviderErrorGitHub(c, err)
-		} else {
-			_ = mapOAuthProviderErrorGeneric(c, providerKey, err)
-		}
+		// fix H-Audit L6（2026-05-20）：所有 provider 共用 generic mapper（错误码 ERR_OAUTH_*）。
+		// 原 GitHub-specific mapOAuthProviderErrorGitHub 是 H-2 临时兼容层，已删；
+		// 历史 i18n ERR_GITHUB_* keys 不再被引用（保留在 json 不影响）。
+		_ = mapOAuthProviderErrorGeneric(c, providerKey, err)
 		return nil, true
 	}
 	return id, false
@@ -1201,12 +1199,6 @@ func CompleteProfile(c *fiber.Ctx) error {
 	if err != nil {
 		return c.Status(403).JSON(fiber.Map{"success": false, "message": err.Error(), "message_code": "ERR_RISK_TICKET_INVALID"})
 	}
-	if !markTmpTokenConsumed(req.TmpToken) {
-		return c.Status(403).JSON(fiber.Map{
-			"success":      false,
-			"message_code": "ERR_TMP_TOKEN_ALREADY_USED",
-		})
-	}
 	if tokenType != "clean" {
 		return c.Status(403).JSON(fiber.Map{"success": false, "message": "票据类型错误", "message_code": "ERR_INVALID_PASS_STATE"})
 	}
@@ -1217,6 +1209,16 @@ func CompleteProfile(c *fiber.Ctx) error {
 	externalID = strings.TrimSpace(externalID)
 	if providerKey == "" || externalID == "" {
 		return c.Status(403).JSON(fiber.Map{"success": false, "message": "无效的干净通行证状态", "message_code": "ERR_INVALID_PASS_STATE"})
+	}
+
+	// fix H-Audit L1（2026-05-20）：markTmpTokenConsumed 移到所有格式校验之后。
+	// 原版本在 provider/externalID 检查之前消费 token，导致格式错误的 token 也被锁，
+	// 用户无法重试。现在只有通过所有校验才标记消费。
+	if !markTmpTokenConsumed(req.TmpToken) {
+		return c.Status(403).JSON(fiber.Map{
+			"success":      false,
+			"message_code": "ERR_TMP_TOKEN_ALREADY_USED",
+		})
 	}
 
 	registerMu.Lock()

@@ -127,7 +127,9 @@ func (p *GoogleProvider) Exchange(ctx context.Context, code, codeVerifier string
 	}
 	if tokenRes.AccessToken == "" {
 		// Google 在 code 过期 / 已用 / verifier 不匹配时返回 {"error":"invalid_grant", ...}
-		log.Printf("[OAUTH-GOOGLE] token exchange rejected: error=%s desc=%s", tokenRes.Error, tokenRes.ErrorDesc)
+		// fix H-Audit L2（2026-05-20）：ErrorDesc 来自 Google 响应，不可信内容。
+		// %.128s 截断防意外日志膨胀 + 防 partial credential 信息泄露到日志收集系统。
+		log.Printf("[OAUTH-GOOGLE] token exchange rejected: error=%s desc=%.128s", tokenRes.Error, tokenRes.ErrorDesc)
 		return nil, ErrOAuthCodeExpired
 	}
 

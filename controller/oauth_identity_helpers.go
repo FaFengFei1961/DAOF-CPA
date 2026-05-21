@@ -1,10 +1,18 @@
 // Package controller / oauth_identity_helpers.go
 //
-// OAuth identity 查找 / 创建 helper。Phase H-3（2026-05-20）。
+// OAuth identity 数据访问层（"repo" 层）。Phase H-3（2026-05-20）。
 //
-// 这层把 oauth_identities 表的查询封装起来，让 callback / risk / profile handler 不
-// 直接接触 GORM SQL。Phase H-3b 后 User.GithubID 列已删除，所有 OAuth 身份信息
-// 仅存于本表。
+// 职责：把 oauth_identities 表的 GORM 查询/写入封装起来，让 controller / handler
+// 不直接接触 SQL。本文件**只放纯 DB layer helpers**——
+//   - lookupActiveUserByOAuthIdentity
+//   - linkOAuthIdentityTx
+//   - lookupOAuthIdentitiesForUser
+//   - hasActiveOAuthIdentity
+//
+// 业务规则相关的 helpers（如 finishOAuthLinkToExistingUser、userHasOtherAuthMethodTx）
+// 不在这里——放在 user_oauth_identities.go 里和 handler 共享上下文。
+//
+// Phase H-3b 后 User.GithubID 列已删除，所有 OAuth 身份信息仅存于本表。
 package controller
 
 import (
@@ -56,6 +64,10 @@ func lookupActiveUserByOAuthIdentity(provider, externalID string) (*database.Use
 // 同 user 同 provider 不允许重复 active 行（应用层语义）；本 helper 不校验，
 // caller 应先 lookupOAuthIdentitiesForUser 判断。
 func linkOAuthIdentityTx(tx *gorm.DB, userID uint, data OAuthIdentityData) error {
+	linkMethod := data.LinkMethod
+	if linkMethod == "" {
+		linkMethod = database.LinkMethodOAuthFlow // fix H-Audit L7：默认值
+	}
 	row := database.OAuthIdentity{
 		UserID:         userID,
 		Provider:       data.Provider,
@@ -63,6 +75,7 @@ func linkOAuthIdentityTx(tx *gorm.DB, userID uint, data OAuthIdentityData) error
 		EmailAtLink:    data.Email,
 		UsernameAtLink: data.Username,
 		LinkedAt:       time.Now(),
+		LinkMethod:     linkMethod,
 	}
 	if err := tx.Create(&row).Error; err != nil {
 		return fmt.Errorf("create oauth_identity: %w", err)

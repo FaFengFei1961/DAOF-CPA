@@ -69,6 +69,11 @@ type OAuthIdentityData struct {
 	// EmailVerified 当 provider 明确标记 email_verified=true 才填 true。
 	// 用于"跨 provider email 冲突检测"——unverified email 不算"已验证"。
 	EmailVerified bool
+
+	// LinkMethod（H-Audit L7）：caller 在写 oauth_identities 行时填入；
+	// 用于审计追溯。取值见 database.LinkMethod* 常量。
+	// 为空时 linkOAuthIdentityTx 会默认填 "oauth_flow"。
+	LinkMethod string
 }
 
 // ErrOAuth* 是 Provider.Exchange 错误的标准 sentinel。
