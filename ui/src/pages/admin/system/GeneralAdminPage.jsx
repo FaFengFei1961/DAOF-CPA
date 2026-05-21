@@ -18,7 +18,7 @@ import toast from 'react-hot-toast';
  */
 const GeneralAdminPage = () => {
   const { t } = useTranslation();
-  const { configs, loading, handleChange } = useAdminConfigs();
+  const { configs, loading, handleChange, refetch } = useAdminConfigs();
   const { signOut } = useAuth();
   const [showClipKey, setShowClipKey] = useState(false);
   const [savingClip, setSavingClip] = useState(false);
@@ -74,17 +74,30 @@ const GeneralAdminPage = () => {
       toast.error(t('ADMIN_SYS.GENERAL.CLIPROXY_URL_REQUIRED'));
       return;
     }
+    // Bug fix（用户反馈"切换菜单回来又恢复默认状态"）：
+    //   - 之前 looksLikeMaskedSecret 判定如果用户没改 cliproxy_key（仍显示
+    //     mask 文本如 "ab****cd"），后端会跳过 → 本次 POST 不写 cliproxy_key
+    //     是 OK 的；但若用户**改了** url 没改 key，旧 key 应保留 → 这部分逻辑
+    //     已由后端 line 407 处理。
+    //   - 真 bug：本 handler 完成后没有让 useAdminConfigs 的 module-level cache
+    //     失效，导致切走再回来时 cache 还在 30s TTL，仍展示旧 state（mask 之前的
+    //     localState 改动被 cache 反向覆盖）。保存成功必须 refetch()。
+    //   - 同时加 ?allow_empty=1 让用户可以**主动清空** cliproxy_key（如要 rotate
+    //     掉旧凭据先清后填）。默认不带 allow_empty 时空值会被后端"未修改"跳过。
+    const trimmedKey = (configs.cliproxy_key || '').trim();
     setSavingClip(true);
     try {
-      const data = await authFetch('/api/admin/config', {
+      const data = await authFetch('/api/admin/config?allow_empty=1', {
         method: 'POST',
         body: {
           cliproxy_url: (configs.cliproxy_url || '').trim(),
-          cliproxy_key: (configs.cliproxy_key || '').trim(),
+          cliproxy_key: trimmedKey,
         },
       });
       if (data.success) {
         toast.success(t('ADMIN_SYS.GENERAL.CLIPROXY_SAVE_OK'));
+        // 关键：刷新 cache，避免切换菜单回来看到"老数据"假象
+        await refetch();
       } else {
         toast.error(data.message || t('SETTINGS.SAVE_FAILED'));
       }
