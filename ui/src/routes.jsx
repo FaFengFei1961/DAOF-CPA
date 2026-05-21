@@ -30,6 +30,12 @@ import RouteGuard from './shells/RouteGuard';
 import NotFound from './components/NotFound';
 import RouteErrorBoundary from './components/RouteErrorBoundary';
 
+// OAuth 回调（GitHub / Google / ...）— 浏览器从授权页 redirect 回 /oauth/:provider
+// 时由它接住，发 POST 给后端 callback 端点。原 App.jsx 里 OAuthCallbackHandler
+// 挂在 RouterProvider 外面，但 RouterProvider 的 NotFound fallback 抢先渲染 404
+// 给新用户造成"页面不存在"假象。
+const OAuthCallbackPage = lazy(() => import('./pages/OAuthCallbackPage'));
+
 // User-side pages
 const Dashboard = lazy(() => import('./components/Dashboard'));
 const TokenManager = lazy(() => import('./components/TokenManager'));
@@ -150,6 +156,10 @@ const router = createBrowserRouter([
       },
     ],
   },
+  // OAuth callback — 放在顶层(无 UserShell 包裹)，避免 sidebar + topbar
+  // 在跳转动画期间闪一下。组件自己跳转 / 拉起 AuthModal。
+  { path: '/oauth/:provider', element: <OAuthCallbackPage /> },
+
   // Global 404 fallback — dedicated page so users see what they asked for
   // and have explicit escape hatches (back / home / pricing).
   { path: '*', element: <NotFound /> },

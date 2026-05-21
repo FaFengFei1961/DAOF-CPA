@@ -222,7 +222,6 @@ const UpgradePage = ({ onPurchaseSuccess, embedded = false }) => {
       if (json.success) {
         toast.success(t('UPGRADE.PURCHASE_OK', '🎉 购买成功'));
 
-
         setPaneAndUrl('mine');
         clearPageCache('subscriptions:');
         clearPageCache('billing:');
@@ -233,9 +232,21 @@ const UpgradePage = ({ onPurchaseSuccess, embedded = false }) => {
         load({ force: true });
         if (onPurchaseSuccess) onPurchaseSuccess(json);
       } else {
-        toast.error(json.message || t('UPGRADE.PURCHASE_FAIL', '购买失败'));
+        // Bug fix（"双重弹窗"反馈）：
+        //   1) 关闭确认购买 modal —— 之前失败时只在 success 分支 reset，导致用户
+        //      看到错误 toast 同时 modal 还覆盖在上面，得手动点取消，体验崩坏。
+        //   2) 跳过 402 重复 toast —— authFetch.js 已经针对 402 弹了带「去充值」
+        //      按钮的 toast；这里再 toast 一次 json.message 就成了双重错误提示，
+        //      其它非 402 错误才回退到 json.message。
+        setPurchaseDraft(null);
+        if (json.status !== 402) {
+          toast.error(json.message || t('UPGRADE.PURCHASE_FAIL', '购买失败'));
+        }
       }
-    } catch { toast.error(t('API.ERR_NETWORK', '网络异常')); }
+    } catch {
+      setPurchaseDraft(null);
+      toast.error(t('API.ERR_NETWORK', '网络异常'));
+    }
     finally { setPurchasing(null); }
   };
 

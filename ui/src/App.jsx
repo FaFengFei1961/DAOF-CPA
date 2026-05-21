@@ -2,103 +2,20 @@
 import React, { useEffect, useMemo, useState, lazy, Suspense } from 'react';
 import { useTranslation } from 'react-i18next';
 import { RouterProvider } from 'react-router-dom';
-import toast, { Toaster } from 'react-hot-toast';
+import { Toaster } from 'react-hot-toast';
 import { ConfirmProvider } from './context/ConfirmContext';
-import { AuthProvider, useAuth } from './context/AuthContext';
+import { AuthProvider } from './context/AuthContext';
 import AuthModalContainer from './shells/AuthModalContainer';
 import BanAlertContainer from './shells/BanAlertContainer';
 import router from './routes';
-import { logger } from './utils/logger';
 
 const AdminSecretLogin = lazy(() => import('./components/AdminSecretLogin'));
-const BANNED_MARKER = '\u5c01\u7981';
-const BANNED_PREFIX = '\u8d26\u6237\u88ab\u5c01\u7981';
-const BANNED_REASON_PREFIX = '\u7406\u7531\uff1a';
 
-// OAuthCallbackHandler 通用 OAuth 回调处理器（H-4 多 provider）。
-// 检测当前 URL path 是否为 /oauth/{provider}，是则用对应 provider 调 backend callback。
-// 支持的 path: /oauth/github, /oauth/google（H-4 新增）。
-const OAuthCallbackHandler = () => {
-  const { t } = useTranslation();
-  const { openLogin, onLoginSuccess } = useAuth();
-
-  useEffect(() => {
-    // 从 URL path 拆 provider key（/oauth/github → "github"; /oauth/google → "google"）
-    const pathMatch = window.location.pathname.match(/^\/oauth\/([a-z0-9_]+)$/i);
-    if (!pathMatch) return;
-    const provider = pathMatch[1].toLowerCase();
-
-    const params = new URLSearchParams(window.location.search);
-    const code = params.get('code');
-    const state = params.get('state') || '';
-    if (!code) return;
-
-    const ref = sessionStorage.getItem('daof_ref') || '';
-    window.history.replaceState({}, document.title, '/');
-    queueMicrotask(() => openLogin({ step: 'github', loading: true }));
-
-    fetch(`/api/auth/oauth/${encodeURIComponent(provider)}/callback?code=${encodeURIComponent(code)}&state=${encodeURIComponent(state)}`, {
-      method: 'POST',
-      credentials: 'include',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ ref }),
-    })
-      .then(async (res) => {
-        const ct = res.headers.get('content-type') || '';
-        if (!ct.includes('application/json')) {
-          throw new Error(t('APP.NON_JSON_RESPONSE', {
-            status: res.status,
-            defaultValue: 'HTTP {{status}}: 服务端返回非 JSON 响应',
-          }));
-        }
-        return res.json();
-      })
-      .then(data => {
-        if (data.success) {
-          // H-5：已登录用户主动 link 新 provider 时，后端返 SUCCESS_OAUTH_LINKED 但无 session_id
-          // （用户原 session 仍有效）。检测这种情况：直接弹成功 toast + 跳设置页，不重 openLogin。
-          if (data.message_code === 'SUCCESS_OAUTH_LINKED') {
-            toast.success(t('API.SUCCESS_OAUTH_LINKED', '第三方账号绑定成功'));
-            if (window.location.pathname !== '/settings') {
-              window.location.replace('/settings?tab=account');
-            }
-            return;
-          }
-          if (!data.session_id) throw new Error('missing session_id');
-          localStorage.setItem('daof_token', data.session_id);
-          onLoginSuccess();
-        } else if (data.action === 'require_sms_bind') {
-          openLogin({ step: 'bind', tmpToken: data.tmp_token });
-        } else if (data.action === 'require_profile_setup') {
-          openLogin({ step: 'profile', tmpToken: data.tmp_token, defaultName: data.default_name || '' });
-        } else if (data.message_code === 'ERR_BANNED' || (data.message && data.message.includes(BANNED_MARKER))) {
-
-          window.dispatchEvent(new CustomEvent('daof_banned', {
-            detail: data.ban_reason || (data.message ? data.message.replace(BANNED_PREFIX, '').replace(BANNED_REASON_PREFIX, '').trim() : ''),
-          }));
-        } else if (data.message_code === 'ERR_OAUTH_EMAIL_TAKEN_LINK_REQUIRED') {
-          // H-6：跨 provider 邮箱冲突。停留更久的 toast + 引导用户先用原账号登录后再 link。
-          // H-Audit M1：不再展示 email_hint（后端已移除），避免邮箱枚举 oracle。
-          toast.error(
-            t('API.ERR_OAUTH_EMAIL_TAKEN_LINK_REQUIRED', '该第三方邮箱已被另一个账号占用，请先登录原账号后在「设置 → 第三方账号」中绑定。'),
-            { duration: 8000 },
-          );
-          openLogin({ step: 'github' });
-        } else {
-          toast.error((data.message_code ? t('API.' + data.message_code) : data.message) || t('APP.OAUTH_FAILED', '第三方登录失败'));
-          openLogin({ step: 'github' });
-        }
-      })
-      .catch((err) => {
-        logger.warn('[oauth-callback] failed', err);
-        toast.error(t('APP.LOGIN_NET_ERROR', '登录网络异常'));
-        openLogin({ step: 'github' });
-      });
-  // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, []);
-
-  return null;
-};
+// OAuth 回调已迁到 pages/OAuthCallbackPage.jsx 作为正经 router route，
+// 避免 RouterProvider 内的 NotFound fallback 抢先把回调 URL 渲成 404
+// （新用户从 GitHub 回跳过来会看到大大的"页面不存在"，体验崩溃）。
+// 原 OAuthCallbackHandler 函数体已迁移到 OAuthCallbackPage.jsx，App.jsx
+// 不再持有此 handler，避免在 RouterProvider 外层渲染时被 NotFound 抢先击中。
 
 const RootShell = () => (
   <>
@@ -113,7 +30,6 @@ const RootShell = () => (
         },
       }}
     />
-    <OAuthCallbackHandler />
     <AuthModalContainer />
     <BanAlertContainer />
     <RouterProvider router={router} />
@@ -123,14 +39,12 @@ const RootShell = () => (
 function App() {
   const { t } = useTranslation();
 
-
   const sysParam = useMemo(() => new URLSearchParams(window.location.search).get('sys'), []);
   const isAdminUnlocked = localStorage.getItem('daof_admin_unlocked') === '1';
   const [sysCheckStatus, setSysCheckStatus] = useState(() => ({
     loading: !!sysParam,
     setupNeeded: false,
   }));
-
 
   useEffect(() => {
     if (!sysParam) return;
@@ -159,7 +73,6 @@ function App() {
     );
   }
 
-
   if (sysCheckStatus.setupNeeded) {
     if (sysParam && !isAdminUnlocked) {
       return (
@@ -168,7 +81,6 @@ function App() {
             sysParam={sysParam}
             setupMode
             onSuccess={() => {
-
               window.location.href = '/admin';
             }}
           />
@@ -186,7 +98,6 @@ function App() {
       </div>
     );
   }
-
 
   if (sysParam && !isAdminUnlocked) {
     return (
