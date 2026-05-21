@@ -91,7 +91,15 @@ const TopupResult = () => {
           <div className="flex gap-3 justify-center mb-6">
             <button
               type="button"
-              onClick={() => navigate('/topup')}
+              onClick={() => {
+                // IA audit M-J3 fix：重试时保留 out_trade_no 让 Topup 页面
+                // 能预填上次金额 / 通道（Topup 页可读 ?ref= 之类的 query），
+                // 避免用户重新输一遍。
+                const params = new URLSearchParams();
+                if (outTradeNo) params.set('ref', outTradeNo);
+                const qs = params.toString();
+                navigate(`/topup${qs ? `?${qs}` : ''}`);
+              }}
               className="h-10 px-6 bg-primary text-on-primary rounded-control text-sm font-semibold hover:opacity-90"
             >
               {t('TOPUP.RESULT.RETRY', '重试充值')}

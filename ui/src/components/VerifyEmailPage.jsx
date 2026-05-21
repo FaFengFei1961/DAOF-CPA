@@ -9,6 +9,7 @@ import { useSearchParams, useNavigate } from 'react-router-dom';
 import { useTranslation } from 'react-i18next';
 import { CheckCircle, AlertTriangle, Loader2 } from 'lucide-react';
 import { authFetch, isLoggedIn } from '../utils/authFetch';
+import { useAuth } from '../context/AuthContext';
 
 const STATUS_IDLE = 'idle';
 const STATUS_LOADING = 'loading';
@@ -19,6 +20,10 @@ const VerifyEmailPage = () => {
   const { t } = useTranslation();
   const [params] = useSearchParams();
   const navigate = useNavigate();
+  // IA audit M-J2 fix: 未登录用户 ERR_NO_AUTH 之前的 CTA 是"回到设置重发"
+  // (/settings?tab=account)，但 RouteGuard 会立即把未登录用户挡回登录。
+  // 接入 openLogin 让失败页能直接弹登录 modal。
+  const { openLogin } = useAuth();
   const token = params.get('token') || '';
   const [status, setStatus] = useState(STATUS_IDLE);
   const [errorCode, setErrorCode] = useState('');
@@ -101,12 +106,21 @@ const VerifyEmailPage = () => {
                 t('EMAIL.VERIFY.FAIL_GENERIC', '链接无效或已过期，请重新申请。')}
             </p>
             <div className="flex justify-center gap-2 mt-6">
-              <button
-                onClick={() => navigate('/settings?tab=account')}
-                className="h-9 px-4 bg-primary text-on-primary rounded-control text-sm font-medium"
-              >
-                {t('EMAIL.VERIFY.GOTO_REBIND', '回到设置重发')}
-              </button>
+              {errorCode === 'ERR_NO_AUTH' ? (
+                <button
+                  onClick={() => openLogin({ step: 'email-login' })}
+                  className="h-9 px-4 bg-primary text-on-primary rounded-control text-sm font-medium"
+                >
+                  {t('EMAIL.VERIFY.GOTO_LOGIN', '请先登录')}
+                </button>
+              ) : (
+                <button
+                  onClick={() => navigate('/settings?tab=account')}
+                  className="h-9 px-4 bg-primary text-on-primary rounded-control text-sm font-medium"
+                >
+                  {t('EMAIL.VERIFY.GOTO_REBIND', '回到设置重发')}
+                </button>
+              )}
               <button
                 onClick={() => navigate('/')}
                 className="h-9 px-4 bg-surface-container-high border border-outline text-on-surface rounded-control text-sm"

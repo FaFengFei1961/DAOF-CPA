@@ -8,6 +8,7 @@ import { useConfirm } from '../context/ConfirmContext';
 import { authFetch } from '../utils/authFetch';
 import AdminUserBills from './AdminUserBills';
 import BulkGrantCouponModal from './BulkGrantCouponModal';
+import { DestructiveIconButton } from './ui';
 import { useModalA11y } from '../hooks/useModalA11y';
 import DataTable from './ui/DataTable';
 import StatusBadge from './ui/StatusBadge';
@@ -573,9 +574,12 @@ const UserManagement = () => {
                                             >
                                                 <Banknote size={16} />
                                             </button>
-                                            <button onClick={(e) => { e.stopPropagation(); handleDelete(u.id); }} className="text-on-surface-variant hover:text-error" aria-label={t('USER_MGMT.DELETE_TOOLTIP')} title={t('USER_MGMT.DELETE_TOOLTIP')}>
-                                                <Trash2 size={16} />
-                                            </button>
+                                            <DestructiveIconButton
+                                              onClick={(e) => { e.stopPropagation(); handleDelete(u.id); }}
+                                              icon={Trash2}
+                                              size={16}
+                                              title={t('USER_MGMT.DELETE_TOOLTIP')}
+                                            />
                                         </>
                                     )}
                                 </div>

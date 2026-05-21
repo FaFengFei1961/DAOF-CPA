@@ -986,7 +986,8 @@
       "GOTO_PREFS": "前往通知偏好",
       "FAIL": "邮箱验证失败",
       "FAIL_GENERIC": "链接无效或已过期，请重新申请。",
-      "GOTO_REBIND": "回到设置重发"
+      "GOTO_REBIND": "回到设置重发",
+      "GOTO_LOGIN": "请先登录"
     },
     "RESET": {
       "TITLE": "设置新密码",
@@ -2089,7 +2090,7 @@
     "ERR_INVALID_MULTIPLIER": "套餐配额倍数必须为有限数且不超过上限 100。",
     "ERR_INVALID_OAUTH_CODE": "无效的 OAuth 授权码。",
     "ERR_OAUTH_ALREADY_REGISTERED": "该第三方账号已绑定其它账户。",
-    "ERR_OAUTH_EMAIL_TAKEN_LINK_REQUIRED": "该第三方邮箱已被另一个账号占用。请先登录原账号，再到「设置 → 第三方账号」中绑定。",
+    "ERR_OAUTH_EMAIL_TAKEN_LINK_REQUIRED": "该第三方邮箱已被另一个账号占用。请先登录原账号，再到「设置 → 个人档案 → 第三方账号」中绑定。",
     "ERR_OAUTH_CODE_EXPIRED": "第三方授权码已过期，请重新登录。",
     "ERR_OAUTH_INTERNAL": "OAuth 内部错误，请重试。",
     "ERR_OAUTH_PROVIDER_NOT_CONFIGURED": "管理员未配置该 OAuth 服务。",

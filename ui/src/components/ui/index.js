@@ -20,3 +20,4 @@ export { default as Switch } from './Switch';
 export { default as StatusBadge } from './StatusBadge';
 export { default as ProgressBar } from './ProgressBar';
 export { default as SortableGrid, GripHandle } from './SortableGrid';
+export { default as DestructiveIconButton } from './DestructiveIconButton';

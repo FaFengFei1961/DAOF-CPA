@@ -5,7 +5,7 @@ import toast from 'react-hot-toast';
 import { useConfirm } from '../context/ConfirmContext';
 import { authFetch } from '../utils/authFetch';
 import DurationInput, { formatDuration } from './DurationInput';
-import { SortableGrid, GripHandle } from './ui';
+import { SortableGrid, GripHandle, DestructiveIconButton } from './ui';
 import { toCSV, downloadCSV, parseCSV, pickCSVFile } from '../utils/csv';
 import { useModalA11y } from '../hooks/useModalA11y';
 
@@ -286,9 +286,7 @@ const QuotaPlanManagement = () => {
                   <button onClick={() => startEdit(p)} className="p-1.5 text-on-surface-variant hover:text-primary">
                     <Edit size={14} />
                   </button>
-                  <button onClick={() => remove(p)} className="p-1.5 text-on-surface-variant hover:text-error">
-                    <Trash2 size={14} />
-                  </button>
+                  <DestructiveIconButton onClick={() => remove(p)} title={t('COMMON.DELETE', '删除')} />
                 </div>
               </div>
               <div className="space-y-1 text-xs text-on-surface-variant">

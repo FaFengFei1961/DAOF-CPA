@@ -1,10 +1,11 @@
 import React, { useState, useEffect, useCallback, useRef } from 'react';
 import { useTranslation } from 'react-i18next';
-import { Ticket, Plus, Edit, Trash2, X, Save } from 'lucide-react';
+import { Ticket, Plus, Edit, X, Save } from 'lucide-react';
 import toast from 'react-hot-toast';
 import { useConfirm } from '../context/ConfirmContext';
 import { authFetch } from '../utils/authFetch';
 import { useModalA11y } from '../hooks/useModalA11y';
+import { DestructiveIconButton } from './ui';
 
 /**
  * CouponManagement is the admin coupon-template CRUD screen.
@@ -205,10 +206,7 @@ const CouponManagement = () => {
                       className="p-1.5 hover:bg-primary/20 text-primary rounded-control mr-1" aria-label={t('COUPON.EDIT', '编辑')}>
                       <Edit size={14} />
                     </button>
-                    <button onClick={() => onDelete(tpl)}
-                      className="p-1.5 hover:bg-error/20 text-error rounded-control" aria-label={t('COUPON.DELETE', '删除')}>
-                      <Trash2 size={14} />
-                    </button>
+                    <DestructiveIconButton onClick={() => onDelete(tpl)} title={t('COUPON.DELETE', '删除')} />
                   </td>
                 </tr>
               ))

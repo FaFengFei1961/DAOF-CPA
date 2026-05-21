@@ -10,6 +10,7 @@ import { isPageCacheFresh, readPageCache, writePageCache } from '../utils/pageCa
 import { StorePage } from './store/StorePrimitives';
 import TextInput from './ui/TextInput';
 import StatusBadge from './ui/StatusBadge';
+import { DestructiveIconButton } from './ui';
 
 const TOKEN_CACHE_TTL_MS = 30000;
 
@@ -407,9 +408,7 @@ const TokenManager = ({ isAuthenticated }) => {
                                         </button>
                                     </td>
                                     <td className="p-4 text-right">
-                                        <button onClick={() => handleDeleteToken(token.id)} className="text-on-surface-variant hover:text-error p-2 rounded-control hover:bg-error/10 ">
-                                            <Trash2 size={16} />
-                                        </button>
+                                        <DestructiveIconButton onClick={() => handleDeleteToken(token.id)} icon={Trash2} size={16} title={t('TOKEN_MGMT.DELETE_TOOLTIP', '删除令牌')} />
                                     </td>
                                 </tr>
                             ))}

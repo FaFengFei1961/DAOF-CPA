@@ -6,6 +6,7 @@ import toast from 'react-hot-toast';
 import { authFetch } from '../utils/authFetch';
 import { useConfirm } from '../context/ConfirmContext';
 import { useModalA11y } from '../hooks/useModalA11y';
+import { DestructiveIconButton } from './ui';
 import DataTable from './ui/DataTable';
 import StatusBadge from './ui/StatusBadge';
 import ChannelCircuitMonitor from './ChannelCircuitMonitor';
@@ -1111,8 +1112,8 @@ const ChannelManagement = () => {
                                 { key: 'weight', header: t('CHANNEL_MGMT.MODEL.TABLE.WEIGHT'), width: '5%', render: row => (row.isProviderGroup || row.isFamilyGroup) ? null : row.model.weight },
                                 { key: 'actions', header: t('CHANNEL_MGMT.MODEL.TABLE.ACTIONS'), align: 'right', width: '8%', render: row => (row.isProviderGroup || row.isFamilyGroup) ? null : (
                                     <>
-                                        <button onClick={() => handleOpenModelModal(row.model)} className="p-2 hover:bg-primary/20 text-primary rounded-control mr-2"><Edit2 size={16} /></button>
-                                        <button onClick={() => handleDeleteModel(row.model.id)} className="p-2 hover:bg-error/20 text-error rounded-control"><Trash2 size={16} /></button>
+                                        <button onClick={() => handleOpenModelModal(row.model)} className="p-2 hover:bg-primary/20 text-primary rounded-control mr-2" aria-label={t('COMMON.EDIT', '编辑')}><Edit2 size={16} /></button>
+                                        <DestructiveIconButton onClick={() => handleDeleteModel(row.model.id)} icon={Trash2} size={16} title={t('COMMON.DELETE', '删除')} />
                                     </>
                                 )}
                             ]}
@@ -1636,7 +1637,7 @@ const ChannelManagement = () => {
                                 <div className="flex items-center justify-end gap-2">
                                     <button onClick={() => handleSelectChannel(c)} className="p-2 flex shrink-0 items-center gap-1 hover:bg-primary/20 text-primary rounded-control bg-surface-variant whitespace-nowrap"><Box size={14} /> {t('CHANNEL_MGMT.BTN_MODELS')}</button>
                                     <button onClick={() => handleOpenChanModal(c)} className="p-2 shrink-0 hover:bg-primary/20 text-primary rounded-control bg-surface-variant "><Edit2 size={16} /></button>
-                                    <button onClick={() => handleDeleteChan(c.id)} className="p-2 shrink-0 hover:bg-error/20 text-error rounded-control bg-surface-variant "><Trash2 size={16} /></button>
+                                    <DestructiveIconButton onClick={() => handleDeleteChan(c.id)} icon={Trash2} size={16} title={t('COMMON.DELETE', '删除')} />
                                 </div>
                             )}
                         ]}

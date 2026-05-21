@@ -5,7 +5,7 @@ import { useTranslation } from 'react-i18next';
 import { useConfirm } from '../context/ConfirmContext';
 import { authFetch } from '../utils/authFetch';
 import { logger } from '../utils/logger';
-import { SortableGrid, GripHandle } from './ui';
+import { SortableGrid, GripHandle, DestructiveIconButton } from './ui';
 import { toCSV, downloadCSV, parseCSV, pickCSVFile } from '../utils/csv';
 import { useModalA11y } from '../hooks/useModalA11y';
 
@@ -503,15 +503,7 @@ const PackageManagement = () => {
                     >
                       <Edit size={14} />
                     </button>
-                    <button
-                      type="button"
-                      onClick={() => remove(p)}
-                      className="p-1.5 text-on-surface-variant hover:text-error"
-                      aria-label={t('PACKAGE_MGMT.DELETE_PACKAGE', '删除套餐')}
-                      title={t('PACKAGE_MGMT.DELETE_PACKAGE', '删除套餐')}
-                    >
-                      <Trash2 size={14} />
-                    </button>
+                    <DestructiveIconButton onClick={() => remove(p)} title={t('PACKAGE_MGMT.DELETE_PACKAGE', '删除套餐')} />
                   </div>
                 </div>
                 <div className="space-y-1 text-xs text-on-surface-variant">
