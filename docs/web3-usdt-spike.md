@@ -1,19 +1,28 @@
 # Web3 USDT 支付集成 Spike
 
-**状态：W-1 / W-3 已完成，W-2 待用户提供阻塞项**（2026-05-21）。
+**状态：完整可用（manual 模式零部署上线）**（2026-05-21）。
 
 实施进度：
-- ✅ W-0：spike 钉决策（commit 7e369c1）
-- ✅ W-1：PaymentProvider 抽象 + TopupOrder.Provider 字段（commit fa06838）
-- ✅ W-3-P1：webhook 抽象接口 + yifut adapter ParseAndVerifyWebhook（commit a69b142）
-- ✅ W-3-P3：通用 ProcessPaymentWebhook + YifutNotify 薄壳化（commit b5df14f）
-- ✅ W-3-P2：epusdtProvider adapter 完整实现（commit ade493a）
-- ⏳ W-2：epusdt sidecar 部署 — 部署模板见 `deploy/epusdt/`，等用户补 3 链地址 + admin 口令
-- ⏳ W-4：前端 Topup UI 增加 Web3 USDT 卡片（依赖 W-2）
-- ⏳ W-5：上线 + 监控（依赖 W-2 + W-4）
+- ✅ W-0：spike 钉决策（7e369c1）
+- ✅ W-1：PaymentProvider 抽象 + TopupOrder.Provider 字段（fa06838）
+- ✅ W-3-P1：webhook 抽象接口 + yifut adapter ParseAndVerifyWebhook（a69b142）
+- ✅ W-3-P3：通用 ProcessPaymentWebhook + YifutNotify 薄壳化（b5df14f）
+- ✅ W-3-P2：epusdtProvider adapter 完整实现（ade493a）
+- ✅ W-2 准备：epusdt docker-compose 模板（e63049e，auto 模式部署用）
+- ✅ W 系列 review Tier 1-4（24 finding）（a58eca5 / b227810 / 39753b4）
+- ✅ W-4：前端 Topup multi-provider tab + EpusdtOrderPanel（3d4026d / 075aca0）
+- ✅ **W-4-Manual：epusdt 双模式（auto / manual）+ admin SysConfig UI**（b56acf4 / 2679deb）
+- ✅ W-4-Manual E2E（fe1db7d）+ Tier 5 review（6dbb611 / dcfa8ec）
+- ✅ H-6 admin in-product 待确认 USDT badge（b8da24c）
+- ⏳ W-2 实施：等用户部署 epusdt sidecar（manual 模式可先上线，sidecar 是升级路径）
+- ⏳ W-5：上线 + 监控
 
-> 后端代码层已全部就绪。admin 在 SysConfig 配齐 `epusdt_endpoint` / `epusdt_pid` /
-> `epusdt_secret_key` / `epusdt_enabled_chains` 即激活，无需重启进程。
+> **零部署上线路径**：admin 配 SMTP + epusdt manual 4 链地址 + admin 邮箱 → 立即可收 USDT。
+> 用户下单 → 邮件通知 admin → admin 区块链浏览器验真 → 后台标记到账 → quota+=。
+> 见 §6 "manual 模式工作流"。
+
+> **升级到 auto 模式**：部署 `deploy/epusdt/` Docker → SysConfig 改 `epusdt_mode=auto` →
+> 全自动链上对账，前端用户感知零变化。
 
 ## 1. 背景与目标
 
@@ -106,18 +115,27 @@ DAOF 自己接 TronGrid / Infura / Alchemy / Solana RPC，监听 USDT 合约 Tra
 
 ### 决策矩阵
 
-| 维度 | A. epusdt | B. 自集成 | C. 第三方 |
-|------|-----------|----------|----------|
-| 工作量（首期） | **中** | 高 | 低 |
-| 持续维护 | 中 | **高** | 低 |
-| 资金托管 | 否 | 否 | **是** |
-| 私钥风险 | sidecar 持有 | DAOF 持有 | 平台持有 |
-| 费率 | **0%** | gas only | 1–2% + 平台费 |
-| 多链覆盖 | 5+ 链 | 看实现 | 看平台 |
-| 合规友好度 | 中 | 中 | **高** |
-| 推荐 | ★★★★★ | ★★ | ★★★（特定场景） |
+| 维度 | A. epusdt auto | A.M epusdt **manual**（W-4-Manual 新增）| B. 自集成 | C. 第三方 |
+|------|----------------|--------------------------------------|----------|----------|
+| 工作量（首期） | 中 | **极低** | 高 | 低 |
+| 持续维护 | 中 | 0（仅 admin 手工确认）| **高** | 低 |
+| 部署 | 1 个 sidecar Docker | **0 部署** | DAOF 自己 | SaaS |
+| 资金托管 | 否 | 否 | 否 | **是** |
+| 私钥风险 | sidecar 持有 | **完全不存在**（admin 自管钱包）| DAOF 持有 | 平台持有 |
+| 费率 | **0%** | **0%** | gas only | 1–2% + 平台费 |
+| 多链覆盖 | 5+ 链 | 4 链（TRC20/ERC20/BEP20/Polygon）| 看实现 | 看平台 |
+| 入账自动化 | **全自动** | 半自动（邮件+admin 手工标记） | 全自动 | 全自动 |
+| 适合阶段 | 中量稳定流量 | **公测期 / 小流量起步** | 持续高负载 | 合规优先场景 |
+| 合规友好度 | 中 | 中 | 中 | **高** |
+| 推荐 | ★★★★★ | **★★★★★（推荐起点）** | ★★ | ★★★（特定场景） |
 
-**结论：选 A（epusdt sidecar）**。理由：与 DAOF 当前"开发者工具 / 非托管"定位匹配，工作量可控，私钥隔离在独立进程。
+**最终采用 A.M（epusdt manual 模式起步）+ 升级路径 A（auto）**：
+
+- **起步**：manual 模式零部署上线，admin 配几个钱包地址 + 邮箱即可，公测期流量可控
+- **升级**：流量上来后部署 epusdt sidecar → SysConfig 改 `epusdt_mode=auto` → 全自动
+- **回滚**：sidecar 出问题随时切回 manual，前端用户零感知
+
+与 DAOF "开发者工具 / 非托管 / 公测" 定位完全匹配。
 
 ## 4. 推荐方案：DAOF + epusdt 集成
 
@@ -277,6 +295,73 @@ epusdt 标准模式是**静态地址 + 金额尾数**（用户付款金额做 0.
 ### W-1 不阻塞 — 可立即启动
 
 PaymentProvider 抽象层是纯代码重构，不接触任何链上 / 钱包配置，与 W-2 完全解耦。本 spike 完成后**即刻进入 W-1**。
+
+---
+
+## 7. Manual 模式工作流（W-4-Manual，2026-05-21 完成）
+
+### 7.1 admin 一次性配置（5 分钟）
+
+1. **配 SMTP**（如果还没配）：admin 后台 → 系统设置 → 邮件 → 填 Gmail / SendGrid / 自建 SMTP
+2. **配 epusdt manual**：admin 后台 → 财务 → "Web3 USDT" tab
+   - Mode 选"手动确认（推荐 / 零部署）"
+   - 填 admin 邮箱（订单通知收件人）
+   - 填至少 1 条链的收款地址（地址会被正则校验：TRC20 必须 T + 33 base58 / EVM 必须 0x + 40 hex）
+   - 保存
+
+### 7.2 单笔订单全流程
+
+```
+用户 /topup → 选 "Web3 USDT" tab → 选 TRC20 → 输入金额 10 USDT
+   ↓
+后端 createOrderManual：
+  • 取 TRC20 地址 + actual_amount = 10 + (OrderID % 10000) * 0.0001 = 10.0042 USDT
+  • TopupOrder 落库 status=created provider=epusdt
+  • 异步入 EmailQueue（DedupKey=epusdt-manual:OrderID）
+   ↓
+admin 收到邮件：
+  Subject: [DAOF] 新充值订单待确认 #4242   ← 不暴露金额/链给推送预览
+  Body:   订单号 #4242 / 用户 ID / TRC20 / 10.0042 USDT / 地址 / 过期时间
+   ↓
+admin 后台 FinancePage nav 显示红点 "1"（30s polling）
+   ↓
+admin 在 tronscan.org 查 TMBjE... 地址收到 10.0042 USDT 转账
+   ↓
+admin 后台 → 充值订单管理 → 找 #4242 → "标记到账" → 填 chain tx hash
+   ↓
+AdminMarkTopupPaid 单事务：
+  • lockUserForUpdate（user 行锁）
+  • freshOrder 重读 + status='created' 守卫
+  • INSERT PaymentWebhookReceipt(provider=manual, nonce=tx_hash)
+  • UPDATE TopupOrder.status='paid'
+  • UPDATE user.quota+=10_000_000 + paid_quota+=10_000_000
+  • INSERT BillingEntry(currency=USDT, amount_original=10_000_000)
+   ↓
+用户 quota +=10 USD → 前端 toast "充值已到账"
+```
+
+### 7.3 关键安全不变量
+
+- **SMTP 强依赖**：未配齐时 CreateOrder 直接 fail-closed（拒下单）→ 避免用户付款但 admin 永不知
+- **金额尾数防冲突**：0.0001 USDT 步长，10000 个未决订单内不冲突
+- **mark-paid 三层串行化**：user 行锁 + freshOrder 重读 + status CAS UPDATE → 单 order 双扣不可能
+- **跨 provider 防御**：order.Provider 锁定，攻击者拿 yifut 回调投递到 epusdt 路由 → 403
+- **manual 拒 webhook**：manual 模式 ParseAndVerifyWebhook 返 405 ErrWebhookUnsupported
+- **地址格式校验**：TRC20 / EVM 正则在 SysConfig 保存时严格校验，admin 错填立即拒
+- **admin 可见信号**：邮件 + admin nav 红点 + 30s polling，admin 不看邮箱也能感知
+
+### 7.4 升级到 auto 模式
+
+1. 部署 epusdt sidecar（参考 `deploy/epusdt/README.md`）
+2. admin 后台 Web3 USDT tab → 切换 Mode 到 "epusdt sidecar"
+3. 填 endpoint / pid / secret_key（从 epusdt admin 后台拿）
+4. 保存 → 立即生效
+
+升级后行为变化：
+- 链上确认自动入账（不需 admin 手工标记）
+- ParseAndVerifyWebhook 接受 POST JSON 回调
+- admin 后台红点消失（不再有积压订单）
+- 前端用户感知零变化（pay_info JSON 结构不变）
 
 ---
 

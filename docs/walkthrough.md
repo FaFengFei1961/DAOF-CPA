@@ -186,6 +186,64 @@ database/oauth_identities 表（append-only，soft-delete via unlinked_at）
   - unlink 时 check via `userHasOtherAuthMethodTx`（TOCTOU 事务化，H-Audit H-2）
 - Email 冲突防御（H-6）：跨 provider 邮箱相同且都 verified 时，返 409 + ERR_OAUTH_EMAIL_TAKEN_LINK_REQUIRED，write 审计日志 OAUTH_EMAIL_COLLISION_BLOCKED
 
+## 支付通道：PaymentProvider 抽象（Phase W 系列）
+
+充值收款的多 provider 抽象。yifut（CNY 实时回调）+ epusdt（USDT 链上）双通道，
+后者支持 **auto sidecar** 和 **manual 邮件确认**双模式（零部署也能上线 USDT）。
+
+```
+PaymentProvider interface (controller/payment_provider.go)
+├── Key() string                                    // "yifut" / "epusdt"
+├── IsConfigured() bool                              // admin 配齐凭据
+├── CreateOrder(ctx, req) → (result, error)          // 下单
+├── PublicOptions() PaymentProviderPublicOptions     // 给 /api/topup/options
+└── ParseAndVerifyWebhook(input) → (event, error)    // 验签 + 解析（不查 DB）
+
+可选 IPAllowlistedProvider interface（W-3 review M-2/M-7）
+└── AllowedRemoteIPCIDRs() string                   // yifut + epusdt 实现
+```
+
+**通用 webhook 入口**：`ProcessPaymentWebhook(c, providerKey)`（controller/payment_webhook.go）
+1. IP allowlist（按 provider 调 type assert）
+2. provider.ParseAndVerifyWebhook → event
+3. (provider, event.Nonce) 唯一约束防重放
+4. SELECT order → 金额比对（fen vs micro_usd 双口径，按 event.AmountKind 分支）
+5. 单事务：status 'created'→'paid' + quota+= + paid_quota+= + WriteBillingEntry
+
+**Provider 一致性防御**：order.Provider != providerKey → 403，防攻击者拿 epusdt
+合法 callback 投递到 /yifut 路由。
+
+### Web3 USDT 双模式（W-4-Manual）
+
+epusdt 内部按 `SysConfig epusdt_mode` 切换：
+
+| 模式 | 工作流 | 部署 |
+|---|---|---|
+| **auto** | epusdt sidecar 监听链上 → POST webhook → DAOF 入账 | docker compose up，配 endpoint/pid/secret |
+| **manual**（默认）| 订单创建时邮件通知 admin → admin 区块链浏览器验真 → admin 后台点"标记到账" | 0 部署，只配 admin 邮箱 + 钱包地址 |
+
+manual 模式核心机制：
+- **金额尾数**：`actual_amount_micro = AmountUSDMicro + (OrderID % 10000) * 100`（0.0001 USDT 步长，10000 个未决订单内不冲突）
+- **邮件通知**：异步入 G-1 EmailQueue，DedupKey=`epusdt-manual:<order_id>`
+- **入账复用**：admin 走 `POST /api/admin/topup/orders/:id/mark-paid`（provider-agnostic，原 yifut 应急补单入口）
+- **不变量**：
+  - SMTP 未配齐时 createOrderManual 直接 fail-closed（C-2：避免用户付款但 admin 永不知）
+  - manual 模式 ParseAndVerifyWebhook 拒所有 webhook（H-2：返 405 ErrWebhookUnsupported 避免误判）
+  - mark-paid 三层串行化（lockUserForUpdate → freshOrder 重读 → status CAS UPDATE）
+
+**Admin in-product badge**（H-6）：FinancePage nav 30s polling `/api/admin/topup/pending-manual-count`，
+积压订单 > 0 时显示红点 + 数字 + 悬停显示最早订单时长。不看邮箱也能感知积压。
+
+**关键文件**：
+- `controller/payment_provider.go` — 接口 + 错误 sentinel
+- `controller/payment_provider_yifut.go` — yifut adapter
+- `controller/payment_provider_epusdt.go` — epusdt adapter（auto + manual 分支）
+- `controller/payment_webhook.go` — 通用 ProcessPaymentWebhook
+- `controller/topup_admin.go` — AdminMarkTopupPaid（manual 入账复用）+ AdminGetPendingManualEpusdtCount
+- `proxy/epusdt_client.go` — HTTP client + MD5 签名 + 钱包地址正则校验（ValidateEpusdtAddress）
+- `deploy/epusdt/` — Docker 模板 + README + .env.example（auto 模式部署用）
+- `docs/web3-usdt-spike.md` — 选型决策 + 实施进度记录
+
 ## WebSocket 桥接（proxy/responses_websocket.go）
 
 Codex Responses WebSocket v2 协议透明代理：
