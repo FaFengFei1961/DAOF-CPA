@@ -109,18 +109,6 @@
   --font-heading: 18px;     /* section 标题 */
   --font-display: 26px;     /* 页面 H1 */
 
-  /* 向下兼容 alias（旧代码用 font-body1/title3 等仍能工作） */
-  --font-caption2: 12px;
-  --font-caption1: 12px;
-  --font-body1: 13.5px;
-  --font-body2: 13.5px;
-  --font-subtitle2: 13.5px;
-  --font-subtitle1: 18px;
-  --font-title3: 18px;
-  --font-title2: 26px;
-  --font-title1: 26px;
-  --font-large-title: 26px;
-
   /* ─── 字体栈（Geist 主，PingFang/Noto 中文 fallback） ──────── */
   --font-sans:
     'Geist',

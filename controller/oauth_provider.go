@@ -156,23 +156,11 @@ func GetOAuthProvider(key string) (OAuthProvider, bool) {
 	return p, ok
 }
 
-// ListConfiguredOAuthProviders 返回当前 admin 已配齐凭据的 provider key 列表。
-// 用于 GET /api/public-config 暴露给前端"用户当前可选哪些登录方式"。
-func ListConfiguredOAuthProviders() []string {
-	oauthProvidersMu.RLock()
-	defer oauthProvidersMu.RUnlock()
-	keys := make([]string, 0, len(oauthProviders))
-	for k, p := range oauthProviders {
-		if p.IsConfigured() {
-			keys = append(keys, k)
-		}
-	}
-	return keys
-}
-
 // ListConfiguredOAuthProviderMetadata 返回所有 admin 已配齐凭据的 provider 完整元数据。
-// fix H-Audit L8（2026-05-21）：替代 ListConfiguredOAuthProviders 的结构化版本，
 // 前端用 metadata 字段直接渲染按钮 + 拼 authorize URL，不再 hardcode provider map。
+//
+// Phase H cleanup：删除 ListConfiguredOAuthProviders ([]string) — 零调用方，
+// metadata 数组已是唯一公共接口。
 //
 // 返回顺序：按 Key 字典序排序，保证前端渲染稳定（map 遍历顺序不固定）。
 func ListConfiguredOAuthProviderMetadata() []OAuthProviderPublicMetadata {

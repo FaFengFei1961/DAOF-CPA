@@ -2,6 +2,7 @@ package controller
 
 import (
 	"encoding/json"
+	"errors"
 	"fmt"
 	"log"
 	"regexp"
@@ -353,9 +354,17 @@ func persistBillingRulesUpdate(values map[string]string, revision database.Billi
 			if err != nil {
 				return fmt.Errorf("encrypt %s: %w", k, err)
 			}
+			// Phase H C-2 fix：原代码只用 RowsAffected>0 区分 update/create，
+			// 不区分 "key 不存在" vs "First() 失败"。若 DB busy / lock timeout，
+			// RowsAffected=0 会让逻辑 fall-through 到 Create，触发 unique-violation
+			// 而真实失败原因被掩盖。改用 errors.Is(gorm.ErrRecordNotFound) 显式区分，
+			// 与 admin_email.go:396 的标准范式一致。
 			var existing database.SysConfig
 			res := tx.Where("key = ?", k).First(&existing)
-			if res.RowsAffected > 0 {
+			if res.Error != nil && !errors.Is(res.Error, gorm.ErrRecordNotFound) {
+				return fmt.Errorf("lookup %s: %w", k, res.Error)
+			}
+			if res.Error == nil {
 				existing.Value = enc
 				if err := tx.Save(&existing).Error; err != nil {
 					return fmt.Errorf("save %s: %w", k, err)

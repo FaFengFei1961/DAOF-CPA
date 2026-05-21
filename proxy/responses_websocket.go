@@ -749,7 +749,11 @@ func writeWebsocketPendingReconcile(state *websocketBridgeState, modelName, reas
 	}
 	// fix H1：写 pending_reconcile 前重读 quota，避免 BalanceAfterUSD 是 handshake stale
 	refreshUserQuotaFromDB(state.user)
-	_ = database.WriteBillingEntryNonFatal(database.BillingEntryInput{
+	// Phase H C-1 fix：WS 的 pending_reconcile 入账之前是 `_ = WriteBillingEntryNonFatal(...)`，
+	// 与 text_billing.go / image_billing.go 的 3 次重试 + LOST-DEBT 告警严重不对齐。
+	// 单实例 SQLite 在锁竞争时偶发 BUSY，错误被静默吞掉意味着对账事实丢失、admin 完全无信号。
+	// 切到共享的 writeBillingWithRetry，保持金融审计路径口径一致。
+	pendingEntry := database.BillingEntryInput{
 		UserID:          state.user.ID,
 		EntryType:       database.BillingTypeApiUsagePendingReconcile,
 		BillingState:    database.BillingStatePendingReconcile,
@@ -759,7 +763,8 @@ func writeWebsocketPendingReconcile(state *websocketBridgeState, modelName, reas
 		RelatedType:     relatedType,
 		RelatedID:       relatedID,
 		Description:     fmt.Sprintf("[%s] WS %s · 待对账（无 usage）", reasonTag, modelName),
-	})
+	}
+	writeBillingWithRetry(pendingEntry, 0, 0, relatedID, state.user.ID, modelName)
 }
 
 // refreshUserQuotaFromDB 重读 user.Quota 字段（其余字段不变），用于 WS 长连

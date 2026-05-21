@@ -78,7 +78,7 @@ const UserLinkedAccounts = () => {
   const [loading, setLoading] = useState(true);
   const [submittingProvider, setSubmittingProvider] = useState(''); // 当前 in-flight 的 provider key
   const [identities, setIdentities] = useState([]); // [{ provider, external_id, linked_at, ... }]
-  const [publicConfig, setPublicConfig] = useState(null); // { oauth_providers: [...], github_client_id, google_client_id, server_address }
+  const [publicConfig, setPublicConfig] = useState(null); // { oauth_provider_metadata: [...], server_address }
 
   const load = useCallback(async () => {
     if (!isLoggedIn()) {
@@ -189,14 +189,12 @@ const UserLinkedAccounts = () => {
     return <div className="text-sm text-on-surface-variant py-4">{t('COMMON.LOADING', '加载中…')}</div>;
   }
 
-  // fix H-Audit L8：admin 已配置的 provider 元数据列表（含 label / authorize_endpoint /
-  // default_params / icon_key）。从 server 取，前端不再 hardcode。老字段 oauth_providers
-  // ([]string) 作为兜底——当 server 未返新字段时退回 key-only 渲染。
+  // admin 已配置的 provider 元数据列表（含 label / authorize_endpoint /
+  // default_params / icon_key）。Phase H cleanup：删除 oauth_providers ([]string) 兜底，
+  // 公测期同仓部署不会有"前端旧 / 后端新"窗口期。
   const configuredMeta = Array.isArray(publicConfig?.oauth_provider_metadata)
     ? publicConfig.oauth_provider_metadata
-    : (Array.isArray(publicConfig?.oauth_providers)
-        ? publicConfig.oauth_providers.map((k) => ({ key: k, label: k, icon_key: k, default_params: {} }))
-        : []);
+    : [];
   if (configuredMeta.length === 0) {
     return (
       <section className="rounded-overlay border border-outline-variant bg-surface-container p-6">

@@ -61,7 +61,13 @@ const AccountProfile = () => {
             .then(data => {
                 if (alive && data?.success) setPublicConfig(data);
             })
-            .catch(() => {});
+            .catch((err) => {
+                // Phase H Critical fix：旧代码 .catch(() => {}) 完全静默，
+                // referral 面板会展示三个 '—' 让用户以为是真值（其实是 fetch fail）。
+                // 至少在控制台 warn 出来，让运维 / 调试时能定位。
+                // eslint-disable-next-line no-console
+                console.warn('[AccountProfile] public-config fetch failed', err);
+            });
         return () => { alive = false; };
     }, []);
 
@@ -204,9 +210,15 @@ const AccountProfile = () => {
                                 className="flex-1 h-10 bg-black/40 border border-outline-variant rounded-control px-3 text-xs text-on-surface font-mono outline-none select-all"
                             />
                             <button
-                                onClick={() => {
-                                    navigator.clipboard.writeText(referralUrl);
-                                    toast.success(t('ACCOUNT.REFERRAL_COPIED', '推荐链接已复制'));
+                                onClick={async () => {
+                                    // Phase H Critical fix：旧代码 fire-and-forget，
+                                    // clipboard 失败也会无条件 success toast 误导用户。
+                                    try {
+                                        await navigator.clipboard.writeText(referralUrl);
+                                        toast.success(t('ACCOUNT.REFERRAL_COPIED', '推荐链接已复制'));
+                                    } catch {
+                                        toast.error(t('COMMON.COPY_FAIL', '复制失败，请手动选中复制'));
+                                    }
                                 }}
                                 className="px-4 bg-primary text-on-primary rounded-control text-sm font-medium hover:opacity-90 flex items-center gap-1"
                             >

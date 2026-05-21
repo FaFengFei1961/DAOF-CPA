@@ -44,20 +44,31 @@ const Dashboard = () => {
       logger.warn('[dashboard] fetch failed', err);
       return null;
     };
-    Promise.all([
-      authFetch('/api/user/me', { signal: ctrl.signal }).catch(swallow),
-      authFetch('/api/logs?page=1&limit=8', { signal: ctrl.signal }).catch(swallow),
-    ]).then(([meRes, logsRes]) => {
-      if (ctrl.signal.aborted) return;
-      if (meRes?.success) setMe(meRes.data);
-      // 后端 /api/logs 返回 { data: { logs: [...], total, page, limit } }，
-      // 字段名是 logs 不是 items。Array.isArray 兜底防御非数组响应（避免 reduce 崩）。
-      if (logsRes?.success) {
-        const raw = logsRes.data?.logs ?? logsRes.data?.items ?? logsRes.data;
-        setRecentLogs(Array.isArray(raw) ? raw : []);
+    // Phase H Critical fix：原 Promise.all().then() 缺顶层 .catch — 如果
+    // .then 回调内部 throw（罕见但可能），meLoading 永久卡 true，骨架屏永远转。
+    // 用 try/finally 保证 setMeLoading(false) 一定被调用。
+    (async () => {
+      try {
+        const [meRes, logsRes] = await Promise.all([
+          authFetch('/api/user/me', { signal: ctrl.signal }).catch(swallow),
+          authFetch('/api/logs?page=1&limit=8', { signal: ctrl.signal }).catch(swallow),
+        ]);
+        if (ctrl.signal.aborted) return;
+        if (meRes?.success) setMe(meRes.data);
+        // 后端 /api/logs 返回 { data: { logs: [...], total, page, limit } }，
+        // 字段名是 logs 不是 items。Array.isArray 兜底防御非数组响应（避免 reduce 崩）。
+        if (logsRes?.success) {
+          const raw = logsRes.data?.logs ?? logsRes.data?.items ?? logsRes.data;
+          setRecentLogs(Array.isArray(raw) ? raw : []);
+        }
+      } catch (err) {
+        if (err?.name !== 'AbortError') {
+          logger.warn('[dashboard] unexpected error', err);
+        }
+      } finally {
+        if (!ctrl.signal.aborted) setMeLoading(false);
       }
-      setMeLoading(false);
-    });
+    })();
     return () => ctrl.abort();
   }, [isAuthenticated, isAdmin]);
 

@@ -214,9 +214,18 @@ const TokenManager = ({ isAuthenticated }) => {
         }
     };
 
-    const handleCopy = (text) => {
-        navigator.clipboard.writeText(text);
-        toast.success(t('TOKEN_MGMT.COPY_SUCCESS'));
+    // Phase H Critical fix：原来是 fire-and-forget，复制失败（HTTP / permission denied /
+    // clipboard API 不可用）也会无条件弹 success toast。API token 是安全凭据，
+    // 假成功比无操作更糟 — 用户以为复制了，粘贴时拿到上次剪贴板里的别人 token。
+    const handleCopy = async (text) => {
+        try {
+            await navigator.clipboard.writeText(text);
+            toast.success(t('TOKEN_MGMT.COPY_SUCCESS'));
+        } catch (err) {
+            toast.error(t('TOKEN_MGMT.COPY_FAIL', '复制失败，请手动选中复制'));
+            // eslint-disable-next-line no-console
+            console.warn('[TokenManager] clipboard write failed', err);
+        }
     };
 
     const renderTokens = () => (

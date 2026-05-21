@@ -94,20 +94,11 @@ const AuthModal = ({ isOpen, onClose, onLoginSuccess, initialStep = 'github', tm
       }
       const pub = await pubRes.json();
       const stateJson = await stateRes.json();
-      // 找到 provider 元数据（兼容老字段：若新字段缺失，按 key 自拼）
+      // Phase H cleanup：删除 [provider]_client_id 顶层 fallback —
+      // /api/public-config 现在只返 oauth_provider_metadata 数组。
       const metaList = Array.isArray(pub?.oauth_provider_metadata) ? pub.oauth_provider_metadata : [];
-      let meta = metaList.find((m) => m?.key === providerKey);
-      if (!meta) {
-        // 兼容：老 server 未返 oauth_provider_metadata，从顶层 [provider]_client_id 兜底
-        const fallbackClientID = (pub?.[`${providerKey}_client_id`] || '').trim();
-        if (!fallbackClientID) {
-          toast.error(t('API.ERR_OAUTH_PROVIDER_NOT_CONFIGURED', '该第三方登录未配置'));
-          setLoading(false);
-          return;
-        }
-        meta = { key: providerKey, client_id: fallbackClientID, authorize_endpoint: '', default_params: {} };
-      }
-      if (!meta.client_id || !meta.authorize_endpoint) {
+      const meta = metaList.find((m) => m?.key === providerKey);
+      if (!meta || !meta.client_id || !meta.authorize_endpoint) {
         toast.error(t('API.ERR_OAUTH_PROVIDER_NOT_CONFIGURED', '该第三方登录未配置'));
         setLoading(false);
         return;
@@ -399,8 +390,8 @@ const AuthModal = ({ isOpen, onClose, onLoginSuccess, initialStep = 'github', tm
                </button>
 
                {/* Phase H-4：Google OAuth 按钮。Google 品牌色（white bg + colored G logo）。
-                   admin 未配 google_client_id 时隐藏（handleGoogleLogin 会失败 + 弹 toast；
-                   按钮是否显示由 publicConfig.oauth_providers 决定 → 下一步）。 */}
+                   admin 未配 google client 时隐藏（handleGoogleLogin 会失败 + 弹 toast；
+                   按钮是否显示由 publicConfig.oauth_provider_metadata 决定）。 */}
                <button
                   type="button"
                   onClick={handleGoogleLogin}

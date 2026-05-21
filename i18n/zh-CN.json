@@ -30,6 +30,7 @@
     "GO_HOME": "返回首页",
     "GO_PRICING": "查看定价",
     "GO_TOPUP": "去充值",
+    "COPY_FAIL": "复制失败，请手动选中复制",
     "RUNTIME_ERROR_TITLE": "页面发生异常",
     "RUNTIME_ERROR_DESC": "页面加载或运行时出错。可以尝试刷新当前页，或返回首页继续。",
     "ERR_INSUFFICIENT_BALANCE_GO_TOPUP": "余额不足，请前往充值或购买套餐。"

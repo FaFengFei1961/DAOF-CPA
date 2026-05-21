@@ -1025,33 +1025,26 @@ func mapOAuthProviderErrorGeneric(c *fiber.Ctx, providerKey string, err error) e
 // GetPublicConfig 暴露不受查验的安全级别配置给前台。
 // fix CRITICAL Sprint4-M3：exchange_rate 改为 int64 micros 字段名，杜绝 float 协议。
 //
-// H-4：新增 google_client_id + oauth_providers 数组让前端按已配置 provider 渲染按钮。
+// Phase H cleanup（2026-05-21）：删除 github_client_id / google_client_id /
+// oauth_providers 三个旧字段。前端 AuthModal.jsx + UserLinkedAccounts.jsx
+// 现统一从 oauth_provider_metadata 结构化数组读取，不再走 flat 字段兜底。
+// 公测期不需要向后兼容；同仓部署不会出现"前端旧、后端新"窗口。
 func GetPublicConfig(c *fiber.Ctx) error {
 	proxy.SysConfigMutex.RLock()
-	githubClientID := proxy.SysConfigCache["github_client_id"]
-	googleClientID := proxy.SysConfigCache["google_client_id"]
 	serverAddress := proxy.SysConfigCache["server_address"]
 	rateStr := proxy.SysConfigCache["exchange_rate_rmb_per_usd_micros"]
 	proxy.SysConfigMutex.RUnlock()
 	signupBonus, referrerBonus, refereeBonus := resolveBonusConfig()
 	paidSpendRewardBPS, paidSpendRewardWindowSeconds := readReferralPaidSpendRewardConfig()
 
-	// oauth_providers：列已配置（registry 注册 + IsConfigured 返 true）的 provider key
-	// 前端用这个数组渲染登录按钮（"用 GitHub / Google 登录"）。
-	//
-	// fix H-Audit L8（2026-05-21）：同时返结构化 oauth_provider_metadata 数组，
-	// 前端用元数据字段直接渲染按钮 + 拼 authorize URL，添加新 provider 时
-	// 前端无需发版。oauth_providers/[provider]_client_id 保留兼容老前端，
-	// 下一版可删除。
-	providers := ListConfiguredOAuthProviders()
+	// oauth_provider_metadata：结构化数组，每项包含 provider key + client_id +
+	// authorize URL 模板 + 显示名等。前端从这一个字段拿到渲染按钮 + 启动
+	// OAuth 跳转所需的所有信息。
 	providerMetadata := ListConfiguredOAuthProviderMetadata()
 
 	return c.JSON(fiber.Map{
 		"success":                          true,
-		"github_client_id":                 githubClientID,
-		"google_client_id":                 googleClientID,
-		"oauth_providers":                  providers,        // []string{"github", "google", ...}（兼容字段）
-		"oauth_provider_metadata":          providerMetadata, // L8：结构化元数据
+		"oauth_provider_metadata":          providerMetadata,
 		"server_address":                   serverAddress,
 		"exchange_rate_rmb_per_usd_micros": rateStr,
 		"referral_incentives": fiber.Map{
