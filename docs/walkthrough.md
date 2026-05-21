@@ -64,6 +64,128 @@ type CommitTextContext struct {
 
 **默认 disabled 策略**：所有非传统媒体端点（images/edits / videos/edits / videos/extensions / /v1beta/models / /v1/responses/ws）seed 默认 `Supported=false` / `DefaultEnabled=false`，admin 必须在 ChannelModel.AllowedEndpoints 显式加端点 + 切 Supported=true 才能启用。
 
+## 邮件系统（Phase G-1）
+
+**核心**：SMTP 客户端 + 模板引擎 + 异步发送队列 + 用户邮箱绑定 API。
+
+**架构**：
+```
+Admin 配置 SMTP（加密存储）→ EmailTemplate（模板 + i18n）
+  ↓
+User 触发（注册 / 验证邮箱 / 忘记密码）→ EmailQueue → 限流+幂等 → SMTP 发送
+  ↓
+审计：SMTP 配置 / Token 消费 / 发送失败记录
+```
+
+**关键组件**：
+
+- `proxy/email_smtp.go` — SMTP 客户端（TLS 强制 465/587，SSRF 防护 via safeDialContext，凭据 AES-CBC 加密）
+- `proxy/email_template.go` — 模板系统（bind/verify/reset/welcome 预定义，i18n 多语言）
+- `proxy/email_queue.go` — 异步队列（per-target 限流、幂等通过 SourceRef hash）
+- `database/email_verification_schema.go` — EmailVerification 表（append-only，token 单次消费）
+- `database/user_schema.go` — User 新增 Email / EmailVerifiedAt / PasswordHash / EmailLoginEnabled 字段（bcrypt cost=12 prod/cost=4 test）
+- `controller/admin_email.go` — Admin 侧 SMTP 配置 + 凭据加密解密 + feature toggle（SysConfig email_enabled）
+- `controller/email_auth.go` — 邮箱注册 / 登录 / 忘记密码 / 重置密码（含 signup_bonus + partial unique index 兜底）
+
+**关键不变量**：
+- EmailVerification 仅 INSERT + 消费时 UPDATE ConsumedAt；其他修改拒绝（BeforeUpdate hook）
+- SMTP password 绝不回显；admin 修改配置时 UI 展示密码掩码
+- 发送失败 → 入队列重试，不轮询数据库（由 email_queue 定期扫 SendErrorCount < 5 的行）
+
+## 邮箱+密码登录（Phase G-2）
+
+**扩展 G-1**：在 User 表基础上加登录、注册、忘记密码全流程。
+
+**API**（实际路由见 `main.go`）：
+
+匿名（认证前）：
+- `POST /api/auth/email/login` — 邮箱+密码登录
+- `POST /api/auth/email/signup` — 邮箱+密码注册（发 verify 邮件 → 用户点链接 → `/api/user/email/verify` 消费 token）
+- `POST /api/auth/email/forgot-password` — 忘记密码申请（发 reset_password token）
+- `POST /api/auth/email/reset-password` — 新密码设置（token 消费 + bcrypt 更新）
+- `POST /api/auth/email/set-password` — OAuth 用户首次启用 email-login（复用 reset 流程语义）
+
+登录后（UserGuard + CSRFGuard）：
+- `GET    /api/user/email` — 查当前邮箱绑定 / 验证状态
+- `POST   /api/user/email/bind` — 绑定邮箱（发 verify 邮件）
+- `POST   /api/user/email/verify` — 消费 verify token
+- `POST   /api/user/email/resend-verification` — 重发验证邮件
+- `DELETE /api/user/email` — 解绑邮箱
+- `POST   /api/user/email/request-set-password` — OAuth 用户请求设密链接
+- `PUT    /api/user/email-login-enabled` — 用户级开关 email-login
+
+**关键文件**：
+- `controller/email_signup.go`
+- `controller/email_login.go`
+- `controller/email_password_reset.go`
+- `controller/email_set_password.go`
+
+**关键不变量**：
+- 注册路径（createUserWithSignupBonus）事务化：user + EmailVerification + signup_bonus + signup_coupon 四步原子（H-Audit C-1）
+- 邮箱唯一约束：`users(email)` 有 partial unique index 限制已验证账号同邮箱唯一（兜底 409 + ERR_EMAIL_TAKEN）
+
+## OAuth 多 provider 抽象（Phase H-1 ~ H-4）
+
+**目标**：把第三方身份验证从 hardcoded GitHub 扩展到任意 provider（GitHub + Google + 预留扩展点）。
+
+**架构**：
+```
+Provider Registry（init 时注册 GitHub / Google adapter）
+  ↓ OAuthProvider interface
+  ├─ oauth_provider_github.go（OIDC via github.com/apps）
+  ├─ oauth_provider_google.go（OIDC via accounts.google.com）
+  └─ [扩展点] oauth_provider_*.go
+  ↓
+controller/oauth.go（handler）→ tmp_token 生成 → 前端消费
+  ↓
+database/oauth_identities 表（append-only，soft-delete via unlinked_at）
+```
+
+**关键表**：
+- `oauth_identities` — (provider, external_id, user_id, email, email_verified, unlinked_at)
+  - Partial unique index：`uniq_oauth_identity_active(provider, external_id) WHERE unlinked_at IS NULL`
+  - 审计：append-only with soft-delete（BeforeUpdate/BeforeDelete hook）
+
+**关键 API**：
+- `POST /api/auth/oauth/:provider/prepare` — 获 state + code_challenge（前端自行跳转 provider）
+- `POST /api/auth/oauth/:provider/callback` — 回调处理（code → external_id → lookup/create user）
+
+**关键文件**：
+- `controller/oauth_provider.go` — Provider 接口 + 注册表 + sentinel errors（ErrOAuthCodeExpired / ErrOAuthProviderNotConfigured 等）
+- `controller/oauth_provider_github.go` — GitHub 实现（email 保守取值，EmailVerified=false 即使 primary）
+- `controller/oauth_provider_google.go` — Google 实现（OIDC userinfo 格式 + scope: openid email profile）
+- `database/oauth_identity_schema.go` — OAuthIdentity 模型 + append-only 约束
+
+**tmp_token 格式**（8 段，H-Audit-2 扩展）：
+```
+(clean|sms)|provider|externalID|username|ref|email|verifiedFlag|timestamp
+```
+
+**关键不变量**：
+- GitHub email 保守取值：EmailVerified=false（防 secondary public email 占位攻击）
+- tmp_token 一次性消费（CompleteRisk / CompleteProfile 时消费，存 state 防 CSRF）
+- Provider credential 轮换：ClientID / ClientSecret 从 SysConfig 读取（无硬编码）
+
+## OAuth 账号 link-unlink（Phase H-5）
+
+**场景**：已登录用户绑定 / 解绑第三方账号，跨 provider 邮箱防冲突。
+
+**API**：
+- `GET  /api/user/oauth/identities` — 列当前已绑定的 active providers（仅 provider + external_id + linked_at；H-Audit M4 起隐藏 email/username 减少 PII 泄漏）
+- `POST /api/user/oauth/:provider/link/prepare` — 启动 link 流程（返 state + code_challenge；state 内嵌 `LinkUserID` 标识"已登录用户加新 provider"）
+- `POST /api/user/oauth/:provider/unlink` — 软删（事务内 check + `SET unlinked_at = now`；TOCTOU 防御 H-Audit H-2）
+
+**关键设计**：link 回调**复用同一个 `/api/auth/oauth/:provider/callback`**端点。`oauthStateRecord.LinkUserID != 0` 时 `OAuthCallback` 走 `finishOAuthLinkToExistingUser` 分支（绑到当前 user），否则走匿名 login/signup 分支。state 一次性消费保证不可混淆。
+
+**关键文件**：
+- `controller/oauth_identity_helpers.go` — 用户视角的 identity 查询 + 安全检查（至少保留一种 auth method）
+- `controller/oauth.go` — 回调处理分支（linkMode vs loginMode）
+
+**关键不变量**：
+- 安全：至少保留一个 auth method（phone OR email+verified+password OR active identity）
+  - unlink 时 check via `userHasOtherAuthMethodTx`（TOCTOU 事务化，H-Audit H-2）
+- Email 冲突防御（H-6）：跨 provider 邮箱相同且都 verified 时，返 409 + ERR_OAUTH_EMAIL_TAKEN_LINK_REQUIRED，write 审计日志 OAUTH_EMAIL_COLLISION_BLOCKED
+
 ## WebSocket 桥接（proxy/responses_websocket.go）
 
 Codex Responses WebSocket v2 协议透明代理：
