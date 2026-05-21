@@ -121,19 +121,23 @@ func startTmpTokenJanitor() {
 }
 
 // parseTmpToken 解析并校验 OAuth 流程中的 tmp_token。
-// payload 形如（Phase H-3 多 provider 格式）：
+// payload 形如（Phase H-Audit-2 多 provider + email sync 格式，2026-05-21）：
 //
-//	(clean|sms) | provider | externalID | suggestedUsername | ref | timestamp
+//	(clean|sms) | provider | externalID | suggestedUsername | ref | email | emailVerified | timestamp
+//	   [0]        [1]         [2]            [3]              [4]   [5]      [6]            [7]
+//
+// 旧 H-3 6 段格式（不带 email + emailVerified）也接受，但 email 视为空 / 未验证。
+// 与 G-2 邮箱 + 密码注册的 tmp_token 不冲突（那条走自己的格式，不进本路径）。
 //
 // 返回 (tokenType, refUser, originalDecryptedStr, error)
-// originalDecryptedStr 让 caller 自己 split 出 provider / externalID / suggestedUsername。
+// originalDecryptedStr 让 caller 自己 split 出剩余字段。
 func parseTmpToken(tmpToken string) (string, string, string, error) {
 	decrypted, err := utils.Decrypt(tmpToken)
 	if err != nil || decrypted == "" {
 		return "", "", "", fmt.Errorf("无效或被篡改的风控票据")
 	}
 	parts := strings.Split(decrypted, "|")
-	// H-3：新格式 6 段。旧格式（5 段）一律拒（项目尚未上线 + 任何漏掉的旧 token TTL 15min 已过）
+	// 至少 6 段（H-3 老格式）；8 段（H-Audit-2 新格式，带 email + verified）
 	if len(parts) < 6 {
 		return "", "", "", fmt.Errorf("票据格式损坏")
 	}
@@ -141,8 +145,8 @@ func parseTmpToken(tmpToken string) (string, string, string, error) {
 	if tokenType != "clean" && tokenType != "sms" {
 		return "", "", "", fmt.Errorf("票据类型未知")
 	}
-	// parts[1]=provider parts[2]=externalID parts[3]=username parts[4]=ref parts[5]=ts
-	tsStr := parts[5]
+	// timestamp 在最后一段（兼容 6 段和 8 段）
+	tsStr := parts[len(parts)-1]
 	ts, err := strconv.ParseInt(tsStr, 10, 64)
 	if err != nil {
 		return "", "", "", fmt.Errorf("票据时间戳损坏")
@@ -159,25 +163,45 @@ func parseTmpToken(tmpToken string) (string, string, string, error) {
 	return tokenType, refUser, decrypted, nil
 }
 
-// parseOAuthTmpTokenParts 从 parseTmpToken 返回的 decryptedStr 中提取 (provider, externalID, username)。
+// parseOAuthTmpTokenParts 从 parseTmpToken 返回的 decryptedStr 中提取
+// (provider, externalID, username, email, emailVerified)。
+// 8 段格式拿 email + verified；6 段格式 email="", verified=false。
 // 不重复校验段数（parseTmpToken 已确认 >= 6）。
-func parseOAuthTmpTokenParts(decryptedStr string) (provider, externalID, suggestedUsername string) {
+func parseOAuthTmpTokenParts(decryptedStr string) (provider, externalID, suggestedUsername, email string, emailVerified bool) {
 	parts := strings.Split(decryptedStr, "|")
 	if len(parts) < 6 {
-		return "", "", ""
+		return "", "", "", "", false
 	}
-	return parts[1], parts[2], parts[3]
+	provider = parts[1]
+	externalID = parts[2]
+	suggestedUsername = parts[3]
+	// 8 段新格式：parts[5]=email parts[6]=emailVerified parts[7]=ts
+	if len(parts) >= 8 {
+		email = parts[5]
+		emailVerified = parts[6] == "1"
+	}
+	return
 }
 
 // buildOAuthTmpTokenPayload 拼装 tmp_token 明文（caller 再 utils.Encrypt）。
-// 严禁 provider/externalID/username/ref 含 "|" —— caller 责任：先用 sanitizeTmpTokenField 过滤。
-func buildOAuthTmpTokenPayload(tokenType, provider, externalID, username, refUser string) string {
-	return fmt.Sprintf("%s|%s|%s|%s|%s|%d",
+// 严禁字段含 "|" —— caller 责任：先用 sanitizeTmpTokenField 过滤。
+//
+// fix H-Audit-2（2026-05-21）：增加 email + emailVerified 两段，让 CompleteRisk/
+// CompleteProfile 注册路径能把 verified email 自动 sync 到 user.email，
+// 防 H-6 反向漏洞（"先 OAuth 注册同邮箱 → 再 OAuth 同邮箱"双账号路径）。
+func buildOAuthTmpTokenPayload(tokenType, provider, externalID, username, refUser, email string, emailVerified bool) string {
+	verifiedFlag := "0"
+	if emailVerified {
+		verifiedFlag = "1"
+	}
+	return fmt.Sprintf("%s|%s|%s|%s|%s|%s|%s|%d",
 		tokenType,
 		sanitizeTmpTokenField(provider),
 		sanitizeTmpTokenField(externalID),
 		sanitizeTmpTokenField(username),
 		sanitizeTmpTokenField(refUser),
+		sanitizeTmpTokenField(email),
+		verifiedFlag,
 		time.Now().Unix(),
 	)
 }
@@ -388,6 +412,30 @@ func readDefaultBalanceConsumeLimitMicroUSD() int64 {
 //   - refUsername 不存在 或 = newUser 本人：什么都不做（防自荐）
 //   - refUsername 存在且为普通用户：给推荐人 +referrerBonus，给新用户 +refereeBonus，写两条审计
 //
+// applyVerifiedEmailFromIdentity 把 OAuth identity 的 verified email 同步到 user 表。
+//
+// fix H-Audit-2（2026-05-21）：仅当 identity 明确标注 EmailVerified=true 且 email 非空时
+// 写入。GitHub 当前 EmailVerified=false（除非扩 user:email scope）→ 不写；Google OIDC
+// 给 email_verified=true → 写。
+//
+// Email 入库前 normalize（lowercase + trim）—— 与 G-1 / H-6 一致，让 partial unique index
+// uniq_users_email_nonempty 能正确比对。
+//
+// 副作用：写完 user.Email + user.EmailVerifiedAt 后，H-6 的"先 OAuth 注册同邮箱 →
+// 再 OAuth 同邮箱"反向路径也能被 OAuthCallback 早期拦截（uniq index 是最终兜底）。
+func applyVerifiedEmailFromIdentity(user *database.User, email string, emailVerified bool) {
+	if user == nil || !emailVerified {
+		return
+	}
+	norm := strings.ToLower(strings.TrimSpace(email))
+	if norm == "" {
+		return
+	}
+	user.Email = norm
+	now := time.Now()
+	user.EmailVerifiedAt = &now
+}
+
 // createUserWithSignupBonus 创建用户 + 写 signup_bonus 账单（原子单事务）。
 //
 // fix CRITICAL C19-2（codex 第十九轮）：之前 newUser.Create 与 signup_bonus 账单写入分两步，
@@ -933,7 +981,12 @@ func finishOAuthRegisterIntent(c *fiber.Ctx, providerKey string, identity *OAuth
 		messageCode = "ERR_REQUIRE_SMS_BIND"
 		message = "安全校验未完成：受新账号安全策略影响，请先验证手机号码以完成注册核验。"
 	}
-	safeTmpToken, _ := utils.Encrypt(buildOAuthTmpTokenPayload(tokenType, providerKey, identity.ExternalID, identity.Username, refUser))
+	// fix H-Audit-2（2026-05-21）：把 identity.Email + EmailVerified 塞进 tmp_token，
+	// 让后续 CompleteRisk / CompleteProfile 注册时把 verified email 同步到 user 表。
+	safeTmpToken, _ := utils.Encrypt(buildOAuthTmpTokenPayload(
+		tokenType, providerKey, identity.ExternalID, identity.Username, refUser,
+		identity.Email, identity.EmailVerified,
+	))
 	resp := fiber.Map{
 		"success":      false,
 		"action":       action,
@@ -1044,8 +1097,8 @@ func CompleteRisk(c *fiber.Ctx) error {
 		})
 	}
 
-	// H-3：tmp_token payload 格式：(clean|sms) | provider | externalID | username | ref | timestamp
-	providerKey, externalID, displayName := parseOAuthTmpTokenParts(decryptedStr)
+	// H-Audit-2：tmp_token 升级 8 段，增加 email + emailVerified
+	providerKey, externalID, displayName, identityEmail, identityEmailVerified := parseOAuthTmpTokenParts(decryptedStr)
 	providerKey = strings.TrimSpace(providerKey)
 	externalID = strings.TrimSpace(externalID)
 	if providerKey == "" || externalID == "" {
@@ -1103,13 +1156,29 @@ func CompleteRisk(c *fiber.Ctx) error {
 		BalanceConsumeLimitUSD:      readDefaultBalanceConsumeLimitMicroUSD(),
 		BalanceConsumeWindowSeconds: int(readInt64Config("balance_consume_default_window_secs", 2592000)),
 	}
+	// fix H-Audit-2：把 identity 的 verified email 自动同步到 user.email + email_verified_at。
+	// 让 H-6 邮箱冲突防御对"先 OAuth 注册同邮箱 → 再 OAuth 同邮箱"也能拦截。
+	applyVerifiedEmailFromIdentity(&newUser, identityEmail, identityEmailVerified)
+
 	// fix CRITICAL C19-2（codex 第十九轮）：user 创建 + signup_bonus 账单原子化
 	// fix CRITICAL H-Audit C-1（2026-05-20）：把 oauth_identity 写入合并到同事务，
 	// 杜绝"user 已建但 identity 缺失"导致下次 OAuth 登录被当作新用户重复注册的双账号路径。
 	if err := createUserWithSignupBonus(&newUser, signupBonusMicro, "sms", &OAuthIdentityData{
-		Provider: providerKey, ExternalID: externalID, Username: displayName,
+		Provider:      providerKey,
+		ExternalID:    externalID,
+		Username:      displayName,
+		Email:         identityEmail,
+		EmailVerified: identityEmailVerified,
 	}); err != nil {
 		log.Printf("[REGISTER-SMS] tx failed username=%s: %v", newUser.Username, err)
+		// 同 CompleteProfile：邮箱 unique 冲突时给友好错误
+		if errors.Is(err, gorm.ErrDuplicatedKey) || strings.Contains(strings.ToLower(err.Error()), "unique") {
+			return c.Status(409).JSON(fiber.Map{
+				"success":      false,
+				"message_code": "ERR_OAUTH_EMAIL_TAKEN_LINK_REQUIRED",
+				"message":      "该第三方邮箱已被另一个账号占用，请先登录原账号后在「设置 → 第三方账号」中绑定。",
+			})
+		}
 		return c.Status(500).JSON(fiber.Map{"success": false, "message": "创建根记录失败", "message_code": "ERR_CREATE_ROOT_RECORD"})
 	}
 
@@ -1210,8 +1279,8 @@ func CompleteProfile(c *fiber.Ctx) error {
 		return c.Status(403).JSON(fiber.Map{"success": false, "message": "票据类型错误", "message_code": "ERR_INVALID_PASS_STATE"})
 	}
 
-	// H-3：新 tmp_token 格式拆 (provider, externalID, suggestedUsername)
-	providerKey, externalID, _ := parseOAuthTmpTokenParts(decryptedStr)
+	// H-Audit-2：tmp_token 升级 8 段，增加 email + emailVerified
+	providerKey, externalID, _, identityEmail, identityEmailVerified := parseOAuthTmpTokenParts(decryptedStr)
 	providerKey = strings.TrimSpace(providerKey)
 	externalID = strings.TrimSpace(externalID)
 	if providerKey == "" || externalID == "" {
@@ -1272,12 +1341,29 @@ func CompleteProfile(c *fiber.Ctx) error {
 		BalanceConsumeLimitUSD:      readDefaultBalanceConsumeLimitMicroUSD(),
 		BalanceConsumeWindowSeconds: int(readInt64Config("balance_consume_default_window_secs", 2592000)),
 	}
+	// fix H-Audit-2：把 identity 的 verified email 同步到 user.email + email_verified_at
+	applyVerifiedEmailFromIdentity(&newUser, identityEmail, identityEmailVerified)
+
 	// fix CRITICAL C19-2（codex 第十九轮）：user 创建 + signup_bonus 账单原子化
 	// fix CRITICAL H-Audit C-1（2026-05-20）：oauth_identity 写入合并到同事务
 	if err := createUserWithSignupBonus(&newUser, signupBonusMicro, providerKey, &OAuthIdentityData{
-		Provider: providerKey, ExternalID: externalID, Username: req.Username,
+		Provider:      providerKey,
+		ExternalID:    externalID,
+		Username:      req.Username,
+		Email:         identityEmail,
+		EmailVerified: identityEmailVerified,
 	}); err != nil {
 		log.Printf("[REGISTER-OAUTH] tx failed provider=%s username=%s: %v", providerKey, newUser.Username, err)
+		// 邮箱 unique 冲突的兜底：partial unique index uniq_users_email_nonempty 在并发
+		// 同邮箱注册时会触发；前面 H-6 已经在 OAuthCallback 预检过，理论上只有 H-6 检查
+		// 到 CompleteProfile 之间的窗口才会命中。给客户端更友好的错误码。
+		if errors.Is(err, gorm.ErrDuplicatedKey) || strings.Contains(strings.ToLower(err.Error()), "unique") {
+			return c.Status(409).JSON(fiber.Map{
+				"success":      false,
+				"message_code": "ERR_OAUTH_EMAIL_TAKEN_LINK_REQUIRED",
+				"message":      "该第三方邮箱已被另一个账号占用，请先登录原账号后在「设置 → 第三方账号」中绑定。",
+			})
+		}
 		return c.Status(500).JSON(fiber.Map{"success": false, "message": "创建通行记录失败", "message_code": "ERR_CREATE_PASS_RECORD"})
 	}
 
