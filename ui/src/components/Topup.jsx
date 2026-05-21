@@ -350,7 +350,7 @@ const Topup = ({ isAuthenticated }) => {
     return (
       <div className="max-w-3xl mx-auto py-8">
         <StorePage title={t('TOPUP.TITLE', '余额充值')} icon={Wallet}>
-          <div className="fl-card p-10 text-center border-warning/40">
+          <div className="card p-10 text-center border-warning/40">
             <Wallet size={48} className="mx-auto mb-4 text-warning" />
             <p className="text-sm text-on-surface-variant">
               {t('TOPUP.UNAVAILABLE', '充值功能尚未配置，请联系管理员')}
@@ -374,7 +374,7 @@ const Topup = ({ isAuthenticated }) => {
         />
 
 
-      <section className="fl-card p-6 space-y-5">
+      <section className="card p-6 space-y-5">
 
         {/* W-4：provider tab（只有 2+ providers 时才显示） */}
         {providersList.length > 1 && (
@@ -526,7 +526,7 @@ const Topup = ({ isAuthenticated }) => {
 
 
       {orderResult && !isEpusdtOrder && (
-        <section className="fl-card p-8 flex flex-col items-center gap-5 border-primary/40 shadow-primary/5">
+        <section className="card p-8 flex flex-col items-center gap-5 border-primary/40 shadow-primary/5">
           <div className="text-center">
             <div className="text-base font-semibold text-on-surface flex items-center justify-center gap-2">
               <span className={`w-2 h-2 rounded-full bg-primary animate-pulse`} />
@@ -602,7 +602,7 @@ const Topup = ({ isAuthenticated }) => {
           </button>
         }
       >
-      <div className="fl-card p-6">
+      <div className="card p-6">
         {historyTotal === 0 ? (
           <div className="text-center py-8 text-sm text-on-surface-variant">
             {t('TOPUP.EMPTY', '暂无充值记录')}

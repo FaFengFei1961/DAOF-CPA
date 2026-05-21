@@ -65,7 +65,7 @@ const Dashboard = () => {
   if (isAdmin) {
     return (
       <div className="space-y-6 py-6">
-        <section className="fl-card flex items-center gap-3 px-4 py-3">
+        <section className="card row gap-3" style={{ padding: '12px 16px' }}>
           <ShieldAlert size={16} className="text-on-surface-variant shrink-0" />
           <span className="text-sm text-on-surface-variant">
             {t('DASH.ADMIN_HINT', '当前为管理员模式，可前往管理控制台查看渠道、用户与计费')}
@@ -86,7 +86,7 @@ const Dashboard = () => {
   if (!isAuthenticated) {
     return (
       <div className="space-y-6 py-6">
-        <section className="fl-card flex items-center gap-3 px-4 py-3">
+        <section className="card row gap-3" style={{ padding: '12px 16px' }}>
           <span className="text-sm text-on-surface-variant">
             {t('DASH.SIGN_IN_HINT', '登录后可查看您的订阅、用量与账单')}
           </span>
@@ -147,7 +147,10 @@ const StatStrip = ({ me, recentLogs, formatCurrency, i18n, t }) => {
 
   return (
     <section>
-      <div className="fl-card grid grid-cols-2 md:grid-cols-4 divide-y md:divide-y-0 md:divide-x divide-outline-variant/30 overflow-hidden">
+      <div
+        className="card grid grid-cols-2 md:grid-cols-4 divide-y md:divide-y-0 md:divide-x divide-outline-variant/30 overflow-hidden"
+        style={{ padding: 0 }}
+      >
         <Stat
           label={t('DASH.STAT_BALANCE', '账户余额')}
           value={me ? formatCurrency(me.quota ?? 0, 2) : '—'}
@@ -181,11 +184,10 @@ const StatStrip = ({ me, recentLogs, formatCurrency, i18n, t }) => {
 
 const Stat = ({ label, value, hint, prominent = false }) => (
   <div className="px-5 py-4 min-w-0">
-    <div className="text-[10px] uppercase tracking-[0.08em] text-on-surface-variant font-semibold">
-      {label}
-    </div>
+    {/* .eyebrow primitive: uppercase / tracked / muted micro-label */}
+    <div className="eyebrow">{label}</div>
     <div
-      className={`font-bold text-on-surface tabular-nums tracking-tight mt-1.5 truncate ${
+      className={`num-tabular font-bold text-on-surface tracking-tight mt-1.5 truncate ${
         prominent ? 'text-3xl' : 'text-2xl'
       }`}
     >
@@ -197,8 +199,9 @@ const Stat = ({ label, value, hint, prominent = false }) => (
 
 const StatStripSkeleton = () => (
   <section
-    className="fl-card grid grid-cols-2 md:grid-cols-4 divide-y md:divide-y-0 md:divide-x divide-outline-variant/30 overflow-hidden"
+    className="card grid grid-cols-2 md:grid-cols-4 divide-y md:divide-y-0 md:divide-x divide-outline-variant/30 overflow-hidden"
     aria-hidden="true"
+    style={{ padding: 0 }}
   >
     {[0, 1, 2, 3].map(i => (
       <div key={i} className="px-5 py-4">
