@@ -53,10 +53,15 @@ var allowedPayTypes = map[string]bool{
 //
 // W-1 重构（2026-05-21）：增加 Provider 字段路由到具体 PaymentProvider adapter；
 // 空值 = 默认 "yifut"（向后兼容老前端）。
+//
+// W-4（2026-05-21）：增加 Method 字段给 epusdt 用（trc20-usdt / erc20-usdt 等）。
+// yifut 仍用 PayType（alipay / wxpay 等）。两者并存兼容，controller 把它们都塞 RawExtras
+// 让 provider adapter 自取自己认识的 key。
 type topupCreateRequest struct {
 	Provider  string `json:"provider"`   // "yifut" / "epusdt"，空值默认 yifut
 	AmountFen int64  `json:"amount_fen"` // RMB × 100，必须 > 0
 	PayType   string `json:"pay_type"`   // alipay / wxpay 等（yifut-specific）
+	Method    string `json:"method"`     // trc20-usdt / erc20-usdt / bep20-usdt / polygon-usdt（epusdt-specific）
 	Device    string `json:"device"`     // pc / mobile / wechat / alipay / jump（默认 pc）
 }
 
@@ -184,7 +189,8 @@ func CreateTopup(c *fiber.Ctx) error {
 		ReturnURL:                   returnURL,
 		ProductName:                 productName,
 		RawExtras: map[string]string{
-			"pay_type": req.PayType,
+			"pay_type": req.PayType, // yifut adapter 读
+			"method":   req.Method,  // epusdt adapter 读
 			"device":   device,
 		},
 	})
