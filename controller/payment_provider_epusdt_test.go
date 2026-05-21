@@ -48,17 +48,20 @@ func configureEpusdtForTest(t *testing.T, endpoint, pid, secret string) {
 
 // configureEpusdtManualForTest 注入 manual 模式 SysConfig。
 // adminEmail 必填；addresses 至少一个非空即可让 IsConfigured 返 true。
+// 顺带设 server_address（CreateTopup 需要它拼 notify_url，即使 manual 模式回调不会触发）。
 func configureEpusdtManualForTest(t *testing.T, adminEmail string, trc20, erc20, bep20, polygon string) {
 	t.Helper()
 	proxy.SysConfigMutex.Lock()
 	old := proxy.SysConfigCache
 	cfg := map[string]string{
-		"epusdt_mode":                    "manual",
-		"epusdt_manual_admin_email":      adminEmail,
-		"epusdt_manual_address_trc20":    trc20,
-		"epusdt_manual_address_erc20":    erc20,
-		"epusdt_manual_address_bep20":    bep20,
-		"epusdt_manual_address_polygon":  polygon,
+		"epusdt_mode":                   "manual",
+		"epusdt_manual_admin_email":     adminEmail,
+		"epusdt_manual_address_trc20":   trc20,
+		"epusdt_manual_address_erc20":   erc20,
+		"epusdt_manual_address_bep20":   bep20,
+		"epusdt_manual_address_polygon": polygon,
+		"server_address":                "https://test.daof.local",
+		"server_address_require_https":  "true",
 	}
 	proxy.SysConfigCache = cfg
 	proxy.SysConfigMutex.Unlock()
