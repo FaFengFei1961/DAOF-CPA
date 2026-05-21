@@ -324,14 +324,29 @@ func AdminMarkTopupPaid(c *fiber.Ctx) error {
 			return fmt.Errorf("write billing entry: %w", err)
 		}
 
+		// Tier 3 M-9 修复（2026-05-21）：audit 字段加 confirmation_source 区分动机。
+		//   - yifut 订单走此路径：webhook 没到位时的应急补单
+		//   - epusdt 订单走此路径：manual 模式的常态入账（admin 链上验证）
+		// 同一 endpoint，但合规/分析角度需要能区分。
+		var confirmationSource string
+		switch freshOrder.Provider {
+		case database.TopupProviderEpusdt:
+			confirmationSource = "epusdt_manual_chain_verify"
+		case database.TopupProviderYifut:
+			confirmationSource = "yifut_offline_fallback"
+		default:
+			confirmationSource = "unknown_provider_" + freshOrder.Provider
+		}
 		auditDetails, err := json.Marshal(map[string]any{
-			"type":               "TOPUP_MANUAL_MARK_PAID",
-			"topup_order_id":     freshOrder.ID,
-			"out_trade_no":       freshOrder.OutTradeNo,
-			"external_trade_ref": externalRef,
-			"amount_micro_usd":   freshOrder.AmountUSD,
-			"money_fen":          freshOrder.MoneyRMB,
-			"reason":             reason,
+			"type":                "TOPUP_MANUAL_MARK_PAID",
+			"topup_order_id":      freshOrder.ID,
+			"provider":            freshOrder.Provider,
+			"confirmation_source": confirmationSource,
+			"out_trade_no":        freshOrder.OutTradeNo,
+			"external_trade_ref":  externalRef,
+			"amount_micro_usd":    freshOrder.AmountUSD,
+			"money_fen":           freshOrder.MoneyRMB,
+			"reason":              reason,
 		})
 		if err != nil {
 			return fmt.Errorf("marshal audit details: %w", err)

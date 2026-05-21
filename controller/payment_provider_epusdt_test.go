@@ -18,6 +18,7 @@ import (
 	"errors"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
 
 	"daof-cpa/database"
@@ -829,6 +830,64 @@ func TestEpusdtManualMode_PublicOptionsFollowsAddressConfig(t *testing.T) {
 	}
 	if got["erc20-usdt"] || got["bep20-usdt"] {
 		t.Errorf("Methods should NOT include erc20/bep20 (unconfigured): %v", opts.Methods)
+	}
+}
+
+// W-4-Manual Tier 3+4 L-3：拆出的 email helper 测试
+func TestEpusdtChainLabel(t *testing.T) {
+	cases := []struct{ in, want string }{
+		{"tron", "TRC20"},
+		{"ethereum", "ERC20"},
+		{"bsc", "BEP20"},
+		{"polygon", "Polygon"},
+		{"solana", "SOLANA"}, // 未来扩展 fallback
+		{"", ""},
+	}
+	for _, tc := range cases {
+		got := epusdtChainLabel(tc.in)
+		if got != tc.want {
+			t.Errorf("epusdtChainLabel(%q)=%q, want %q", tc.in, got, tc.want)
+		}
+	}
+}
+
+func TestEpusdtManualEmailSubject_NoMonetaryLeak(t *testing.T) {
+	// H-4 不变量：subject 不含金额 / token / 链类型（移动端推送预览防泄漏）
+	subj := epusdtManualEmailSubject(42)
+	if !strings.Contains(subj, "#42") {
+		t.Errorf("subject missing order id: %q", subj)
+	}
+	for _, leak := range []string{"USDT", "USDC", "TRC20", "ERC20", "10.", "Polygon", "BSC"} {
+		if strings.Contains(subj, leak) {
+			t.Errorf("subject must NOT contain %q (mobile push preview leak): %q", leak, subj)
+		}
+	}
+}
+
+func TestEpusdtManualEmailBody_ContainsAllReconcileInfo(t *testing.T) {
+	// body 必须含 admin 对账需要的所有信息
+	body := epusdtManualEmailBody(manualOrderEmailContext{
+		OrderID:    4242,
+		OutTradeNo: "tp_e2e_test",
+		UserID:     99,
+		Network:    "tron",
+		Token:      "USDT",
+		Address:    "TMBjEGgFAPMt6DxDPKqcxsAQvWMAua8gHk",
+		AmountUSDT: 10.1234,
+		ExpireAt:   1779345302,
+	})
+	for _, must := range []string{
+		"#4242",                                 // 订单号
+		"tp_e2e_test",                           // out_trade_no
+		"99",                                    // user_id
+		"TRC20",                                 // 链显示名
+		"TMBjEGgFAPMt6DxDPKqcxsAQvWMAua8gHk",    // 收款地址
+		"10.1234",                               // 精确金额（4 位小数）
+		"manual 模式",                            // 模式提示
+	} {
+		if !strings.Contains(body, must) {
+			t.Errorf("body missing required info %q:\n%s", must, body)
+		}
 	}
 }
 

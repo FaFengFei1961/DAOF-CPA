@@ -152,14 +152,23 @@ func (p *EpusdtPaymentProvider) createOrderAuto(ctx context.Context, cfg proxy.E
 //
 // 金额尾数策略：actual_amount_micro = AmountUSDMicro + (OrderID % 10000) * 100
 // 即在 micro_usd 基础上加 0.0001 USDT 步长（与 epusdt sidecar 默认尾数一致）。
-// 10000 个未决订单内不冲突；超出后环回，admin 仍可按时间 + 金额双锚点定位。
+//
+// **10000 订单环回限制**（Tier 3 M-10，2026-05-21）：
+//   - 公测期单笔基础金额下，约 10000 个未决订单可同时存在不冲突
+//   - 同一基础金额跨越 10000 倍数时尾数环回（订单 #1 和 #10001 的 actual_amount 相同）
+//   - admin 仍能按 time + amount 双锚点定位订单，不丢钱但增加 admin 心智负担
+//
+// **扩展方案**（当真到达瓶颈）：
+//   - 阈值上调：改 `OrderID % 100000 * 10`（10000 → 100000，步长 0.001 USDT；
+//     代价：用户付款金额可读性下降 X.XXX → X.XXXX）
+//   - 切 auto 模式：epusdt sidecar 用静态地址 + 唯一金额池，无此限制
 //
 // 订单过期：10 分钟（与 epusdt 默认 order_expiration_time 一致）。
 //
-// Tier 1 C-2 修复（2026-05-21）：manual 模式强依赖邮件通知，SMTP 未配齐时不应创建订单
+// Tier 1 C-2 修复：manual 模式强依赖邮件通知，SMTP 未配齐时不应创建订单
 // （否则用户付款但 admin 永不知情）。fail-closed 在订单创建前先验证 SMTP。
 //
-// Tier 2 L-2 修复（2026-05-21）：OrderID==0 防御（理论上 GORM auto-increment 不会返 0，
+// Tier 2 L-2 修复：OrderID==0 防御（理论上 GORM auto-increment 不会返 0，
 // 但守卫一下让万一出现时立即报错而不是给所有订单生成相同的尾数 0）。
 func (p *EpusdtPaymentProvider) createOrderManual(cfg proxy.EpusdtConfig, req *PaymentCreateOrderRequest, token, network string) (*PaymentCreateOrderResult, error) {
 	if req.OrderID == 0 {
@@ -243,30 +252,61 @@ type manualOrderEmailContext struct {
 
 // sendEpusdtManualAdminEmail 异步发"USDT 新订单待确认"邮件给 admin。
 // fire-and-forget：失败仅 log，不让订单创建失败（用户体验优先；admin 仍可从后台查）。
+//
+// Tier 3+4 L-3（2026-05-21）：拆出 epusdtChainLabel / epusdtManualEmailSubject /
+// epusdtManualEmailBody 三个 pure helper，让此函数 < 50 行 + 三个 helper 可独立单测。
 func sendEpusdtManualAdminEmail(adminEmail string, ctx manualOrderEmailContext) {
 	if adminEmail == "" {
 		return
 	}
-
-	chainLabel := strings.ToUpper(ctx.Network)
-	switch ctx.Network {
-	case "tron":
-		chainLabel = "TRC20"
-	case "ethereum":
-		chainLabel = "ERC20"
-	case "bsc":
-		chainLabel = "BEP20"
-	case "polygon":
-		chainLabel = "Polygon"
+	enqueueErr := proxy.EnqueueEmail(proxy.EmailTask{
+		To: adminEmail,
+		Message: proxy.EmailMessage{
+			To:       adminEmail,
+			Subject:  epusdtManualEmailSubject(ctx.OrderID),
+			TextBody: epusdtManualEmailBody(ctx),
+		},
+		Label:    "epusdt_manual_admin_notify",
+		DedupKey: fmt.Sprintf("epusdt-manual:%d", ctx.OrderID),
+	})
+	if enqueueErr != nil {
+		log.Printf("[EPUSDT-MANUAL] admin notify enqueue failed order=%d email=%s: %v",
+			ctx.OrderID, maskEpusdtEmail(adminEmail), enqueueErr)
+		proxy.IncEmailSendFailCount()
 	}
+}
 
-	// Tier 2 H-4 修复（2026-05-21）：subject 不含金额 / 链类型 / token，避免移动端推送通知
-	// 弹窗直接暴露资金流向给旁观者（家人/同事看到屏幕预览）。详情仍在 body。
-	subject := fmt.Sprintf("[DAOF] 新充值订单待确认 #%d", ctx.OrderID)
+// epusdtChainLabel 把 epusdt 协议的 network key（tron/ethereum/bsc/polygon）
+// 转成 admin / 用户认识的链显示名（TRC20/ERC20/BEP20/Polygon）。
+// 未知 network 返大写原值作 fallback。
+func epusdtChainLabel(network string) string {
+	switch network {
+	case "tron":
+		return "TRC20"
+	case "ethereum":
+		return "ERC20"
+	case "bsc":
+		return "BEP20"
+	case "polygon":
+		return "Polygon"
+	}
+	return strings.ToUpper(network)
+}
 
+// epusdtManualEmailSubject 渲染 admin 邮件主题。
+//
+// Tier 2 H-4：subject 不含金额 / 链类型 / token，避免移动端推送通知预览
+// 弹窗直接暴露资金流向给旁观者（家人/同事看到屏幕预览）。详情仅在 body。
+func epusdtManualEmailSubject(orderID uint) string {
+	return fmt.Sprintf("[DAOF] 新充值订单待确认 #%d", orderID)
+}
+
+// epusdtManualEmailBody 渲染 admin 邮件正文。
+// 含完整对账信息：订单号 / 用户 / 网络 / 地址 / 精确金额 / 过期时间。
+func epusdtManualEmailBody(ctx manualOrderEmailContext) string {
+	chainLabel := epusdtChainLabel(ctx.Network)
 	expiresLocal := time.Unix(ctx.ExpireAt, 0).Format("2006-01-02 15:04:05")
-
-	text := fmt.Sprintf(`新的 USDT 充值订单需要您确认：
+	return fmt.Sprintf(`新的 USDT 充值订单需要您确认：
 
   订单号:     #%d
   商户单号:   %s
@@ -288,18 +328,6 @@ func sendEpusdtManualAdminEmail(adminEmail string, ctx manualOrderEmailContext) 
 		expiresLocal,
 		ctx.OrderID,
 	)
-
-	enqueueErr := proxy.EnqueueEmail(proxy.EmailTask{
-		To:       adminEmail,
-		Message:  proxy.EmailMessage{To: adminEmail, Subject: subject, TextBody: text},
-		Label:    "epusdt_manual_admin_notify",
-		DedupKey: fmt.Sprintf("epusdt-manual:%d", ctx.OrderID),
-	})
-	if enqueueErr != nil {
-		log.Printf("[EPUSDT-MANUAL] admin notify enqueue failed order=%d email=%s: %v",
-			ctx.OrderID, maskEpusdtEmail(adminEmail), enqueueErr)
-		proxy.IncEmailSendFailCount()
-	}
 }
 
 // maskEpusdtEmail 把邮箱中间打码，避免 log 泄漏 admin 邮件全文。
