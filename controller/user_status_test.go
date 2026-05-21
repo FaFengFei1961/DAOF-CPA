@@ -124,7 +124,7 @@ func TestUserStatus_OnlyRejectsStatusTwo(t *testing.T) {
 		installMockGitHub(t, verifier)
 
 		app := fiber.New(fiber.Config{DisableStartupMessage: true})
-		app.Post("/callback", GithubCallback)
+		app.Post("/callback/:provider", OAuthCallback)
 		resp := postGithubCallback(t, app, "code-ok", state)
 		if resp.StatusCode != http.StatusOK {
 			t.Fatalf("callback status=%d, want 200", resp.StatusCode)
@@ -188,7 +188,7 @@ func TestUserStatus_OnlyRejectsStatusTwo(t *testing.T) {
 		installMockGitHub(t, verifier)
 
 		app := fiber.New(fiber.Config{DisableStartupMessage: true})
-		app.Post("/callback", GithubCallback)
+		app.Post("/callback/:provider", OAuthCallback)
 		resp := postGithubCallback(t, app, "code-ok", state)
 		if resp.StatusCode != http.StatusOK {
 			t.Fatalf("callback status=%d, want 200", resp.StatusCode)

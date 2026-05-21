@@ -129,18 +129,22 @@ func GetUsers(c *fiber.Ctx) error {
 		users[i].Token = ""
 	}
 	// Phase H-3b：把每个 user 的活跃 OAuth identities 一并 attach，让 admin UI 显示
-	// "已绑 GitHub / Google" 之类标签。Best-effort 加载——DB 失败时 attach 空列表，
-	// 不阻塞用户列表展示。
-	identitiesByUser := loadActiveOAuthIdentitiesForUsers(users)
+	// "已绑 GitHub / Google" 之类标签。
+	// H-Audit M6：DB 加载失败时返回 identities_load_failed=true，admin UI 可显示警告 banner。
+	identitiesByUser, identitiesLoadFailed := loadActiveOAuthIdentitiesForUsers(users)
 	out := make([]AdminUserListItem, len(users))
 	for i, u := range users {
 		out[i] = AdminUserListItem{User: u, OAuthIdentities: identitiesByUser[u.ID]}
 	}
-	return c.JSON(fiber.Map{
+	resp := fiber.Map{
 		"success": true,
 		"data":    out,
 		"meta":    fiber.Map{"page": page, "page_size": pageSize, "total": total},
-	})
+	}
+	if identitiesLoadFailed {
+		resp["identities_load_failed"] = true
+	}
+	return c.JSON(resp)
 }
 
 // AdminUserListItem 是 admin 用户列表的 wire 投影：嵌入 User 字段 + 附带活跃 OAuth 绑定。
@@ -157,11 +161,15 @@ type AdminOAuthIdentitySummary struct {
 
 // loadActiveOAuthIdentitiesForUsers 批量加载一组 user 的活跃 OAuth 绑定。
 // 一次查询返回 map[user_id] -> []summary，按 (provider, external_id) 排序保持稳定。
-// 失败时 log + 返回空 map（best-effort，不阻塞调用方）。
-func loadActiveOAuthIdentitiesForUsers(users []database.User) map[uint][]AdminOAuthIdentitySummary {
-	result := map[uint][]AdminOAuthIdentitySummary{}
+// 失败时 log + 返回 (空 map, true)，让 caller 在响应中标记 identities_load_failed=true，
+// admin UI 可以渲染"OAuth 列加载失败"banner 而不是误以为"用户全都没绑 OAuth"。
+//
+// fix H-Audit M6（2026-05-20）：原 best-effort 返空 map 让 admin 看到错误信息——
+// 用户没绑 vs DB 失败无法区分，引发决策错误（如忽略 Google-only 用户当作密码用户）。
+func loadActiveOAuthIdentitiesForUsers(users []database.User) (result map[uint][]AdminOAuthIdentitySummary, loadFailed bool) {
+	result = map[uint][]AdminOAuthIdentitySummary{}
 	if len(users) == 0 {
-		return result
+		return result, false
 	}
 	userIDs := make([]uint, len(users))
 	for i, u := range users {
@@ -173,7 +181,7 @@ func loadActiveOAuthIdentitiesForUsers(users []database.User) map[uint][]AdminOA
 		Order("user_id ASC, provider ASC, linked_at ASC").
 		Find(&rows).Error; err != nil {
 		log.Printf("[USERS-LIST] load oauth_identities failed: %v", err)
-		return result
+		return result, true
 	}
 	for _, r := range rows {
 		result[r.UserID] = append(result[r.UserID], AdminOAuthIdentitySummary{
@@ -181,7 +189,7 @@ func loadActiveOAuthIdentitiesForUsers(users []database.User) map[uint][]AdminOA
 			ExternalID: r.ExternalID,
 		})
 	}
-	return result
+	return result, false
 }
 
 // 用户增量操作 Payload。Quota 是 API wire 层 USD float，handler 内转 micro_usd。

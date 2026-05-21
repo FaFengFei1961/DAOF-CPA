@@ -6,7 +6,7 @@
 // 抽到 OAuthProvider interface 后面，让上层 handler 与具体 provider 解耦。
 //
 // 调用方流程：
-//   1. Frontend POST /api/auth/github/prepare → 拿 state + code_challenge
+//   1. Frontend POST /api/auth/oauth/:provider/prepare → 拿 state + code_challenge
 //   2. Frontend 跳转到 provider 授权页（前端用 SysConfig 暴露的 client_id 自己拼 URL）
 //   3. Provider redirect 回 /oauth/github?code=XXX&state=YYY，前端 POST 到 /api/auth/github
 //   4. handler 调 provider := GetOAuthProvider("github") → provider.Exchange(ctx, code, verifier)

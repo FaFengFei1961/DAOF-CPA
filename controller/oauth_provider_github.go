@@ -40,7 +40,7 @@ func init() {
 type GitHubProvider struct{}
 
 // NewGitHubProvider 构造 default GitHub adapter。无配置；endpoints + HTTP client
-// 读 oauth.go 顶部的 globals（githubTokenEndpoint / githubUserEndpoint / githubHTTPClient）。
+// 读 oauth.go 顶部的 globals（githubTokenEndpoint / githubUserEndpoint / oauthHTTPClient）。
 func NewGitHubProvider() *GitHubProvider { return &GitHubProvider{} }
 
 // Key 返回 "github"。
@@ -95,14 +95,14 @@ func (p *GitHubProvider) Exchange(ctx context.Context, code, codeVerifier string
 	req.Header.Set("Content-Type", "application/json")
 	req.Header.Set("Accept", "application/json")
 
-	resp, err := githubHTTPClient.Do(req)
+	resp, err := oauthHTTPClient.Do(req)
 	if err != nil {
 		log.Printf("[OAUTH-GITHUB] token exchange failed: %v", err)
 		return nil, ErrOAuthUpstreamUnavailable
 	}
 	defer resp.Body.Close()
 
-	tokenBody, err := io.ReadAll(io.LimitReader(resp.Body, githubResponseLimit))
+	tokenBody, err := io.ReadAll(io.LimitReader(resp.Body, oauthUpstreamResponseLimit))
 	if err != nil {
 		log.Printf("[OAUTH-GITHUB] read token resp failed (status=%d): %v", resp.StatusCode, err)
 		return nil, ErrOAuthUpstreamMalformed
@@ -124,14 +124,14 @@ func (p *GitHubProvider) Exchange(ctx context.Context, code, codeVerifier string
 		return nil, ErrOAuthProviderInternal
 	}
 	req2.Header.Set("Authorization", "Bearer "+accessToken)
-	resp2, err := githubHTTPClient.Do(req2)
+	resp2, err := oauthHTTPClient.Do(req2)
 	if err != nil {
 		log.Printf("[OAUTH-GITHUB] fetch user failed: %v", err)
 		return nil, ErrOAuthUpstreamUnavailable
 	}
 	defer resp2.Body.Close()
 
-	userBody, err := io.ReadAll(io.LimitReader(resp2.Body, githubResponseLimit))
+	userBody, err := io.ReadAll(io.LimitReader(resp2.Body, oauthUpstreamResponseLimit))
 	if err != nil {
 		log.Printf("[OAUTH-GITHUB] read user body failed: %v", err)
 		return nil, ErrOAuthUpstreamMalformed

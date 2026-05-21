@@ -125,7 +125,7 @@ func initializeMegaTestDB() *fiber.App {
 	app.Delete("/api/admin/locales/:lang", DeleteLocale)
 
 	// OAuth
-	app.Post("/api/auth/github", GithubCallback)
+	app.Post("/api/auth/oauth/:provider/callback", OAuthCallback)
 	app.Get("/api/public-config", GetPublicConfig)
 	app.Post("/api/auth/complete-risk", CompleteRisk)
 	app.Post("/api/auth/complete-profile", CompleteProfile)
@@ -774,17 +774,17 @@ func TestOAuthMega(t *testing.T) {
 	// Test Public Config
 	sendRequest(app, "GET", "/api/public-config", nil, "")
 
-	// code/state 现在通过 query 传入；空 query → ERR_INVALID_OAUTH_CODE (400)
-	sendRequest(app, "POST", "/api/auth/github", GithubAuthRequest{}, "")
+	// fix H-Audit M9：路由已切到 /api/auth/oauth/:provider/callback；旧别名删除
+	sendRequest(app, "POST", "/api/auth/oauth/github/callback", GithubAuthRequest{}, "")
 	// code 存在但 state 未在 oauthStateStore → 403 (PKCE state 校验失败)
-	sendRequest(app, "POST", "/api/auth/github?code=123&state=bogus", GithubAuthRequest{}, "")
+	sendRequest(app, "POST", "/api/auth/oauth/github/callback?code=123&state=bogus", GithubAuthRequest{}, "")
 
 	proxy.SysConfigMutex.Lock()
 	proxy.SysConfigCache["github_client_id"] = "test"
 	proxy.SysConfigCache["github_client_secret"] = "test"
 	proxy.SysConfigMutex.Unlock()
 	// 配置存在但 state 仍非法 → 同样 403，覆盖到 SysConfigCache 读路径
-	sendRequest(app, "POST", "/api/auth/github?code=123&state=bogus", GithubAuthRequest{}, "")
+	sendRequest(app, "POST", "/api/auth/oauth/github/callback?code=123&state=bogus", GithubAuthRequest{}, "")
 
 	// CompleteRisk Edge Cases
 	// 1. empty body

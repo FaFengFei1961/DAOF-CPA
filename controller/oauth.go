@@ -49,24 +49,32 @@ var (
 	// 让 cleanupExpiredOAuthStates 的 Range 退化为 O(N) 阻塞。加原子计数器 + 上限
 	// 拒绝新 state 注入。10K 远超合理峰值（同时段 10000 个并发 GitHub OAuth 流），
 	// 触顶说明遭受滥用，直接 503 给客户端 + log 告警。
-	oauthStateCount    int64
+	//
+	// fix H-Audit M14（2026-05-20）：Go 1.19+ idiom 用 atomic.Int64 把原子性绑在类型上，
+	// 防止意外裸 read/write 跳过 atomic 操作。
+	oauthStateCount    atomic.Int64
 	oauthStateMaxItems int64 = 10000
 
 	githubTokenEndpoint = "https://github.com/login/oauth/access_token"
 	githubUserEndpoint  = "https://api.github.com/user"
 	// fix B-H1 (2026-05-19)：加 SafeTransport + RedirectGuard 防 DNS rebinding /
 	// open redirect 把 OAuth 流量重定向到内网；下游 io.ReadAll 也需要 LimitReader
-	// 防 OOM（见 readGithubResponseBody 助手）。
-	githubHTTPClient = &http.Client{
+	// 防 OOM。
+	//
+	// fix H-Audit M5（2026-05-20）：从 githubHTTPClient 重命名为 oauthHTTPClient。
+	// 此 client 被所有 provider 共用（GitHub + Google + 未来添加的），原 github 前缀
+	// 误导阅读者以为它是 GitHub 专属。SSRF 防护配置（Transport + CheckRedirect）
+	// 对所有 OAuth provider 一视同仁。
+	oauthHTTPClient = &http.Client{
 		Timeout:       10 * time.Second,
 		Transport:     proxy.SafeTransport(),
 		CheckRedirect: proxy.RedirectGuard,
 	}
 )
 
-// githubResponseLimit 限制 GitHub OAuth/User 响应体大小。
-// GitHub 公开 token 响应 ~200 字节，user profile JSON 5~10KB，64KB 充足。
-const githubResponseLimit int64 = 64 * 1024
+// oauthUpstreamResponseLimit 限制 OAuth provider /token、/userinfo 响应体大小。
+// GitHub token ~200B / user profile 5~10KB；Google OIDC 类似。64KB 充足。
+const oauthUpstreamResponseLimit int64 = 64 * 1024
 
 // tmp_token TTL：超过此时长视为过期
 const tmpTokenTTL = 15 * time.Minute
@@ -177,6 +185,39 @@ func buildOAuthTmpTokenPayload(tokenType, provider, externalID, username, refUse
 // sanitizeTmpTokenField 过滤掉 "|" 防止破坏 tmp_token 切分。
 func sanitizeTmpTokenField(s string) string { return strings.ReplaceAll(s, "|", "") }
 
+// issueOAuthState 生成 state + PKCE verifier 并存入 state store。
+// linkUserID != 0 时把 user 绑到 state 上（H-5 已登录用户 link 流程）。
+// done=true 表示响应已写（cap 触顶 503 或 crypto 失败 500），caller 应立即 return nil。
+//
+// fix H-Audit M11（2026-05-20）：抽公共 helper，去除 PrepareOAuthState 与
+// PrepareOAuthLink 之间 90% 重复的代码（state 生成 / PKCE / cap 保护 / 响应组装）。
+func issueOAuthState(c *fiber.Ctx, linkUserID uint, tag string) (state, challenge string, done bool) {
+	// fix C-M2：触顶就 503，让 cleanupExpiredOAuthStates 有窗口跑完一轮 GC
+	if oauthStateCount.Load() >= oauthStateMaxItems {
+		log.Printf("[OAUTH-STATE-OVERFLOW] %s state count >= %d, refusing new", tag, oauthStateMaxItems)
+		_ = c.Status(503).JSON(fiber.Map{"success": false, "message_code": "ERR_OAUTH_OVERLOAD", "message": "OAuth 服务暂时过载，请稍后重试"})
+		return "", "", true
+	}
+	s, err := randomHex(32)
+	if err != nil {
+		log.Printf("[OAUTH] %s generate state failed: %v", tag, err)
+		_ = c.Status(500).JSON(fiber.Map{"success": false, "message_code": "ERR_OAUTH_INTERNAL"})
+		return "", "", true
+	}
+	verifier, err := generatePKCEVerifier()
+	if err != nil {
+		log.Printf("[OAUTH] %s generate PKCE verifier failed: %v", tag, err)
+		_ = c.Status(500).JSON(fiber.Map{"success": false, "message_code": "ERR_OAUTH_INTERNAL"})
+		return "", "", true
+	}
+	if linkUserID != 0 {
+		storeOAuthLinkState(s, verifier, linkUserID)
+	} else {
+		storeOAuthState(s, verifier)
+	}
+	return s, pkceChallenge(verifier), false
+}
+
 // PrepareOAuthState 给前端发起 OAuth 之前调用。服务端生成一次性 state 和 PKCE verifier，
 // 只把 state + code_challenge 下发给前端，verifier 留在服务端 5 分钟内存表。
 //
@@ -184,26 +225,14 @@ func sanitizeTmpTokenField(s string) string { return strings.ReplaceAll(s, "|", 
 // 旧 /api/auth/github/prepare 已删，此 handler 现在 provider-agnostic（state/verifier 与
 // provider 无关，下发的 challenge 复用于任意 provider）。
 func PrepareOAuthState(c *fiber.Ctx) error {
-	// fix C-M2：触顶就 503，让 cleanupExpiredOAuthStates 有窗口跑完一轮 GC
-	if atomic.LoadInt64(&oauthStateCount) >= oauthStateMaxItems {
-		log.Printf("[OAUTH-STATE-OVERFLOW] state count >= %d, refusing new", oauthStateMaxItems)
-		return c.Status(503).JSON(fiber.Map{"success": false, "message_code": "ERR_OAUTH_OVERLOAD", "message": "OAuth 服务暂时过载，请稍后重试"})
+	state, challenge, done := issueOAuthState(c, 0, "login")
+	if done {
+		return nil
 	}
-	state, err := randomHex(32)
-	if err != nil {
-		log.Printf("[OAUTH] generate state failed: %v", err)
-		return c.Status(500).JSON(fiber.Map{"success": false, "message_code": "ERR_GITHUB_INTERNAL"})
-	}
-	verifier, err := generatePKCEVerifier()
-	if err != nil {
-		log.Printf("[OAUTH] generate PKCE verifier failed: %v", err)
-		return c.Status(500).JSON(fiber.Map{"success": false, "message_code": "ERR_GITHUB_INTERNAL"})
-	}
-	storeOAuthState(state, verifier)
 	return c.JSON(fiber.Map{
 		"success":               true,
 		"state":                 state,
-		"code_challenge":        pkceChallenge(verifier),
+		"code_challenge":        challenge,
 		"code_challenge_method": "S256",
 	})
 }
@@ -246,13 +275,13 @@ func storeOAuthLinkState(state, verifier string, linkUserID uint) {
 	})
 }
 
-// loadOAuthStateCount 提供给同 package 其它文件读取 atomic counter。
-func loadOAuthStateCount() int64 { return atomic.LoadInt64(&oauthStateCount) }
+// fix H-Audit L5 / M14（2026-05-20）：loadOAuthStateCount 包装层删除。
+// oauthStateCount 已改为 atomic.Int64，调用方直接 .Load() 即可。
 
 func storeOAuthStateRecord(state string, rec oauthStateRecord) {
 	startOAuthStateJanitor()
 	if _, loaded := oauthStateStore.LoadOrStore(state, rec); !loaded {
-		atomic.AddInt64(&oauthStateCount, 1)
+		oauthStateCount.Add(1)
 	}
 }
 
@@ -273,7 +302,7 @@ func consumeOAuthStateFull(state string) (string, uint, bool) {
 	if !ok {
 		return "", 0, false
 	}
-	atomic.AddInt64(&oauthStateCount, -1)
+	oauthStateCount.Add(-1)
 	record, ok := raw.(oauthStateRecord)
 	if !ok || record.CodeVerifier == "" || time.Now().After(record.ExpiresAt) {
 		return "", 0, false
@@ -298,7 +327,7 @@ func cleanupExpiredOAuthStates(now time.Time) {
 		record, ok := value.(oauthStateRecord)
 		if !ok || now.After(record.ExpiresAt) {
 			if _, loaded := oauthStateStore.LoadAndDelete(key); loaded {
-				atomic.AddInt64(&oauthStateCount, -1)
+				oauthStateCount.Add(-1)
 			}
 		}
 		return true
@@ -630,18 +659,9 @@ func rejectIfUserCapReached(c *fiber.Ctx) bool {
 	return false
 }
 
-// GithubCallback 核心注册网关：集成了智能风控引擎
-// GithubCallback 是 OAuthCallback 的 GitHub-specific 别名，给 oauth_test.go 的
-// 现有测试复用（旧测试直接 app.Post("/callback", GithubCallback) 注册，没有 :provider
-// URL 段）。新代码 / 生产路由请用 OAuthCallback + /api/auth/oauth/:provider/callback。
-func GithubCallback(c *fiber.Ctx) error {
-	c.Locals(oauthProviderOverrideKey, database.OAuthProviderGitHub)
-	return OAuthCallback(c)
-}
-
-// oauthProviderOverrideKey 是 c.Locals 的 key，让 GithubCallback 等 alias handler 在
-// 不修改路由参数的情况下传递 provider key 给 OAuthCallback。仅 controller package 内部用。
-const oauthProviderOverrideKey = "oauth_provider_override"
+// fix H-Audit M9（2026-05-20）：GithubCallback thin wrapper + oauthProviderOverrideKey
+// Locals 机制已删。该 wrapper 是 H-2 兼容层（让旧测试无需迁移到 :provider 路由），
+// 公测期无后向兼容需求，应直接收紧。所有测试现走 /callback/:provider + OAuthCallback。
 
 // OAuthCallback 是多 provider OAuth 回调统一入口。
 // 路由：POST /api/auth/oauth/:provider/callback?code=...&state=...
@@ -711,15 +731,10 @@ type oauthCallbackInputs struct {
 	refUser      string
 }
 
-// resolveOAuthProviderFromCtx 从 :provider URL 参数（或 Locals override，测试用）
-// 取已注册的 provider。done=true 时 caller 应立即 return（响应已写）。
+// resolveOAuthProviderFromCtx 从 :provider URL 参数取已注册的 provider。
+// done=true 时 caller 应立即 return（响应已写）。
 func resolveOAuthProviderFromCtx(c *fiber.Ctx) (provider OAuthProvider, providerKey string, done bool) {
 	providerKey = strings.ToLower(strings.TrimSpace(c.Params("provider")))
-	if providerKey == "" {
-		if v, ok := c.Locals(oauthProviderOverrideKey).(string); ok {
-			providerKey = v
-		}
-	}
 	if providerKey == "" {
 		_ = c.Status(400).JSON(fiber.Map{"success": false, "message_code": "ERR_OAUTH_PROVIDER_UNKNOWN"})
 		return nil, "", true
@@ -803,13 +818,13 @@ func finishOAuthExistingUserLogin(c *fiber.Ctx, existingUser *database.User, pro
 		log.Printf("[OAUTH] create session failed existing user=%d: %v", existingUser.ID, err)
 		return c.Status(500).JSON(fiber.Map{"success": false, "message_code": "ERR_DB_INSERT_FAILED"})
 	}
+	// fix H-Audit M10（2026-05-20）：删旧字段名 msg / msg_code / gh_name。
+	// 公测期无后向兼容需求；统一为 message / message_code / display_name，
+	// 与平台其它 API 命名一致。前端 OAuthCallbackHandler 早已读 message_code。
 	return c.JSON(fiber.Map{
 		"success":      true,
-		"msg":          "欢迎回归, " + displayName,
-		"msg_code":     "SUCCESS_WELCOME_BACK",
 		"message":      "欢迎回归, " + displayName,
 		"message_code": "SUCCESS_WELCOME_BACK",
-		"gh_name":      displayName, // 兼容字段，前端切换到 display_name 后下版本删
 		"display_name": displayName,
 		"session_id":   sessionID,
 	})
@@ -831,7 +846,16 @@ func finishOAuthExistingUserLogin(c *fiber.Ctx, existingUser *database.User, pro
 // fail-closed：DB lookup 错误返 500，宁可让用户重试也不要冒"两 user 共邮箱"风险。
 // 兜底：uniq_users_email_nonempty partial unique index 拦下并发竞态。
 func blockOnEmailCollision(c *fiber.Ctx, providerKey string, identity *OAuthIdentityData) bool {
-	if identity.Email == "" || !identity.EmailVerified {
+	if identity.Email == "" {
+		return false
+	}
+	if !identity.EmailVerified {
+		// fix H-Audit M3（2026-05-20）：unverified email 不触发冲突检测，但记日志
+		// 让运维感知"该 provider 没返 email_verified"的情况——Google 极罕见
+		// 会出现，GitHub 默认走这条分支（H-1）。多个用户因此产生同邮箱时由
+		// uniq_users_email_nonempty partial unique index 在 INSERT 阶段兜底。
+		log.Printf("[OAUTH-EMAIL-COLLISION] skipped check provider=%s ext=%s reason=unverified email=%s",
+			providerKey, identity.ExternalID, maskEmailForAdmin(identity.Email))
 		return false
 	}
 	normEmail := strings.ToLower(strings.TrimSpace(identity.Email))
@@ -856,11 +880,15 @@ func blockOnEmailCollision(c *fiber.Ctx, providerKey string, identity *OAuthIden
 	LogOperationBy(0, existing.ID, "system", "OAUTH_EMAIL_COLLISION_BLOCKED", c.IP(),
 		fmt.Sprintf(`[{"type":"OAUTH_EMAIL_COLLISION_BLOCKED","provider":%q,"external_id":%q,"email_hint":%q}]`,
 			providerKey, identity.ExternalID, maskEmailForAdmin(normEmail)))
+	// fix H-Audit M1（2026-05-20）：响应不再透露 email_hint。
+	// 原版本回 "a***@example.com" 是邮箱枚举 oracle——攻击者轮 GitHub 账号枚举
+	// 已注册到 DAOF 的邮箱域名。完整 hint 留在 audit log 给运维排查即可。
+	// provider 字段保留：前端要提示用户切换 provider 入口，且 provider key 本就
+	// 公开（admin 配置 + 用户点了哪个按钮）。
 	_ = c.Status(409).JSON(fiber.Map{
 		"success":      false,
 		"message_code": "ERR_OAUTH_EMAIL_TAKEN_LINK_REQUIRED",
 		"message":      "该第三方邮箱已被另一个账号占用，请先登录原账号后在「设置 → 第三方账号」中绑定。",
-		"email_hint":   maskEmailForAdmin(normEmail),
 		"provider":     providerKey,
 	})
 	return true
@@ -1105,10 +1133,10 @@ func CompleteRisk(c *fiber.Ctx) error {
 	}
 
 	return c.JSON(fiber.Map{
-		"success":    true,
-		"msg":        "实名核验完成，沙盒限制已解除",
-		"msg_code":   "SUCCESS_SANDBOX_CLEARED",
-		"session_id": sessionID,
+		"success":      true,
+		"message":      "实名核验完成，沙盒限制已解除",
+		"message_code": "SUCCESS_SANDBOX_CLEARED",
+		"session_id":   sessionID,
 	})
 }
 
@@ -1266,9 +1294,9 @@ func CompleteProfile(c *fiber.Ctx) error {
 	}
 
 	return c.JSON(fiber.Map{
-		"success":    true,
-		"msg":        "名字烙印完成！",
-		"msg_code":   "SUCCESS_NAME_FORGED",
-		"session_id": sessionID,
+		"success":      true,
+		"message":      "名字烙印完成！",
+		"message_code": "SUCCESS_NAME_FORGED",
+		"session_id":   sessionID,
 	})
 }

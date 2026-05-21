@@ -259,7 +259,7 @@ const AuthModal = ({ isOpen, onClose, onLoginSuccess, initialStep = 'github', tm
       if (data.success) {
          if (!data.session_id) throw new Error('missing session_id');
          localStorage.setItem('daof_token', data.session_id);
-         if (data.msg_code) { toast.success(t('API.' + data.msg_code)); } onLoginSuccess();
+         if (data.message_code) { toast.success(t('API.' + data.message_code)); } onLoginSuccess();
       } else {
          toast.error((data.message_code ? t('API.' + data.message_code) : data.message) || t('AUTH.BIND_FAILED'));
          setLoading(false);
@@ -368,7 +368,7 @@ const AuthModal = ({ isOpen, onClose, onLoginSuccess, initialStep = 'github', tm
       if (data.success) {
          if (!data.session_id) throw new Error('missing session_id');
          localStorage.setItem('daof_token', data.session_id);
-         if (data.msg_code) { toast.success(t('API.' + data.msg_code)); } onLoginSuccess();
+         if (data.message_code) { toast.success(t('API.' + data.message_code)); } onLoginSuccess();
       } else {
          toast.error((data.message_code ? t('API.' + data.message_code) : data.message) || t('AUTH.PROFILE_FAILED'));
          setLoading(false);

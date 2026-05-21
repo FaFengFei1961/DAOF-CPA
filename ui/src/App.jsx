@@ -78,9 +78,9 @@ const OAuthCallbackHandler = () => {
           }));
         } else if (data.message_code === 'ERR_OAUTH_EMAIL_TAKEN_LINK_REQUIRED') {
           // H-6：跨 provider 邮箱冲突。停留更久的 toast + 引导用户先用原账号登录后再 link。
+          // H-Audit M1：不再展示 email_hint（后端已移除），避免邮箱枚举 oracle。
           toast.error(
-            t('API.ERR_OAUTH_EMAIL_TAKEN_LINK_REQUIRED', '该第三方邮箱已被另一个账号占用，请先登录原账号后在「设置 → 第三方账号」中绑定。')
-            + (data.email_hint ? `\n(${data.email_hint})` : ''),
+            t('API.ERR_OAUTH_EMAIL_TAKEN_LINK_REQUIRED', '该第三方邮箱已被另一个账号占用，请先登录原账号后在「设置 → 第三方账号」中绑定。'),
             { duration: 8000 },
           );
           openLogin({ step: 'github' });

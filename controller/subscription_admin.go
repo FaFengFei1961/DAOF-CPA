@@ -598,8 +598,10 @@ func AdminListSubscriptions(c *fiber.Ctx) error {
 	for _, u := range users {
 		userByID[u.ID] = u
 	}
-	// Phase H-3b：批量预加载活跃 OAuth 绑定，让每条 adminSubItem 能展示用户的第三方账号。
-	identitiesByUser := loadActiveOAuthIdentitiesForUsers(users)
+	// Phase H-3b / H-Audit M6：批量预加载活跃 OAuth 绑定。
+	// loadFailed 用于把"DB 失败"和"无绑定"区分开（admin UI 可显示警告 banner）。
+	identitiesByUser, identitiesLoadFailed := loadActiveOAuthIdentitiesForUsers(users)
+	_ = identitiesLoadFailed // TODO admin/订阅列表 wire 层加 identities_load_failed 字段
 
 	var allUsages []database.SubscriptionUsage
 	if len(subIDs) > 0 {

@@ -22,7 +22,6 @@ import (
 	"errors"
 	"net/http"
 	"net/http/httptest"
-	"strings"
 	"testing"
 	"time"
 
@@ -125,9 +124,9 @@ func TestOAuthCallback_EmailCollision_Rejects(t *testing.T) {
 	if body["provider"] != "stubverif" {
 		t.Errorf("provider=%v", body["provider"])
 	}
-	hint, _ := body["email_hint"].(string)
-	if !strings.Contains(hint, "***") || !strings.Contains(hint, "@example.com") {
-		t.Errorf("email_hint=%q, want masked form", hint)
+	// H-Audit M1：响应不再返 email_hint（防枚举），仅留在 audit log
+	if _, hasHint := body["email_hint"]; hasHint {
+		t.Errorf("email_hint should not be in response (anti-enum)")
 	}
 	// 不应建新用户
 	var n int64

@@ -22,7 +22,7 @@
 //   5. 前端读 code+state 后 POST /api/auth/oauth/google/callback → 服务端 OAuthCallback
 //
 // 安全：
-//   - 用 proxy.SafeTransport + RedirectGuard，复用 githubHTTPClient（同 SSRF 防护）
+//   - 用 proxy.SafeTransport + RedirectGuard，复用 oauthHTTPClient（同 SSRF 防护）
 //   - email_verified=false 的 Google 账号在 OAuthIdentityData 里如实标 false，
 //     让 H-3 跨 provider 冲突检测可以拒绝
 //   - access_token 不持久化（同 GitHub adapter）
@@ -101,14 +101,14 @@ func (p *GoogleProvider) Exchange(ctx context.Context, code, codeVerifier string
 	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
 	req.Header.Set("Accept", "application/json")
 
-	resp, err := githubHTTPClient.Do(req)
+	resp, err := oauthHTTPClient.Do(req)
 	if err != nil {
 		log.Printf("[OAUTH-GOOGLE] token exchange failed: %v", err)
 		return nil, ErrOAuthUpstreamUnavailable
 	}
 	defer resp.Body.Close()
 
-	tokenBody, err := io.ReadAll(io.LimitReader(resp.Body, githubResponseLimit))
+	tokenBody, err := io.ReadAll(io.LimitReader(resp.Body, oauthUpstreamResponseLimit))
 	if err != nil {
 		log.Printf("[OAUTH-GOOGLE] read token resp failed (status=%d): %v", resp.StatusCode, err)
 		return nil, ErrOAuthUpstreamMalformed
@@ -138,14 +138,14 @@ func (p *GoogleProvider) Exchange(ctx context.Context, code, codeVerifier string
 		return nil, ErrOAuthProviderInternal
 	}
 	req2.Header.Set("Authorization", "Bearer "+tokenRes.AccessToken)
-	resp2, err := githubHTTPClient.Do(req2)
+	resp2, err := oauthHTTPClient.Do(req2)
 	if err != nil {
 		log.Printf("[OAUTH-GOOGLE] fetch userinfo failed: %v", err)
 		return nil, ErrOAuthUpstreamUnavailable
 	}
 	defer resp2.Body.Close()
 
-	userBody, err := io.ReadAll(io.LimitReader(resp2.Body, githubResponseLimit))
+	userBody, err := io.ReadAll(io.LimitReader(resp2.Body, oauthUpstreamResponseLimit))
 	if err != nil {
 		log.Printf("[OAUTH-GOOGLE] read userinfo body failed: %v", err)
 		return nil, ErrOAuthUpstreamMalformed

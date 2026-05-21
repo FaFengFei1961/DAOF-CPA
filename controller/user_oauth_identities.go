@@ -42,14 +42,16 @@ func GetMyOAuthIdentities(c *fiber.Ctx) error {
 		log.Printf("[OAUTH-IDS] list failed user=%d: %v", user.ID, err)
 		return c.Status(500).JSON(fiber.Map{"success": false, "message_code": "ERR_DB_QUERY"})
 	}
+	// fix H-Audit M4（2026-05-20）：用户侧 API 不再回显 email_at_link / username_at_link。
+	// 这两个字段是 link 时刻的"快照"——provider 侧改名 / 改邮箱后 DAOF 不会回拉，
+	// 用户面 UI 只需要 provider + linked_at + 一个稳定的不可枚举 external_id 提示即可。
+	// Admin 端审计需要可保留完整字段，因此这里仅约束 user 面。
 	out := make([]fiber.Map, 0, len(identities))
 	for _, id := range identities {
 		out = append(out, fiber.Map{
-			"provider":         id.Provider,
-			"external_id":      id.ExternalID,
-			"email_at_link":    id.EmailAtLink,
-			"username_at_link": id.UsernameAtLink,
-			"linked_at":        id.LinkedAt,
+			"provider":    id.Provider,
+			"external_id": id.ExternalID,
+			"linked_at":   id.LinkedAt,
 		})
 	}
 	return c.JSON(fiber.Map{
@@ -100,29 +102,21 @@ func PrepareOAuthLink(c *fiber.Ctx) error {
 		})
 	}
 
-	// 防 state store 被刷爆（与 PrepareOAuthState 同保护）
-	if currentOAuthStateCount() >= oauthStateMaxItems {
-		log.Printf("[OAUTH-LINK] state count overflow user=%d provider=%s", user.ID, providerKey)
-		return c.Status(503).JSON(fiber.Map{"success": false, "message_code": "ERR_OAUTH_OVERLOAD"})
+	// fix H-Audit M11（2026-05-20）：state 生成走共享 issueOAuthState helper。
+	stateValue, challenge, done := issueOAuthState(c, user.ID, "link")
+	if done {
+		return nil
 	}
-
-	stateValue, err := randomHex(32)
-	if err != nil {
-		log.Printf("[OAUTH-LINK] generate state failed user=%d: %v", user.ID, err)
-		return c.Status(500).JSON(fiber.Map{"success": false, "message_code": "ERR_OAUTH_INTERNAL"})
-	}
-	verifier, err := generatePKCEVerifier()
-	if err != nil {
-		log.Printf("[OAUTH-LINK] generate PKCE verifier failed: %v", err)
-		return c.Status(500).JSON(fiber.Map{"success": false, "message_code": "ERR_OAUTH_INTERNAL"})
-	}
-	storeOAuthLinkState(stateValue, verifier, user.ID)
+	// fix H-Audit M8：补 OAUTH_LINK_PREPARE 审计日志。原版本只对完成 link 写
+	// OAUTH_LINK，prepare 阶段静默——用户中途放弃 / 攻击者反复探测 state store 无迹可循。
+	LogOperationBy(user.ID, user.ID, "user", "OAUTH_LINK_PREPARE", c.IP(),
+		fmt.Sprintf(`[{"type":"OAUTH_LINK_PREPARE","provider":%q}]`, providerKey))
+	// fix H-Audit M2：不下发 link_user_id（防泄露内部 ID）。
 	return c.JSON(fiber.Map{
 		"success":               true,
 		"state":                 stateValue,
-		"code_challenge":        pkceChallenge(verifier),
+		"code_challenge":        challenge,
 		"code_challenge_method": "S256",
-		"link_user_id":          user.ID, // 仅作前端调试 hint，与 state 一致性无关
 		"provider":              providerKey,
 	})
 }
@@ -280,9 +274,11 @@ func finishOAuthLinkToExistingUser(c *fiber.Ctx, userID uint, providerKey string
 		return c.Status(500).JSON(fiber.Map{"success": false, "message_code": "ERR_DB_INSERT_FAILED"})
 	}
 
-	proxy.RefreshUserAuth(userID)
+	// fix H-Audit M7：audit log 先于 cache 失效，确保 link 事件可追溯
+	// 即便后续 RefreshUserAuth 失败或进程崩溃，事件已在 operation_logs 中持久化
 	LogOperationBy(0, userID, "user", "OAUTH_LINK", c.IP(),
 		fmt.Sprintf(`[{"type":"OAUTH_LINK","provider":%q,"external_id":%q}]`, providerKey, identity.ExternalID))
+	proxy.RefreshUserAuth(userID)
 
 	return c.JSON(fiber.Map{
 		"success":      true,
@@ -321,8 +317,5 @@ func userHasOtherAuthMethodTx(tx *gorm.DB, user *database.User, excludedProvider
 	return n > 0, nil
 }
 
-// currentOAuthStateCount 是给本文件用的 atomic counter accessor，避免直接 import sync/atomic。
-// 实现在 oauth.go 顶部的 oauthStateCount 变量。
-func currentOAuthStateCount() int64 {
-	return loadOAuthStateCount()
-}
+// fix H-Audit L5 / M11（2026-05-20）：currentOAuthStateCount 包装层删除——
+// state 颁发已统一走 issueOAuthState helper（oauth.go），caller 不再需要直接读 counter。

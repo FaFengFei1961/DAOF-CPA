@@ -129,8 +129,8 @@ func GetUsersUsage(c *fiber.Ctx) error {
 		modelMap = loadUserModelBreakdown(cutoff)
 	}
 
-	// 3b. 批量加载活跃 OAuth 绑定（Phase H-3b）
-	identitiesByUser := loadActiveOAuthIdentitiesForUsers(users)
+	// 3b. 批量加载活跃 OAuth 绑定（Phase H-3b / H-Audit M6）
+	identitiesByUser, identitiesLoadFailed := loadActiveOAuthIdentitiesForUsers(users)
 
 	// 4. 组装输出 + 总览
 	rows := make([]UserUsageRow, 0, len(users))
@@ -194,7 +194,7 @@ func GetUsersUsage(c *fiber.Ctx) error {
 	// 5. 排序
 	sortUserUsageRows(rows, sortBy)
 
-	return c.JSON(fiber.Map{
+	resp := fiber.Map{
 		"success": true,
 		"data": fiber.Map{
 			"period": period,
@@ -208,7 +208,11 @@ func GetUsersUsage(c *fiber.Ctx) error {
 			},
 			"users": rows,
 		},
-	})
+	}
+	if identitiesLoadFailed {
+		resp["identities_load_failed"] = true
+	}
+	return c.JSON(resp)
 }
 
 func parseUsageTime(raw string) (time.Time, bool) {

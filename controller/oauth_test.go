@@ -81,6 +81,9 @@ func resetOAuthStatesForTest() {
 		oauthStateStore.Delete(key)
 		return true
 	})
+	// fix H-Audit M13（2026-05-20）：清 store 时也必须重置 atomic counter，
+	// 否则跨测试残留 → 后续测试在 capacity check 上拿错误答案。
+	oauthStateCount.Store(0)
 }
 
 func resetTmpTokenConsumedForTest() {
@@ -242,23 +245,24 @@ func installMockGitHub(t *testing.T, expectedVerifier string) *atomic.Int64 {
 
 	oldTokenEndpoint := githubTokenEndpoint
 	oldUserEndpoint := githubUserEndpoint
-	oldClient := githubHTTPClient
+	oldClient := oauthHTTPClient
 	githubTokenEndpoint = server.URL + "/login/oauth/access_token"
 	githubUserEndpoint = server.URL + "/user"
-	githubHTTPClient = server.Client()
+	oauthHTTPClient = server.Client()
 	t.Cleanup(func() {
 		githubTokenEndpoint = oldTokenEndpoint
 		githubUserEndpoint = oldUserEndpoint
-		githubHTTPClient = oldClient
+		oauthHTTPClient = oldClient
 	})
 	return &tokenHits
 }
 
 func postGithubCallback(t *testing.T, app *fiber.App, code, state string) *http.Response {
 	t.Helper()
+	// fix H-Audit M9：现走 /callback/:provider 路由，不再用 alias wrapper。
 	req := httptest.NewRequest(
 		http.MethodPost,
-		fmt.Sprintf("/callback?code=%s&state=%s", code, state),
+		fmt.Sprintf("/callback/github?code=%s&state=%s", code, state),
 		bytes.NewBufferString(`{"ref":""}`),
 	)
 	req.Header.Set("Content-Type", "application/json")
@@ -304,7 +308,7 @@ func TestGithubCallback_RejectsReusedState(t *testing.T) {
 	tokenHits := installMockGitHub(t, verifier)
 
 	app := fiber.New(fiber.Config{DisableStartupMessage: true})
-	app.Post("/callback", GithubCallback)
+	app.Post("/callback/:provider", OAuthCallback)
 
 	first := postGithubCallback(t, app, "code-ok", state)
 	if first.StatusCode != http.StatusOK {
@@ -351,7 +355,7 @@ func TestGithubCallback_RejectsMismatchedVerifier(t *testing.T) {
 	installMockGitHub(t, verifier)
 
 	app := fiber.New(fiber.Config{DisableStartupMessage: true})
-	app.Post("/callback", GithubCallback)
+	app.Post("/callback/:provider", OAuthCallback)
 	resp := postGithubCallback(t, app, "code-ok", state)
 	if resp.StatusCode != http.StatusUnauthorized {
 		t.Fatalf("callback status=%d, want 401", resp.StatusCode)
