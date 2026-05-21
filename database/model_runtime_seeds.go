@@ -138,13 +138,22 @@ func firstOrCreateDefaultCLIProxyChannel(tx *gorm.DB) (Channel, bool, error) {
 	if res.RowsAffected > 0 {
 		return ch, false, nil
 	}
+	// UX fix（用户反馈"/pricing 暂无可用模型接入"）：
+	//   - 默认 cliproxy channel 之前 seed 为 Status=2（禁用），是早期"小心放量"的兜底；
+	//     但前端 ChannelManagement 表单 / 表格都没有 channel 级 status 开关 ——
+	//     admin 创建好 channel 也无法把它启用，导致 16 个 text DefaultEnabled 模型
+	//     被 /api/pricing 的 `WHERE channels.status=1` 全过滤掉，用户看到"0 个模型"。
+	//   - 改成 Status=1（启用）：channel 只是"上游网关连通性"标志，真正的"放量门禁"
+	//     在 channel_model.status 上（媒体类仍是 status=2 默认禁用，admin 显式启用前
+	//     不会暴露）。本地 cliproxy 端点本来就是用户必填的核心运行依赖，没有任何
+	//     一键禁用的合理场景。
 	ch = Channel{
 		Type:    "cliproxy",
 		Name:    "CLIProxyAPI Local",
 		Key:     "",
 		BaseURL: "http://127.0.0.1:8317",
 		Weight:  1,
-		Status:  2,
+		Status:  1,
 	}
 	if err := tx.Create(&ch).Error; err != nil {
 		return ch, false, fmt.Errorf("create default cliproxy channel: %w", err)

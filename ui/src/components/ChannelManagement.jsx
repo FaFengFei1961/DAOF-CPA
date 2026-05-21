@@ -184,7 +184,11 @@ const ChannelManagement = () => {
         return order.filter(g => grouped[g]?.length).map(g => [g, grouped[g]]);
     }, [upstreamModels]);
 
-    const initChanForm = { type: 'cliproxy', name: '', key: '', base_url: '', proxy_url: '', headers: '', weight: 1 };
+    // UX fix（用户反馈 "/pricing 暂无可用模型接入"）：
+    // 之前 channel 表单没有 status 字段，channel 创建 / 编辑都漏掉了 enable/disable
+    // 维度 —— 用户 seed 出一个 Status=2 的默认 channel 后没有任何 UI 能把它启用，
+    // 导致后端 `/api/pricing` 的 `WHERE channels.status=1` 把所有模型滤掉。
+    const initChanForm = { type: 'cliproxy', name: '', key: '', base_url: '', proxy_url: '', headers: '', weight: 1, status: 1 };
     const [chanForm, setChanForm] = useState(initChanForm);
 
     // a11y: each modal has its own initial focus ref, preferring the close button.
@@ -447,7 +451,7 @@ const ChannelManagement = () => {
     const handleOpenChanModal = (chan = null) => {
         if (chan) {
             setCurrentChannel(chan);
-            setChanForm({ type: chan.type, name: chan.name || '', key: chan.key || '', base_url: chan.base_url, proxy_url: chan.proxy_url || '', headers: chan.headers || '', weight: chan.weight });
+            setChanForm({ type: chan.type, name: chan.name || '', key: chan.key || '', base_url: chan.base_url, proxy_url: chan.proxy_url || '', headers: chan.headers || '', weight: chan.weight, status: chan.status === 2 ? 2 : 1 });
         } else {
             setCurrentChannel(null);
             setChanForm(initChanForm);
@@ -461,7 +465,7 @@ const ChannelManagement = () => {
         try {
             const url = currentChannel ? `/api/admin/channels/${currentChannel.id}` : '/api/admin/channels';
             const method = currentChannel ? 'PUT' : 'POST';
-            const payload = { ...chanForm, weight: parseInt(chanForm.weight) || 1 };
+            const payload = { ...chanForm, weight: parseInt(chanForm.weight) || 1, status: chanForm.status === 2 ? 2 : 1 };
             const data = await authFetch(url, { method, body: payload });
             if (data.success) {
                 fetchChannels();
@@ -491,6 +495,41 @@ const ChannelManagement = () => {
             }
         } catch {
             toast.error(t('API.ERR_NETWORK', '网络异常，删除失败'));
+        }
+    };
+
+    // 单击启用 / 禁用：把整条 channel 在 channel.status=1↔2 之间翻转。
+    // 后端 /api/admin/channels/:id 是部分更新 (只 set 非零字段)，但 status 是核心
+    // 必传字段 —— 单独 PUT 一个只含 status 的 payload 会把 BaseURL/Headers/Weight
+    // 当成"未传"留原值，正合所愿。
+    const handleToggleChannelStatus = async (chan) => {
+        const nextStatus = chan.status === 1 ? 2 : 1;
+        setIsSubmitting(true);
+        try {
+            const data = await authFetch(`/api/admin/channels/${chan.id}`, {
+                method: 'PUT',
+                body: {
+                    type: chan.type,
+                    name: chan.name,
+                    base_url: chan.base_url || '',
+                    proxy_url: chan.proxy_url || '',
+                    headers: chan.headers || '',
+                    weight: chan.weight || 1,
+                    status: nextStatus,
+                },
+            });
+            if (data.success) {
+                fetchChannels();
+                toast.success(nextStatus === 1
+                    ? t('CHANNEL_MGMT.CHANNEL_ENABLED', '渠道已启用')
+                    : t('CHANNEL_MGMT.CHANNEL_DISABLED', '渠道已禁用'));
+            } else {
+                toast.error(data.message || t('API.' + data.message_code));
+            }
+        } catch {
+            toast.error(t('API.ERR_NETWORK', '网络异常'));
+        } finally {
+            setIsSubmitting(false);
         }
     };
 
@@ -1634,6 +1673,32 @@ const ChannelManagement = () => {
                             { key: 'weight', header: t('CHANNEL_MGMT.CHANNEL_TABLE.WEIGHT'), width: '10%', render: c => (
                                 <span className="text-primary">{c.weight}</span>
                             )},
+                            { key: 'status', header: t('CHANNEL_MGMT.CHANNEL_TABLE.STATUS', '状态'), width: '11%', render: c => {
+                                const enabled = c.status === 1;
+                                return (
+                                    <button
+                                        type="button"
+                                        onClick={() => handleToggleChannelStatus(c)}
+                                        disabled={isSubmitting}
+                                        aria-pressed={enabled}
+                                        title={enabled
+                                            ? t('CHANNEL_MGMT.CHANNEL_TOGGLE_DISABLE', '点击禁用整条渠道')
+                                            : t('CHANNEL_MGMT.CHANNEL_TOGGLE_ENABLE', '点击启用整条渠道')}
+                                        className={`inline-flex items-center gap-1.5 rounded-full border px-2 py-1 text-[11px] font-semibold transition disabled:opacity-50 ${
+                                            enabled
+                                                ? 'bg-success/10 text-success border-success/30 hover:bg-success/15'
+                                                : 'bg-surface-container text-on-surface-variant border-outline-variant hover:text-on-surface hover:bg-surface-container-high'
+                                        }`}
+                                    >
+                                        <span className={`relative inline-flex h-3.5 w-6 rounded-full transition ${enabled ? 'bg-success/45' : 'bg-outline-variant/50'}`}>
+                                            <span className={`absolute top-0.5 h-2.5 w-2.5 rounded-full bg-current transition-transform ${enabled ? 'translate-x-3' : 'translate-x-0.5'}`} />
+                                        </span>
+                                        {enabled
+                                            ? t('CHANNEL_MGMT.CHANNEL_TABLE.STATUS_ENABLED', '启用')
+                                            : t('CHANNEL_MGMT.CHANNEL_TABLE.STATUS_DISABLED', '禁用')}
+                                    </button>
+                                );
+                            }},
                             { key: 'actions', header: t('CHANNEL_MGMT.CHANNEL_TABLE.ACTIONS'), align: 'right', width: '240px', render: c => (
                                 <div className="flex items-center justify-end gap-2">
                                     <button onClick={() => handleSelectChannel(c)} className="p-2 flex shrink-0 items-center gap-1 hover:bg-primary/20 text-primary rounded-control bg-surface-variant whitespace-nowrap"><Box size={14} /> {t('CHANNEL_MGMT.BTN_MODELS')}</button>
@@ -1697,6 +1762,23 @@ const ChannelManagement = () => {
                             <div>
                                 <label htmlFor="channel-form-weight" className="block text-xs font-medium text-on-surface-variant mb-1">{t('CHANNEL_MGMT.MODAL_CHANNEL.WEIGHT')}</label>
                                 <input id="channel-form-weight" type="number" min="1" value={chanForm.weight} onChange={e=>setChanForm({...chanForm, weight: e.target.value})} className="w-full bg-surface-container-high border border-outline-variant rounded-overlay px-4 py-2.5 text-on-surface" />
+                            </div>
+                            <div>
+                                <label htmlFor="channel-form-status" className="block text-xs font-medium text-on-surface-variant mb-1">
+                                    {t('CHANNEL_MGMT.MODAL_CHANNEL.STATUS', '启用状态')}
+                                </label>
+                                <select
+                                    id="channel-form-status"
+                                    value={chanForm.status}
+                                    onChange={e=>setChanForm({...chanForm, status: parseInt(e.target.value, 10) || 1})}
+                                    className="w-full bg-surface-container-high border border-outline-variant rounded-overlay px-4 py-2.5 text-on-surface cursor-pointer hover:border-primary/50 outline-none"
+                                >
+                                    <option value={1}>{t('CHANNEL_MGMT.CHANNEL_TABLE.STATUS_ENABLED', '启用')}</option>
+                                    <option value={2}>{t('CHANNEL_MGMT.CHANNEL_TABLE.STATUS_DISABLED', '禁用')}</option>
+                                </select>
+                                <p className="text-[11px] text-on-surface-variant mt-1">
+                                    {t('CHANNEL_MGMT.MODAL_CHANNEL.STATUS_HINT', '禁用后此渠道下所有模型对外不可见，但模型本体的启用/禁用配置保留。')}
+                                </p>
                             </div>
                         </div>
                         <div className="p-6 border-t border-outline-variant bg-surface-container-high flex justify-end gap-3 rounded-control-b-2xl">

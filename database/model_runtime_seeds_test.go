@@ -35,7 +35,11 @@ func TestSeedModelRuntimeDefaults_ReproducibleFactoryModelPool(t *testing.T) {
 	if err := DB.Where("name = ?", "CLIProxyAPI Local").First(&ch).Error; err != nil {
 		t.Fatalf("load default channel: %v", err)
 	}
-	if ch.Status != 2 || ch.Type != "cliproxy" || ch.BaseURL != "http://127.0.0.1:8317" {
+	// UX fix（2026-05-21）：默认 channel 之前 seed 为 Status=2 是早期"小心放量"兜底，
+	// 但前端 ChannelManagement 没有 channel 级 status 开关 —— 导致 admin 也无法启用，
+	// 整个 /pricing 永远空。channel 是"上游网关连通性"标志，模型的真正 gating 在
+	// channel_model.status 上（媒体仍默认 status=2），channel 应 default-enabled。
+	if ch.Status != 1 || ch.Type != "cliproxy" || ch.BaseURL != "http://127.0.0.1:8317" {
 		t.Fatalf("unexpected default channel: %#v", ch)
 	}
 
