@@ -169,6 +169,127 @@ func EmailSignup(c *fiber.Ctx) error {
 	})
 }
 
+// ResendUnverifiedSignupEmail POST /api/auth/email/resend-verify
+//
+// 公开端点（无需登录），用于"注册时 SMTP 发信失败"的恢复路径：
+// 用户已建号但邮件没发出去，无法登录（需要验证邮箱）+ 无法走 /api/user/email/resend-verification
+// （需要登录）→ 死循环。
+//
+// 安全设计：
+//   - 始终返回相同 success 响应，防止邮箱枚举
+//   - CheckAndConsumeEmailRateLimit 阻止刷发（5次/IP/小时 + per-email dedup 5min）
+//   - 仅对"已注册但邮箱未验证"的账户实际发送；其他情况静默成功
+//
+// Audit 2026-05-21 T1-2 fix（permanent signup lockout）。
+func ResendUnverifiedSignupEmail(c *fiber.Ctx) error {
+	if !proxy.IsEmailEnabled() {
+		return c.Status(503).JSON(fiber.Map{"success": false, "message_code": "ERR_EMAIL_FEATURE_DISABLED"})
+	}
+
+	var req struct {
+		Email string `json:"email"`
+	}
+	if err := c.BodyParser(&req); err != nil {
+		return c.Status(400).JSON(fiber.Map{"success": false, "message_code": "ERR_BAD_REQUEST"})
+	}
+	email, ok := normalizeEmail(req.Email)
+	if !ok {
+		// 用统一 success 响应（不返回 400）以防邮箱枚举 —— 攻击者无法
+		// 从 200 vs 400 区分"格式错"和"不存在"。但要短路：不消耗 rate limit。
+		return c.JSON(fiber.Map{
+			"success":      true,
+			"message_code": "SUCCESS_EMAIL_RESEND_QUEUED",
+		})
+	}
+
+	// Rate limit 同时也是邮箱枚举防御：合法/非法邮箱都消耗限额，
+	// 攻击者无法通过观察 429 vs 200 区分账户存在。
+	if err := proxy.CheckAndConsumeEmailRateLimit(email, c.IP()); err != nil {
+		return c.Status(429).JSON(fiber.Map{"success": false, "message_code": "ERR_EMAIL_RATE_LIMIT"})
+	}
+
+	// 统一成功响应（与"账户不存在"/"已验证"/"实际发送成功"都返回同样的 payload，
+	// 防止时序攻击和枚举攻击区分这三种状态）。
+	uniformResp := c.JSON(fiber.Map{
+		"success":      true,
+		"message_code": "SUCCESS_EMAIL_RESEND_QUEUED",
+	})
+
+	var user database.User
+	if err := database.DB.Where("LOWER(email) = ?", email).First(&user).Error; err != nil {
+		// 找不到用户 → 直接返回 success，不泄漏存在性
+		return uniformResp
+	}
+	if user.EmailVerifiedAt != nil {
+		// 已验证 → 也返回 success（避免攻击者用此端点判断"该邮箱是否已激活"）
+		return uniformResp
+	}
+
+	// 作废旧 verify token + 建新 + 发邮件
+	rawToken, tokenHash, err := generateEmailToken()
+	if err != nil {
+		log.Printf("[EMAIL-RESEND-PUBLIC] gen token failed: %v", err)
+		return uniformResp // 静默：用户那边显示成功，admin 日志里能看到
+	}
+	ttl := loadEmailVerifyTTL()
+	row := database.EmailVerification{
+		UserID:    user.ID,
+		Email:     user.Email,
+		TokenHash: tokenHash,
+		Purpose:   database.EmailVerificationPurposeVerify,
+		ExpiresAt: time.Now().Add(ttl),
+		ClientIP:  c.IP(),
+		UserAgent: truncateUserAgent(c.Get("User-Agent")),
+		CreatedAt: time.Now(),
+	}
+	txErr := database.DB.Transaction(func(tx *gorm.DB) error {
+		now := time.Now()
+		if err := tx.Model(&database.EmailVerification{}).
+			Where("user_id = ? AND purpose = ? AND consumed_at IS NULL AND expires_at > ?",
+				user.ID, database.EmailVerificationPurposeVerify, now).
+			Update("consumed_at", now).Error; err != nil {
+			return fmt.Errorf("invalidate prior verify tokens: %w", err)
+		}
+		if err := tx.Create(&row).Error; err != nil {
+			return fmt.Errorf("insert verify token: %w", err)
+		}
+		return nil
+	})
+	if txErr != nil {
+		log.Printf("[EMAIL-RESEND-PUBLIC] tx failed user=%d: %v", user.ID, txErr)
+		return uniformResp
+	}
+
+	verifyURL, err := buildEmailVerifyURL(rawToken)
+	if err != nil {
+		log.Printf("[EMAIL-RESEND-PUBLIC] build verify url failed: %v", err)
+		return uniformResp
+	}
+	locale := emailLocaleFromCtx(c)
+	msg, err := proxy.RenderEmail(proxy.EmailTplVerify, locale, proxy.EmailVars{
+		UserName:  user.Username,
+		UserEmail: user.Email,
+		VerifyURL: verifyURL,
+		ExpiresIn: ttlDisplay(ttl, locale),
+		AppName:   proxy.AppNameFromConfig(),
+	})
+	if err != nil {
+		log.Printf("[EMAIL-RESEND-PUBLIC] render failed: %v", err)
+		return uniformResp
+	}
+	dedupKey := fmt.Sprintf("verify:%d:%s", user.ID, user.Email)
+	if err := proxy.SendEmailDeduped(proxy.EmailTask{
+		To:       user.Email,
+		Message:  msg,
+		DedupKey: dedupKey,
+		Label:    "resend_signup_verify_public",
+	}); err != nil && !errors.Is(err, proxy.ErrEmailDedup) {
+		log.Printf("[EMAIL-RESEND-PUBLIC] enqueue failed user=%d: %v", user.ID, err)
+		proxy.IncEmailSendFailCount()
+	}
+	return uniformResp
+}
+
 // sendInitialVerifyEmail 注册时立即发一封验证邮件。
 // 与 G-1.5 BindEmail 的发信逻辑一致，但跳过限流（注册流程已限流，不应在这里再次限流）。
 func sendInitialVerifyEmail(c *fiber.Ctx, user *database.User) error {

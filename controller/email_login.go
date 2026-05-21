@@ -44,6 +44,76 @@ var (
 	dummyHash     string
 )
 
+// Audit 2026-05-21 T1-3 fix：per-email brute-force lockout。
+// emailLoginLimiter 是 per-IP 5次/5min —— 防不了分布式撞库（攻击者用 1000 个 IP
+// × 5 次/5min × bcrypt 250ms = 5000 次/5min 打一个邮箱）。这里加 per-email 计数：
+// 10 次失败 / 1 小时窗口 → 锁 1 小时（拒绝走 bcrypt，直接 429）。
+const (
+	emailLoginFailWindow   = time.Hour
+	emailLoginFailThreshold = 10
+	emailLoginLockDuration  = time.Hour
+)
+
+type emailLoginFailEntry struct {
+	count       int
+	firstAt     time.Time
+	lockedUntil time.Time
+}
+
+var (
+	emailLoginFailMu    sync.Mutex
+	emailLoginFailStore = make(map[string]*emailLoginFailEntry)
+)
+
+// checkEmailLoginLockout 在 bcrypt 之前调用：若该 email 处于锁定窗口，
+// 返回 (locked=true, retryAfterSec)。
+func checkEmailLoginLockout(email string) (bool, int) {
+	emailLoginFailMu.Lock()
+	defer emailLoginFailMu.Unlock()
+	entry, ok := emailLoginFailStore[email]
+	if !ok {
+		return false, 0
+	}
+	now := time.Now()
+	if entry.lockedUntil.After(now) {
+		return true, int(entry.lockedUntil.Sub(now).Seconds()) + 1
+	}
+	// 锁定到期 + 计数窗口过期 → 清掉
+	if now.Sub(entry.firstAt) > emailLoginFailWindow {
+		delete(emailLoginFailStore, email)
+	}
+	return false, 0
+}
+
+// recordEmailLoginFail 在每次失败后调用：累加计数，过阈值则锁定。
+func recordEmailLoginFail(email string) {
+	if email == "" {
+		return
+	}
+	emailLoginFailMu.Lock()
+	defer emailLoginFailMu.Unlock()
+	now := time.Now()
+	entry, ok := emailLoginFailStore[email]
+	if !ok || now.Sub(entry.firstAt) > emailLoginFailWindow {
+		emailLoginFailStore[email] = &emailLoginFailEntry{count: 1, firstAt: now}
+		return
+	}
+	entry.count++
+	if entry.count >= emailLoginFailThreshold {
+		entry.lockedUntil = now.Add(emailLoginLockDuration)
+	}
+}
+
+// clearEmailLoginFail 在登录成功后调用：清掉失败计数。
+func clearEmailLoginFail(email string) {
+	if email == "" {
+		return
+	}
+	emailLoginFailMu.Lock()
+	delete(emailLoginFailStore, email)
+	emailLoginFailMu.Unlock()
+}
+
 // getDummyPasswordHashForTiming 懒加载并 cache 一个 bcrypt hash 用于失败路径的时间侧信道防御。
 // 若 bcrypt 异常返回空串，调用方需 fallback（loginFailedResponse 里有处理）。
 func getDummyPasswordHashForTiming() string {
@@ -85,6 +155,18 @@ func EmailLogin(c *fiber.Ctx) error {
 		return loginFailedResponse(c, "empty password input", email, "")
 	}
 
+	// Audit T1-3：per-email lockout 在 bcrypt 之前先拦截
+	if locked, retryAfter := checkEmailLoginLockout(email); locked {
+		log.Printf("[EMAIL-LOGIN] account locked email=%s ip=%s retry_after=%ds",
+			maskEmailForAdmin(email), c.IP(), retryAfter)
+		c.Set("Retry-After", fmt.Sprintf("%d", retryAfter))
+		return c.Status(429).JSON(fiber.Map{
+			"success":      false,
+			"message_code": "ERR_LOGIN_FAILED", // 不暴露锁定状态，避免攻击者通过 429 判定账户存在
+			"message":      "邮箱或密码错误",
+		})
+	}
+
 	// 查用户：partial unique index 保证 (email, status=1) 至多一行
 	var user database.User
 	err := database.DB.Where("email = ? AND status = ?", email, 1).First(&user).Error
@@ -122,6 +204,9 @@ func EmailLogin(c *fiber.Ctx) error {
 		return c.Status(500).JSON(fiber.Map{"success": false, "message_code": "ERR_DB_INSERT_FAILED"})
 	}
 
+	// 成功登录 → 清掉失败计数，避免下一次合法登录还在锁定窗口里
+	clearEmailLoginFail(email)
+
 	LogOperationBy(user.ID, user.ID, "user", "EMAIL_LOGIN", c.IP(),
 		fmt.Sprintf(`[{"type":"EMAIL_LOGIN","email":%q,"username":%q}]`, email, user.Username))
 	return c.JSON(fiber.Map{
@@ -149,6 +234,8 @@ func loginFailedResponse(c *fiber.Ctx, internalReason, email, password string) e
 		}
 	}
 	if email != "" {
+		// Audit T1-3：记录失败计数（locked 检查在 EmailLogin 入口已做）
+		recordEmailLoginFail(email)
 		log.Printf("[EMAIL-LOGIN] failed reason=%s email=%s ip=%s",
 			internalReason, maskEmailForAdmin(email), c.IP())
 	}

@@ -83,19 +83,9 @@ func EmailOpsStats() (sendFails, queueDrops int64) {
 // 也能贡献给同一份 ops 计数器。无需返回值。
 func IncEmailSendFailCount() { emailSendFailCount.Add(1) }
 
-// SetEmailQueueSyncForTest 让 EnqueueEmail / SendEmailDeduped 同步执行 processEmailTask。
-// 仅测试用；caller 负责测试结束后 reset。
-func SetEmailQueueSyncForTest(b bool) {
-	emailQueueSyncForTest.Store(b)
-}
-
-// SetSendEmailViaSMTPHookForTest 注入一个 fake send 函数。传 nil 恢复默认（调真实 SMTP）。
-// 仅测试用；caller 负责在测试结束 reset。
-func SetSendEmailViaSMTPHookForTest(fn func(cfg SMTPConfig, msg EmailMessage) error) {
-	sendEmailViaSMTPHookMu.Lock()
-	sendEmailViaSMTPHook = fn
-	sendEmailViaSMTPHookMu.Unlock()
-}
+// Audit 2026-05-21 T1-4 fix：原 SetEmailQueueSyncForTest / SetSendEmailViaSMTPHookForTest
+// 暴露在生产文件 → 任何生产路径调用都能改全局状态。两者已挪到 email_queue_testhooks_test.go
+// 仅在 _test 构建可见。这里只保留 SMTP 调度函数。
 
 func sendEmailViaSMTPDispatch(cfg SMTPConfig, msg EmailMessage) error {
 	sendEmailViaSMTPHookMu.RLock()

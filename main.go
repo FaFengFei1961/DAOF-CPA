@@ -337,6 +337,23 @@ func main() {
 	})
 	api.Post("/auth/email/signup", emailSignupLimiter, controller.EmailSignup)
 
+	// Audit 2026-05-21 T1-2 fix：注册时 SMTP 发信失败导致永久锁号 ——
+	// 公开 resend-verify 端点（无需登录）+ 5/IP/hour 限流。
+	emailResendVerifyLimiter := limiter.New(limiter.Config{
+		Max:        5,
+		Expiration: 1 * time.Hour,
+		KeyGenerator: func(c *fiber.Ctx) string {
+			return "email-resend-verify:" + utils.RealClientIP(c)
+		},
+		LimitReached: func(c *fiber.Ctx) error {
+			return c.Status(429).JSON(fiber.Map{
+				"success":      false,
+				"message_code": "ERR_RATE_LIMIT",
+			})
+		},
+	})
+	api.Post("/auth/email/resend-verify", emailResendVerifyLimiter, controller.ResendUnverifiedSignupEmail)
+
 	// Phase G-2.4 忘记密码限流：严格（per-IP 5次/hour）—— 防滥发重置邮件骚扰
 	emailForgotPwdLimiter := limiter.New(limiter.Config{
 		Max:        5,
@@ -385,13 +402,19 @@ func main() {
 	api.Post("/auth/email/set-password", emailSetPwdLimiter, controller.SetPassword)
 
 	// Admin 高权限隔离区 (换用 LanGuard + AdminGuard)
-	adminApi := api.Group("/admin", middleware.LanGuard, middleware.AdminGuard)
+	// Audit 2026-05-21 T1-4/T1-1/T1-2 fix：CSRFGuard 升到 group 级别。
+	// 原 AdminGuard 内嵌 CSRF 检查，结构性脆弱 —— 任何 group middleware 改动都
+	// 可能让某个 admin POST/PUT/DELETE 路由静默失守。现在 CSRFGuard 作为
+	// 独立中间件挂在 group 上，覆盖所有 admin 写路由（POST /config /credentials
+	// 等高爆破半径端点都受保护），且与 AdminGuard 解耦后易于审计。
+	adminApi := api.Group("/admin", middleware.LanGuard, middleware.AdminGuard, middleware.CSRFGuard)
 	adminApi.Get("/config", controller.GetSysConfigs)
 	adminApi.Post("/config", controller.BatchUpdateSysConfigs)
 	// Phase G-1.6 邮件配置专用 API（password 不回显）
 	adminApi.Get("/email/config", controller.GetAdminEmailConfig)
-	adminApi.Put("/email/config", middleware.CSRFGuard, controller.UpdateAdminEmailConfig)
-	adminApi.Post("/email/test-send", middleware.CSRFGuard, controller.SendAdminEmailTest)
+	// CSRFGuard 已在 adminApi group 级别挂载，per-route 不再重复挂。
+	adminApi.Put("/email/config", controller.UpdateAdminEmailConfig)
+	adminApi.Post("/email/test-send", controller.SendAdminEmailTest)
 	adminApi.Post("/moderation/test", controller.TestModerationConfig)
 	adminApi.Post("/moderation/evaluate", controller.EvaluateModerationDryRun)
 	adminApi.Post("/moderation/keywords/generate", controller.GenerateModerationKeywords)

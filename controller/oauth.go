@@ -27,6 +27,13 @@ import (
 
 // registerMu 保护"cap 检查 + 创建用户"为临界区，避免两个并发新注册都通过 cap 检查
 // 之后导致 user 总数超过 max_users。SQLite 的串行写只能部分缓解，不能确定性消除。
+//
+// Audit 2026-05-21 T1-1（go-reviewer）建议删除此锁、改用 oauth_identities 唯一约束。
+// 不采纳：唯一约束只防 identity 重复绑定，**防不了 user 总数超 cap**（两个不同
+// identity 的并发注册都过 cap check 即超）。bcrypt 已经在锁外（email_signup.go），
+// 锁内只剩 ms 级 DB 查询 + tx，配合 SQLite 单写者本来就串行 —— 当前实现是
+// 单实例 SQLite 部署下"够用"的选择。多实例时需换成分布式锁或 DB-level
+// CHECK constraint。
 var (
 	registerMu sync.Mutex
 )

@@ -46,9 +46,12 @@ const AuthModal = ({ isOpen, onClose, onLoginSuccess, initialStep = 'github', tm
         if (data.email_features) setEmailFeatures(data.email_features);
       })
       .catch(() => {
-        // 拉失败 fallback：所有按钮展示（旧行为），让用户点了才知道未配置
-        setEnabledProviders(['github', 'google']);
-        setEmailFeatures({ enabled: true, signup_enabled: true, login_enabled: true });
+        // Audit T1-3 fix：fetch 失败时不再硬编码 permissive fallback ——
+        // 之前 fallback 是 'github,google + email all enabled'，跟 admin 关了某项的
+        // 配置撒谎；用户点击后会撞 503 还没有恢复路径。改成空 state，让
+        // hasAnyMethod=false 分支显示 NO_METHOD_CONFIGURED 提示。
+        setEnabledProviders([]);
+        setEmailFeatures({ enabled: false, signup_enabled: false, login_enabled: false });
       });
     return () => { alive = false; };
   }, [isOpen]);

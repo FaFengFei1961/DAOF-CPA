@@ -15,7 +15,18 @@ import toast from 'react-hot-toast';
 import { Plus, Trash2, Save, RefreshCw, AlertTriangle, Scale, Activity, Send, Clock, XCircle } from 'lucide-react';
 import { authFetch } from '../../../utils/authFetch';
 
+// Audit 2026-05-21 HIGH-6 fix：每行带稳定 _rowId。原本 key={idx} 在删行 / 重排时
+// 让 React 把上一行的 controlled input state 错配给下一行 —— admin 输入的价格
+// 静默应用到错的 model pattern，是金融正确性 bug。
+//
+// _rowId 仅前端用，提交时由 buildPayload 剥离。
+const newRowId = () => {
+  if (typeof crypto !== 'undefined' && crypto.randomUUID) return crypto.randomUUID();
+  return `row-${Date.now()}-${Math.random().toString(36).slice(2, 9)}`;
+};
+
 const emptyModelRow = () => ({
+  _rowId: newRowId(),
   pattern: '',
   weight: 1,
   thinking_weight: '',
@@ -24,6 +35,7 @@ const emptyModelRow = () => ({
 });
 
 const emptyHealthRow = () => ({
+  _rowId: newRowId(),
   pattern: '*',
   weight: 1,
   label: '',
@@ -92,6 +104,7 @@ const BillingRulesPage = () => {
       if (!res.ok || !json.success) throw new Error(json.message || `HTTP ${res.status}`);
       const data = json.data || {};
       setModels((data.model_weights || []).map((r) => ({
+        _rowId: newRowId(),
         pattern: r.pattern || '',
         weight: r.weight ?? 1,
         thinking_weight: r.thinking_weight ?? '',
@@ -99,6 +112,7 @@ const BillingRulesPage = () => {
         reason: r.reason || '',
       })));
       setHealths((data.health_multipliers || []).map((r) => ({
+        _rowId: newRowId(),
         pattern: r.pattern || '*',
         weight: r.weight ?? 1,
         label: r.label || '',
@@ -377,7 +391,7 @@ const BillingRulesPage = () => {
               <tr><td colSpan="6" className="px-3 py-6 text-center text-on-surface-variant">{t('ADMIN_BILLING_RULES.EMPTY_MODEL', '点击右上方"新增"添加第一条规则')}</td></tr>
             )}
             {!loading && models.map((r, idx) => (
-              <tr key={idx}>
+              <tr key={r._rowId}>
                 <td className="px-3 py-1.5">
                   <input
                     value={r.pattern}
@@ -461,7 +475,7 @@ const BillingRulesPage = () => {
               <tr><td colSpan="5" className="px-3 py-6 text-center text-on-surface-variant">{t('ADMIN_BILLING_RULES.EMPTY_HEALTH', '保存时若空，服务端自动补 *=1 兜底')}</td></tr>
             )}
             {!loading && healths.map((r, idx) => (
-              <tr key={idx}>
+              <tr key={r._rowId}>
                 <td className="px-3 py-1.5">
                   <input
                     value={r.pattern}

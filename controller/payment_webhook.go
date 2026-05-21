@@ -105,10 +105,16 @@ func ProcessPaymentWebhook(c *fiber.Ctx, providerKey string) error {
 	}
 
 	// 查订单
+	//
+	// Audit 2026-05-21 T1-1 fix：原实现 order_not_found 返回 404。epusdt sidecar 把
+	// 4xx 当作 ACK 不重试 —— 如果 webhook 在 CreateTopupOrder 还没提交那一瞬到达
+	// （SQLite 写锁等待 / Go 调度延迟），用户 USDT 已发但系统永远不入账。
+	// 现在统一返回 500（gateway 会重试，重复 nonce 会被上面的去重拦住，安全）。
+	// 攻击者用伪造 out_trade_no 刷请求只会被 llmProxyLimiter 限流，不会真造成损失。
 	var order database.TopupOrder
 	if err := database.DB.Where("out_trade_no = ?", event.OutTradeNo).First(&order).Error; err != nil {
-		log.Printf("[WEBHOOK-%s] order not found out_trade_no=%s", providerKey, event.OutTradeNo)
-		return c.Status(404).SendString("order_not_found")
+		log.Printf("[WEBHOOK-%s] order not found out_trade_no=%s (returning 500 so gateway retries; real miss vs race is indistinguishable without per-tx tracking)", providerKey, event.OutTradeNo)
+		return c.Status(500).SendString("order_not_found_retry")
 	}
 
 	// 防跨 provider 重放：订单创建时锁定的 provider 必须等于本次回调来源

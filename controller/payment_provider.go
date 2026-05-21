@@ -351,9 +351,6 @@ func ListConfiguredPaymentProviderOptions() []PaymentProviderPublicOptions {
 	return out
 }
 
-// ResetPaymentProvidersForTest 测试 hook：清空 registry。仅测试使用。
-func ResetPaymentProvidersForTest() {
-	paymentProvidersMu.Lock()
-	defer paymentProvidersMu.Unlock()
-	paymentProviders = map[string]PaymentProvider{}
-}
+// Audit 2026-05-21 T1-4 fix：ResetPaymentProvidersForTest 已移到
+// payment_provider_testhooks_test.go，仅 _test 构建可见。原暴露在生产文件
+// 等于给攻击 / 误用一个 "清空整个支付 provider registry" 的 surface。
