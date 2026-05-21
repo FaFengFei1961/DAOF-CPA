@@ -204,6 +204,10 @@ type PaymentCreateOrderRequest struct {
 	// OutTradeNo 商户订单号（已在 controller 层 generateOutTradeNo 生成并落库）。
 	OutTradeNo string
 
+	// OrderID DAOF 本地订单 ID（W-4-Manual 引入）。epusdt manual 模式用来生成金额尾数，
+	// 让不同订单的金额不冲突（actual_amount = AmountUSDMicro + OrderID%10000 * step）。
+	OrderID uint
+
 	// UserID 发起充值的用户 ID（provider 可能记日志或对账用，不必传给网关）。
 	UserID uint
 

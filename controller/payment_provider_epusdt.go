@@ -20,9 +20,11 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"log"
 	"math"
 	"strconv"
 	"strings"
+	"time"
 
 	"daof-cpa/database"
 	"daof-cpa/proxy"
@@ -68,6 +70,9 @@ func (p *EpusdtPaymentProvider) IsConfigured() bool {
 //   - GatewayPayType:  "wallet_address"（前端按此渲染收款地址 + 精确金额展示）
 //   - PayInfo: JSON 包 receive_address / actual_amount / network / token / expire_at（前端解析渲染）
 //   - RawExtras: 透传 payment_url（epusdt 收银台跳转 URL，可选）
+// W-4-Manual（2026-05-21）：双模式分支。
+//   - auto:   调 epusdt sidecar，全自动链上对账（原 W-3-P2 实现）
+//   - manual: 本地生成订单 + 邮件通知 admin，admin 区块链浏览器验真后手工标记到账
 func (p *EpusdtPaymentProvider) CreateOrder(ctx context.Context, req *PaymentCreateOrderRequest) (*PaymentCreateOrderResult, error) {
 	if req == nil {
 		return nil, fmt.Errorf("%w: nil request", ErrPaymentProviderInternal)
@@ -87,12 +92,21 @@ func (p *EpusdtPaymentProvider) CreateOrder(ctx context.Context, req *PaymentCre
 		return nil, fmt.Errorf("%w: invalid method %q (expected trc20-usdt/erc20-usdt/bep20-usdt/polygon-usdt)", ErrPaymentProviderInternal, method)
 	}
 
-	// 1:1 换算：req.AmountUSDMicro (int64) → USDT (float64)
-	// 注：epusdt 内部用 float64，DAOF 用 int64 micro_usd；这是精度边界，单次转换 acceptable
-	// （micro_usd 6 位精度 ≈ USDT 6 位精度对齐）
 	if req.AmountUSDMicro <= 0 {
 		return nil, fmt.Errorf("%w: AmountUSDMicro must be > 0", ErrPaymentProviderInternal)
 	}
+
+	switch cfg.Mode {
+	case proxy.EpusdtModeAuto:
+		return p.createOrderAuto(ctx, cfg, req, token, network)
+	case proxy.EpusdtModeManual:
+		return p.createOrderManual(cfg, req, token, network)
+	}
+	return nil, fmt.Errorf("%w: unknown mode %q", ErrPaymentProviderInternal, cfg.Mode)
+}
+
+// createOrderAuto 走 epusdt sidecar 的全自动流程（原 W-3-P2 实现）。
+func (p *EpusdtPaymentProvider) createOrderAuto(ctx context.Context, cfg proxy.EpusdtConfig, req *PaymentCreateOrderRequest, token, network string) (*PaymentCreateOrderResult, error) {
 	usdtAmount := float64(req.AmountUSDMicro) / 1_000_000.0
 
 	resp, err := proxy.CreateEpusdtOrder(ctx, cfg, proxy.EpusdtCreateOrderRequest{
@@ -100,32 +114,26 @@ func (p *EpusdtPaymentProvider) CreateOrder(ctx context.Context, req *PaymentCre
 		Amount:    usdtAmount,
 		Token:     token,
 		Network:   network,
-		Currency:  "usd", // 用户视角的法币口径
+		Currency:  "usd",
 		NotifyURL: req.NotifyURL,
 		Name:      req.ProductName,
 	})
 	if err != nil {
-		// epusdt 网关侧业务码错误 vs 网络错误 —— resp.TradeID 是否拿到判断
 		if resp != nil && resp.TradeID == "" {
 			return nil, fmt.Errorf("%w: %v", ErrPaymentGatewayReject, err)
 		}
 		return nil, fmt.Errorf("%w: %v", ErrPaymentUpstreamUnavailable, err)
 	}
 
-	// 把"用户付钱所需信息"打包成 JSON 给前端
-	// W-3 review H-6 修复（2026-05-21）：原 `_ := json.Marshal` 错误吞会让用户看到空白
-	// 二维码 / 收款页（前端拿不到 receive_address）。改为显式 fail-closed。
+	// W-3 review H-6：marshal 错误显式返而非 silent
 	payInfo, marshalErr := json.Marshal(map[string]any{
 		"receive_address": resp.ReceiveAddress,
-		"actual_amount":   resp.ActualAmount, // 含 0.0001 尾数避免冲突
+		"actual_amount":   resp.ActualAmount,
 		"token":           resp.Token,
 		"network":         network,
 		"expire_at":       resp.ExpirationTime,
 	})
 	if marshalErr != nil {
-		// 理论上 map[string]any (string/float64/string/string/int64) 不会 marshal 失败，
-		// 但万一 epusdt 响应字段含非 UTF-8 / NaN / Inf 让 marshal 失败时，让用户看到错误
-		// 而不是哑铃式空白页。订单已经在 epusdt 侧创建，需要 admin 手工对账。
 		return nil, fmt.Errorf("%w: marshal pay_info failed: %v", ErrPaymentProviderInternal, marshalErr)
 	}
 
@@ -140,6 +148,152 @@ func (p *EpusdtPaymentProvider) CreateOrder(ctx context.Context, req *PaymentCre
 	}, nil
 }
 
+// createOrderManual 走 manual 模式：本地生成订单 + 邮件通知 admin。
+//
+// 金额尾数策略：actual_amount_micro = AmountUSDMicro + (OrderID % 10000) * 100
+// 即在 micro_usd 基础上加 0.0001 USDT 步长（与 epusdt sidecar 默认尾数一致）。
+// 10000 个未决订单内不冲突；超出后环回，admin 仍可按时间 + 金额双锚点定位。
+//
+// 订单过期：10 分钟（与 epusdt 默认 order_expiration_time 一致）。
+func (p *EpusdtPaymentProvider) createOrderManual(cfg proxy.EpusdtConfig, req *PaymentCreateOrderRequest, token, network string) (*PaymentCreateOrderResult, error) {
+	address := cfg.ManualAddresses.AddressFor(network)
+	if address == "" {
+		return nil, fmt.Errorf("%w: admin has not configured %s address", ErrPaymentProviderNotConfigured, strings.ToUpper(network))
+	}
+
+	const amountStepMicro = int64(100) // 0.0001 USDT
+	suffix := int64(req.OrderID%10000) * amountStepMicro
+	actualMicro := req.AmountUSDMicro + suffix
+	actualUSDT := float64(actualMicro) / 1_000_000.0
+
+	const orderTTLSec = int64(10 * 60) // 10 分钟
+	expireAt := time.Now().Unix() + orderTTLSec
+
+	tradeID := fmt.Sprintf("manual-%s", req.OutTradeNo)
+
+	payInfo, marshalErr := json.Marshal(map[string]any{
+		"receive_address": address,
+		"actual_amount":   actualUSDT,
+		"token":           strings.ToUpper(token),
+		"network":         network,
+		"expire_at":       expireAt,
+		"mode":            "manual", // 前端可据此显示"等待管理员确认"而非"等待链上确认"
+	})
+	if marshalErr != nil {
+		return nil, fmt.Errorf("%w: marshal pay_info failed: %v", ErrPaymentProviderInternal, marshalErr)
+	}
+
+	// 异步发邮件给 admin（不阻塞用户下单；邮件失败仅 log）
+	sendEpusdtManualAdminEmail(cfg.ManualAdminEmail, manualOrderEmailContext{
+		OrderID:     req.OrderID,
+		OutTradeNo:  req.OutTradeNo,
+		UserID:      req.UserID,
+		Network:     network,
+		Token:       strings.ToUpper(token),
+		Address:     address,
+		AmountUSDT:  actualUSDT,
+		ExpireAt:    expireAt,
+		ProductName: req.ProductName,
+	})
+
+	return &PaymentCreateOrderResult{
+		ExternalTradeNo: tradeID,
+		GatewayPayType:  "wallet_address",
+		PayInfo:         string(payInfo),
+		RawExtras: map[string]string{
+			"network": network,
+			"mode":    "manual",
+		},
+	}, nil
+}
+
+// manualOrderEmailContext 是 manual 模式订单通知邮件的渲染上下文。
+type manualOrderEmailContext struct {
+	OrderID     uint
+	OutTradeNo  string
+	UserID      uint
+	Network     string
+	Token       string
+	Address     string
+	AmountUSDT  float64
+	ExpireAt    int64
+	ProductName string
+}
+
+// sendEpusdtManualAdminEmail 异步发"USDT 新订单待确认"邮件给 admin。
+// fire-and-forget：失败仅 log，不让订单创建失败（用户体验优先；admin 仍可从后台查）。
+func sendEpusdtManualAdminEmail(adminEmail string, ctx manualOrderEmailContext) {
+	if adminEmail == "" {
+		return
+	}
+
+	chainLabel := strings.ToUpper(ctx.Network)
+	switch ctx.Network {
+	case "tron":
+		chainLabel = "TRC20"
+	case "ethereum":
+		chainLabel = "ERC20"
+	case "bsc":
+		chainLabel = "BEP20"
+	case "polygon":
+		chainLabel = "Polygon"
+	}
+
+	subject := fmt.Sprintf("[DAOF] 新 USDT 充值订单待确认 #%d (%.4f %s / %s)",
+		ctx.OrderID, ctx.AmountUSDT, ctx.Token, chainLabel)
+
+	expiresLocal := time.Unix(ctx.ExpireAt, 0).Format("2006-01-02 15:04:05")
+
+	text := fmt.Sprintf(`新的 USDT 充值订单需要您确认：
+
+  订单号:     #%d
+  商户单号:   %s
+  用户 ID:    %d
+  网络:       %s (%s)
+  收款地址:   %s
+  精确金额:   %.4f %s
+  过期时间:   %s（本地时间）
+
+请在区块链浏览器查到对应转账后，登录 DAOF admin 后台 → 充值订单管理 →
+找到订单 #%d → 点"标记到账"。
+
+注意金额必须严格匹配（精确到小数点后 4 位），用尾数区分不同订单。
+
+—— DAOF Web3 USDT 通道（manual 模式）`,
+		ctx.OrderID, ctx.OutTradeNo, ctx.UserID,
+		chainLabel, ctx.Token, ctx.Address,
+		ctx.AmountUSDT, ctx.Token,
+		expiresLocal,
+		ctx.OrderID,
+	)
+
+	enqueueErr := proxy.EnqueueEmail(proxy.EmailTask{
+		To:       adminEmail,
+		Message:  proxy.EmailMessage{To: adminEmail, Subject: subject, TextBody: text},
+		Label:    "epusdt_manual_admin_notify",
+		DedupKey: fmt.Sprintf("epusdt-manual:%d", ctx.OrderID),
+	})
+	if enqueueErr != nil {
+		log.Printf("[EPUSDT-MANUAL] admin notify enqueue failed order=%d email=%s: %v",
+			ctx.OrderID, maskEpusdtEmail(adminEmail), enqueueErr)
+		proxy.IncEmailSendFailCount()
+	}
+}
+
+// maskEpusdtEmail 把邮箱中间打码，避免 log 泄漏 admin 邮件全文。
+// "admin@example.com" → "a***n@example.com"
+func maskEpusdtEmail(email string) string {
+	at := strings.Index(email, "@")
+	if at <= 1 {
+		return email
+	}
+	prefix := email[:at]
+	if len(prefix) <= 2 {
+		return prefix[:1] + "***" + email[at:]
+	}
+	return prefix[:1] + "***" + prefix[len(prefix)-1:] + email[at:]
+}
+
 // PublicOptions 给前端 /api/topup/options 用。
 //
 // methods 列表由 SysConfig `epusdt_enabled_chains` 决定（admin 控制，CSV 格式）：
@@ -151,17 +305,26 @@ func (p *EpusdtPaymentProvider) CreateOrder(ctx context.Context, req *PaymentCre
 func (p *EpusdtPaymentProvider) PublicOptions() PaymentProviderPublicOptions {
 	cfg := proxy.LoadEpusdtConfig()
 
-	chains := readStringConfig("epusdt_enabled_chains", "tron")
+	// W-4-Manual：methods 按 mode 决定来源
+	//   - auto:   SysConfig epusdt_enabled_chains（admin 显式启用哪些链）
+	//   - manual: 按 admin 配齐了哪些链地址自动过滤
+	var enabledNetworks []string
+	switch cfg.Mode {
+	case proxy.EpusdtModeManual:
+		enabledNetworks = cfg.ManualAddresses.EnabledNetworks()
+	default: // auto
+		enabledNetworks = splitCSV(readStringConfig("epusdt_enabled_chains", "tron"))
+	}
+
 	methods := []string{}
-	for _, chain := range splitCSV(chains) {
+	for _, chain := range enabledNetworks {
 		method := chainToMethod(chain)
 		if method != "" {
 			methods = append(methods, method)
 		}
 	}
 
-	// W-3 review M-11 修复：epusdt 用自己的 SysConfig key 命名空间，fallback 到 yifut_*
-	// 让 admin 心智模型清晰（"epusdt 跟 yifut 是平行 provider"），又不强制 admin 重新配。
+	// W-3 review M-11：epusdt 用自己的 SysConfig key 命名空间，fallback 到 yifut_*
 	presets := []int64{}
 	presetCSV := readStringConfig("epusdt_preset_amounts_fen", readStringConfig("yifut_preset_amounts_fen", "1000,3000,5000,10000,30000,50000"))
 	for _, s := range splitCSV(presetCSV) {
@@ -201,6 +364,12 @@ func (p *EpusdtPaymentProvider) ParseAndVerifyWebhook(input *PaymentWebhookInput
 	cfg := proxy.LoadEpusdtConfig()
 	if !cfg.IsConfigured() {
 		return nil, ErrWebhookProviderNotConfigured
+	}
+
+	// W-4-Manual：manual 模式下不应有 webhook 推送（admin 用 AdminMarkTopupPaid 入账）
+	// 拒掉所有 manual 模式下进入 /api/payment/notify/epusdt 的请求，防错配 / 攻击者扫端口
+	if cfg.Mode == proxy.EpusdtModeManual {
+		return nil, fmt.Errorf("%w: manual mode does not accept webhook callbacks", ErrWebhookProviderNotConfigured)
 	}
 
 	// epusdt 回调是 POST application/json

@@ -41,47 +41,133 @@ import (
 
 // ─── 配置 ─────────────────────────────────────────────────
 
+// EpusdtMode 决定 USDT 充值的处理方式：
+//   - auto:   部署 epusdt sidecar，全自动链上监听 + webhook 入账（W-3-P2 完整实现）
+//   - manual: 不部署 sidecar，订单创建时邮件通知 admin，admin 区块链浏览器验真后
+//             手工通过 AdminMarkTopupPaid 标记到账
+//
+// 默认 manual：零部署上线，admin 配几个地址 + 邮箱即可收 USDT；将来可平滑升级到 auto。
+type EpusdtMode string
+
+const (
+	EpusdtModeAuto   EpusdtMode = "auto"
+	EpusdtModeManual EpusdtMode = "manual"
+)
+
+// EpusdtManualAddresses 是 manual 模式下 admin 配置的 4 链收款地址。
+// 空串 = 该链未启用（不会出现在 PublicOptions.methods 里）。
+type EpusdtManualAddresses struct {
+	TRC20   string // TRON 链 (T...)
+	ERC20   string // Ethereum 链 (0x...)
+	BEP20   string // BSC 链 (0x...，可与 ERC20 同地址)
+	Polygon string // Polygon 链 (0x...，可与 ERC20 同地址)
+}
+
 // EpusdtConfig 即时配置快照。
 type EpusdtConfig struct {
+	// 公共字段
+	Mode EpusdtMode
+
+	// auto 模式字段
 	Endpoint  string // epusdt sidecar base URL（如 "http://localhost:8000"）
 	PID       int64  // epusdt 商户 PID（int64 类型，与 epusdt 协议字段一致）
 	SecretKey string // 商户 secret_key，签名用
+
+	// manual 模式字段
+	ManualAddresses  EpusdtManualAddresses
+	ManualAdminEmail string // 新订单通知收件人
 }
 
 // LoadEpusdtConfig 从 SysConfigCache 拉一次配置快照。
 // 任何字段缺失则 IsConfigured 返 false。
 //
-// W-3 review C-3 修复（2026-05-21）：原 fmt.Sscanf 错误被丢弃，admin 误配 "abc" / "1 trailing"
-// 会让 pid=0 而 IsConfigured 返 false，但不知道为什么。改用 strconv.ParseInt + log 告警。
+// W-4-Manual（2026-05-21）：双模式支持。
+//   - epusdt_mode=auto:   读 endpoint/pid/secret_key
+//   - epusdt_mode=manual: 读 manual_address_* / manual_admin_email
+//   - 缺省 / 非法值 → 默认 manual（零部署友好）
 func LoadEpusdtConfig() EpusdtConfig {
 	SysConfigMutex.RLock()
 	defer SysConfigMutex.RUnlock()
-	endpoint := strings.TrimRight(strings.TrimSpace(SysConfigCache["epusdt_endpoint"]), "/")
-	pidStr := strings.TrimSpace(SysConfigCache["epusdt_pid"])
-	secret := strings.TrimSpace(SysConfigCache["epusdt_secret_key"])
 
-	var pid int64
-	if pidStr != "" {
-		parsed, err := strconv.ParseInt(pidStr, 10, 64)
-		if err != nil {
-			// 不会让进程崩，但告警 ops：admin 配错了 pid（不会被 IsConfigured 通过）
-			// log 也避免 silent failure（admin 看到 503 不知道为啥）
-			// 注：sync.RWMutex 已持有 RLock，但 log.Printf 内部无锁，安全。
-			pid = 0
-		} else {
-			pid = parsed
+	// Mode（默认 manual 让零部署成为最低阻力路径）
+	mode := EpusdtMode(strings.ToLower(strings.TrimSpace(SysConfigCache["epusdt_mode"])))
+	if mode != EpusdtModeAuto && mode != EpusdtModeManual {
+		mode = EpusdtModeManual
+	}
+
+	cfg := EpusdtConfig{Mode: mode}
+
+	// auto 模式字段
+	cfg.Endpoint = strings.TrimRight(strings.TrimSpace(SysConfigCache["epusdt_endpoint"]), "/")
+	cfg.SecretKey = strings.TrimSpace(SysConfigCache["epusdt_secret_key"])
+	if pidStr := strings.TrimSpace(SysConfigCache["epusdt_pid"]); pidStr != "" {
+		if parsed, err := strconv.ParseInt(pidStr, 10, 64); err == nil {
+			cfg.PID = parsed
 		}
 	}
-	return EpusdtConfig{
-		Endpoint:  endpoint,
-		PID:       pid,
-		SecretKey: secret,
+
+	// manual 模式字段
+	cfg.ManualAddresses = EpusdtManualAddresses{
+		TRC20:   strings.TrimSpace(SysConfigCache["epusdt_manual_address_trc20"]),
+		ERC20:   strings.TrimSpace(SysConfigCache["epusdt_manual_address_erc20"]),
+		BEP20:   strings.TrimSpace(SysConfigCache["epusdt_manual_address_bep20"]),
+		Polygon: strings.TrimSpace(SysConfigCache["epusdt_manual_address_polygon"]),
 	}
+	cfg.ManualAdminEmail = strings.TrimSpace(SysConfigCache["epusdt_manual_admin_email"])
+
+	return cfg
 }
 
-// IsConfigured 三项就绪才算配置好。
+// IsConfigured 按 mode 判定配置完整性。
+//   - auto:   endpoint + pid + secret_key 全齐
+//   - manual: 至少一个链地址 + admin 邮箱
 func (c EpusdtConfig) IsConfigured() bool {
-	return c.Endpoint != "" && c.PID > 0 && c.SecretKey != ""
+	switch c.Mode {
+	case EpusdtModeAuto:
+		return c.Endpoint != "" && c.PID > 0 && c.SecretKey != ""
+	case EpusdtModeManual:
+		return c.ManualAdminEmail != "" && c.ManualAddresses.HasAny()
+	}
+	return false
+}
+
+// HasAny 返 true 表示 4 条链至少配齐 1 个地址。
+func (a EpusdtManualAddresses) HasAny() bool {
+	return a.TRC20 != "" || a.ERC20 != "" || a.BEP20 != "" || a.Polygon != ""
+}
+
+// AddressFor 按 network 名（与 epusdt 协议字段一致）返对应地址，未配置时返空串。
+func (a EpusdtManualAddresses) AddressFor(network string) string {
+	switch strings.ToLower(strings.TrimSpace(network)) {
+	case "tron":
+		return a.TRC20
+	case "ethereum":
+		return a.ERC20
+	case "bsc":
+		return a.BEP20
+	case "polygon":
+		return a.Polygon
+	}
+	return ""
+}
+
+// EnabledNetworks 返 manual 模式下已配置地址的 network key 列表。
+// 顺序固定（tron > ethereum > bsc > polygon），便于前端按手续费递增展示。
+func (a EpusdtManualAddresses) EnabledNetworks() []string {
+	out := make([]string, 0, 4)
+	if a.TRC20 != "" {
+		out = append(out, "tron")
+	}
+	if a.ERC20 != "" {
+		out = append(out, "ethereum")
+	}
+	if a.BEP20 != "" {
+		out = append(out, "bsc")
+	}
+	if a.Polygon != "" {
+		out = append(out, "polygon")
+	}
+	return out
 }
 
 // ValidateEpusdtEndpoint 防 SSRF / 配置错误。

@@ -24,16 +24,41 @@ import (
 	"daof-cpa/proxy"
 )
 
-// configureEpusdtForTest 注入 SysConfig 让 IsConfigured 返 true，并把 endpoint 指向 mock server。
+// configureEpusdtForTest 注入 SysConfig 让 IsConfigured 返 true (auto 模式)，
+// 并把 endpoint 指向 mock server。原有测试都期望 auto 模式行为，因此显式设 mode=auto。
 func configureEpusdtForTest(t *testing.T, endpoint, pid, secret string) {
 	t.Helper()
 	proxy.SysConfigMutex.Lock()
 	old := proxy.SysConfigCache
 	cfg := map[string]string{
+		"epusdt_mode":           "auto", // W-4-Manual：必须显式，因为默认值改为 manual
 		"epusdt_endpoint":       endpoint,
 		"epusdt_pid":            pid,
 		"epusdt_secret_key":     secret,
 		"epusdt_enabled_chains": "tron,ethereum,bsc,polygon",
+	}
+	proxy.SysConfigCache = cfg
+	proxy.SysConfigMutex.Unlock()
+	t.Cleanup(func() {
+		proxy.SysConfigMutex.Lock()
+		proxy.SysConfigCache = old
+		proxy.SysConfigMutex.Unlock()
+	})
+}
+
+// configureEpusdtManualForTest 注入 manual 模式 SysConfig。
+// adminEmail 必填；addresses 至少一个非空即可让 IsConfigured 返 true。
+func configureEpusdtManualForTest(t *testing.T, adminEmail string, trc20, erc20, bep20, polygon string) {
+	t.Helper()
+	proxy.SysConfigMutex.Lock()
+	old := proxy.SysConfigCache
+	cfg := map[string]string{
+		"epusdt_mode":                    "manual",
+		"epusdt_manual_admin_email":      adminEmail,
+		"epusdt_manual_address_trc20":    trc20,
+		"epusdt_manual_address_erc20":    erc20,
+		"epusdt_manual_address_bep20":    bep20,
+		"epusdt_manual_address_polygon":  polygon,
 	}
 	proxy.SysConfigCache = cfg
 	proxy.SysConfigMutex.Unlock()
@@ -646,6 +671,146 @@ func TestChainToMethod(t *testing.T) {
 				t.Errorf("chainToMethod(%q)=%q, want %q", tc.chain, got, tc.want)
 			}
 		})
+	}
+}
+
+// ─── W-4-Manual：manual 模式专属测试 ──────────────────────────────
+
+func TestEpusdtManualMode_IsConfigured(t *testing.T) {
+	// 缺 admin_email → 不算配齐
+	clearEpusdtConfigForTest(t)
+	proxy.SysConfigMutex.Lock()
+	proxy.SysConfigCache = map[string]string{
+		"epusdt_mode":                 "manual",
+		"epusdt_manual_address_trc20": "TXXX",
+	}
+	proxy.SysConfigMutex.Unlock()
+	p := NewEpusdtPaymentProvider()
+	if p.IsConfigured() {
+		t.Error("manual mode without admin_email should not be configured")
+	}
+
+	// 有 admin_email 但无地址 → 不算配齐
+	proxy.SysConfigMutex.Lock()
+	proxy.SysConfigCache["epusdt_manual_admin_email"] = "admin@example.com"
+	proxy.SysConfigCache["epusdt_manual_address_trc20"] = ""
+	proxy.SysConfigMutex.Unlock()
+	if p.IsConfigured() {
+		t.Error("manual mode without any address should not be configured")
+	}
+
+	// 有 admin_email + 至少 1 个地址 → 配齐
+	proxy.SysConfigMutex.Lock()
+	proxy.SysConfigCache["epusdt_manual_address_trc20"] = "TXXX"
+	proxy.SysConfigMutex.Unlock()
+	if !p.IsConfigured() {
+		t.Error("manual mode with admin_email + TRC20 address should be configured")
+	}
+}
+
+func TestEpusdtManualMode_CreateOrder_GeneratesLocalOrder(t *testing.T) {
+	// 关键：manual 模式不调任何外部网关，纯本地生成订单
+	configureEpusdtManualForTest(t, "admin@example.com",
+		"TMBjEGgFAPMt6DxDPKqcxsAQvWMAua8gHk", "", "", "")
+
+	// 拦截邮件发送让测试可断言
+	proxy.SetEmailQueueSyncForTest(true)
+	proxy.SetSendEmailViaSMTPHookForTest(func(cfg proxy.SMTPConfig, msg proxy.EmailMessage) error {
+		return nil // SMTP not configured for test; queue path is what we care about
+	})
+	t.Cleanup(func() {
+		proxy.SetEmailQueueSyncForTest(false)
+		proxy.SetSendEmailViaSMTPHookForTest(nil)
+	})
+
+	p := NewEpusdtPaymentProvider()
+	result, err := p.CreateOrder(context.Background(), &PaymentCreateOrderRequest{
+		OutTradeNo:     "tp_manual_test",
+		OrderID:        1234,
+		UserID:         42,
+		AmountUSDMicro: 10_000_000, // 10 USDT
+		ProductName:    "DAOF Manual Test",
+		RawExtras:      map[string]string{"method": "trc20-usdt"},
+	})
+	if err != nil {
+		t.Fatalf("CreateOrder: %v", err)
+	}
+	if result.ExternalTradeNo != "manual-tp_manual_test" {
+		t.Errorf("ExternalTradeNo=%q, want manual-<out_trade_no>", result.ExternalTradeNo)
+	}
+	if result.GatewayPayType != "wallet_address" {
+		t.Errorf("GatewayPayType=%q", result.GatewayPayType)
+	}
+	if result.RawExtras["mode"] != "manual" {
+		t.Errorf("RawExtras.mode=%q, want manual", result.RawExtras["mode"])
+	}
+
+	var payInfo map[string]any
+	if err := json.Unmarshal([]byte(result.PayInfo), &payInfo); err != nil {
+		t.Fatalf("PayInfo not valid JSON: %v", err)
+	}
+	if payInfo["receive_address"] != "TMBjEGgFAPMt6DxDPKqcxsAQvWMAua8gHk" {
+		t.Errorf("receive_address mismatch: %v", payInfo["receive_address"])
+	}
+	// actual_amount: 10 USDT + (1234 % 10000) * 0.0001 = 10.1234 USDT
+	if payInfo["actual_amount"] != 10.1234 {
+		t.Errorf("actual_amount=%v, want 10.1234 (10 + 1234*0.0001)", payInfo["actual_amount"])
+	}
+	if payInfo["mode"] != "manual" {
+		t.Errorf("PayInfo.mode=%v, want manual", payInfo["mode"])
+	}
+}
+
+func TestEpusdtManualMode_CreateOrder_RejectsUnconfiguredChain(t *testing.T) {
+	// 只配 TRC20，但请求 ERC20 → 应该拒
+	configureEpusdtManualForTest(t, "admin@example.com",
+		"TXXX", "", "", "")
+
+	p := NewEpusdtPaymentProvider()
+	_, err := p.CreateOrder(context.Background(), &PaymentCreateOrderRequest{
+		OutTradeNo:     "tp_no_erc20",
+		OrderID:        1,
+		AmountUSDMicro: 10_000_000,
+		RawExtras:      map[string]string{"method": "erc20-usdt"},
+	})
+	if !errors.Is(err, ErrPaymentProviderNotConfigured) {
+		t.Errorf("err=%v, want ErrPaymentProviderNotConfigured for ERC20 address missing", err)
+	}
+}
+
+func TestEpusdtManualMode_RejectsWebhook(t *testing.T) {
+	// manual 模式下 webhook 应直接拒（防错配/扫端口/攻击者）
+	configureEpusdtManualForTest(t, "admin@example.com", "TXXX", "", "", "")
+
+	p := NewEpusdtPaymentProvider()
+	_, err := p.ParseAndVerifyWebhook(&PaymentWebhookInput{
+		Method: "POST",
+		Body:   []byte(`{"pid":1,"order_id":"x","amount":10,"trade_id":"y","status":2,"signature":"abc"}`),
+	})
+	if !errors.Is(err, ErrWebhookProviderNotConfigured) {
+		t.Errorf("err=%v, want ErrWebhookProviderNotConfigured in manual mode", err)
+	}
+}
+
+func TestEpusdtManualMode_PublicOptionsFollowsAddressConfig(t *testing.T) {
+	// 仅配 TRC20 + Polygon → PublicOptions.methods 也只含这 2 个
+	configureEpusdtManualForTest(t, "admin@example.com",
+		"TXXX", "", "", "0xpoly")
+
+	p := NewEpusdtPaymentProvider()
+	opts := p.PublicOptions()
+	if !opts.Configured {
+		t.Fatal("should be configured (TRC20 + Polygon)")
+	}
+	got := make(map[string]bool, len(opts.Methods))
+	for _, m := range opts.Methods {
+		got[m] = true
+	}
+	if !got["trc20-usdt"] || !got["polygon-usdt"] {
+		t.Errorf("Methods should include trc20-usdt + polygon-usdt: %v", opts.Methods)
+	}
+	if got["erc20-usdt"] || got["bep20-usdt"] {
+		t.Errorf("Methods should NOT include erc20/bep20 (unconfigured): %v", opts.Methods)
 	}
 }
 

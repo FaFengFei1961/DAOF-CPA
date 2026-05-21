@@ -180,6 +180,7 @@ func CreateTopup(c *fiber.Ctx) error {
 	defer cancel()
 	result, err := provider.CreateOrder(ctx, &PaymentCreateOrderRequest{
 		OutTradeNo:                  outTradeNo,
+		OrderID:                     order.ID, // W-4-Manual：epusdt manual 模式生成金额尾数
 		UserID:                      user.ID,
 		AmountFen:                   req.AmountFen,
 		AmountUSDMicro:              amountUSDMicro,
