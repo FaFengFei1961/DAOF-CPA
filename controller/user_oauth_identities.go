@@ -219,13 +219,26 @@ func finishOAuthLinkToExistingUser(c *fiber.Ctx, userID uint, providerKey string
 	}
 
 	// 3. 验 (provider, external_id) 没被其它 user 占用
-	if existing, found, lookupErr := lookupActiveUserByOAuthIdentity(providerKey, identity.ExternalID); lookupErr == nil && found && existing.ID != userID {
-		return c.Status(409).JSON(fiber.Map{
-			"success":      false,
-			"message_code": "ERR_OAUTH_ALREADY_REGISTERED",
-			"message":      "该第三方账号已绑定其它账户",
-			"provider":     providerKey,
-		})
+	//
+	// fix CRITICAL H-Audit C-3（2026-05-20）：原 `lookupErr == nil && found && existing.ID != userID`
+	// 在 DB 故障时 lookupErr != nil → 整个条件直接跳过 → identity 占用检查被旁路 →
+	// 攻击者可在 DB 抖动窗口期把别人的 OAuth 绑到自己账号（auth hijack vector）。
+	// 现在 lookupErr != nil 时 fail-closed 返 500。
+	{
+		existing, found, lookupErr := lookupActiveUserByOAuthIdentity(providerKey, identity.ExternalID)
+		if lookupErr != nil {
+			log.Printf("[OAUTH-LINK] identity conflict check failed user=%d provider=%s ext=%s: %v",
+				userID, providerKey, identity.ExternalID, lookupErr)
+			return c.Status(500).JSON(fiber.Map{"success": false, "message_code": "ERR_DB_QUERY"})
+		}
+		if found && existing.ID != userID {
+			return c.Status(409).JSON(fiber.Map{
+				"success":      false,
+				"message_code": "ERR_OAUTH_ALREADY_REGISTERED",
+				"message":      "该第三方账号已绑定其它账户",
+				"provider":     providerKey,
+			})
+		}
 	}
 
 	// 4. 写 oauth_identities 行

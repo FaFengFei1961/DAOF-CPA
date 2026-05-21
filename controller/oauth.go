@@ -364,7 +364,13 @@ func readDefaultBalanceConsumeLimitMicroUSD() int64 {
 // fix CRITICAL C19-2（codex 第十九轮）：之前 newUser.Create 与 signup_bonus 账单写入分两步，
 // 后者用 NonFatal 路径仅日志失败 → "余额已给但账单丢失"路径仍存在。
 // 改为单事务：要么 user 创建成功 + 账单成功；要么都失败回滚（不会有 user 但无账单的状态）。
-func createUserWithSignupBonus(newUser *database.User, signupBonusMicroUSD int64, via string) error {
+//
+// fix CRITICAL H-Audit C-1（2026-05-20）：oauthIdentity 参数让 OAuth 注册路径把
+// 创建用户 + 写 signup_bonus + 写 oauth_identity 三步合并到同一事务。
+// 老版本在 createUserWithSignupBonus 之外再调 linkOAuthIdentityTx(database.DB, ...)，
+// 若 link 失败 user 已建但没 identity 行 → 下次 OAuth 登录被当作新用户重复注册 → 双账号。
+// 当 oauthIdentity == nil 时（如纯 SMS 注册或 admin 创建），跳过 identity 写入。
+func createUserWithSignupBonus(newUser *database.User, signupBonusMicroUSD int64, via string, oauthIdentity *OAuthIdentityData) error {
 	return database.DB.Transaction(func(tx *gorm.DB) error {
 		if err := tx.Create(newUser).Error; err != nil {
 			return fmt.Errorf("create user: %w", err)
@@ -385,6 +391,12 @@ func createUserWithSignupBonus(newUser *database.User, signupBonusMicroUSD int64
 		// 自动发新人券（如果 admin 在 SysConfig 配置了 signup_coupon_template_id 且模板有效）
 		if err := autoGrantSignupCouponTx(tx, newUser.ID, via); err != nil {
 			return fmt.Errorf("grant signup coupon: %w", err)
+		}
+		// Phase H-Audit C-1：OAuth 身份事务内一并写
+		if oauthIdentity != nil {
+			if err := linkOAuthIdentityTx(tx, newUser.ID, *oauthIdentity); err != nil {
+				return fmt.Errorf("link oauth identity: %w", err)
+			}
 		}
 		return nil
 	})
@@ -954,13 +966,24 @@ func CompleteRisk(c *fiber.Ctx) error {
 		return c.Status(403).JSON(fiber.Map{"success": false, "message": "系统判定：该手机号已绑定其它账户", "message_code": "ERR_PHONE_BOUND"})
 	}
 	// 同一外部账号已绑定其它 DAOF user 也要拒（同 externalID 在 SMS 路径反复开户）
-	if _, found, lookupErr := lookupActiveUserByOAuthIdentity(providerKey, externalID); lookupErr == nil && found {
-		return c.Status(403).JSON(fiber.Map{
-			"success":      false,
-			"message":      "该第三方账号已绑定其它账户",
-			"message_code": "ERR_OAUTH_ALREADY_REGISTERED",
-			"provider":     providerKey,
-		})
+	//
+	// fix CRITICAL H-Audit C-2（2026-05-20）：原 `lookupErr == nil && found` 在 DB 故障
+	// 时 lookupErr != nil 整个条件直接跳过 → 安全检查 fail-open → 双账号注册路径被旁路。
+	// 现在 lookupErr != nil 时 fail-closed 返 500，不让 DB 抖动放行重复绑定。
+	{
+		_, found, lookupErr := lookupActiveUserByOAuthIdentity(providerKey, externalID)
+		if lookupErr != nil {
+			log.Printf("[REGISTER-SMS] identity dup check failed provider=%s ext=%s: %v", providerKey, externalID, lookupErr)
+			return c.Status(500).JSON(fiber.Map{"success": false, "message_code": "ERR_DB_QUERY"})
+		}
+		if found {
+			return c.Status(403).JSON(fiber.Map{
+				"success":      false,
+				"message":      "该第三方账号已绑定其它账户",
+				"message_code": "ERR_OAUTH_ALREADY_REGISTERED",
+				"provider":     providerKey,
+			})
+		}
 	}
 
 	if rejectIfUserCapReached(c) {
@@ -987,18 +1010,13 @@ func CompleteRisk(c *fiber.Ctx) error {
 		BalanceConsumeWindowSeconds: int(readInt64Config("balance_consume_default_window_secs", 2592000)),
 	}
 	// fix CRITICAL C19-2（codex 第十九轮）：user 创建 + signup_bonus 账单原子化
-	if err := createUserWithSignupBonus(&newUser, signupBonusMicro, "sms"); err != nil {
-		log.Printf("[REGISTER-SMS] tx failed username=%s: %v", newUser.Username, err)
-		return c.Status(500).JSON(fiber.Map{"success": false, "message": "创建根记录失败", "message_code": "ERR_CREATE_ROOT_RECORD"})
-	}
-	// 写 oauth_identities 行（new user 已经有 ID 了）
-	if err := linkOAuthIdentityTx(database.DB, newUser.ID, OAuthIdentityData{
+	// fix CRITICAL H-Audit C-1（2026-05-20）：把 oauth_identity 写入合并到同事务，
+	// 杜绝"user 已建但 identity 缺失"导致下次 OAuth 登录被当作新用户重复注册的双账号路径。
+	if err := createUserWithSignupBonus(&newUser, signupBonusMicro, "sms", &OAuthIdentityData{
 		Provider: providerKey, ExternalID: externalID, Username: displayName,
 	}); err != nil {
-		log.Printf("[REGISTER-SMS] link oauth_identity failed user=%d provider=%s ext=%s: %v",
-			newUser.ID, providerKey, externalID, err)
-		// user 已建立，但 oauth_identity 没写进去 → 下次该 provider 登录会被当作新用户
-		// 风险可接受（运维事后可补）；不阻塞响应。
+		log.Printf("[REGISTER-SMS] tx failed username=%s: %v", newUser.Username, err)
+		return c.Status(500).JSON(fiber.Map{"success": false, "message": "创建根记录失败", "message_code": "ERR_CREATE_ROOT_RECORD"})
 	}
 
 	// fix HIGH NEW-H2（codex 第十八轮）：AddUserToAuthCache 必须在 applyReferralBonuses **之前**调用。
@@ -1116,13 +1134,22 @@ func CompleteProfile(c *fiber.Ctx) error {
 	defer registerMu.Unlock()
 
 	// 拒重复绑：同一外部账号已绑过其它 DAOF user
-	if _, found, lookupErr := lookupActiveUserByOAuthIdentity(providerKey, externalID); lookupErr == nil && found {
-		return c.Status(403).JSON(fiber.Map{
-			"success":      false,
-			"message":      "系统防刷判定：此第三方账号已经注册过",
-			"message_code": "ERR_OAUTH_ALREADY_REGISTERED",
-			"provider":     providerKey,
-		})
+	//
+	// fix CRITICAL H-Audit C-2（2026-05-20）：lookupErr fail-closed，详见 CompleteRisk 同样修复
+	{
+		_, found, lookupErr := lookupActiveUserByOAuthIdentity(providerKey, externalID)
+		if lookupErr != nil {
+			log.Printf("[REGISTER-OAUTH] identity dup check failed provider=%s ext=%s: %v", providerKey, externalID, lookupErr)
+			return c.Status(500).JSON(fiber.Map{"success": false, "message_code": "ERR_DB_QUERY"})
+		}
+		if found {
+			return c.Status(403).JSON(fiber.Map{
+				"success":      false,
+				"message":      "系统防刷判定：此第三方账号已经注册过",
+				"message_code": "ERR_OAUTH_ALREADY_REGISTERED",
+				"provider":     providerKey,
+			})
+		}
 	}
 
 	if rejectIfUserCapReached(c) {
@@ -1148,16 +1175,12 @@ func CompleteProfile(c *fiber.Ctx) error {
 		BalanceConsumeWindowSeconds: int(readInt64Config("balance_consume_default_window_secs", 2592000)),
 	}
 	// fix CRITICAL C19-2（codex 第十九轮）：user 创建 + signup_bonus 账单原子化
-	if err := createUserWithSignupBonus(&newUser, signupBonusMicro, providerKey); err != nil {
-		log.Printf("[REGISTER-OAUTH] tx failed provider=%s username=%s: %v", providerKey, newUser.Username, err)
-		return c.Status(500).JSON(fiber.Map{"success": false, "message": "创建通行记录失败", "message_code": "ERR_CREATE_PASS_RECORD"})
-	}
-	// 写 oauth_identities 行
-	if err := linkOAuthIdentityTx(database.DB, newUser.ID, OAuthIdentityData{
+	// fix CRITICAL H-Audit C-1（2026-05-20）：oauth_identity 写入合并到同事务
+	if err := createUserWithSignupBonus(&newUser, signupBonusMicro, providerKey, &OAuthIdentityData{
 		Provider: providerKey, ExternalID: externalID, Username: req.Username,
 	}); err != nil {
-		log.Printf("[REGISTER-OAUTH] link oauth_identity failed user=%d provider=%s ext=%s: %v",
-			newUser.ID, providerKey, externalID, err)
+		log.Printf("[REGISTER-OAUTH] tx failed provider=%s username=%s: %v", providerKey, newUser.Username, err)
+		return c.Status(500).JSON(fiber.Map{"success": false, "message": "创建通行记录失败", "message_code": "ERR_CREATE_PASS_RECORD"})
 	}
 
 	// fix HIGH NEW-H2：AddUserToAuthCache 在 applyReferralBonuses 前调用（见 CompleteRisk 同样修复）

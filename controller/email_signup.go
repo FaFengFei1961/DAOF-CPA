@@ -125,7 +125,8 @@ func EmailSignup(c *fiber.Ctx) error {
 		// EmailVerifiedAt = nil：必须 verify 后才能登录（login handler 检查这个）
 	}
 
-	if err := createUserWithSignupBonus(&newUser, signupBonusMicro, "email"); err != nil {
+	// nil oauthIdentity：邮箱注册没有第三方身份要写
+	if err := createUserWithSignupBonus(&newUser, signupBonusMicro, "email", nil); err != nil {
 		// unique 冲突的最后兜底：partial unique index 拦下并发竞态
 		// 用 GORM 的 driver-agnostic sentinel；fallback 仍保留 string-match 兼容旧驱动
 		if errors.Is(err, gorm.ErrDuplicatedKey) || strings.Contains(strings.ToLower(err.Error()), "unique") {
