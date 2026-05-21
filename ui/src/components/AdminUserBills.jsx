@@ -162,7 +162,7 @@ const AdminUserBills = ({ userId, username, onClose }) => {
       aria-modal="true"
       aria-labelledby="admin-bills-title"
       onClick={onBackdropClick}
-      className="fixed inset-0 z-[60] flex items-center justify-center p-4 bg-black/70 backdrop-blur-md"
+      className="fixed inset-0 z-[60] flex items-center justify-center p-4 bg-black/60 backdrop-blur-sm"
     >
       <div className="bg-surface w-full max-w-5xl max-h-[90vh] rounded-overlay shadow-2xl shadow-black/40 overflow-hidden flex flex-col">
         <div className="flex items-center justify-between px-6 py-4 border-b border-outline-variant/40">

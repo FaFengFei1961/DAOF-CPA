@@ -324,7 +324,7 @@ const AdminTopupOrders = () => {
           aria-modal="true"
           aria-labelledby="refund-modal-title"
           onClick={onRefundBackdropClick}
-          className="fixed inset-0 z-[60] flex items-center justify-center p-4 bg-black/70 backdrop-blur-md"
+          className="fixed inset-0 z-[60] flex items-center justify-center p-4 bg-black/60 backdrop-blur-sm"
         >
           <div className="bg-surface w-full max-w-md rounded-overlay shadow-2xl shadow-black/40 overflow-hidden">
             <div className="flex items-center justify-between px-5 py-4 border-b border-outline-variant/40">
@@ -460,7 +460,7 @@ const AdminTopupOrders = () => {
           aria-modal="true"
           aria-labelledby="mark-paid-modal-title"
           onClick={onMarkPaidBackdropClick}
-          className="fixed inset-0 z-[60] flex items-center justify-center p-4 bg-black/70 backdrop-blur-md"
+          className="fixed inset-0 z-[60] flex items-center justify-center p-4 bg-black/60 backdrop-blur-sm"
         >
           <div className="bg-surface w-full max-w-md rounded-overlay shadow-2xl shadow-black/40 overflow-hidden">
             <div className="flex items-center justify-between px-5 py-4 border-b border-outline-variant/40">

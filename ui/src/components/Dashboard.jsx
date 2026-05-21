@@ -24,37 +24,26 @@ import { StatusBadge } from './ui';
 
 const Dashboard = () => {
   const { t, i18n } = useTranslation();
-  const { isAdmin, isAuthenticated, openLogin } = useAuth();
+  // IA audit M-D2 fix: AuthContext 是 /api/user/me 单源 — 它已经在挂载时
+  // + 30s 轮询 + 'user-profile-refresh' 事件三处拉 profile。Dashboard 不再
+  // 自己 fetch，直接读 context.profile。/api/logs 是独立 endpoint 保留。
+  const { isAdmin, isAuthenticated, openLogin, profile: me } = useAuth();
   const { formatCurrency } = useCurrency();
   const navigate = useNavigate();
 
-  const [me, setMe] = useState(null);
   const [recentLogs, setRecentLogs] = useState([]);
-  const [meLoading, setMeLoading] = useState(() => isAuthenticated && isLoggedIn() && !isAdmin);
+  // me 来自 AuthContext，初始可能是 null（轮询第一次还没到）→ 用骨架屏
+  const meLoading = isAuthenticated && isLoggedIn() && !isAdmin && me === null;
 
   useEffect(() => {
     if (!isAuthenticated || !isLoggedIn() || isAdmin) {
-      setMeLoading(false);
       return undefined;
     }
-    setMeLoading(true);
     const ctrl = new AbortController();
-    const swallow = (err) => {
-      if (err?.name === 'AbortError') return null;
-      logger.warn('[dashboard] fetch failed', err);
-      return null;
-    };
-    // Phase H Critical fix：原 Promise.all().then() 缺顶层 .catch — 如果
-    // .then 回调内部 throw（罕见但可能），meLoading 永久卡 true，骨架屏永远转。
-    // 用 try/finally 保证 setMeLoading(false) 一定被调用。
     (async () => {
       try {
-        const [meRes, logsRes] = await Promise.all([
-          authFetch('/api/user/me', { signal: ctrl.signal }).catch(swallow),
-          authFetch('/api/logs?page=1&limit=8', { signal: ctrl.signal }).catch(swallow),
-        ]);
+        const logsRes = await authFetch('/api/logs?page=1&limit=8', { signal: ctrl.signal });
         if (ctrl.signal.aborted) return;
-        if (meRes?.success) setMe(meRes.data);
         // 后端 /api/logs 返回 { data: { logs: [...], total, page, limit } }，
         // 字段名是 logs 不是 items。Array.isArray 兜底防御非数组响应（避免 reduce 崩）。
         if (logsRes?.success) {
@@ -63,10 +52,8 @@ const Dashboard = () => {
         }
       } catch (err) {
         if (err?.name !== 'AbortError') {
-          logger.warn('[dashboard] unexpected error', err);
+          logger.warn('[dashboard] logs fetch failed', err);
         }
-      } finally {
-        if (!ctrl.signal.aborted) setMeLoading(false);
       }
     })();
     return () => ctrl.abort();

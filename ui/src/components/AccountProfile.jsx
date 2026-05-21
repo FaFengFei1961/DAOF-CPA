@@ -1,24 +1,18 @@
-import React, { useState, useEffect, useMemo } from 'react';
+import React, { useState, useEffect } from 'react';
 import { useTranslation } from 'react-i18next';
-// IA audit M-IA1 fix: dropped Lock + ShieldAlert + useConfirm — the admin
-// credentials form that used them lived in two places (here and
-// pages/admin/system/GeneralAdminPage). AccountProfile is a user-facing
-// page; admin credential rotation belongs only at /admin/general so we
-// don't have two ways to wipe the only-admin account.
+// IA audit M-IA1 fix: dropped admin credentials form + useConfirm + Lock +
+// ShieldAlert — those live exclusively at /admin/general now.
+//
+// IA audit M-D2 fix: AuthContext 是 /api/user/me 单源。本组件不再独立 fetch /
+// 不再读 pageCache —— 直接读 useAuth().profile。这避免三处独立 fetch
+// （AuthContext / Dashboard / AccountProfile）状态漂移。
 import { User, Copy, Gift, UserPlus } from 'lucide-react';
 import toast from 'react-hot-toast';
-import { authFetch, readAuthState } from '../utils/authFetch';
-import { isPageCacheFresh, readPageCache, writePageCache } from '../utils/pageCache';
+import { useAuth } from '../context/AuthContext';
 import UserEmailBinding from './UserEmailBinding';
 import UserLinkedAccounts from './UserLinkedAccounts';
 
-const PROFILE_CACHE_TTL_MS = 30000;
 const MICRO_PER_USD = 1_000_000;
-const BANNED_MARKER = '\u5c01\u7981';
-const getProfileCacheKey = () => {
-    const { isAdmin, userToken } = readAuthState();
-    return `profile:${isAdmin ? 'admin' : userToken || 'guest'}`;
-};
 
 const formatMicroUSD = (microValue) => {
     if (microValue == null || microValue === '') return '—';
@@ -48,10 +42,11 @@ const formatWindowDays = (secondsValue) => {
 
 const AccountProfile = () => {
     const { t } = useTranslation();
-    const profileCacheKey = useMemo(getProfileCacheKey, []);
-    const cachedProfile = readPageCache(profileCacheKey);
-    const [profile, setProfile] = useState(() => cachedProfile);
-    const [loading, setLoading] = useState(() => !cachedProfile);
+    // M-D2: 单源 profile 来自 AuthContext（不再独立 fetch / 不再读 pageCache）。
+    const { profile, isAuthenticated, isAdmin } = useAuth();
+    const loggedIn = isAuthenticated || isAdmin;
+    // loading = 已登录但 profile 还没拉到（AuthContext 第一次 verifyUserToken 未完成）
+    const loading = loggedIn && profile === null;
     const [publicConfig, setPublicConfig] = useState(null);
 
     useEffect(() => {
@@ -64,42 +59,11 @@ const AccountProfile = () => {
             .catch((err) => {
                 // Phase H Critical fix：旧代码 .catch(() => {}) 完全静默，
                 // referral 面板会展示三个 '—' 让用户以为是真值（其实是 fetch fail）。
-                // 至少在控制台 warn 出来，让运维 / 调试时能定位。
                 // eslint-disable-next-line no-console
                 console.warn('[AccountProfile] public-config fetch failed', err);
             });
         return () => { alive = false; };
     }, []);
-
-    useEffect(() => {
-        const isAdmin = localStorage.getItem('daof_admin_unlocked') === '1';
-        const userToken = localStorage.getItem('daof_token');
-        if (!isAdmin && !userToken) {
-            setLoading(false);
-            return;
-        }
-        const cached = readPageCache(profileCacheKey);
-        if (cached) {
-            setProfile(cached);
-            setLoading(false);
-            if (isPageCacheFresh(profileCacheKey, PROFILE_CACHE_TTL_MS)) return;
-        }
-        authFetch('/api/user/me')
-            .then(data => {
-                if (data.success) {
-                    writePageCache(profileCacheKey, data.data);
-                    setProfile(data.data);
-                } else if (data.message_code === 'ERR_BANNED' || (data.message && data.message.includes(BANNED_MARKER))) {
-                    return;
-                }
-                setLoading(false);
-            })
-            .catch(() => setLoading(false));
-    }, [profileCacheKey]);
-
-    // M-IA1 removed: handleAdminUpdate + adminForm state + the JSX block
-    // below. Admin credentials are owned by /admin/general now; this
-    // component is the user-facing AccountProfile only.
 
     if (loading) return <div className="text-on-surface-variant p-8 text-center ">{t('ACCOUNT.LOADING')}</div>;
     if (!profile) return <div className="bg-error/10 border border-error/30 text-error p-6 rounded-overlay text-center">{t('ACCOUNT.LOAD_FAILED')}</div>;

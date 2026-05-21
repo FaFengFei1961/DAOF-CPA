@@ -608,7 +608,7 @@ const UserManagement = () => {
                     aria-modal="true"
                     aria-labelledby="log-modal-title"
                     onClick={onLogBackdropClick}
-                    className="fixed inset-0 z-[60] flex items-center justify-center p-4 bg-black/70 backdrop-blur-md animate-in fade-in "
+                    className="fixed inset-0 z-[60] flex items-center justify-center p-4 bg-black/60 backdrop-blur-sm animate-in fade-in "
                 >
                     <div className="relative w-full max-w-4xl max-h-[80vh] flex flex-col bg-surface-container-high border border-outline-variant rounded-overlay shadow-2xl shadow-black/40 overflow-hidden">
                         <div className="p-5 border-b border-outline-variant flex items-center justify-between bg-surface-container">
@@ -759,7 +759,7 @@ const UserManagement = () => {
                     aria-modal="true"
                     aria-labelledby="offline-topup-modal-title"
                     onClick={onOfflineTopupBackdropClick}
-                    className="fixed inset-0 z-[60] flex items-center justify-center p-4 bg-black/70 backdrop-blur-md animate-in fade-in"
+                    className="fixed inset-0 z-[60] flex items-center justify-center p-4 bg-black/60 backdrop-blur-sm animate-in fade-in"
                 >
                     <div className="relative w-full max-w-md bg-surface-container border border-outline-variant rounded-overlay shadow-2xl shadow-black/40 p-6">
                         <button type="button" ref={offlineTopupCloseBtnRef} onClick={closeOfflineTopupModal} className="absolute top-4 right-4 text-on-surface-variant hover:text-white" aria-label={t('COMMON.CLOSE', '关闭')}>
