@@ -36,6 +36,9 @@ func (s *stubPaymentProvider) CreateOrder(ctx context.Context, req *PaymentCreat
 func (s *stubPaymentProvider) PublicOptions() PaymentProviderPublicOptions {
 	return PaymentProviderPublicOptions{Key: s.key, Configured: s.configured, Label: "Stub-" + s.key}
 }
+func (s *stubPaymentProvider) ParseAndVerifyWebhook(input *PaymentWebhookInput) (*PaymentWebhookEvent, error) {
+	return &PaymentWebhookEvent{Kind: WebhookEventPaid, OutTradeNo: "stub-tn", Nonce: s.key + ":stub-nonce"}, nil
+}
 
 // withStubPaymentProviders 临时替换全局 registry，结束后还原。
 // 注意：这里不调用 ResetPaymentProvidersForTest，因为生产 init() 已经注册了 yifut；

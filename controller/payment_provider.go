@@ -55,7 +55,123 @@ type PaymentProvider interface {
 	//
 	// 不包含敏感字段（pid / private_key / webhook_secret 等绝不下发）。
 	PublicOptions() PaymentProviderPublicOptions
+
+	// ParseAndVerifyWebhook 解析 + 验签外部网关推送的回调。
+	//
+	// 责任边界：
+	//   - 验签（RSA / HMAC / 链上证明）—— provider 内部
+	//   - 解析金额、订单号、状态枚举 —— provider 内部
+	//   - 防重放 nonce 计算 —— provider 内部（用 raw params 拼）
+	//   - DB 操作（查订单 / 写 receipt / 加额度）—— **不要在 provider 内部做**，通用层负责
+	//
+	// 返回错误时通用层会写"rejected" receipt 并拒绝回调；返回事件后通用层用 (Provider, Nonce)
+	// 在 PaymentWebhookReceipt 里去重，匹配本地订单，然后单事务入账。
+	//
+	// 错误映射：用 ErrWebhook* sentinel 让通用层映射成对应 HTTP status code。
+	//
+	// W-3-P1（2026-05-21）：接口先加上，yifut adapter 实现就绪；YifutNotify 路由暂保留
+	// 原 inline 行为作兼容基线，W-3-P3 改造为薄壳走通用 ProcessPaymentWebhook。
+	ParseAndVerifyWebhook(input *PaymentWebhookInput) (*PaymentWebhookEvent, error)
 }
+
+// PaymentWebhookInput 是通用层从 fiber.Ctx 抽出来传给 provider 的 HTTP 上下文快照。
+//
+// 设计动机：让 provider.ParseAndVerifyWebhook 不依赖 fiber，便于纯函数单测。
+// 通用层（ProcessPaymentWebhook）负责从 c 抽字段填进来。
+type PaymentWebhookInput struct {
+	// Method "GET" / "POST"（yifut 是 GET query；多数 EPay 变种是 GET）。
+	Method string
+
+	// Headers 大小写规范化后的请求头（key 全小写）。某些网关在 header 里放签名。
+	Headers map[string]string
+
+	// QueryParams URL query 参数（GET callback 主要字段）。
+	QueryParams map[string]string
+
+	// Body POST 请求体（GET 回调可空）。limit 上游负责（≤ 1 MB）。
+	Body []byte
+
+	// RemoteIP 经 RealClientIP 解析后的客户端 IP。provider 可用于自身 IP allowlist。
+	RemoteIP string
+}
+
+// WebhookEventKind 标准化的回调事件枚举。通用层根据 Kind 决定走哪条入账路径。
+type WebhookEventKind string
+
+const (
+	// WebhookEventPaid 支付成功，通用层应走入账事务（status created→paid + quota+= + billing）。
+	WebhookEventPaid WebhookEventKind = "paid"
+
+	// WebhookEventNonTerminal 非终态（待支付 / 待确认），通用层应 ack 但不入账。
+	// 用于回调说"我收到了，但还没确认到账"。yifut 不发这种回调（终态才推），但 epusdt 链上
+	// 1 → N 确认期间可能推中间状态。
+	WebhookEventNonTerminal WebhookEventKind = "non_terminal"
+
+	// WebhookEventRefunded 部分 / 全额退款。预留给未来网关主动推送退款（当前 DAOF 退款走 admin
+	// 手工，本枚举未使用）。
+	WebhookEventRefunded WebhookEventKind = "refunded"
+
+	// WebhookEventFailed 终态失败 / 取消 / 关单。通用层 ack + 标记订单 failed。
+	WebhookEventFailed WebhookEventKind = "failed"
+)
+
+// PaymentWebhookEvent 是 provider 解析回调后返回的标准化事件结构。
+// 通用层（ProcessPaymentWebhook）按字段路由：先 (Provider, Nonce) 去重，再金额比对，再入账。
+type PaymentWebhookEvent struct {
+	// Kind 事件类型，决定后续路径。
+	Kind WebhookEventKind
+
+	// OutTradeNo 商户订单号（与 TopupOrder.OutTradeNo 对应）。必填。
+	OutTradeNo string
+
+	// ExternalTradeNo 网关侧订单号（yifut: trade_no；epusdt: tx_hash 或内部 order_id）。
+	// 入账时写回 TopupOrder.TradeNo 用作外部对账锚点。
+	ExternalTradeNo string
+
+	// Nonce 防重放唯一键。provider 负责拼接（如 "out_trade_no + sign[:16]"）。
+	// 通用层用 (Provider, Nonce) 写入 PaymentWebhookReceipt 防重放。
+	Nonce string
+
+	// SignatureHash 网关签名的 SHA-256 摘要（不存原 sign 缩小敏感面）。落库审计用。
+	SignatureHash string
+
+	// AmountKind 金额单位枚举，让通用层决定怎么对账。
+	AmountKind PaymentAmountKind
+
+	// AmountRaw 回调声明的金额（按 AmountKind 解释）。
+	//   - AmountKindFenCNY:    fen int64 (RMB × 100), 通用层用 order.ExchangeRateRmbPerUsdMicros 换算
+	//   - AmountKindMicroUSD:  micro_usd int64 (USD × 1e6), 通用层直接 == order.AmountUSD 比对
+	AmountRaw int64
+
+	// RawParams 原始回调参数（query / body 解析后），落库审计 + 异常排查用。
+	RawParams map[string]string
+}
+
+// PaymentAmountKind 标识 PaymentWebhookEvent.AmountRaw 的单位。
+type PaymentAmountKind string
+
+const (
+	// AmountKindFenCNY 人民币分（yifut V2 回调 money 字段解析后）。
+	AmountKindFenCNY PaymentAmountKind = "fen_cny"
+
+	// AmountKindMicroUSD micro USD（USDT/USDC 1:1 入账，epusdt 适用）。
+	AmountKindMicroUSD PaymentAmountKind = "micro_usd"
+)
+
+// ErrWebhook* 是 ParseAndVerifyWebhook 错误的标准 sentinel。
+// 通用层 ProcessPaymentWebhook 用 errors.Is 映射到 HTTP status code + log。
+var (
+	// ErrWebhookSignatureInvalid 签名验证失败。403。
+	ErrWebhookSignatureInvalid = errors.New("webhook: signature invalid")
+	// ErrWebhookPIDMismatch 跨商户字段不一致（如 yifut params.pid != cfg.PID）。403。
+	ErrWebhookPIDMismatch = errors.New("webhook: merchant id mismatch")
+	// ErrWebhookTimestampDrift timestamp 超出 ±300s 容忍窗口。403。
+	ErrWebhookTimestampDrift = errors.New("webhook: timestamp drift too large")
+	// ErrWebhookMalformed 参数缺失 / 格式非法（如 money 字符串解析失败）。400。
+	ErrWebhookMalformed = errors.New("webhook: payload malformed")
+	// ErrWebhookProviderNotConfigured admin 还没配齐 provider 凭据。503。
+	ErrWebhookProviderNotConfigured = errors.New("webhook: provider not configured")
+)
 
 // PaymentCreateOrderRequest 是 controller 传给 provider 的下单请求快照。
 // 通用字段（OutTradeNo / AmountFen / UserID / IPs）由 controller 装好，

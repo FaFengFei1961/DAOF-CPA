@@ -14,6 +14,8 @@ import (
 	"context"
 	"fmt"
 	"strconv"
+	"strings"
+	"time"
 
 	"daof-cpa/database"
 	"daof-cpa/proxy"
@@ -134,4 +136,106 @@ func (p *YifutPaymentProvider) PublicOptions() PaymentProviderPublicOptions {
 		Methods:      methods,
 		IconKey:      "yifut",
 	}
+}
+
+// ParseAndVerifyWebhook 解析 + 验签易付通 V2 异步通知。
+//
+// 责任边界（W-3-P1）：
+//   - 验签：proxy.VerifyYifutRSA（平台公钥 SHA256WithRSA）
+//   - pid 校验：params.pid == cfg.PID（防跨商户重放）
+//   - timestamp ±300s：防回放
+//   - 金额解析：money 字符串 → fen int64（严格不引入 float）
+//   - nonce 拼接：webhookNonce(provider, params) — 与 inline 实现一致
+//   - 状态映射：trade_status=TRADE_SUCCESS → WebhookEventPaid；其它 → WebhookEventNonTerminal
+//
+// 不做的事：
+//   - 查 DB（订单不存在 / 金额不一致 / 重放检测都由通用层 ProcessPaymentWebhook 处理）
+//   - 写 receipt（通用层在 Verify 通过后单独写）
+//   - 入账事务（通用层 finalizePaidTopup 用单事务执行）
+//
+// 错误使用 ErrWebhook* sentinel，通用层 errors.Is 映射 HTTP status。
+func (p *YifutPaymentProvider) ParseAndVerifyWebhook(input *PaymentWebhookInput) (*PaymentWebhookEvent, error) {
+	if input == nil {
+		return nil, fmt.Errorf("%w: nil input", ErrWebhookMalformed)
+	}
+
+	cfg := proxy.LoadYifutConfig()
+	if !cfg.IsConfigured() {
+		return nil, ErrWebhookProviderNotConfigured
+	}
+
+	// yifut 回调是 GET，参数都在 QueryParams
+	params := input.QueryParams
+	if len(params) == 0 {
+		return nil, fmt.Errorf("%w: empty query params", ErrWebhookMalformed)
+	}
+
+	// 1. RSA 签名（最强防线，先过这层避免后续 DB / log 开销暴露给伪造请求）
+	if !proxy.VerifyYifutRSA(params, cfg.PlatformPublicKey) {
+		return nil, ErrWebhookSignatureInvalid
+	}
+
+	// 2. pid 校验（防跨商户重放：攻击者用自家 yifut 商户产生合法签名回调投递到本站）
+	if cfg.PID == "" || params["pid"] != cfg.PID {
+		return nil, ErrWebhookPIDMismatch
+	}
+
+	// 3. timestamp ±300s 漂移
+	if !yifutVerifyTimestamp(params["timestamp"]) {
+		return nil, ErrWebhookTimestampDrift
+	}
+
+	// 4. 金额解析（保留 fen int64，让通用层用 order.ExchangeRateRmbPerUsdMicros 换算 micro_usd）
+	moneyFen, ok := parseRMBStringToFen(params["money"])
+	if !ok {
+		return nil, fmt.Errorf("%w: bad money=%q", ErrWebhookMalformed, params["money"])
+	}
+
+	// 5. out_trade_no 必填（通用层用此查订单）
+	outTradeNo := strings.TrimSpace(params["out_trade_no"])
+	if outTradeNo == "" {
+		return nil, fmt.Errorf("%w: missing out_trade_no", ErrWebhookMalformed)
+	}
+
+	// 6. trade_no 截断（与 YifutNotify 防御一致：网关签名已校验，但仍防外部串污染 schema）
+	tradeNo := params["trade_no"]
+	if len(tradeNo) > 128 {
+		tradeNo = tradeNo[:128]
+	}
+
+	// 7. 状态映射：yifut V2 只在 TRADE_SUCCESS 时让平台入账；其它（TRADE_FINISHED / WAIT_BUYER_PAY 等）
+	//    都不入账。通用层收到 NonTerminal 应直接 ack "success" 避免易付通重试。
+	kind := WebhookEventNonTerminal
+	if params["trade_status"] == "TRADE_SUCCESS" {
+		kind = WebhookEventPaid
+	}
+
+	return &PaymentWebhookEvent{
+		Kind:            kind,
+		OutTradeNo:      outTradeNo,
+		ExternalTradeNo: tradeNo,
+		Nonce:           webhookNonce(database.TopupProviderYifut, params),
+		SignatureHash:   signatureHash(params["sign"]),
+		AmountKind:      AmountKindFenCNY,
+		AmountRaw:       moneyFen,
+		RawParams:       params,
+	}, nil
+}
+
+// yifutVerifyTimestamp 是 checkYifutTimestamp 的纯函数版本（无 log，便于 adapter 自检）。
+// 接受 unix 秒字符串，与服务器时间漂移 ≤ notifyTimestampSkewSeconds（300s）则通过。
+func yifutVerifyTimestamp(ts string) bool {
+	ts = strings.TrimSpace(ts)
+	if ts == "" {
+		return false
+	}
+	tsInt, err := strconv.ParseInt(ts, 10, 64)
+	if err != nil {
+		return false
+	}
+	diff := time.Now().Unix() - tsInt
+	if diff < 0 {
+		diff = -diff
+	}
+	return diff <= notifyTimestampSkewSeconds
 }
