@@ -2308,6 +2308,7 @@
     "SUCCESS_DELETED": "Deleted successfully.",
     "SUCCESS_EMAIL_ALREADY_VERIFIED": "Your email is already verified.",
     "SUCCESS_EMAIL_BIND_SENT": "Verification email sent. Please check your inbox.",
+    "SUCCESS_EMAIL_RESEND_QUEUED": "If the email is registered and unverified, a fresh verification email has been queued.",
     "SUCCESS_EMAIL_UNBOUND": "Email unbound successfully.",
     "SUCCESS_EMAIL_TEST_SENT": "Test email sent. Please check your inbox.",
     "SUCCESS_EMAIL_LOGIN_TOGGLED": "Email login preference updated.",

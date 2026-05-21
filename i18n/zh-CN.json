@@ -2307,6 +2307,7 @@
     "SUCCESS_CREDITS_REFRESH_TRIGGERED": "号池余额刷新已触发。",
     "SUCCESS_EMAIL_ALREADY_VERIFIED": "您的邮箱已验证。",
     "SUCCESS_EMAIL_BIND_SENT": "验证邮件已发送，请前往邮箱完成验证。",
+    "SUCCESS_EMAIL_RESEND_QUEUED": "若该邮箱已注册且未验证，验证邮件已重新发出。",
     "SUCCESS_EMAIL_UNBOUND": "邮箱已解绑。",
     "SUCCESS_EMAIL_TEST_SENT": "测试邮件已发送，请查收。",
     "SUCCESS_EMAIL_LOGIN_TOGGLED": "邮箱登录开关已更新。",
