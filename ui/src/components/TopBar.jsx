@@ -8,13 +8,14 @@ import { logger } from '../utils/logger';
 import NotificationCenter from './NotificationCenter';
 
 /**
- * Microsoft Store / Windows 11 Settings style command bar.
+ * Linear / Vercel / Anthropic Console style command bar (Phase B-1).
  *
  * Visual rules:
- *  - 48px height
- *  - centered desktop search box
- *  - compact right-side controls
- *  - 32px controls with subtle hover states
+ *  - 48px height with hairline bottom border
+ *  - centered desktop search box (single accent on focus only)
+ *  - compact right-side controls (28px buttons, icon-led)
+ *  - dropdown menu uses the .card primitive so depth matches the rest of the
+ *    new design system
  *  - mobile keeps only logo, app name, and account or sign-in controls
  */
 const TopBar = ({ isAuthenticated, onOpenAuth, isAdmin, profile }) => {
@@ -108,14 +109,15 @@ const TopBar = ({ isAuthenticated, onOpenAuth, isAdmin, profile }) => {
         <span className="text-sm font-semibold text-on-surface">DAOF-CPA</span>
       </div>
 
-      {/* Desktop search box */}
-      <form onSubmit={onSearchSubmit} className="hidden lg:flex flex-1 max-w-2xl mx-auto relative">
+      {/* Desktop search box — .input primitive + .kbd hint */}
+      <form onSubmit={onSearchSubmit} className="hidden lg:flex flex-1 max-w-xl mx-auto relative">
         <label htmlFor="topbar-search" className="sr-only">
           {t('TOPBAR.SEARCH_PLACEHOLDER', '搜索模型、套餐')}
         </label>
         <Search
-          size={14}
-          className="absolute left-3.5 top-1/2 -translate-y-1/2 text-on-surface-variant pointer-events-none z-10"
+          size={13}
+          className="absolute left-2.5 top-1/2 -translate-y-1/2 pointer-events-none z-10"
+          style={{ color: 'var(--t3)' }}
         />
         <input
           id="topbar-search"
@@ -123,10 +125,14 @@ const TopBar = ({ isAuthenticated, onOpenAuth, isAdmin, profile }) => {
           value={searchQ}
           onChange={(e) => setSearchQ(e.target.value)}
           placeholder={t('TOPBAR.SEARCH_PLACEHOLDER', '搜索模型、套餐')}
-          className="w-full h-9 bg-surface-container/60 border border-outline-variant/60 rounded-overlay pl-9 pr-14 text-sm text-on-surface placeholder:text-on-surface-variant outline-none focus:border-primary focus:bg-surface-container transition-colors"
+          className="input"
+          style={{ paddingLeft: 30, paddingRight: 48 }}
         />
-        <kbd className="hidden lg:flex absolute right-3 top-1/2 -translate-y-1/2 items-center gap-0.5 h-5 px-1.5 rounded-control text-[10px] font-mono text-on-surface-variant bg-on-surface/5 border border-outline-variant/60 pointer-events-none">
-          <span>⌘</span><span>K</span>
+        <kbd
+          aria-hidden="true"
+          className="kbd hidden lg:flex absolute right-2 top-1/2 -translate-y-1/2 pointer-events-none"
+        >
+          ⌘K
         </kbd>
       </form>
 
@@ -140,11 +146,11 @@ const TopBar = ({ isAuthenticated, onOpenAuth, isAdmin, profile }) => {
         {isAdmin && (
           <Link
             to="/admin"
-            className="flex items-center gap-1.5 h-8 px-2.5 rounded-control border border-outline-variant text-on-surface-variant hover:bg-on-surface/[0.04] hover:text-on-surface transition"
+            className="btn btn-secondary"
             title={t('TOPBAR.ENTER_ADMIN', '进入管理后台')}
           >
-            <ShieldAlert size={14} />
-            <span className="hidden sm:inline text-sm font-medium">{t('TOPBAR.ADMIN')}</span>
+            <ShieldAlert size={13} aria-hidden="true" />
+            <span className="hidden sm:inline">{t('TOPBAR.ADMIN')}</span>
           </Link>
         )}
 
@@ -168,7 +174,8 @@ const TopBar = ({ isAuthenticated, onOpenAuth, isAdmin, profile }) => {
             {menuOpen && (
               <div
                 role="menu"
-                className="absolute right-0 top-full mt-2 w-72 bg-surface-container-high border border-outline-variant rounded-overlay shadow-black/40 z-[100] overflow-hidden"
+                className="card absolute right-0 top-full mt-2 w-72 z-[100] overflow-hidden"
+                style={{ padding: 0 }}
               >
                 {/* Header: username, role, and balance */}
                 <div className="px-4 py-3 border-b border-outline-variant/40">
@@ -270,10 +277,10 @@ const TopBar = ({ isAuthenticated, onOpenAuth, isAdmin, profile }) => {
           </div>
         ) : (
           <div className="flex items-center gap-1 ml-1 pl-2 border-l border-outline-variant/60">
-            <button type="button" onClick={onOpenAuth} className="fl-btn fl-btn-subtle h-8">
+            <button type="button" onClick={onOpenAuth} className="btn btn-ghost">
               {t('TOPBAR.LOGIN')}
             </button>
-            <button type="button" onClick={onOpenAuth} className="fl-btn fl-btn-prominent h-8">
+            <button type="button" onClick={onOpenAuth} className="btn btn-primary">
               {t('TOPBAR.REGISTER')}
             </button>
           </div>
