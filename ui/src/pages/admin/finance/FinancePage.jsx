@@ -1,7 +1,7 @@
 import React, { Suspense, lazy } from 'react';
 import { useTranslation } from 'react-i18next';
 import { Outlet, NavLink, useLocation, Navigate } from 'react-router-dom';
-import { ShieldAlert, Wallet, Receipt, Package as PackageIcon, Scale } from 'lucide-react';
+import { ShieldAlert, Wallet, Receipt, Package as PackageIcon, Scale, Coins } from 'lucide-react';
 import { PageContainer, PageHeader } from '../../../components/ui';
 
 const FinanceSettingsPage = lazy(() => import('./FinanceSettingsPage'));
@@ -15,11 +15,12 @@ const AdminSubscriptions = lazy(() => import('../../../components/AdminSubscript
  * and deep links work across finance operations.
  */
 const FINANCE_TABS = [
-  { id: 'settings',      path: '/admin/finance',               icon: ShieldAlert, labelKey: 'ADMIN_FINANCE.TABS.SETTINGS' },
-  { id: 'rules',         path: '/admin/finance/rules',         icon: Scale,       labelKey: 'ADMIN_FINANCE.TABS.RULES' },
-  { id: 'payment',       path: '/admin/finance/payment',       icon: Wallet,      labelKey: 'ADMIN_FINANCE.TABS.PAYMENT' },
-  { id: 'topups',        path: '/admin/finance/topups',        icon: Receipt,     labelKey: 'ADMIN_FINANCE.TABS.TOPUPS' },
-  { id: 'subscriptions', path: '/admin/finance/subscriptions', icon: PackageIcon, labelKey: 'ADMIN_FINANCE.TABS.SUBSCRIPTIONS' },
+  { id: 'settings',         path: '/admin/finance',                  icon: ShieldAlert, labelKey: 'ADMIN_FINANCE.TABS.SETTINGS' },
+  { id: 'rules',            path: '/admin/finance/rules',            icon: Scale,       labelKey: 'ADMIN_FINANCE.TABS.RULES' },
+  { id: 'payment',          path: '/admin/finance/payment',          icon: Wallet,      labelKey: 'ADMIN_FINANCE.TABS.PAYMENT' },
+  { id: 'payment-epusdt',   path: '/admin/finance/payment-epusdt',   icon: Coins,       labelKey: 'ADMIN_FINANCE.TABS.PAYMENT_EPUSDT' },
+  { id: 'topups',           path: '/admin/finance/topups',           icon: Receipt,     labelKey: 'ADMIN_FINANCE.TABS.TOPUPS' },
+  { id: 'subscriptions',    path: '/admin/finance/subscriptions',    icon: PackageIcon, labelKey: 'ADMIN_FINANCE.TABS.SUBSCRIPTIONS' },
 ];
 
 const FinanceShell = () => {

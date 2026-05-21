@@ -75,6 +75,7 @@ const FinanceShell = lazy(() => import('./pages/admin/finance/FinancePage'));
 const FinanceSettingsPage = lazy(() => import('./pages/admin/finance/FinanceSettingsPage'));
 const BillingRulesAdminPage = lazy(() => import('./pages/admin/finance/BillingRulesPage'));
 const AdminPaymentChannels = lazy(() => import('./components/AdminPaymentChannels'));
+const AdminPaymentChannelsEpusdt = lazy(() => import('./components/AdminPaymentChannelsEpusdt'));
 const AdminTopupOrders = lazy(() => import('./components/AdminTopupOrders'));
 const AdminSubscriptions = lazy(() => import('./components/AdminSubscriptions'));
 
@@ -148,6 +149,7 @@ const router = createBrowserRouter([
           { index: true,           element: <FinanceSettingsPage /> },
           { path: 'rules',         element: <BillingRulesAdminPage /> },
           { path: 'payment',       element: <AdminPaymentChannels /> },
+          { path: 'payment-epusdt', element: <AdminPaymentChannelsEpusdt /> },
           { path: 'topups',        element: <AdminTopupOrders /> },
           { path: 'subscriptions', element: <AdminSubscriptions /> },
         ],
