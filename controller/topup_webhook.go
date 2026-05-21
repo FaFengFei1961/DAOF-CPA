@@ -26,7 +26,6 @@ import (
 	"daof-cpa/proxy"
 
 	"github.com/gofiber/fiber/v2"
-	"gorm.io/gorm"
 )
 
 // errTopupDuplicate 哨兵：当 status 条件 UPDATE 命中 0 行时（已 paid/refunded/failed）
@@ -63,186 +62,16 @@ func checkYifutTimestamp(ts, logKey, logPrefix string) bool {
 
 // YifutNotify GET /api/payment/notify/yifut
 //
-// 易付通异步通知。验签 + 金额校验 + 幂等加额度 + 通知用户。必须返回纯文本 "success"。
+// 易付通异步通知薄壳。
 //
-// 原子性保证：status 'created'→'paid' 与 quota+= 必须在同一事务内，
-// 否则两步之间另一个并发回调到达可触发双加额度，或 quota 加失败回滚 status 又失败时
-// 钱已扣但额度永远不到账。
+// W-3-P3（2026-05-21）重构：原 inline 180 行实现已搬到通用 ProcessPaymentWebhook
+// + YifutPaymentProvider.ParseAndVerifyWebhook。本函数仅作路由别名，未来 epusdt 路由
+// 注册 `/api/payment/notify/epusdt` 同样调 ProcessPaymentWebhook(c, "epusdt")。
+//
+// 与 epusdt 路由的对称性：路由层挂 fiber handler 直接调通用入口，所有 provider 共享
+// 同一套 IP allowlist / nonce 去重 / 订单查询 / 金额比对 / 入账事务 / 通知逻辑。
 func YifutNotify(c *fiber.Ctx) error {
-	cfg := proxy.LoadYifutConfig()
-	if !cfg.IsConfigured() {
-		log.Printf("[TOPUP-NOTIFY] received but not configured")
-		return c.Status(503).SendString("not_configured")
-	}
-
-	params := collectQueryParams(c)
-	logKey := params["out_trade_no"]
-	if logKey == "" {
-		logKey = "<empty>"
-	}
-
-	remoteIP := c.IP()
-
-	// fix CRITICAL Sprint4-M3：IP 白名单（最外层防御，比签名校验更早，节省密码学开销）
-	// 默认 SysConfig yifut_notify_allowed_cidrs 为空 → 跳过 IP 检查；admin 配置后强制校验。
-	if !checkYifutNotifyIPAllowed(remoteIP) {
-		// 不写 webhook receipt — 这种情况未经签名验证，无可信 nonce
-		log.Printf("[TOPUP-NOTIFY] IP not allowed out_trade_no=%s ip=%s", logKey, remoteIP)
-		return c.Status(403).SendString("ip_not_allowed")
-	}
-
-	if !proxy.VerifyYifutRSA(params, cfg.PlatformPublicKey) {
-		log.Printf("[TOPUP-NOTIFY] sign verify FAILED out_trade_no=%s ip=%s", logKey, remoteIP)
-		return c.Status(403).SendString("sign_invalid")
-	}
-
-	// fix CRITICAL（codex 第四轮）：仅 RSA 验签不足以防跨商户重放——
-	// 攻击者可在自己的易付通商户用相同 out_trade_no/money 创建订单付款，
-	// 拿到平台合法签名的回调后投递到本站 notify。回调"签名有效"，但 pid 不属于我们。
-	// 必须强制 params["pid"] == cfg.PID，缺失或不一致即拒绝。
-	if cfg.PID == "" || params["pid"] != cfg.PID {
-		log.Printf("[TOPUP-NOTIFY] pid mismatch out_trade_no=%s expected=%s got=%s ip=%s", logKey, cfg.PID, params["pid"], remoteIP)
-		recordWebhookReceipt("yifut", params, logKey, remoteIP, "rejected_pid", "pid mismatch")
-		return c.Status(403).SendString("pid_mismatch")
-	}
-
-	// 防重放：timestamp 必填，且与服务器时间漂移 ≤300 秒
-	if !checkYifutTimestamp(params["timestamp"], logKey, "TOPUP-NOTIFY") {
-		recordWebhookReceipt("yifut", params, logKey, remoteIP, "rejected_timestamp", "timestamp drift > 300s")
-		return c.Status(403).SendString("timestamp_invalid")
-	}
-
-	// fix CRITICAL Sprint4-M3：nonce 防重放（最强防线）
-	// 即使签名 + pid + timestamp 全过，同一回调（out_trade_no + sign 前 16 字符）也不能入账两次。
-	// 这层在 TopupOrder.status CAS 之外，提供独立审计 + 跨订单重放兜底（万一上游 bug 复用 sign）。
-	if duplicate, err := recordWebhookReceiptOnce("yifut", params, logKey, remoteIP); err != nil {
-		// DB 故障 → 500 让易付通重试（事务尚未提交，状态未变）
-		log.Printf("[TOPUP-NOTIFY] webhook receipt insert failed out_trade_no=%s: %v", logKey, err)
-		return c.Status(500).SendString("receipt_failed")
-	} else if duplicate {
-		// 同一 (provider, nonce) 已存在 → 重放，直接 success 让易付通停止重试
-		log.Printf("[TOPUP-NOTIFY] webhook duplicate (nonce already used) out_trade_no=%s ip=%s", logKey, remoteIP)
-		return c.SendString("success")
-	}
-
-	if params["trade_status"] != "TRADE_SUCCESS" {
-		log.Printf("[TOPUP-NOTIFY] non-success status=%s out_trade_no=%s", params["trade_status"], logKey)
-		return c.SendString("success") // 仍返回 success，避免易付通持续重试
-	}
-
-	// 金额双校验：回调 money（RMB 元字符串）必须精确等于本地 money_rmb（fen 整数）。
-	//
-	// fix CRITICAL（多模型审计第二十五轮）：原实现 float 解析 + approxEqual(0.001) 容差，
-	// float64 精度问题让攻击者可提交差 0.09 分的金额仍通过校验，等价绕过精确金额校验。
-	// 改为：把回调字符串当作"元.分"格式，按整数 fen 解析（小数点切两段拼接 → int64），
-	// 与本地 order.MoneyRMB（fen）做严格 == 比较，彻底消除浮点误差与人为容差。
-	gotFen, ok := parseRMBStringToFen(params["money"])
-	if !ok {
-		log.Printf("[TOPUP-NOTIFY] bad money=%s out_trade_no=%s", params["money"], logKey)
-		return c.Status(400).SendString("bad_money")
-	}
-
-	var order database.TopupOrder
-	if err := database.DB.Where("out_trade_no = ?", logKey).First(&order).Error; err != nil {
-		log.Printf("[TOPUP-NOTIFY] order not found out_trade_no=%s", logKey)
-		return c.Status(404).SendString("order_not_found")
-	}
-	if gotFen != order.MoneyRMB {
-		log.Printf("[TOPUP-NOTIFY] money mismatch out_trade_no=%s callback_fen=%d local_fen=%d",
-			logKey, gotFen, order.MoneyRMB)
-		return c.Status(400).SendString("money_mismatch")
-	}
-
-	// 原子事务：status 'created'→'paid' + quota+= 必须同时成功或同时回滚
-	now := time.Now()
-	// 防御性长度截断：网关签名已校验，但即便如此也不让外部串污染我们的 schema
-	tradeNo := params["trade_no"]
-	if len(tradeNo) > 128 {
-		tradeNo = tradeNo[:128]
-	}
-	apiTradeNo := params["api_trade_no"]
-	if len(apiTradeNo) > 128 {
-		apiTradeNo = apiTradeNo[:128]
-	}
-	txErr := database.DB.Transaction(func(tx *gorm.DB) error {
-		res := tx.Model(&database.TopupOrder{}).
-			Where("out_trade_no = ? AND status = ?", logKey, "created").
-			Updates(map[string]any{
-				"status":       "paid",
-				"trade_no":     tradeNo,
-				"api_trade_no": apiTradeNo,
-				"paid_at":      now,
-			})
-		if res.Error != nil {
-			return fmt.Errorf("update order: %w", res.Error)
-		}
-		if res.RowsAffected == 0 {
-			// 已被另一个回调处理过（或订单状态非 created）
-			return errTopupDuplicate
-		}
-		// 加额度（不限制 quota>=0；充值只会增加，永远成立）。
-		// paid_quota 单独记录"充值通道来源的尚未消费余额"，用于拉新消费返佣归因。
-		if err := tx.Model(&database.User{}).
-			Where("id = ?", order.UserID).
-			Updates(map[string]any{
-				"quota":      gorm.Expr("quota + ?", order.AmountUSD),
-				"paid_quota": gorm.Expr("paid_quota + ?", order.AmountUSD),
-			}).Error; err != nil {
-			return fmt.Errorf("add quota: %w", err)
-		}
-		// 账单流水：充值入账（与 quota+= 同事务，原子）
-		// 重新读 user.quota 拿到 quota+= 后的精确余额作为账单快照
-		var freshUser database.User
-		if err := tx.Select("id, quota").First(&freshUser, order.UserID).Error; err != nil {
-			return fmt.Errorf("fetch fresh quota: %w", err)
-		}
-		if err := database.WriteBillingEntry(tx, database.BillingEntryInput{
-			UserID:           order.UserID,
-			OccurredAt:       now,
-			EntryType:        database.BillingTypeTopup,
-			AmountUSD:        order.AmountUSD,
-			BalanceAfterUSD:  freshUser.Quota,
-			RelatedType:      "topup_order",
-			RelatedID:        order.ID,
-			Description:      fmt.Sprintf("充值 ¥%s（%s）", database.FormatFen(order.MoneyRMB), order.PayType),
-			CurrencyOriginal: "CNY",
-			AmountOriginal:   order.MoneyRMB, // fen
-		}); err != nil {
-			return fmt.Errorf("write billing entry: %w", err)
-		}
-		return nil
-	})
-	if errors.Is(txErr, errTopupDuplicate) {
-		log.Printf("[TOPUP-NOTIFY] duplicate callback out_trade_no=%s (already processed)", logKey)
-		return c.SendString("success") // 让易付通停止重试
-	}
-	if txErr != nil {
-		log.Printf("[TOPUP-NOTIFY] tx failed out_trade_no=%s: %v", logKey, txErr)
-		// 回 500 让易付通重试。事务已回滚，status 仍为 created，下次重试可正确推进
-		return c.Status(500).SendString("tx_failed")
-	}
-
-	// 失效用户缓存（不影响订阅但避免关联缓存陈旧）
-	proxy.InvalidateUserSubscriptionCache(order.UserID)
-	// 关键：刷新 AuthCache 里的 user 实例，否则下次 /api/user/me 仍返回旧 quota
-	proxy.RefreshUserAuth(order.UserID)
-
-	// 充值通知（异步，dedupKey 兼容 trade_no 缺失场景）
-	// tradeNo 在前面已截断为 ≤128 字节
-	if tradeNo == "" {
-		tradeNo = logKey // 兜底：用 out_trade_no
-	}
-	title := readSysConfigCached("notif_topup_title", "充值成功")
-	bodyTpl := readSysConfigCached("notif_topup_body", "您充值的 ¥{amount_rmb} 已到账，等额 {amount_usd} USD 已加入余额。")
-	body := strings.ReplaceAll(bodyTpl, "{amount_rmb}", database.FormatFen(order.MoneyRMB))
-	body = strings.ReplaceAll(body, "{amount_usd}", database.FormatMicroUSD(order.AmountUSD))
-	dedupKey := "topup:" + tradeNo
-	proxy.Dispatch(order.UserID, "topup", "success", title, body,
-		proxy.LinkTopup(), "查看", "topup", order.ID, &dedupKey)
-
-	log.Printf("[TOPUP-NOTIFY] OK out_trade_no=%s user=%d rmb_fen=%d usd_micro=%d",
-		logKey, order.UserID, order.MoneyRMB, order.AmountUSD)
-	return c.SendString("success")
+	return ProcessPaymentWebhook(c, database.TopupProviderYifut)
 }
 
 // YifutReturn GET /api/payment/return/yifut
