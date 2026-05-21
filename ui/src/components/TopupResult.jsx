@@ -65,21 +65,21 @@ const TopupResult = () => {
                 compat 路径对齐，MySubscriptions 检测后自动弹 BrowsePackagesModal。 */}
             <button
               onClick={() => navigate('/?openBrowse=store')}
-              className="fl-card p-4 hover:border-primary/50 hover:bg-primary/5 transition group"
+              className="card p-4 hover:border-primary/50 hover:bg-primary/5 transition group"
             >
               <div className="font-semibold text-sm group-hover:text-primary mb-1">{t('TOPUP.RESULT.ACTION_SUBSCRIBE', '立刻订阅套餐')}</div>
               <div className="text-xs text-on-surface-variant">{t('TOPUP.RESULT.ACTION_SUBSCRIBE_DESC', '获取专属额度和优先排队')}</div>
             </button>
             <button
               onClick={() => navigate('/tokens')}
-              className="fl-card p-4 hover:border-primary/50 hover:bg-primary/5 transition group"
+              className="card p-4 hover:border-primary/50 hover:bg-primary/5 transition group"
             >
               <div className="font-semibold text-sm group-hover:text-primary mb-1">{t('TOPUP.RESULT.ACTION_API', '去使用 API')}</div>
               <div className="text-xs text-on-surface-variant">{t('TOPUP.RESULT.ACTION_API_DESC', '管理 Token 并开始调用')}</div>
             </button>
             <button
               onClick={() => navigate('/bills')}
-              className="fl-card p-4 hover:border-primary/50 hover:bg-primary/5 transition group"
+              className="card p-4 hover:border-primary/50 hover:bg-primary/5 transition group"
             >
               <div className="font-semibold text-sm group-hover:text-primary mb-1">{t('TOPUP.RESULT.ACTION_BILLS', '查看账单')}</div>
               <div className="text-xs text-on-surface-variant">{t('TOPUP.RESULT.ACTION_BILLS_DESC', '查看交易明细与记录')}</div>

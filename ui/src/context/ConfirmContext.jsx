@@ -167,14 +167,14 @@ export const ConfirmProvider = ({ children }) => {
             )}
 
             <div className="flex justify-end gap-2 mt-auto shrink-0">
-              <button type="button" onClick={handleCancel} className="fl-btn fl-btn-standard">
+              <button type="button" onClick={handleCancel} className="btn btn-secondary">
                 {state.cancelText || t('CONFIRM.CANCEL', '取消')}
               </button>
               <button
                 type="button"
                 onClick={handleConfirm}
                 disabled={isConfirmDisabled}
-                className="fl-btn disabled:opacity-50 disabled:cursor-not-allowed"
+                className="btn disabled:opacity-50 disabled:cursor-not-allowed"
                 style={
                   state.danger
                     ? { background: 'var(--color-error)', color: 'var(--color-on-error)' }

@@ -29,7 +29,7 @@ Skeleton.Line = ({ lines = 3, className = '' }) => (
 );
 
 Skeleton.Card = ({ className = '' }) => (
-  <div className={`fl-card p-4 md:p-5 flex flex-col gap-3 min-h-[112px] ${className}`}>
+  <div className={`card p-4 md:p-5 flex flex-col gap-3 min-h-[112px] ${className}`}>
     <Skeleton w={36} h={36} rounded="rounded-control" />
     <div className="flex flex-col gap-2">
       <Skeleton w="60%" h={20} />

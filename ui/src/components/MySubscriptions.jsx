@@ -213,7 +213,7 @@ const UsageOverview = ({ items, refreshing, onRefresh, formatMeterCurrency }) =>
 const MetricCard = ({ icon: Icon, label, value, sub, tone }) => {
   const color = tone == null ? '#c4b5fd' : remainingColor(tone);
   return (
-    <div className="fl-card p-4 min-h-[104px]">
+    <div className="card p-4 min-h-[104px]">
       <div className="flex items-start justify-between gap-3">
         <div className="min-w-0">
           <div className="text-xs text-on-surface-variant">{label}</div>
@@ -229,7 +229,7 @@ const MetricCard = ({ icon: Icon, label, value, sub, tone }) => {
 };
 
 const EmptyUsageCard = ({ children }) => (
-  <div className="fl-card p-8 text-center text-sm text-on-surface-variant">
+  <div className="card p-8 text-center text-sm text-on-surface-variant">
     {children}
   </div>
 );
@@ -241,7 +241,7 @@ const SubscriptionUsageCard = ({ item, priority, onCancel, t, formatMeterCurrenc
   const color = remainingColor(avgRemaining);
 
   return (
-    <div className={`fl-card overflow-hidden border ${priority ? 'border-primary/70' : 'border-outline-variant/60'}`}>
+    <div className={`card overflow-hidden border ${priority ? 'border-primary/70' : 'border-outline-variant/60'}`}>
       <div className="p-5 border-b border-outline-variant/40">
         <div className="flex items-start justify-between gap-4">
           <div className="min-w-0">

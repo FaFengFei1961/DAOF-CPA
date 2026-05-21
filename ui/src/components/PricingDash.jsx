@@ -45,7 +45,7 @@ const PricingDash = () => {
     >
       <BillingRulesPanel />
 
-      <div className="fl-card flex flex-col sm:flex-row gap-4 items-center justify-between p-4">
+      <div className="card flex flex-col sm:flex-row gap-4 items-center justify-between p-4">
         <div className="relative w-full sm:w-96">
           <Search className="absolute left-3 top-1/2 -translate-y-1/2 text-on-surface-variant" size={18} />
           <input
@@ -70,7 +70,7 @@ const PricingDash = () => {
       {loading && filteredModels.length === 0 ? (
         <PricingSkeleton />
       ) : capabilityGroups.length === 0 ? (
-        <div className="fl-card p-12 text-center text-sm text-on-surface-variant">
+        <div className="card p-12 text-center text-sm text-on-surface-variant">
           {searchTerm ? t('PRICING.NOT_FOUND', '未查找到对应模型') : t('PRICING.EMPTY', '暂无可用模型接入')}
         </div>
       ) : (

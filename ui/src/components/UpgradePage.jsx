@@ -292,7 +292,7 @@ const UpgradePage = ({ onPurchaseSuccess, embedded = false }) => {
           const filtered = pkgs;
           if (filtered.length === 0) {
             return (
-              <div className="fl-card p-16 text-center">
+              <div className="card p-16 text-center">
                 <p className="text-on-surface-variant">{t('UPGRADE.STORE_EMPTY', '此分类暂无可购买的套餐')}</p>
               </div>
             );
@@ -310,7 +310,7 @@ const UpgradePage = ({ onPurchaseSuccess, embedded = false }) => {
               const isRecommended = !!highlightTag;
               return (
                 <div key={pkg.id}
-                  className={`relative fl-card p-6 ${isRecommended ? 'border-primary' : ''}`}>
+                  className={`relative card p-6 ${isRecommended ? 'border-primary' : ''}`}>
 
                   {isRecommended && (
                     <span className="absolute top-3 right-3 inline-flex items-center px-2 py-0.5 rounded-full text-[10px] font-medium bg-primary/15 text-primary border border-primary/30">
@@ -383,7 +383,7 @@ const UpgradePage = ({ onPurchaseSuccess, embedded = false }) => {
               type="button"
               onClick={() => setPurchaseDraft(null)}
               disabled={!!purchasing}
-              className="fl-btn fl-btn-standard"
+              className="btn btn-secondary"
             >
               {t('CONFIRM.CANCEL', '取消')}
             </button>
@@ -391,7 +391,7 @@ const UpgradePage = ({ onPurchaseSuccess, embedded = false }) => {
               type="button"
               onClick={purchase}
               disabled={!!purchasing}
-              className="fl-btn disabled:opacity-50 disabled:cursor-not-allowed"
+              className="btn disabled:opacity-50 disabled:cursor-not-allowed"
             >
               {purchasing ? t('UPGRADE.PROCESSING', '处理中...') : t('UPGRADE.PURCHASE_CONFIRM', '确认购买')}
             </button>

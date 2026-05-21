@@ -16,7 +16,7 @@ export const SaveBar = ({ loading, onSave }) => {
         type="button"
         onClick={() => onSave()}
         disabled={loading}
-        className="fl-btn fl-btn-prominent flex items-center justify-center gap-2 disabled:opacity-50"
+        className="btn btn-primary flex items-center justify-center gap-2 disabled:opacity-50"
       >
         {loading ? t('COMMON.SAVING') : (
           <>
@@ -56,7 +56,7 @@ export const SecretInputField = ({ label, id, val, onChange, show, onToggle, isP
  * Section card with an accent rail and optional heading/subheading.
  */
 export const SectionCard = ({ title, sub, accent = 'bg-primary text-on-primary', children, className = '' }) => (
-  <div className={`fl-card p-4 md:p-6 mb-6 w-full ${className}`}>
+  <div className={`card p-4 md:p-6 mb-6 w-full ${className}`}>
     {(title || sub) && (
       <header className="flex items-center gap-2 mb-6">
         <div className={`w-1 h-5 ${accent} rounded-r-control`} />

@@ -97,7 +97,7 @@ export function StoreCard({
     <Wrapper
       type={onClick ? 'button' : undefined}
       onClick={onClick}
-      className={`fl-card group flex items-center gap-4 ${isCompact ? 'p-3' : 'p-4'} text-left w-full ${onClick ? 'cursor-pointer' : ''} ${className}`}
+      className={`card group flex items-center gap-4 ${isCompact ? 'p-3' : 'p-4'} text-left w-full ${onClick ? 'cursor-pointer' : ''} ${className}`}
     >
       {/* Logo tile derived from the accent hue. */}
       {Icon && (

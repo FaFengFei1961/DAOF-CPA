@@ -103,7 +103,7 @@ const AccountProfile = () => {
     const referralUrl = `${referralBaseUrl}/?ref=${encodeURIComponent(profile.username)}`;
 
     return (
-        <div className="fl-card p-8 mb-8">
+        <div className="card p-8 mb-8">
             <div className="flex items-center gap-3 mb-6">
                 <div className="w-10 h-10 rounded-overlay bg-primary/30 flex items-center justify-center">
                     <User size={20} className="text-primary" />

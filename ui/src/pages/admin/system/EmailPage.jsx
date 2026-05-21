@@ -259,7 +259,7 @@ const EmailPage = () => {
           type="button"
           onClick={handleSave}
           disabled={saving}
-          className="fl-btn fl-btn-prominent disabled:opacity-50"
+          className="btn btn-primary disabled:opacity-50"
         >
           {saving ? t('COMMON.SAVING', '保存中...') : t('COMMON.SAVE', '保存')}
         </button>

@@ -288,7 +288,7 @@ const NotificationPreferences = () => {
           type="button"
           onClick={handleSave}
           disabled={saving}
-          className="fl-btn fl-btn-prominent h-9 px-4 disabled:opacity-50"
+          className="btn btn-primary h-9 px-4 disabled:opacity-50"
         >
           {saving ? t('COMMON.SAVING', '保存中...') : t('COMMON.SAVE', '保存')}
         </button>

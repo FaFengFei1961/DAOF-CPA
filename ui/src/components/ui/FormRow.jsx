@@ -39,7 +39,7 @@ const FormRow = ({
  * FormGroup — 一组相关 FormRow 的卡片包装
  */
 FormRow.Group = ({ title, sub, children, className = '' }) => (
-  <section className={`fl-card p-4 md:p-6 ${className}`}>
+  <section className={`card p-4 md:p-6 ${className}`}>
     {(title || sub) && (
       <header className="mb-4 pb-4 border-b border-outline-variant/30">
         {title && <h3 className="text-sm font-semibold text-on-surface">{title}</h3>}

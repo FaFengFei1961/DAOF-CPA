@@ -237,7 +237,7 @@ const NotificationCenter = ({ isAuthenticated, onSignIn }) => {
                 <button
                   type="button"
                   onClick={() => { setOpen(false); onSignIn?.(); }}
-                  className="fl-btn fl-btn-prominent h-8"
+                  className="btn btn-primary h-8"
                 >
                   {t('AUTH_GATE.SIGN_IN', '登录')}
                 </button>

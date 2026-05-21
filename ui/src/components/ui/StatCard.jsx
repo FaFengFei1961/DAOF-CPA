@@ -5,7 +5,7 @@ import React from 'react';
  *
  * 替换原各 admin 页面自己写的 5 张总览卡（密度/对比/对齐都不一致）。
  * 视觉规则：
- *  - Fluent fl-card（带 hover reveal，符合 gemini ccg "卡片微交互"建议）
+ *  - Fluent card（带 hover reveal，符合 gemini ccg "卡片微交互"建议）
  *  - 左上 icon（圆形 token 容器） + 右上 trend 小徽章
  *  - 主数值 title3 (24px) tabular-nums，副标题 caption1 (12px) muted
  *  - 可选 sub2 行（如"近 24h" 时间窗）
@@ -29,7 +29,7 @@ const StatCard = ({
     neutral: 'bg-on-surface/[0.06] text-on-surface-variant border-outline-variant',
   }[trendTone];
 
-  const baseClass = `fl-card p-4 md:p-5 flex flex-col gap-3 min-h-[112px] ${className}`;
+  const baseClass = `card p-4 md:p-5 flex flex-col gap-3 min-h-[112px] ${className}`;
   const Wrapper = onClick ? 'button' : 'div';
   const wrapperProps = onClick
     ? { type: 'button', onClick, className: `${baseClass} text-left focus-visible:ring-2 focus-visible:ring-primary outline-none` }

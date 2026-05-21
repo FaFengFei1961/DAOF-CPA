@@ -37,7 +37,7 @@ const ChartContainer = ({
 }) => {
   const height = typeof h === 'number' ? h : (HEIGHT_MAP[h] || HEIGHT_MAP.md);
   return (
-    <section className={`fl-card overflow-hidden ${className}`}>
+    <section className={`card overflow-hidden ${className}`}>
       {(title || actions) && (
         <header className="px-4 md:px-5 py-3 border-b border-outline-variant/40 flex items-center justify-between gap-3">
           <div className="min-w-0">

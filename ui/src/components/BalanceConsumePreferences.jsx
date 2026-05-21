@@ -152,7 +152,7 @@ const BalanceConsumePreferences = () => {
       </header>
 
       {/* Master switch */}
-      <div className="flex items-center justify-between fl-card p-4">
+      <div className="flex items-center justify-between card p-4">
         <div className="flex-1 min-w-0">
           <div id="balance-consume-enable-label" className="text-sm font-semibold text-on-surface">{t('BALANCE_PREF.ENABLED', '允许余额消费')}</div>
           <div className="text-[11px] text-on-surface-variant mt-0.5">
@@ -175,7 +175,7 @@ const BalanceConsumePreferences = () => {
       </div>
 
       {/* Limit and progress */}
-      <div className="fl-card p-4 space-y-3">
+      <div className="card p-4 space-y-3">
         <div className="flex items-center justify-between">
           <div>
             <div className="text-xs text-on-surface-variant">

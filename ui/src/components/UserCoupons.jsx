@@ -99,7 +99,7 @@ const CouponCard = ({ coupon, t }) => {
   const isAvailable = coupon.effective_status === 'available';
   const expires = coupon.expires_at ? new Date(coupon.expires_at).toLocaleDateString() : null;
   return (
-    <li className={`fl-card p-4 flex items-start gap-3 ${isAvailable ? 'border-l-4 border-l-emerald-400' : 'opacity-60'}`}>
+    <li className={`card p-4 flex items-start gap-3 ${isAvailable ? 'border-l-4 border-l-emerald-400' : 'opacity-60'}`}>
       <Ticket size={20} className={isAvailable ? 'text-success mt-0.5' : 'text-on-surface-variant mt-0.5'} aria-hidden="true" />
       <div className="flex-1 min-w-0">
         <div className="font-semibold text-on-surface">{coupon.snapshot_name}</div>

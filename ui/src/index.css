@@ -518,73 +518,14 @@ select.input { padding-right: 28px; }
 .row.gap-3 { gap: 12px; }
 .row.gap-4 { gap: 16px; }
 
-/* ─── 旧 Fluent 风格 utility class（保留，兼容现有代码） ──────────
- * 这些 class 在数百个 .jsx 里被引用，Phase A 阶段保留并指向新色板。
- * Phase B-G 会逐步迁移到新原语（.card / .btn / .badge-*）。
+/* ─── 旧 Fluent 风格 utility class（剩余特化样式） ──────────────────
+ * Phase D-G 已把 fl-card / fl-btn 全量替换为 .card / .btn-* 原语。
+ * 下面保留的 4 类是没有干净映射的特化样式，继续保留：
+ *   - fl-section-* : 大标题 + 折叠交互
+ *   - fl-table-shell / fl-table-scroll : 滚动表格壳 + fade-out 提示
+ *   - fl-brand-chip : Claude/Codex/Gemini/xAI 等 provider 品牌色 chip
+ *   - fl-scroll-chat : webkit 自定义滚动条（聊天对话窗专用）
  */
-.fl-card {
-  position: relative;
-  border: 1px solid var(--border);
-  background-color: var(--surface);
-  border-radius: var(--radius-overlay);
-  transition: background-color 0.15s ease, border-color 0.15s ease;
-}
-.fl-card:hover {
-  background-color: var(--surface-2);
-  border-color: var(--border-strong);
-}
-
-.fl-btn {
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  gap: var(--space-s);
-  padding: 6px 14px;
-  height: 32px;
-  font-size: var(--font-body);
-  font-weight: 500;
-  border-radius: var(--radius-control);
-  border: 1px solid transparent;
-  cursor: pointer;
-  transition: background-color 0.1s ease, border-color 0.1s ease;
-  user-select: none;
-  white-space: nowrap;
-}
-.fl-btn:focus-visible {
-  outline: 2px solid var(--accent);
-  outline-offset: 2px;
-}
-.fl-btn:disabled {
-  opacity: 0.4;
-  cursor: not-allowed;
-}
-
-.fl-btn-prominent {
-  background-color: var(--accent);
-  color: var(--accent-fg);
-}
-.fl-btn-prominent:hover:not(:disabled) {
-  background-color: var(--accent-hover);
-}
-
-.fl-btn-standard {
-  background-color: var(--surface);
-  color: var(--t1);
-  border-color: var(--border-strong);
-}
-.fl-btn-standard:hover:not(:disabled) {
-  background-color: var(--surface-2);
-}
-
-.fl-btn-subtle {
-  background-color: transparent;
-  color: var(--t2);
-}
-.fl-btn-subtle:hover:not(:disabled) {
-  background-color: var(--surface-2);
-  color: var(--t1);
-}
-
 .fl-section-header {
   display: flex;
   align-items: center;

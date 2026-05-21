@@ -64,7 +64,7 @@ export default function EpusdtOrderPanel({ orderResult, details, t }) {
   const secs = remainingSec % 60;
 
   return (
-    <section className="fl-card p-6 flex flex-col items-center gap-5 border-primary/40 shadow-primary/5">
+    <section className="card p-6 flex flex-col items-center gap-5 border-primary/40 shadow-primary/5">
       <div className="text-center">
         <div className="text-base font-semibold text-on-surface flex items-center justify-center gap-2">
           <span className={`w-2 h-2 rounded-full ${expired ? 'bg-error' : 'bg-primary animate-pulse'}`} />

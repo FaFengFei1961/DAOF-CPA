@@ -370,7 +370,7 @@ const AdminSubscriptions = () => {
       </form>
 
       {/* List */}
-      <div className="fl-card overflow-hidden">
+      <div className="card overflow-hidden">
         <div className="overflow-x-auto">
           <table className="w-full text-sm">
             <thead className="bg-surface-container-high text-xs text-on-surface-variant">
@@ -897,7 +897,7 @@ const AdminUsageMetric = ({ icon: Icon, label, value, sub, pct }) => {
   const remainingPct = usedPct == null ? null : Math.max(0, 100 - usedPct);
   const color = remainingPct == null ? '#c4b5fd' : remainingColor(remainingPct);
   return (
-    <div className="fl-card p-4 min-h-[96px]">
+    <div className="card p-4 min-h-[96px]">
       <div className="flex items-start justify-between gap-3">
         <div className="min-w-0">
           <div className="text-xs text-on-surface-variant">{label}</div>

@@ -601,13 +601,13 @@ const UpstreamMarginPage = () => {
             <button
               type="button"
               onClick={closeDrawer}
-              className="fl-btn fl-btn-subtle h-9"
+              className="btn btn-ghost h-9"
             >取消</button>
             <button
               type="button"
               onClick={handleSave}
               disabled={saving}
-              className="fl-btn fl-btn-prominent h-9"
+              className="btn btn-primary h-9"
             >{saving ? '保存中…' : '保存'}</button>
           </>
         }

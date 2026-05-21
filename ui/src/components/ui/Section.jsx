@@ -7,7 +7,7 @@ import React from 'react';
  *   - title (subtitle1, 16-20px) + optional sub
  *   - actions (右上角)
  *   - children 内容区
- *   - 默认套 fl-card（带 hover reveal），用 `flat` prop 关掉
+ *   - 默认套 card（带 hover reveal），用 `flat` prop 关掉
  *
  * 取代每页自己写 `<div className="bg-surface-container border border-outline-variant rounded-overlay p-4 md:p-6 mb-8">`。
  */
@@ -21,7 +21,7 @@ const Section = ({
   noPadding = false,
   className = '',
 }) => {
-  const surfaceClass = flat ? '' : 'fl-card';
+  const surfaceClass = flat ? '' : 'card';
   const padClass = noPadding ? '' : 'p-4 md:p-6';
   return (
     <section className={`${surfaceClass} ${padClass} ${className}`}>

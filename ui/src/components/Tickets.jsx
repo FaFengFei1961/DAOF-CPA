@@ -295,7 +295,7 @@ const Tickets = () => {
           >
             <ArrowLeft size={14} /> {t('TICKETS.BACK', '返回列表')}
           </button>
-          <div className="fl-card p-12 text-center text-sm text-on-surface-variant">
+          <div className="card p-12 text-center text-sm text-on-surface-variant">
             {t('COMMON.LOADING', '加载中…')}
           </div>
         </div>
@@ -311,7 +311,7 @@ const Tickets = () => {
           <ArrowLeft size={14} /> {t('TICKETS.BACK', '返回列表')}
         </button>
 
-        <div className="fl-card overflow-hidden">
+        <div className="card overflow-hidden">
           <div className="px-4 sm:px-6 py-4 border-b border-outline-variant/40 flex items-center justify-between gap-3 flex-wrap">
             <div className="flex-1 min-w-0">
               <h2 className="text-base font-bold text-on-surface truncate">{activeTicket.subject}</h2>
@@ -424,7 +424,7 @@ const Tickets = () => {
           <ArrowLeft size={14} /> {t('TICKETS.BACK', '返回列表')}
         </button>
 
-        <div className="fl-card p-6 space-y-4">
+        <div className="card p-6 space-y-4">
           <h2 className="text-lg font-bold flex items-center gap-2">
             <Plus size={18} /> {t('TICKETS.NEW', '创建工单')}
           </h2>
@@ -501,7 +501,7 @@ const Tickets = () => {
       {loading ? (
         <div className="text-center py-20 text-on-surface-variant">{t('COMMON.LOADING', '加载中…')}</div>
       ) : tickets.length === 0 ? (
-        <div className="fl-card p-16 text-center">
+        <div className="card p-16 text-center">
           <MessageSquare size={36} className="mx-auto mb-3 text-on-surface-variant/50" />
           <p className="text-on-surface font-semibold mb-1">{t('TICKETS.EMPTY_TITLE', '暂无工单')}</p>
           <p className="text-on-surface-variant text-sm mb-4">{t('TICKETS.EMPTY_DESC', '有任何问题可以随时提交工单')}</p>
@@ -522,7 +522,7 @@ const Tickets = () => {
                 key={t2.id}
                 type="button"
                 onClick={() => openTicket(t2.id)}
-                className="fl-card group w-full text-left p-4 flex items-start gap-3"
+                className="card group w-full text-left p-4 flex items-start gap-3"
               >
                 <div className="flex-1 min-w-0">
                   <div className="flex items-center gap-2 flex-wrap mb-1">
