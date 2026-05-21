@@ -71,8 +71,17 @@ func ProcessPaymentWebhook(c *fiber.Ctx, providerKey string) error {
 		return handleWebhookError(c, providerKey, logKey, input, err)
 	}
 
+	// 拿到 event 后补充 logKey（POST body provider 的 out_trade_no 在 body 不在 query）
+	if logKey == "<empty>" && event.OutTradeNo != "" {
+		logKey = event.OutTradeNo
+	}
+
 	// nonce 防重放（在 (provider, nonce) 联合 unique 上）
-	if duplicate, rerr := recordWebhookReceiptOnce(providerKey, input.QueryParams, logKey, input.RemoteIP); rerr != nil {
+	//
+	// W-3 review C-1 修复（2026-05-21）：用 event.Nonce（provider 已计算）而非 input.QueryParams
+	// （POST body provider 拿不到字段，原实现会让 epusdt nonce 永远是 "epusdt::no_sign"，第一笔
+	// 之后全部 silent ack 不入账）。
+	if duplicate, rerr := recordWebhookReceiptForEvent(providerKey, event, input.RemoteIP); rerr != nil {
 		log.Printf("[WEBHOOK-%s] receipt insert failed out_trade_no=%s: %v", providerKey, logKey, rerr)
 		return c.Status(500).SendString("receipt_failed")
 	} else if duplicate {

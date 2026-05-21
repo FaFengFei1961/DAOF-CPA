@@ -20,6 +20,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"math"
 	"strings"
 
 	"daof-cpa/database"
@@ -111,13 +112,21 @@ func (p *EpusdtPaymentProvider) CreateOrder(ctx context.Context, req *PaymentCre
 	}
 
 	// 把"用户付钱所需信息"打包成 JSON 给前端
-	payInfo, _ := json.Marshal(map[string]any{
+	// W-3 review H-6 修复（2026-05-21）：原 `_ := json.Marshal` 错误吞会让用户看到空白
+	// 二维码 / 收款页（前端拿不到 receive_address）。改为显式 fail-closed。
+	payInfo, marshalErr := json.Marshal(map[string]any{
 		"receive_address": resp.ReceiveAddress,
 		"actual_amount":   resp.ActualAmount, // 含 0.0001 尾数避免冲突
 		"token":           resp.Token,
 		"network":         network,
 		"expire_at":       resp.ExpirationTime,
 	})
+	if marshalErr != nil {
+		// 理论上 map[string]any (string/float64/string/string/int64) 不会 marshal 失败，
+		// 但万一 epusdt 响应字段含非 UTF-8 / NaN / Inf 让 marshal 失败时，让用户看到错误
+		// 而不是哑铃式空白页。订单已经在 epusdt 侧创建，需要 admin 手工对账。
+		return nil, fmt.Errorf("%w: marshal pay_info failed: %v", ErrPaymentProviderInternal, marshalErr)
+	}
 
 	return &PaymentCreateOrderResult{
 		ExternalTradeNo: resp.TradeID,
@@ -202,9 +211,9 @@ func (p *EpusdtPaymentProvider) ParseAndVerifyWebhook(input *PaymentWebhookInput
 	}
 
 	// 取出 signature 字段做验签（验签输入要去掉 signature 字段）
-	sigVal, _ := payload["signature"].(string)
-	if sigVal == "" {
-		return nil, fmt.Errorf("%w: signature missing", ErrWebhookMalformed)
+	sigVal, sigOK := payload["signature"].(string)
+	if !sigOK || sigVal == "" {
+		return nil, fmt.Errorf("%w: signature missing or wrong type", ErrWebhookMalformed)
 	}
 	verifyPayload := make(map[string]any, len(payload))
 	for k, v := range payload {
@@ -218,7 +227,22 @@ func (p *EpusdtPaymentProvider) ParseAndVerifyWebhook(input *PaymentWebhookInput
 	}
 
 	// pid 校验（防跨商户重放）
-	pidFloat, _ := payload["pid"].(float64) // JSON 数字默认 float64
+	// W-3 review H-2/H-7 修复（2026-05-21）：原 _ := payload["pid"].(float64) silent 失败：
+	//   - 缺失：pidFloat=0 → != cfg.PID → ErrWebhookPIDMismatch（fail-closed 巧合）
+	//   - 错类型（字符串 "1"）：同上
+	//   - NaN/Inf：int64(NaN) 实现定义 → 巧合不等于 cfg.PID
+	// 改为显式拒，错误码语义更准（malformed 而非 pid_mismatch）。
+	pidRaw, pidExists := payload["pid"]
+	if !pidExists {
+		return nil, fmt.Errorf("%w: missing pid", ErrWebhookMalformed)
+	}
+	pidFloat, pidOK := pidRaw.(float64)
+	if !pidOK {
+		return nil, fmt.Errorf("%w: pid unexpected type %T", ErrWebhookMalformed, pidRaw)
+	}
+	if math.IsNaN(pidFloat) || math.IsInf(pidFloat, 0) {
+		return nil, fmt.Errorf("%w: pid NaN/Inf", ErrWebhookMalformed)
+	}
 	if int64(pidFloat) != cfg.PID {
 		return nil, ErrWebhookPIDMismatch
 	}
@@ -229,6 +253,9 @@ func (p *EpusdtPaymentProvider) ParseAndVerifyWebhook(input *PaymentWebhookInput
 		return nil, fmt.Errorf("%w: missing order_id", ErrWebhookMalformed)
 	}
 	tradeID, _ := payload["trade_id"].(string)
+	if strings.TrimSpace(tradeID) == "" {
+		return nil, fmt.Errorf("%w: missing trade_id", ErrWebhookMalformed)
+	}
 	if len(tradeID) > 128 {
 		tradeID = tradeID[:128]
 	}
@@ -238,10 +265,28 @@ func (p *EpusdtPaymentProvider) ParseAndVerifyWebhook(input *PaymentWebhookInput
 	if !ok || amountFloat <= 0 {
 		return nil, fmt.Errorf("%w: invalid amount", ErrWebhookMalformed)
 	}
-	amountMicroUSD := int64(amountFloat*1_000_000 + 0.5) // 四舍五入到 micro 精度
+	if math.IsNaN(amountFloat) || math.IsInf(amountFloat, 0) {
+		return nil, fmt.Errorf("%w: amount NaN/Inf", ErrWebhookMalformed)
+	}
+	// W-3 review H-5 注释（2026-05-21）：float64 * 1e6 + 0.5 四舍五入到 micro。
+	// 精度边界：epusdt 实际只用 ≤ 4 位小数（amount + 0.0001 尾数策略），不会超出 float64
+	// 13 位有效数字的安全区。攻击者构造金额让 int64 截断比对结果偏 1 micro = $0.000001，
+	// 几乎不可利用。验签已确保 amount 来自 epusdt 网关。
+	amountMicroUSD := int64(amountFloat*1_000_000 + 0.5)
 
 	// 状态映射：epusdt mdb.StatusPaySuccess = 2
-	statusFloat, _ := payload["status"].(float64)
+	// W-3 review H-8 修复（2026-05-21）：原 _ := payload["status"].(float64) silent 失败：
+	//   - 缺失：statusFloat=0 → fall through → WebhookEventNonTerminal + ack（burn nonce）
+	//   - 错类型：同上
+	// 改为显式拒，让 admin 看到错误而不是 silent 吞掉。
+	statusRaw, statusExists := payload["status"]
+	if !statusExists {
+		return nil, fmt.Errorf("%w: missing status", ErrWebhookMalformed)
+	}
+	statusFloat, statusOK := statusRaw.(float64)
+	if !statusOK {
+		return nil, fmt.Errorf("%w: status unexpected type %T", ErrWebhookMalformed, statusRaw)
+	}
 	kind := WebhookEventNonTerminal
 	switch int(statusFloat) {
 	case 2: // StatusPaySuccess
@@ -250,16 +295,13 @@ func (p *EpusdtPaymentProvider) ParseAndVerifyWebhook(input *PaymentWebhookInput
 		kind = WebhookEventFailed
 	}
 
-	// nonce：(provider, trade_id) 联合 unique；用 block_transaction_id 做强 nonce 防链上重组重放
-	blockTxID, _ := payload["block_transaction_id"].(string)
-	nonceSuffix := tradeID
-	if blockTxID != "" {
-		nonceSuffix = blockTxID
-		if len(nonceSuffix) > 64 {
-			nonceSuffix = nonceSuffix[:64]
-		}
-	}
-	nonce := database.TopupProviderEpusdt + ":" + orderID + ":" + nonceSuffix
+	// nonce：(provider, trade_id) 联合 unique。
+	// W-3 review H-4 修复（2026-05-21）：原 nonce 用 block_transaction_id（如有），
+	// 但该字段 *不在签名集合内*（epusdt sign.Get 把 nil/空跳过；攻击者拦截合法回调后
+	// 修改 block_tx_id 仍能通过签名验证 + 绕过 nonce 唯一性）。
+	// 改回严格用 trade_id（epusdt 内部订单 ID，签名覆盖，攻击者改不了）。
+	// 链上重组防御交给 epusdt sidecar 侧的确认数策略。
+	nonce := database.TopupProviderEpusdt + ":" + orderID + ":" + tradeID
 
 	// RawParams：把 JSON 字段都序列化成字符串供审计 / 通用层入账事务用
 	rawParams := make(map[string]string, len(payload))

@@ -26,6 +26,7 @@ import (
 	"daof-cpa/proxy"
 
 	"github.com/gofiber/fiber/v2"
+	"gorm.io/gorm"
 )
 
 // errTopupDuplicate 哨兵：当 status 条件 UPDATE 命中 0 行时（已 paid/refunded/failed）
@@ -256,19 +257,48 @@ func signatureHash(sign string) string {
 //
 // 调用方应在 RSA + pid + timestamp 校验**全部通过后**调用，将处理结果记为 "accepted"。
 // 重放（同 nonce 再次到达）由 DB unique 索引兜底，返回 (true, nil)。
+//
+// 注：仅 yifut 测试 + 旧 query-params 调用方使用。新通用层（ProcessPaymentWebhook）
+// 应改用 recordWebhookReceiptForEvent，它用 provider 计算好的 event.Nonce（POST body provider
+// 不依赖 input.QueryParams）。
 func recordWebhookReceiptOnce(provider string, params map[string]string, outTradeNo, remoteIP string) (bool, error) {
+	return persistWebhookReceiptAccepted(provider, webhookNonce(provider, params), signatureHash(params["sign"]), outTradeNo, remoteIP)
+}
+
+// recordWebhookReceiptForEvent 用 provider 已计算好的 event.Nonce / event.SignatureHash 写 receipt。
+//
+// W-3 review C-1 修复（2026-05-21）：原通用层调 recordWebhookReceiptOnce(provider, input.QueryParams, ...)
+// 对 POST JSON 的 epusdt 是空 map → nonce 退化为常量 "epusdt::no_sign" → 第一笔后所有 epusdt
+// callback 都被判定为 duplicate 静默 ack，钱进了但 quota 没加。改用 event.Nonce（provider 内部
+// 用 trade_id / block_tx_id 等真实唯一值计算）解决。
+func recordWebhookReceiptForEvent(provider string, event *PaymentWebhookEvent, remoteIP string) (bool, error) {
+	if event == nil {
+		return false, fmt.Errorf("recordWebhookReceiptForEvent: nil event")
+	}
+	return persistWebhookReceiptAccepted(provider, event.Nonce, event.SignatureHash, event.OutTradeNo, remoteIP)
+}
+
+// persistWebhookReceiptAccepted 是 receipt 写入的内部底层 helper（不导出）。
+// W-3 review H-1 修复：用 errors.Is(gorm.ErrDuplicatedKey) 替代脆弱的 strings.Contains("unique")。
+func persistWebhookReceiptAccepted(provider, nonce, sigHash, outTradeNo, remoteIP string) (bool, error) {
 	receipt := database.PaymentWebhookReceipt{
 		Provider:      provider,
-		Nonce:         webhookNonce(provider, params),
-		SignatureHash: signatureHash(params["sign"]),
+		Nonce:         nonce,
+		SignatureHash: sigHash,
 		OutTradeNo:    outTradeNo,
 		RemoteIP:      remoteIP,
 		Status:        "accepted",
 		ReceivedAt:    time.Now(),
 	}
 	if err := database.DB.Create(&receipt).Error; err != nil {
-		// unique 违反 = nonce 已存在 = 重放
+		// GORM v2 标准化的唯一冲突错误（SQLite / PostgreSQL / MySQL 通用）
+		if errors.Is(err, gorm.ErrDuplicatedKey) {
+			return true, nil
+		}
+		// 兜底：少数 driver/版本不归一化时仍按字符串检测（应该会触发日志告警，
+		// 因为正常情况下 gorm.ErrDuplicatedKey 已经覆盖 SQLite 的 UNIQUE constraint failed）
 		if strings.Contains(strings.ToLower(err.Error()), "unique") {
+			log.Printf("[WEBHOOK] fallback unique-detection by string match (driver may not implement gorm.ErrDuplicatedKey): %v", err)
 			return true, nil
 		}
 		return false, err

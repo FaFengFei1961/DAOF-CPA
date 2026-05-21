@@ -348,9 +348,55 @@ func TestEpusdtWebhook_ValidPaidCallback(t *testing.T) {
 	if event.AmountRaw != 10_000_000 {
 		t.Errorf("AmountRaw=%d, want 10_000_000 (10 USDT = 10M micro_usd)", event.AmountRaw)
 	}
-	// nonce 应该包含 block_transaction_id 作 suffix（强 nonce）
-	if event.Nonce != "epusdt:tp_epusdt_paid:0xabcdef1234567890" {
-		t.Errorf("Nonce=%q, want epusdt:order:tx_id", event.Nonce)
+	// W-3 review H-4 修复后：nonce 用 trade_id（签名覆盖，攻击者改不了）而非 block_tx_id
+	if event.Nonce != "epusdt:tp_epusdt_paid:EPtp_epusdt_paid" {
+		t.Errorf("Nonce=%q, want epusdt:<order_id>:<trade_id>", event.Nonce)
+	}
+}
+
+// W-3 review H-4 测试：攻击者篡改 block_transaction_id 不影响 nonce
+func TestEpusdtWebhook_BlockTxIDIgnoredInNonce(t *testing.T) {
+	configureEpusdtForTest(t, "http://localhost:8000", "1", "secret")
+	// 同一 trade_id，但不同 block_tx_id → nonce 必须相同（防绕过重放）
+	payload1 := map[string]any{
+		"pid":                  int64(1),
+		"trade_id":             "EP-same",
+		"order_id":             "tp_same_order",
+		"amount":               10.0,
+		"actual_amount":        10.0001,
+		"receive_address":      "T...",
+		"token":                "usdt",
+		"block_transaction_id": "0x111",
+		"status":               2,
+	}
+	payload1["signature"] = proxy.SignEpusdtMD5(payload1, "secret")
+	body1, _ := json.Marshal(payload1)
+
+	payload2 := map[string]any{
+		"pid":                  int64(1),
+		"trade_id":             "EP-same",
+		"order_id":             "tp_same_order",
+		"amount":               10.0,
+		"actual_amount":        10.0001,
+		"receive_address":      "T...",
+		"token":                "usdt",
+		"block_transaction_id": "0x222", // 不同！
+		"status":               2,
+	}
+	payload2["signature"] = proxy.SignEpusdtMD5(payload2, "secret")
+	body2, _ := json.Marshal(payload2)
+
+	p := NewEpusdtPaymentProvider()
+	event1, err := p.ParseAndVerifyWebhook(&PaymentWebhookInput{Body: body1})
+	if err != nil {
+		t.Fatalf("first event: %v", err)
+	}
+	event2, err := p.ParseAndVerifyWebhook(&PaymentWebhookInput{Body: body2})
+	if err != nil {
+		t.Fatalf("second event: %v", err)
+	}
+	if event1.Nonce != event2.Nonce {
+		t.Errorf("nonce should not depend on block_tx_id: e1=%s e2=%s", event1.Nonce, event2.Nonce)
 	}
 }
 
@@ -460,6 +506,90 @@ func TestEpusdtWebhook_NilInputRejected(t *testing.T) {
 	_, err := p.ParseAndVerifyWebhook(nil)
 	if !errors.Is(err, ErrWebhookMalformed) {
 		t.Errorf("err=%v, want ErrWebhookMalformed for nil input", err)
+	}
+}
+
+// W-3 review H-2 / H-7 / H-8 测试：显式拒 NaN/Inf/缺字段/错类型
+func TestEpusdtWebhook_MissingPID(t *testing.T) {
+	configureEpusdtForTest(t, "http://localhost:8000", "1", "secret")
+	payload := map[string]any{
+		"order_id":      "tp_no_pid",
+		"trade_id":      "EPno_pid",
+		"amount":        10.0,
+		"actual_amount": 10.0001,
+		"token":         "usdt",
+		"status":        2,
+	}
+	payload["signature"] = proxy.SignEpusdtMD5(payload, "secret")
+	body, _ := json.Marshal(payload)
+
+	p := NewEpusdtPaymentProvider()
+	_, err := p.ParseAndVerifyWebhook(&PaymentWebhookInput{Body: body})
+	if !errors.Is(err, ErrWebhookMalformed) {
+		t.Errorf("err=%v, want ErrWebhookMalformed for missing pid", err)
+	}
+}
+
+func TestEpusdtWebhook_PIDAsStringRejected(t *testing.T) {
+	configureEpusdtForTest(t, "http://localhost:8000", "1", "secret")
+	// epusdt 协议变种把 pid 当字符串发送 → 我方应该显式拒（malformed）而非误判 pid_mismatch
+	payload := map[string]any{
+		"pid":           "1", // 字符串而非数字
+		"order_id":      "tp_str_pid",
+		"trade_id":      "EPstr_pid",
+		"amount":        10.0,
+		"actual_amount": 10.0001,
+		"token":         "usdt",
+		"status":        2,
+	}
+	payload["signature"] = proxy.SignEpusdtMD5(payload, "secret")
+	body, _ := json.Marshal(payload)
+
+	p := NewEpusdtPaymentProvider()
+	_, err := p.ParseAndVerifyWebhook(&PaymentWebhookInput{Body: body})
+	if !errors.Is(err, ErrWebhookMalformed) {
+		t.Errorf("err=%v, want ErrWebhookMalformed for pid as string", err)
+	}
+}
+
+func TestEpusdtWebhook_MissingStatusRejected(t *testing.T) {
+	configureEpusdtForTest(t, "http://localhost:8000", "1", "secret")
+	// 缺 status 字段 → 原代码 silent 当 non_terminal（burn nonce）。修复后应显式拒。
+	payload := map[string]any{
+		"pid":           int64(1),
+		"order_id":      "tp_no_status",
+		"trade_id":      "EPno_status",
+		"amount":        10.0,
+		"actual_amount": 10.0001,
+		"token":         "usdt",
+	}
+	payload["signature"] = proxy.SignEpusdtMD5(payload, "secret")
+	body, _ := json.Marshal(payload)
+
+	p := NewEpusdtPaymentProvider()
+	_, err := p.ParseAndVerifyWebhook(&PaymentWebhookInput{Body: body})
+	if !errors.Is(err, ErrWebhookMalformed) {
+		t.Errorf("err=%v, want ErrWebhookMalformed for missing status", err)
+	}
+}
+
+func TestEpusdtWebhook_MissingTradeID(t *testing.T) {
+	configureEpusdtForTest(t, "http://localhost:8000", "1", "secret")
+	payload := map[string]any{
+		"pid":           int64(1),
+		"order_id":      "tp_no_tradeid",
+		"amount":        10.0,
+		"actual_amount": 10.0001,
+		"token":         "usdt",
+		"status":        2,
+	}
+	payload["signature"] = proxy.SignEpusdtMD5(payload, "secret")
+	body, _ := json.Marshal(payload)
+
+	p := NewEpusdtPaymentProvider()
+	_, err := p.ParseAndVerifyWebhook(&PaymentWebhookInput{Body: body})
+	if !errors.Is(err, ErrWebhookMalformed) {
+		t.Errorf("err=%v, want ErrWebhookMalformed for missing trade_id", err)
 	}
 }
 

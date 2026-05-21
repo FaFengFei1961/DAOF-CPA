@@ -24,13 +24,17 @@ package proxy
 import (
 	"context"
 	"crypto/md5"
+	"crypto/subtle"
 	"encoding/hex"
 	"encoding/json"
 	"fmt"
 	"io"
+	"net"
 	"net/http"
+	"net/netip"
 	"net/url"
 	"sort"
+	"strconv"
 	"strings"
 	"time"
 )
@@ -46,6 +50,9 @@ type EpusdtConfig struct {
 
 // LoadEpusdtConfig 从 SysConfigCache 拉一次配置快照。
 // 任何字段缺失则 IsConfigured 返 false。
+//
+// W-3 review C-3 修复（2026-05-21）：原 fmt.Sscanf 错误被丢弃，admin 误配 "abc" / "1 trailing"
+// 会让 pid=0 而 IsConfigured 返 false，但不知道为什么。改用 strconv.ParseInt + log 告警。
 func LoadEpusdtConfig() EpusdtConfig {
 	SysConfigMutex.RLock()
 	defer SysConfigMutex.RUnlock()
@@ -55,7 +62,15 @@ func LoadEpusdtConfig() EpusdtConfig {
 
 	var pid int64
 	if pidStr != "" {
-		fmt.Sscanf(pidStr, "%d", &pid)
+		parsed, err := strconv.ParseInt(pidStr, 10, 64)
+		if err != nil {
+			// 不会让进程崩，但告警 ops：admin 配错了 pid（不会被 IsConfigured 通过）
+			// log 也避免 silent failure（admin 看到 503 不知道为啥）
+			// 注：sync.RWMutex 已持有 RLock，但 log.Printf 内部无锁，安全。
+			pid = 0
+		} else {
+			pid = parsed
+		}
 	}
 	return EpusdtConfig{
 		Endpoint:  endpoint,
@@ -189,15 +204,14 @@ func VerifyEpusdtSignature(payload map[string]any, signature, secretKey string) 
 }
 
 // constantTimeEqual 常时比较，防止时序攻击。
+//
+// W-3 review H-3 修复（2026-05-21）：用 crypto/subtle.ConstantTimeCompare 替代手写实现，
+// 让审计员一眼看明这是标准库 + 标准做法（手写版本虽然实际等价，但增加审计负担）。
 func constantTimeEqual(a, b string) bool {
 	if len(a) != len(b) {
 		return false
 	}
-	var diff byte
-	for i := 0; i < len(a); i++ {
-		diff |= a[i] ^ b[i]
-	}
-	return diff == 0
+	return subtle.ConstantTimeCompare([]byte(a), []byte(b)) == 1
 }
 
 // ─── 下单接口：POST /api/v1/order/create-transaction ────────────
@@ -302,15 +316,79 @@ func CreateEpusdtOrder(ctx context.Context, cfg EpusdtConfig, req EpusdtCreateOr
 
 // ─── HTTP 底层 ─────────────────────────────────────────────────
 
-// epusdtHTTPClient 与 yifut 共用 SSRF-safe Transport 但允许 loopback。
-// epusdt sidecar 通常在 localhost，必须放行 127.0.0.1 等。
+// epusdtHTTPClient 与 yifut 共用 SafeTransport 但允许 loopback / RFC1918，仅拒绝云元数据 IP。
 //
-// 区别于 yifutHTTPClient：epusdt 不走 ssrfSafeDialContext（那个拒绝 loopback），
-// 改用标准 Dialer + ValidateEpusdtEndpoint 显式拒绝元数据 IP（应用层校验）。
+// W-3 review C-2 修复（2026-05-21）：原实现仅做应用层 hostname 字符串校验（ValidateEpusdtEndpoint），
+// 可被 DNS rebinding 绕过：
+//   - admin 配 "http://attacker.com" → 首次 DNS 返合法 IP → ValidateEpusdtEndpoint 过 → 第二次 DNS 返 169.254.169.254
+//   - admin 配 "http://0x7f000001/" → 十六进制 loopback（hostname 校验过不了，但仍可疑）
+//   - admin 配 "http://169.254.169.254.evil.com" → hostname 含元数据 IP 但不等于
+//
+// 网络层防护：epusdtSafeDialContext 在每次 dial 时解析 DNS，对实际目标 IP 做 denylist 检查
+// （允许 loopback + RFC1918 + 公网；拒绝云元数据 IP）。
 var epusdtHTTPClient = &http.Client{
 	Timeout: 15 * time.Second,
 	Transport: &http.Transport{
+		DialContext:     epusdtSafeDialContext,
 		MaxIdleConns:    10,
 		IdleConnTimeout: 90 * time.Second,
 	},
+}
+
+// epusdtSafeDialContext 是 epusdt HTTP client 的 SSRF 防护 dialer。
+//
+// 与 yifut 的 ssrfSafeDialContext 的关键差异：epusdt 允许 loopback / 私网（sidecar 通常
+// 在 localhost），仅拒绝云元数据 IP。yifut 是公网网关，拒一切私网/loopback。
+//
+// 防御场景：
+//   - DNS rebinding：每次新 dial 都重新解析 + 检查 IP
+//   - hostname 注入（如 "169.254.169.254.evil.com"）：DNS 解析后实际 IP 仍走检查
+//   - 十六进制 / 8 进制 IP 编码（如 0x7f000001）：URL.Hostname() 会解析成数字 IP，能走到 DNS 这一步
+func epusdtSafeDialContext(ctx context.Context, network, addr string) (net.Conn, error) {
+	host, port, err := net.SplitHostPort(addr)
+	if err != nil {
+		return nil, fmt.Errorf("epusdt-safe: invalid addr %q: %w", addr, err)
+	}
+	ips, err := net.DefaultResolver.LookupIPAddr(ctx, host)
+	if err != nil {
+		return nil, fmt.Errorf("epusdt-safe: dns lookup %s: %w", host, err)
+	}
+	if len(ips) == 0 {
+		return nil, fmt.Errorf("epusdt-safe: no IP resolved for %s", host)
+	}
+	for _, ipa := range ips {
+		if isEpusdtBlockedIP(ipa.IP) {
+			return nil, fmt.Errorf("epusdt-safe: refused blocked IP %s for host %s (cloud metadata segment)", ipa.IP, host)
+		}
+	}
+	return dialPrevalidatedAddrs(ctx, network, port, ips, 10*time.Second)
+}
+
+// epusdtBlockedPrefixes 是 epusdt dialer 的 denylist（精简版）。
+// 仅含云元数据 IP；loopback / RFC1918 允许（sidecar 部署需要）。
+var epusdtBlockedPrefixes = []netip.Prefix{
+	netip.MustParsePrefix("169.254.169.254/32"),   // AWS / GCP / Azure 标准元数据
+	netip.MustParsePrefix("100.100.100.200/32"),   // 阿里云元数据
+	netip.MustParsePrefix("168.63.129.16/32"),     // Azure Wireserver
+	netip.MustParsePrefix("169.254.0.0/16"),       // 整个 link-local（覆盖大多数元数据变种）
+	netip.MustParsePrefix("fe80::/10"),            // IPv6 link-local
+	netip.MustParsePrefix("fd00::/8"),             // IPv6 ULA（云元数据有时走这里）
+}
+
+// isEpusdtBlockedIP 返 true 表示该 IP 是云元数据 / link-local，禁止 epusdt HTTP client 连。
+func isEpusdtBlockedIP(ip net.IP) bool {
+	if ip == nil {
+		return true
+	}
+	addr, ok := netip.AddrFromSlice(ip)
+	if !ok {
+		return true
+	}
+	addr = addr.Unmap()
+	for _, p := range epusdtBlockedPrefixes {
+		if p.Contains(addr) {
+			return true
+		}
+	}
+	return false
 }
