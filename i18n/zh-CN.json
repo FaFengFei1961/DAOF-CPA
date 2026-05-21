@@ -1807,11 +1807,21 @@
   "DASH": {
     "ADMIN_HINT": "当前为管理员模式，可前往管理控制台查看渠道、用户与计费",
     "ADMIN_ENTER": "进入控制台",
-    "SIGN_IN_HINT": "登录后可查看您的订阅、用量与账单",
-    "SIGN_IN_ACTION": "登录",
+    "GUEST_TITLE": "探索 DAOF-CPA 模型矩阵",
+    "GUEST_SUBTITLE": "一站式聚合 Claude / Codex / Gemini / xAI 等主流模型，按你的预算和容量挑选合适的套餐。",
+    "GUEST_CTA": "登录开始",
+    "HERO_GREET_MORNING": "早上好",
+    "HERO_GREET_AFTERNOON": "下午好",
+    "HERO_GREET_EVENING": "晚上好",
+    "HERO_GREET_NIGHT": "夜深了",
+    "HERO_SUBTITLE": "这里是你的账户全景：余额、近期用量与订阅状态一目了然。",
     "STAT_NO_DATA": "暂无数据",
     "STAT_BALANCE": "账户余额",
-    "STAT_BALANCE_GO_TOPUP": "余额不足，去充值 →",
+    "STAT_BALANCE_OK": "余额充足",
+    "STAT_BALANCE_LOW": "余额偏低",
+    "STAT_BALANCE_EMPTY": "余额不足",
+    "STAT_BALANCE_GO_TOPUP": "余额不足，去充值",
+    "STAT_BALANCE_TOPUP_CTA": "充值",
     "STAT_REQUESTS": "最近请求",
     "STAT_TOKENS": "Token 用量",
     "STAT_LAST": "上次调用",
@@ -2506,7 +2516,9 @@
     "USER": {
       "SKIP_TO_MAIN": "跳至主要内容",
       "NAV_LABEL": "主导航",
-      "TAGLINE": "AI 模型聚合"
+      "TAGLINE": "AI 模型聚合",
+      "WALLET_LABEL": "账户余额",
+      "WALLET_TOPUP": "充值"
     },
     "BAN": {
       "TITLE": "账户已被限制",

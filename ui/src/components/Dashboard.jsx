@@ -1,7 +1,7 @@
 import React, { useEffect, useState } from 'react';
 import { useTranslation } from 'react-i18next';
 import { Link, useNavigate } from 'react-router-dom';
-import { ShieldAlert } from 'lucide-react';
+import { ShieldAlert, ArrowRight, Wallet, Activity, BarChart3, Clock } from 'lucide-react';
 import { useAuth } from '../context/AuthContext';
 import { useCurrency } from '../context/CurrencyContext';
 import { authFetch, isLoggedIn } from '../utils/authFetch';
@@ -9,17 +9,16 @@ import { formatCompactNumber, formatRelativeTime } from '../utils/format';
 import { logger } from '../utils/logger';
 import MySubscriptions from './MySubscriptions';
 import UpgradePage from './UpgradePage';
-import { StatusBadge } from './ui';
 
 /**
- * Dashboard: consolidated user console.
+ * Dashboard — Sprint J-3 真重设计版本。
  *
- * Three role branches:
- *   - admin: one-line admin banner
- *   - signed-in user: subscriptions plus stat strip
- *   - signed-out visitor: sign-in banner plus public packages
+ * 三个角色分支：
+ *   - admin：admin 简短引导栏
+ *   - 已登录普通用户：hero greeting + stat grid（带 trend chip + dot 状态）+ 订阅
+ *   - 未登录访客：登录提示 + 公开套餐展示
  *
- * Model lists, recent calls, and marketing hero content live elsewhere.
+ * Stat 卡片用新 `.stat` 原语 + dot/chip 表达健康度，而不是单一灰色数字。
  */
 
 const Dashboard = () => {
@@ -83,18 +82,26 @@ const Dashboard = () => {
   // Signed-out visitors see the sign-in prompt plus public package pricing.
   if (!isAuthenticated) {
     return (
-      <div className="space-y-6 py-6">
-        <section className="card row gap-3" style={{ padding: '12px 16px' }}>
-          <span className="text-sm text-on-surface-variant">
-            {t('DASH.SIGN_IN_HINT', '登录后可查看您的订阅、用量与账单')}
-          </span>
-          <button
-            type="button"
-            onClick={openLogin}
-            className="ml-auto text-sm font-medium text-primary hover:underline"
-          >
-            {t('DASH.SIGN_IN_ACTION', '登录')}
-          </button>
+      <div className="space-y-8 py-6">
+        <section className="hero">
+          <div className="hero-row">
+            <div>
+              <h1 className="page-title">
+                {t('DASH.GUEST_TITLE', '探索 DAOF-CPA 模型矩阵')}
+              </h1>
+              <p className="page-subtitle">
+                {t('DASH.GUEST_SUBTITLE', '一站式聚合 Claude / Codex / Gemini / xAI 等主流模型，按你的预算和容量挑选合适的套餐。')}
+              </p>
+            </div>
+            <button
+              type="button"
+              onClick={openLogin}
+              className="btn btn-primary btn-md"
+            >
+              {t('DASH.GUEST_CTA', '登录开始')}
+              <ArrowRight size={14} strokeWidth={2.2} />
+            </button>
+          </div>
         </section>
         <UpgradePage />
       </div>
@@ -103,21 +110,58 @@ const Dashboard = () => {
 
   // Signed-in user
   return (
-    <div className="space-y-6 py-6">
+    <div className="space-y-8 py-6">
+      <DashboardHero me={me} t={t} />
       {meLoading ? (
-        <StatStripSkeleton />
+        <StatGridSkeleton />
       ) : (
-        <StatStrip me={me} recentLogs={recentLogs} formatCurrency={formatCurrency} i18n={i18n} t={t} />
+        <StatGrid me={me} recentLogs={recentLogs} formatCurrency={formatCurrency} i18n={i18n} t={t} />
       )}
       <MySubscriptions isAuthenticated embedded />
     </div>
   );
 };
 
-// Stat strip: balance, recent requests, token usage, and last call.
+/* ─────── Hero greeting ─────── */
+const DashboardHero = ({ me, t }) => {
+  // 简单的时段问候 — 不靠后端，就走客户端时钟，足够日常感
+  const hr = new Date().getHours();
+  const greetKey =
+    hr < 5  ? 'DASH.HERO_GREET_NIGHT' :
+    hr < 12 ? 'DASH.HERO_GREET_MORNING' :
+    hr < 18 ? 'DASH.HERO_GREET_AFTERNOON' :
+              'DASH.HERO_GREET_EVENING';
+  const greetFallback =
+    hr < 5  ? '夜深了' :
+    hr < 12 ? '早上好' :
+    hr < 18 ? '下午好' :
+              '晚上好';
+  const name = me?.username || '';
+  return (
+    <section className="hero">
+      <div className="hero-row">
+        <div className="min-w-0">
+          <h1 className="page-title">
+            {t(greetKey, greetFallback)}{name ? `，${name}` : ''}
+          </h1>
+          <p className="page-subtitle">
+            {t('DASH.HERO_SUBTITLE', '这里是你的账户全景：余额、近期用量与订阅状态一目了然。')}
+          </p>
+        </div>
+      </div>
+    </section>
+  );
+};
+
+/* ─────── Stat grid ─────── */
 //
-// The request and token numbers are recent snapshots, not full-window aggregates.
-const StatStrip = ({ me, recentLogs, formatCurrency, i18n, t }) => {
+// 4 张统计卡：余额（带 dot 状态 + 充值 chip）/ 最近请求（活动 chip）/
+// Token 用量（累计 chip）/ 上次调用（时间 chip）。
+//
+// 数据：me.quota / recentLogs。recentLogs 是 /api/logs?page=1&limit=8 的快照，
+// 不是窗口聚合（这一点在 DASH.STAT_SNAPSHOT_N 文案里有提示）。
+//
+const StatGrid = ({ me, recentLogs, formatCurrency, i18n, t }) => {
   const totalReqs = recentLogs.length;
   const totalTokens = recentLogs.reduce(
     (s, l) => s + (l.prompt_tokens || 0) + (l.completion_tokens || 0),
@@ -125,54 +169,77 @@ const StatStrip = ({ me, recentLogs, formatCurrency, i18n, t }) => {
   );
   const lastTime = recentLogs[0]?.created_at;
   const lastRel = lastTime ? formatRelativeTime(lastTime, i18n.resolvedLanguage || i18n.language) : '—';
-  const snapshotHint = totalReqs > 0
-    ? t('DASH.STAT_SNAPSHOT_N', { n: totalReqs, defaultValue: '近 {{n}} 条快照' })
-    : t('DASH.STAT_NO_DATA', '暂无数据');
 
-  // IA audit M-J1 fix: signed-in users with $0/negative balance previously saw
-  // no path back to topup; turn the balance "hint" into an actionable link
-  // when the account is empty so first-time users + just-spent users have
-  // an obvious next step.
-  const isEmptyBalance = me && Number(me.quota ?? 0) <= 0;
-  const balanceHint = isEmptyBalance ? (
-    <Link
-      to="/topup"
-      className="inline-flex items-center gap-1 text-primary hover:underline"
-    >
-      {t('DASH.STAT_BALANCE_GO_TOPUP', '余额不足，去充值 →')}
-    </Link>
-  ) : (me?.username || '');
+  const balance = Number(me?.quota ?? 0);
+  // 余额健康度：>$5 健康；0.01-5 警告；<=0 异常
+  const balanceTone =
+    balance > 5     ? 'success' :
+    balance > 0     ? 'warning' :
+                      'error';
+  const balanceChipKey =
+    balanceTone === 'success' ? 'DASH.STAT_BALANCE_OK'       :
+    balanceTone === 'warning' ? 'DASH.STAT_BALANCE_LOW'      :
+                                'DASH.STAT_BALANCE_EMPTY';
+  const balanceChipFallback =
+    balanceTone === 'success' ? '余额充足' :
+    balanceTone === 'warning' ? '余额偏低' :
+                                '余额不足';
 
   return (
     <section>
-      <div
-        className="card grid grid-cols-2 md:grid-cols-4 divide-y md:divide-y-0 md:divide-x divide-outline-variant/30 overflow-hidden"
-        style={{ padding: 0 }}
-      >
-        <Stat
+      <div className="grid grid-cols-1 sm:grid-cols-2 xl:grid-cols-4 gap-3">
+        <StatCard
+          icon={Wallet}
           label={t('DASH.STAT_BALANCE', '账户余额')}
-          value={me ? formatCurrency(me.quota ?? 0, 2) : '—'}
-          hint={balanceHint}
-          prominent
+          value={me ? formatCurrency(balance, 2) : '—'}
+          dotTone={balanceTone}
+          chip={{
+            label: t(balanceChipKey, balanceChipFallback),
+            tone: balanceTone,
+          }}
+          // 余额不足直接给一个明显的"去充值"入口
+          footer={balance <= 0 ? (
+            <Link to="/topup" className="text-xs text-primary font-medium hover:underline inline-flex items-center gap-1">
+              {t('DASH.STAT_BALANCE_GO_TOPUP', '余额不足，去充值')}
+              <ArrowRight size={11} strokeWidth={2.4} />
+            </Link>
+          ) : (
+            <Link to="/topup" className="text-xs text-on-surface-variant hover:text-primary inline-flex items-center gap-1">
+              {t('DASH.STAT_BALANCE_TOPUP_CTA', '充值')}
+              <ArrowRight size={11} strokeWidth={2.4} />
+            </Link>
+          )}
         />
-        <Stat
+        <StatCard
+          icon={Activity}
           label={t('DASH.STAT_REQUESTS', '最近请求')}
           value={totalReqs.toLocaleString()}
-          hint={snapshotHint}
+          dotTone={totalReqs > 0 ? 'info' : 'muted'}
+          chip={totalReqs > 0
+            ? { label: t('DASH.STAT_SNAPSHOT_N', { n: totalReqs, defaultValue: '近 {{n}} 条快照' }), tone: 'accent' }
+            : { label: t('DASH.STAT_NO_DATA', '暂无数据'), tone: 'default' }}
         />
-        <Stat
+        <StatCard
+          icon={BarChart3}
           label={t('DASH.STAT_TOKENS', 'Token 用量')}
           value={formatCompactNumber(totalTokens)}
-          hint={snapshotHint}
+          dotTone={totalTokens > 0 ? 'info' : 'muted'}
+          chip={totalTokens > 0
+            ? { label: t('DASH.STAT_SNAPSHOT_N', { n: totalReqs, defaultValue: '近 {{n}} 条快照' }), tone: 'accent' }
+            : { label: t('DASH.STAT_NO_DATA', '暂无数据'), tone: 'default' }}
         />
-        <Stat
+        <StatCard
+          icon={Clock}
           label={t('DASH.STAT_LAST', '上次调用')}
           value={lastRel}
-          hint={lastTime ? '' : t('DASH.STAT_NO_DATA', '暂无数据')}
+          dotTone={lastTime ? 'success' : 'muted'}
+          chip={lastTime
+            ? null
+            : { label: t('DASH.STAT_NO_DATA', '暂无数据'), tone: 'default' }}
         />
       </div>
-      <div className="text-[11px] text-on-surface-variant mt-2 px-1">
-        <Link to="/stats" className="hover:text-primary hover:underline">
+      <div className="text-[11px] text-on-surface-variant mt-3 px-1">
+        <Link to="/stats" className="hover:text-primary hover:underline inline-flex items-center gap-1">
           {t('DASH.STAT_FULL_LINK', '查看完整用量统计 (24h / 7d / 30d) →')}
         </Link>
       </div>
@@ -180,36 +247,36 @@ const StatStrip = ({ me, recentLogs, formatCurrency, i18n, t }) => {
   );
 };
 
-const Stat = ({ label, value, hint, prominent = false }) => (
-  <div className="px-5 py-4 min-w-0">
-    {/* .eyebrow primitive: uppercase / tracked / muted micro-label */}
-    <div className="eyebrow">{label}</div>
-    <div
-      className={`num-tabular font-bold text-on-surface tracking-tight mt-1.5 truncate ${
-        prominent ? 'text-3xl' : 'text-2xl'
-      }`}
-    >
-      {value}
+const StatCard = ({ icon: Icon, label, value, dotTone, chip, footer }) => (
+  <div className="stat">
+    <div className="stat-head">
+      <div className="flex items-center gap-2 min-w-0">
+        <span className={`dot dot-${dotTone || 'muted'}`} aria-hidden="true" />
+        <span className="stat-label truncate">{label}</span>
+      </div>
+      {Icon && <Icon size={14} className="text-on-surface-variant opacity-70 shrink-0" aria-hidden="true" />}
     </div>
-    <div className="text-[11px] text-on-surface-variant mt-1 truncate">{hint || ' '}</div>
+    <div className="stat-value truncate">{value}</div>
+    <div className="flex items-center justify-between gap-2 stat-hint">
+      {chip ? <span className={`chip chip-${chip.tone === 'default' ? '' : chip.tone}`}>{chip.label}</span> : <span />}
+      {footer}
+    </div>
   </div>
 );
 
-const StatStripSkeleton = () => (
-  <section
-    className="card grid grid-cols-2 md:grid-cols-4 divide-y md:divide-y-0 md:divide-x divide-outline-variant/30 overflow-hidden"
-    aria-hidden="true"
-    style={{ padding: 0 }}
-  >
+const StatGridSkeleton = () => (
+  <section className="grid grid-cols-1 sm:grid-cols-2 xl:grid-cols-4 gap-3" aria-hidden="true">
     {[0, 1, 2, 3].map(i => (
-      <div key={i} className="px-5 py-4">
-        <div className="h-2.5 w-16 rounded-control bg-on-surface/[0.08] animate-pulse" />
-        <div className={`mt-2 h-7 ${i === 0 ? 'w-28' : 'w-20'} rounded-control bg-on-surface/[0.10] animate-pulse`} />
-        <div className="mt-2 h-2 w-20 rounded-control bg-on-surface/[0.06] animate-pulse" />
+      <div key={i} className="stat">
+        <div className="stat-head">
+          <div className="h-2.5 w-20 rounded-control bg-on-surface/[0.08] animate-pulse" />
+          <div className="h-3 w-3 rounded-control bg-on-surface/[0.06] animate-pulse" />
+        </div>
+        <div className={`h-7 ${i === 0 ? 'w-32' : 'w-20'} rounded-control bg-on-surface/[0.10] animate-pulse`} />
+        <div className="h-3 w-24 rounded-control bg-on-surface/[0.06] animate-pulse" />
       </div>
     ))}
   </section>
 );
-// Helpers
 
 export default Dashboard;

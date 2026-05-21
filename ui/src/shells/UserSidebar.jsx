@@ -1,11 +1,19 @@
 import React from 'react';
 import { useTranslation } from 'react-i18next';
 import { Link, NavLink } from 'react-router-dom';
-import { Settings as SettingsIcon } from 'lucide-react';
+import { Settings as SettingsIcon, Wallet, ArrowUpRight } from 'lucide-react';
 import { userNav } from '../navManifest';
+import { useAuth } from '../context/AuthContext';
+import { useCurrency } from '../context/CurrencyContext';
 
 /**
- * Expanded user sidebar with full labels and active-route affordance.
+ * Expanded user sidebar (Sprint J-3 真重设计版本):
+ *   - 顶部 brand 块（保持原始尺寸，hover 反馈）
+ *   - 中段 nav 列表
+ *   - 底部固定 "钱包卡 + 充值 CTA"（登录用户）或 settings 入口
+ *
+ * 余额来自 AuthContext.profile —— /api/user/me 已经在挂载 + 30s 轮询 +
+ * user-profile-refresh 三处刷新。这里直接读，不再二次 fetch。
  */
 const NavItem = ({ to, label, Icon }) => {
   const end = to === '/';
@@ -34,6 +42,46 @@ const NavItem = ({ to, label, Icon }) => {
         </>
       )}
     </NavLink>
+  );
+};
+
+const WalletCard = () => {
+  const { t } = useTranslation();
+  const { profile, isAuthenticated, isAdmin } = useAuth();
+  const { formatCurrency } = useCurrency();
+
+  // Admin 不显示钱包；未登录用户也不显示（避免 sidebar 出现登录入口与 topbar 重复）
+  if (isAdmin || !isAuthenticated || !profile) return null;
+
+  const balance = Number(profile.quota ?? 0);
+  const isLow = balance <= 0;
+
+  return (
+    <div className="mx-2 mb-2 rounded-overlay border border-outline-variant/40 bg-surface-container/60 p-3">
+      <div className="flex items-center gap-2 mb-2">
+        <div className="w-7 h-7 rounded-control bg-primary/10 text-primary flex items-center justify-center shrink-0">
+          <Wallet size={14} />
+        </div>
+        <div className="flex flex-col leading-tight min-w-0">
+          <span className="text-[10px] uppercase tracking-wider text-on-surface-variant">
+            {t('SHELL.USER.WALLET_LABEL', '账户余额')}
+          </span>
+          <span className="text-[15px] font-semibold text-on-surface num-tabular truncate">
+            {formatCurrency(balance, 2)}
+          </span>
+        </div>
+      </div>
+      <Link
+        to="/topup"
+        className={`flex items-center justify-center gap-1.5 h-8 rounded-control text-xs font-semibold transition w-full
+          ${isLow
+            ? 'bg-primary text-on-primary hover:bg-primary/90'
+            : 'bg-on-surface/[0.04] text-on-surface hover:bg-on-surface/[0.08] border border-outline-variant/40'}`}
+      >
+        {t('SHELL.USER.WALLET_TOPUP', '充值')}
+        <ArrowUpRight size={12} strokeWidth={2.4} />
+      </Link>
+    </div>
   );
 };
 
@@ -71,6 +119,8 @@ const UserSidebar = () => {
           />
         ))}
       </div>
+
+      <WalletCard />
 
       <div className="border-t border-outline-variant/30 px-2 py-2 shrink-0">
         <NavItem

@@ -1807,11 +1807,21 @@
   "DASH": {
     "ADMIN_HINT": "You are in admin mode. Open the admin console to view channels, users, and billing.",
     "ADMIN_ENTER": "Enter Console",
-    "SIGN_IN_HINT": "Sign in to view your subscriptions, usage, and bills",
-    "SIGN_IN_ACTION": "Sign in",
+    "GUEST_TITLE": "Explore the DAOF-CPA model matrix",
+    "GUEST_SUBTITLE": "One-stop aggregation of Claude / Codex / Gemini / xAI and more. Pick a plan that fits your budget and capacity.",
+    "GUEST_CTA": "Sign in to get started",
+    "HERO_GREET_MORNING": "Good morning",
+    "HERO_GREET_AFTERNOON": "Good afternoon",
+    "HERO_GREET_EVENING": "Good evening",
+    "HERO_GREET_NIGHT": "Burning the midnight oil",
+    "HERO_SUBTITLE": "Your account at a glance — balance, recent usage, and active subscriptions.",
     "STAT_NO_DATA": "No data",
     "STAT_BALANCE": "Account balance",
-    "STAT_BALANCE_GO_TOPUP": "Balance empty — top up →",
+    "STAT_BALANCE_OK": "Healthy",
+    "STAT_BALANCE_LOW": "Running low",
+    "STAT_BALANCE_EMPTY": "Empty",
+    "STAT_BALANCE_GO_TOPUP": "Top up now",
+    "STAT_BALANCE_TOPUP_CTA": "Top up",
     "STAT_REQUESTS": "Recent requests",
     "STAT_TOKENS": "Token usage",
     "STAT_LAST": "Last call",
@@ -2506,7 +2516,9 @@
     "USER": {
       "SKIP_TO_MAIN": "Skip to main content",
       "NAV_LABEL": "Main navigation",
-      "TAGLINE": "AI model aggregator"
+      "TAGLINE": "AI model aggregator",
+      "WALLET_LABEL": "Account balance",
+      "WALLET_TOPUP": "Top up"
     },
     "BAN": {
       "TITLE": "Account restricted",
