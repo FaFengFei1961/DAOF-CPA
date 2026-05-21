@@ -64,7 +64,14 @@
     "EMPTY": "No data",
     "SUBMITTING": "Submitting…",
     "YES": "Yes",
-    "NO": "No"
+    "NO": "No",
+    "NOT_FOUND_TITLE": "Page not found",
+    "NOT_FOUND_DESC": "We could not find the page you were looking for. The link may have expired or been moved.",
+    "GO_BACK": "Go back",
+    "GO_HOME": "Go home",
+    "GO_PRICING": "View pricing",
+    "RUNTIME_ERROR_TITLE": "Something went wrong",
+    "RUNTIME_ERROR_DESC": "This page failed to load or threw an error while running. Try reloading the page or returning home."
   },
   "NOTIF": {
     "CENTER": "Notifications",

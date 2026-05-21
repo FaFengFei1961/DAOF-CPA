@@ -23,7 +23,14 @@
     "EMPTY": "暂无数据",
     "SUBMITTING": "提交中…",
     "YES": "是",
-    "NO": "否"
+    "NO": "否",
+    "NOT_FOUND_TITLE": "页面不存在",
+    "NOT_FOUND_DESC": "我们找不到你想访问的页面。链接可能已失效或被移动。",
+    "GO_BACK": "返回上一页",
+    "GO_HOME": "返回首页",
+    "GO_PRICING": "查看定价",
+    "RUNTIME_ERROR_TITLE": "页面发生异常",
+    "RUNTIME_ERROR_DESC": "页面加载或运行时出错。可以尝试刷新当前页，或返回首页继续。"
   },
   "BROWSE_PACKAGES": {
     "TITLE": "浏览套餐"

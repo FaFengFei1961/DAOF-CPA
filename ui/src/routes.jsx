@@ -28,6 +28,14 @@ const UserShell = lazy(() => import('./shells/UserShell'));
 const AdminShell = lazy(() => import('./shells/AdminShell'));
 import RouteGuard from './shells/RouteGuard';
 
+// IA audit C1 + C2 fix: dedicated 404 + route-level error boundary so
+// mistyped URLs, lazy chunk failures, and runtime throws no longer silently
+// teleport to "/" (which was masking real bugs and stranding users).
+// Both are imported eagerly because they're tiny and act as fallbacks —
+// we don't want a Suspense flash on the very screen meant to recover the user.
+import NotFound from './components/NotFound';
+import RouteErrorBoundary from './components/RouteErrorBoundary';
+
 // User-side pages
 const Dashboard = lazy(() => import('./components/Dashboard'));
 const TokenManager = lazy(() => import('./components/TokenManager'));
@@ -83,6 +91,9 @@ const router = createBrowserRouter([
   {
     path: '/',
     element: <UserShell />,
+    // errorElement catches throws / loader errors anywhere under this route subtree.
+    // The boundary itself routes 404 responses to <NotFound /> for consistent UX.
+    errorElement: <RouteErrorBoundary />,
     children: [
       // Public routes.
       { index: true,    element: <Dashboard /> },
@@ -114,6 +125,7 @@ const router = createBrowserRouter([
   {
     path: '/admin',
     element: <AdminShell />,
+    errorElement: <RouteErrorBoundary />,
     children: [
       { index: true, element: <Navigate to="/admin/channels" replace /> },
 
@@ -162,8 +174,9 @@ const router = createBrowserRouter([
       })),
     ],
   },
-  // Global 404 fallback.
-  { path: '*', element: <Navigate to="/" replace /> },
+  // Global 404 fallback — dedicated page so users see what they asked for
+  // and have explicit escape hatches (back / home / pricing).
+  { path: '*', element: <NotFound /> },
 ]);
 
 export default router;

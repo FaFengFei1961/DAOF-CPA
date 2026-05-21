@@ -1,4 +1,5 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useCallback } from 'react';
+import { useSearchParams } from 'react-router-dom';
 import { useTranslation } from 'react-i18next';
 import { Monitor, User, Bell, Package as PackageIcon, Wallet } from 'lucide-react';
 import AccountProfile from './AccountProfile';
@@ -14,8 +15,16 @@ import { SEED_COLORS } from '../utils/theme-seeds';
  * Scope is intentionally limited to appearance, account, notification preferences, and coupons.
  * Admin settings live under the dedicated admin pages.
  *
- * Legacy props were removed before launch; only initialTab is still honored.
+ * Routing contract (IA audit C-1 fix):
+ *   - `?tab=<id>` is the source of truth for the active tab.
+ *   - OAuth-link, email-verify, and notification deep-links all set this query.
+ *   - Without `?tab=`, `initialTab` prop (or 'general') is used.
+ *   - Clicking a tab updates the URL so deep-links round-trip.
  */
+
+// Whitelist of valid tab ids. Defined at module scope so the query
+// validator is stable across renders.
+const VALID_TABS = ['general', 'account', 'consume_prefs', 'notification_prefs', 'my_coupons'];
 
 const seedColorName = (hex, fallbackName, t) => {
   switch (hex.toLowerCase()) {
@@ -34,11 +43,49 @@ const seedColorName = (hex, fallbackName, t) => {
 const Settings = ({ initialTab }) => {
   const { themePref, changeTheme, seedColor, changeSeedColor } = useTheme();
   const { t } = useTranslation();
-  const [activeTab, setActiveTab] = useState(initialTab || 'general');
+  const [searchParams, setSearchParams] = useSearchParams();
+
+  // Source of truth: URL ?tab=<id>. Falls back to initialTab prop, then 'general'.
+  // Validating against VALID_TABS guards against stale links pointing to deleted tabs.
+  const queryTab = searchParams.get('tab');
+  const resolveTab = useCallback((candidate) => {
+    if (candidate && VALID_TABS.includes(candidate)) return candidate;
+    return null;
+  }, []);
+
+  const [activeTab, setActiveTab] = useState(
+    () => resolveTab(queryTab) || resolveTab(initialTab) || 'general'
+  );
+
+  // React to URL changes (browser back/forward, deep-link from notification, etc.).
+  useEffect(() => {
+    const fromQuery = resolveTab(queryTab);
+    if (fromQuery && fromQuery !== activeTab) {
+      setActiveTab(fromQuery);
+    }
+    // We intentionally exclude activeTab from the deps so this only reacts to URL changes
+    // — the click handler below already writes to the URL, which feeds back into queryTab.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [queryTab, resolveTab]);
 
   useEffect(() => {
-    if (initialTab) setActiveTab(initialTab);
-  }, [initialTab]);
+    const fromProp = resolveTab(initialTab);
+    if (fromProp && fromProp !== activeTab && !queryTab) {
+      setActiveTab(fromProp);
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [initialTab, resolveTab]);
+
+  // Tab click writes the new tab to the URL so deep links round-trip.
+  // Keep other query params intact (e.g. token from notification action).
+  const handleTabChange = useCallback((tabId) => {
+    setActiveTab(tabId);
+    setSearchParams((prev) => {
+      const next = new URLSearchParams(prev);
+      next.set('tab', tabId);
+      return next;
+    }, { replace: true });
+  }, [setSearchParams]);
 
   const userTabs = [
     { id: 'general',            label: t('SETTINGS.TAB_GENERAL', '外观'), icon: Monitor },
@@ -54,7 +101,7 @@ const Settings = ({ initialTab }) => {
       <div className="md:hidden -mx-4 px-4 py-3 sticky top-0 z-10 bg-surface/90 backdrop-blur-md border-b border-outline-variant">
         <select
           value={activeTab}
-          onChange={(e) => setActiveTab(e.target.value)}
+          onChange={(e) => handleTabChange(e.target.value)}
           className="w-full rounded-control bg-surface-container border border-outline-variant text-on-surface text-sm px-3 py-2"
         >
           {userTabs.map(it => (
@@ -77,7 +124,7 @@ const Settings = ({ initialTab }) => {
                 key={it.id}
                 type="button"
                 aria-current={isActive ? 'page' : undefined}
-                onClick={() => setActiveTab(it.id)}
+                onClick={() => handleTabChange(it.id)}
                 className={`w-full h-8 flex items-center gap-2 px-2.5 rounded-control text-sm transition ${
                   isActive
                     ? 'bg-primary-container text-on-primary-container font-medium'

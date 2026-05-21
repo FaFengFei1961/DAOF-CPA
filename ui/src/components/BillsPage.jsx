@@ -1,4 +1,5 @@
 import React, { useState, useEffect, useCallback, useRef } from 'react';
+import { useSearchParams } from 'react-router-dom';
 import { useTranslation } from 'react-i18next';
 import {
   ArrowDownCircle, ArrowUpCircle, RefreshCw, Receipt,
@@ -154,11 +155,30 @@ export const PendingCostBreakdown = ({ entry, t, formatCurrency }) => {
   );
 };
 
+// IA audit C-3 fix: deep-link `/bills?filter=topup` (from充值/退款通知 + 后端 LinkBills())
+// must seed selectedTypes so user lands on the row they were notified about.
+// Validates against TYPE_META to ignore unknown / stale filter values.
+const resolveFilterToTypes = (filterParam) => {
+  if (!filterParam) return null;
+  const tokens = filterParam
+    .split(',')
+    .map((s) => s.trim())
+    .filter(Boolean);
+  const valid = tokens.filter((token) => Object.prototype.hasOwnProperty.call(TYPE_META, token));
+  return valid.length > 0 ? valid : null;
+};
+
 const BillsPage = () => {
   const { t } = useTranslation();
   const { formatCurrency } = useCurrency();
+  const [searchParams] = useSearchParams();
   const [billingAuthKey] = useState(getBillingAuthKey);
   const [isAdmin] = useState(() => readAuthState().isAdmin);
+
+  // Seed selectedTypes from ?filter=<type>[,<type>...] (e.g. notification deep-link).
+  // Computed once at mount; subsequent URL edits flow through the click handlers.
+  const initialFilterTypes = resolveFilterToTypes(searchParams.get('filter'));
+
   const initialListCache = readPageCache(getBillingListCacheKey(
     billingAuthKey,
     buildDefaultBillingQuery({ page_size: BILLING_PAGE_SIZE })
@@ -176,7 +196,9 @@ const BillsPage = () => {
   const [reconcileEntry, setReconcileEntry] = useState(null);
 
 
-  const [selectedTypes, setSelectedTypes] = useState([]);
+  const [selectedTypes, setSelectedTypes] = useState(initialFilterTypes || []);
+  // When ?filter=topup arrives, the deep-link user wants to see the inflow row,
+  // not API usage — hide usage by default. The user can still toggle.
   const [hideUsage, setHideUsage] = useState(true);
   const [fromDate, setFromDate] = useState('');
   const [toDate, setToDate] = useState('');
@@ -185,6 +207,17 @@ const BillsPage = () => {
 
   const reqIdRef = useRef(0);
   const summaryReqIdRef = useRef(0);
+
+  // When the URL filter changes after mount (e.g. user clicks a second notification
+  // while already on /bills), override selectedTypes from the new ?filter=. Manual
+  // chip toggles do not write to the URL, so this only fires on real navigation.
+  const filterParam = searchParams.get('filter');
+  useEffect(() => {
+    const fromQuery = resolveFilterToTypes(filterParam);
+    if (fromQuery) {
+      setSelectedTypes(fromQuery);
+    }
+  }, [filterParam]);
 
   const buildQuery = useCallback((extra = {}) => {
     const params = new URLSearchParams();
