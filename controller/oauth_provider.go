@@ -8,8 +8,10 @@
 // 调用方流程：
 //   1. Frontend POST /api/auth/oauth/:provider/prepare → 拿 state + code_challenge
 //   2. Frontend 跳转到 provider 授权页（前端用 SysConfig 暴露的 client_id 自己拼 URL）
-//   3. Provider redirect 回 /oauth/github?code=XXX&state=YYY，前端 POST 到 /api/auth/github
-//   4. handler 调 provider := GetOAuthProvider("github") → provider.Exchange(ctx, code, verifier)
+//   3. Provider redirect 回浏览器路由 /oauth/:provider?code=XXX&state=YYY，
+//      前端解析后 POST 到 /api/auth/oauth/:provider/callback
+//      （注：旧的 per-provider 路径 /api/auth/github 已在 H-3 删除）
+//   4. handler 调 provider := GetOAuthProvider(":provider") → provider.Exchange(ctx, code, verifier)
 //      → 返回 OAuthIdentityData{ExternalID, Email, Username}
 //   5. handler 用 ExternalID 查 / 建 user
 //
@@ -66,7 +68,8 @@ type OAuthProviderPublicMetadata struct {
 	Label string `json:"label"`
 
 	// ClientID 当前 admin 配置的 client_id，前端拼 authorize URL 用。
-	// 与 GetPublicConfig 顶层的 <provider>_client_id 一致（保留顶层字段以兼容旧前端）。
+	// 这是 oauth_provider_metadata[].client_id 的唯一权威字段（旧的顶层
+	// github_client_id / google_client_id 在 Phase H 清理时已删）。
 	ClientID string `json:"client_id"`
 
 	// AuthorizeEndpoint provider 的 OAuth authorize URL（不含 query），如

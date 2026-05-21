@@ -7,13 +7,11 @@ import { useAuth } from '../context/AuthContext';
 import { useCurrency } from '../context/CurrencyContext';
 
 /**
- * UserSidebar — Sprint J-3 batch 4：宽度回退 240px。
+ * UserSidebar — 240px 紧凑导航 + 底部钱包卡。
  *
- * batch 3 加宽到 272 之后看起来反而更空（nav 才 7 项 4-5 个汉字，加宽
- * 没补任何信息，纯增加空白）。回到 240 + 紧凑行高，让 sidebar 看着是
- * "干练导航"而不是"虚胖空栏"。
- * Wallet 卡视觉提升保留（顶部 highlight + 大字余额 + 带 icon 的充值
- * 按钮），只是 padding / 数字尺寸往窄容器适配。
+ * 宽度 240px 是配合当前 7 项中文 nav 的"信息密度匹配"决策：再宽就会
+ * 显得空（nav 内容量不够撑起更宽的栏）。如果未来 nav 项数翻倍可以
+ * 再加宽到 272-280。
  */
 const NavItem = ({ to, label, Icon }) => {
   const end = to === '/';

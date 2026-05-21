@@ -21,7 +21,7 @@ import UpgradePage from './UpgradePage';
  *
  * 视觉决策：
  *   - .page-title-hero (44px) 替代旧 .page-title (32px)，hero 有真权重
- *   - bento 而不是 4-equal grid（余额是主角，应该最显眼）
+ *   - bento 12-col 不对称网格（余额主角占 6，3 张小 stat 各 2）
  *   - .stat-spotlight 给余额卡 1.5% accent 染色 + 顶部 highlight
  *   - 副标 hint 用 hero-eyebrow（accent 色 + dot）替代普通灰文本
  */

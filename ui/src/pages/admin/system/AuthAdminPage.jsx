@@ -21,11 +21,14 @@ import EmailPage from './EmailPage';
 import SmsPage from './SmsPage';
 import RiskPage from './RiskPage';
 
+// Audit LOW-2 fix：fallback 改英文 —— 与项目其他 fallback 字串一致，且
+// 在 i18n 加载失败的极端情况下显示英文比夹中文更合理。正常情况下不会
+// 走到 fallback（i18n key 都在 zh-CN.json / en-US.json 里存在）。
 const TABS = [
-  { id: 'oauth', icon: Key,             labelKey: 'ADMIN_AUTH.TAB_OAUTH',  fallback: '第三方登录' },
-  { id: 'email', icon: Mail,            labelKey: 'ADMIN_AUTH.TAB_EMAIL',  fallback: '邮箱' },
-  { id: 'sms',   icon: MessageSquare,   labelKey: 'ADMIN_AUTH.TAB_SMS',    fallback: '短信' },
-  { id: 'risk',  icon: ShieldCheck,     labelKey: 'ADMIN_AUTH.TAB_RISK',   fallback: '注册策略' },
+  { id: 'oauth', icon: Key,             labelKey: 'ADMIN_AUTH.TAB_OAUTH',  fallback: 'Third-party' },
+  { id: 'email', icon: Mail,            labelKey: 'ADMIN_AUTH.TAB_EMAIL',  fallback: 'Email' },
+  { id: 'sms',   icon: MessageSquare,   labelKey: 'ADMIN_AUTH.TAB_SMS',    fallback: 'SMS' },
+  { id: 'risk',  icon: ShieldCheck,     labelKey: 'ADMIN_AUTH.TAB_RISK',   fallback: 'Registration policy' },
 ];
 
 const VALID_TABS = TABS.map(t => t.id);

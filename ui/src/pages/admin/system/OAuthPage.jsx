@@ -6,7 +6,12 @@ import { SaveBar, SecretInputField, SectionCard } from './_AdminFormPrimitives';
 import { useMaskState } from '../../../hooks/useMaskState';
 
 /**
- * GitHub OAuth configuration sub-form.
+ * GitHub OAuth credential sub-form.
+ *
+ * 注意：这是"第三方登录"分组里 GitHub 这一行的配置面板，不是整个 OAuth
+ * 配置入口。Google 等其他 provider 的凭证目前由同一 tab 下不同的 SectionCard
+ * 渲染（Google client_id/secret 字段也在 SysConfig 里，由前端按
+ * oauth_provider_metadata 数组分别渲染配置区）。
  *
  * Sprint J-2: 仅作为 AuthAdminPage 的内嵌 tab 渲染。父级负责
  * PageContainer + PageHeader，本组件只输出表单 body。
