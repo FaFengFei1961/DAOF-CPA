@@ -239,14 +239,31 @@ POST /v1beta/models/:modelAction
 - **凭据 sanitize**：`sanitizeError` 抹 Bearer / api_key / JWT / Cookie / URL secrets，所有 ApiLog.ErrorMessage 写入前必经
 - **公测期无兼容包袱**：不写 backward-compat shim；旧协议 / 旧字段直接删
 
-## 测试覆盖率（2026-05-19 实测）
+## 测试覆盖率（2026-05-21 实测）
 
-| 包 | 覆盖率 |
-|---|---|
-| middleware | 71.0% |
-| database | 67.6% |
-| utils | 62.3% |
-| proxy | 56.8% ← critical 路径，待提升到 80% |
-| controller | 53.7% ← 待提升 |
+| 包 | 覆盖率 | 趋势 vs 05-19 | 备注 |
+|---|---|---|---|
+| daof-cpa (main) | 1.0% | n/a | `main.go` 几乎只是路由注册 + lifecycle hook；e2e 框架级测试覆盖（非单测） |
+| controller | 57.7% | +4.0% ↑ | G/H 系列加了测试；剩余空白主要在 admin handler |
+| database | 67.0% | -0.6% | 持平 |
+| middleware | 67.6% | -3.4% | 旧值有未提交本地代码污染；当前实测更准 |
+| proxy | 64.6% | +7.8% ↑ | Phase F batch 1/2 + 媒体路径测试效果 |
+| utils | 69.9% | +7.6% ↑ | 2026-05-21 补 `safe_dialer` + `clientip` SSRF / 防伪 IP 关键测试 |
 
-提升计划：每个低覆盖大文件单独写 characterization 测试 PR（增量做）。
+**为何尚未到 80% 准则**：
+
+剩余未覆盖区主要是两类，都是高成本低 ROI：
+
+1. **Admin HTTP handler**（controller 内 ~70% 空白量）：`AdminListSubscriptions` / `BulkAdjustQuota` / `CreateTicket` 等需要完整 GORM mock + fiber app setup + admin session 上下文。每个写 5-10 个边缘 case 才有意义，每包性价比 ~50 行实现/300 行测试。
+2. **守护型 cron / 后台 goroutine**（proxy 内 `email_queue.go` / `cliproxy_usage_sync.go`）：依赖 time-based 调度 + 外部 HTTP 调用，集成测试方为合适方式。
+
+**已覆盖的关键路径**：
+
+- 计费 pipeline（`text_billing.go` / `image_billing.go` / `video_billing.go`）
+- 守恒不变量（`assertStreamConservation` 多场景）
+- SSRF 防御（`utils/safe_dialer.go` + `proxy/url_safety.go` + WS dialer）
+- OAuth 全套（H-1 ~ H-6 + H-Audit Tier 1-4 + L8 + H-Audit-2 全部带 stub provider 测试套）
+- 邮件认证（G-1/G-2 全套：bind/verify/resend/unbind + signup/login/reset/set-password）
+- 防伪 client IP（`utils/clientip.go` 8 个场景含 CF spoofing / X-Forwarded-For 拒绝信任）
+
+后续增量提升：每个新功能 PR 自带测试，不再批量回填老 admin handler（投入产出比太低，e2e 框架级测试覆盖更合算）。
