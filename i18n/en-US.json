@@ -2065,6 +2065,7 @@
     "ERR_PARSE_PAYLOAD": "Invalid payload format.",
     "ERR_PARSE_REQUEST": "Request payload parsing failed",
     "ERR_PAYLOAD_TOO_LARGE": "Request payload is too large.",
+    "ERR_PAYMENT_PROVIDER_UNKNOWN": "Unknown payment method.",
     "ERR_PAYMENT_UNAVAILABLE": "Payment service is temporarily unavailable.",
     "ERR_PAY_TYPE_DISABLED": "This payment method is disabled.",
     "ERR_PAY_TYPE_INVALID": "Invalid payment method.",

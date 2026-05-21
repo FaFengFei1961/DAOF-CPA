@@ -301,6 +301,24 @@ func InitDB() {
 		}
 	}
 
+	// Phase W-1（2026-05-21）：TopupOrder.Provider 字段 backfill。
+	//
+	// 历史订单（W-1 之前创建）在 AutoMigrate 加 provider 列后默认值为 "yifut"
+	// （GORM tag `default:'yifut'`），但 SQLite 对 ALTER TABLE ADD COLUMN 的 default 只
+	// 应用到**未来插入**——既有行仍为 NULL/空串。一次性 UPDATE 回填。
+	//
+	// 幂等：WHERE provider IS NULL OR provider = '' 保证多次启动不会覆盖已写入的非默认值。
+	{
+		res := DB.Exec(`UPDATE topup_orders SET provider = 'yifut'
+			WHERE provider IS NULL OR provider = ''`)
+		if res.Error != nil {
+			log.Fatalf("[W-1] backfill topup_orders.provider failed: %v", res.Error)
+		}
+		if res.RowsAffected > 0 {
+			log.Printf("[W-1] backfilled topup_orders.provider='yifut' for %d historical rows", res.RowsAffected)
+		}
+	}
+
 	// fix Suggestion Phase 4-codex（第二十四轮）：DB 层 partial index 兜底"零金额类型 invariant"。
 	//
 	// IsZeroAmountBillingType（billing_schema.go）的类型必须 amount_usd=0；应用层 helper

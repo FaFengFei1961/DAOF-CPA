@@ -2065,6 +2065,7 @@
     "ERR_PARSE_PAYLOAD": "请求参数格式错误。",
     "ERR_PARSE_REQUEST": "请求包解析失败。",
     "ERR_PAYLOAD_TOO_LARGE": "请求体过大。",
+    "ERR_PAYMENT_PROVIDER_UNKNOWN": "未知的支付方式。",
     "ERR_PAYMENT_UNAVAILABLE": "支付服务暂不可用。",
     "ERR_PAY_TYPE_DISABLED": "该支付方式未启用。",
     "ERR_PAY_TYPE_INVALID": "支付方式不合法。",

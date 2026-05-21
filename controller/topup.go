@@ -27,11 +27,9 @@ import (
 	"context"
 	"log"
 	"strconv"
-	"strings"
 	"time"
 
 	"daof-cpa/database"
-	"daof-cpa/proxy"
 
 	"github.com/gofiber/fiber/v2"
 )
@@ -51,15 +49,23 @@ var allowedPayTypes = map[string]bool{
 
 // topupCreateRequest 充值下单请求。fix CRITICAL Sprint4-M3：amount 以 fen int64 上送，
 // 杜绝 float64 进入金额计算链路。前端在提交前将"元"输入 × 100 取整为 fen。
+//
+// W-1 重构（2026-05-21）：增加 Provider 字段路由到具体 PaymentProvider adapter；
+// 空值 = 默认 "yifut"（向后兼容老前端）。
 type topupCreateRequest struct {
+	Provider  string `json:"provider"`   // "yifut" / "epusdt"，空值默认 yifut
 	AmountFen int64  `json:"amount_fen"` // RMB × 100，必须 > 0
-	PayType   string `json:"pay_type"`   // alipay / wxpay 等
+	PayType   string `json:"pay_type"`   // alipay / wxpay 等（yifut-specific）
 	Device    string `json:"device"`     // pc / mobile / wechat / alipay / jump（默认 pc）
 }
 
 // CreateTopup POST /api/topup/create
 //
-// 用户发起充值。建本地订单 + 调易付通 V2 下单接口拿支付信息。
+// 用户发起充值。建本地订单 + 调 PaymentProvider 下单接口拿支付信息。
+//
+// W-1 重构（2026-05-21）：原先直接 inline 调 proxy.LoadYifutConfig + CreateYifutOrder；
+// 改为走 PaymentProvider registry，目前仅注册了 yifut adapter（W-3 会加 epusdt）。
+// req.Provider 不填则默认 "yifut"（兼容老前端，新前端会显式传 provider key）。
 func CreateTopup(c *fiber.Ctx) error {
 	user, err := getCurrentUser(c)
 	if err != nil {
@@ -71,8 +77,16 @@ func CreateTopup(c *fiber.Ctx) error {
 		return c.Status(400).JSON(fiber.Map{"success": false, "message_code": "ERR_BAD_REQUEST"})
 	}
 
-	cfg := proxy.LoadYifutConfig()
-	if !cfg.IsConfigured() {
+	// Provider 路由：默认 "yifut"（向后兼容老前端）；新前端通过 provider 字段选 epusdt 等
+	providerKey := req.Provider
+	if providerKey == "" {
+		providerKey = database.TopupProviderYifut
+	}
+	provider, ok := GetPaymentProvider(providerKey)
+	if !ok {
+		return c.Status(400).JSON(fiber.Map{"success": false, "message_code": "ERR_PAYMENT_PROVIDER_UNKNOWN"})
+	}
+	if !provider.IsConfigured() {
 		return c.Status(503).JSON(fiber.Map{"success": false, "message_code": "ERR_PAYMENT_UNAVAILABLE"})
 	}
 
@@ -80,9 +94,10 @@ func CreateTopup(c *fiber.Ctx) error {
 	if req.AmountFen <= 0 {
 		return c.Status(400).JSON(fiber.Map{"success": false, "message_code": "ERR_AMOUNT_INVALID"})
 	}
-	// 金额范围（fen int64）
-	minFen := readInt64Config("yifut_min_amount_fen", 100)       // 默认 ¥1.00
-	maxFen := readInt64Config("yifut_max_amount_fen", 1_000_000) // 默认 ¥10,000.00
+	// 金额范围（fen int64）—— 通过 provider.PublicOptions 取上下限
+	opts := provider.PublicOptions()
+	minFen := opts.MinAmountFen
+	maxFen := opts.MaxAmountFen
 	if req.AmountFen < minFen || req.AmountFen > maxFen {
 		return c.Status(400).JSON(fiber.Map{
 			"success":      false,
@@ -93,12 +108,16 @@ func CreateTopup(c *fiber.Ctx) error {
 	}
 
 	// 支付方式校验：先看是否允许（白名单），再看 admin 是否启用
-	if !allowedPayTypes[req.PayType] {
-		return c.Status(400).JSON(fiber.Map{"success": false, "message_code": "ERR_PAY_TYPE_INVALID"})
-	}
-	enabledMethods := readStringConfig("yifut_enabled_methods", "alipay,wxpay")
-	if !csvContains(enabledMethods, req.PayType) {
-		return c.Status(400).JSON(fiber.Map{"success": false, "message_code": "ERR_PAY_TYPE_DISABLED"})
+	// 注：白名单 allowedPayTypes 仍是 yifut-specific；epusdt adapter 会用自己的 method
+	// 集合（如 trc20-usdt），W-3 时把 method 校验也移到 provider 内部。W-1 暂保留现行 yifut 逻辑。
+	if providerKey == database.TopupProviderYifut {
+		if !allowedPayTypes[req.PayType] {
+			return c.Status(400).JSON(fiber.Map{"success": false, "message_code": "ERR_PAY_TYPE_INVALID"})
+		}
+		enabledMethods := readStringConfig("yifut_enabled_methods", "alipay,wxpay")
+		if !csvContains(enabledMethods, req.PayType) {
+			return c.Status(400).JSON(fiber.Map{"success": false, "message_code": "ERR_PAY_TYPE_DISABLED"})
+		}
 	}
 
 	device := req.Device
@@ -107,8 +126,6 @@ func CreateTopup(c *fiber.Ctx) error {
 	}
 
 	// fix CRITICAL Sprint4-M3：用 big.Int 整数算术做 fen → micro_usd 转换，杜绝 float64。
-	// 公式：usd_micro = fen × 1e10 / rate_rmb_per_usd_micros
-	//   （rate 单位是 micro_usd 域：7.2 RMB/USD → 7_200_000）
 	rateRmbPerUsdMicros := safeExchangeRateRmbPerUsdMicros()
 	amountUSDMicro, ok := usdMicroFromFenAndRate(req.AmountFen, rateRmbPerUsdMicros)
 	if !ok {
@@ -120,12 +137,11 @@ func CreateTopup(c *fiber.Ctx) error {
 		log.Printf("[TOPUP] generate out_trade_no failed user=%d: %v", user.ID, err)
 		return c.Status(500).JSON(fiber.Map{"success": false, "message_code": "ERR_INTERNAL"})
 	}
-	moneyStr := proxy.FormatMoneyFen(req.AmountFen)
 	productName := readStringConfig("yifut_product_name", "DAOF-CPA 余额充值")
 
-	// notify/return 路径硬编码，绝不从 SysConfig 读（防 admin 误改导致回调指向任意路径）
-	const notifyPath = "/api/payment/notify/yifut"
-	const returnPath = "/api/payment/return/yifut"
+	// notify/return 路径按 provider key 路由，绝不从 SysConfig 读（防 admin 误改导致回调指向任意路径）
+	notifyPath := "/api/payment/notify/" + providerKey
+	returnPath := "/api/payment/return/" + providerKey
 	notifyURL, err := buildAbsoluteURL(notifyPath)
 	if err != nil {
 		log.Printf("[TOPUP] cannot build notify_url: %v", err)
@@ -135,6 +151,7 @@ func CreateTopup(c *fiber.Ctx) error {
 
 	// 1. 先建本地订单（status=created）
 	order := database.TopupOrder{
+		Provider:                    providerKey,
 		OutTradeNo:                  outTradeNo,
 		UserID:                      user.ID,
 		PayType:                     req.PayType,
@@ -152,21 +169,26 @@ func CreateTopup(c *fiber.Ctx) error {
 		return c.Status(500).JSON(fiber.Map{"success": false, "message_code": "ERR_DB_INSERT"})
 	}
 
-	// 2. 调易付通下单
+	// 2. 调 provider 下单
 	ctx, cancel := context.WithTimeout(c.Context(), 12*time.Second)
 	defer cancel()
-	resp, err := proxy.CreateYifutOrder(ctx, cfg, proxy.YifutCreateOrderRequest{
-		OutTradeNo: outTradeNo,
-		PayType:    req.PayType,
-		NotifyURL:  notifyURL,
-		ReturnURL:  returnURL,
-		Name:       productName,
-		Money:      moneyStr,
-		ClientIP:   c.IP(),
-		Device:     device,
+	result, err := provider.CreateOrder(ctx, &PaymentCreateOrderRequest{
+		OutTradeNo:                  outTradeNo,
+		UserID:                      user.ID,
+		AmountFen:                   req.AmountFen,
+		AmountUSDMicro:              amountUSDMicro,
+		ExchangeRateRmbPerUsdMicros: rateRmbPerUsdMicros,
+		ClientIP:                    c.IP(),
+		NotifyURL:                   notifyURL,
+		ReturnURL:                   returnURL,
+		ProductName:                 productName,
+		RawExtras: map[string]string{
+			"pay_type": req.PayType,
+			"device":   device,
+		},
 	})
 	if err != nil {
-		log.Printf("[TOPUP] yifut create failed order=%s user=%d: %v", outTradeNo, user.ID, err)
+		log.Printf("[TOPUP] provider=%s create failed order=%s user=%d: %v", providerKey, outTradeNo, user.ID, err)
 		// 标记本地订单为失败（错误不下发，避免泄露网关内部信息）
 		if updErr := database.DB.Model(&order).Updates(map[string]any{"status": "failed"}).Error; updErr != nil {
 			log.Printf("[TOPUP] mark failed order=%s err=%v", outTradeNo, updErr)
@@ -179,9 +201,9 @@ func CreateTopup(c *fiber.Ctx) error {
 	// notify 回调虽然能用 callback 数据回写 trade_no 跑通主流程，但页面刷新 → 数据库读不到 trade_no
 	// → 用户看到"订单异常"困惑。改 fail-closed：标 failed 后让用户重新下单，避免 UI 状态分裂。
 	if err := database.DB.Model(&order).Updates(map[string]any{
-		"trade_no":         resp.TradeNo,
-		"gateway_pay_type": resp.PayType,
-		"pay_info":         resp.PayInfo,
+		"trade_no":         result.ExternalTradeNo,
+		"gateway_pay_type": result.GatewayPayType,
+		"pay_info":         result.PayInfo,
 	}).Error; err != nil {
 		log.Printf("[TOPUP] persist gateway response failed order=%s: %v — marking failed", outTradeNo, err)
 		// 尽力回滚到 failed，避免悬挂 created 订单（用户付款无法对账）
@@ -198,10 +220,11 @@ func CreateTopup(c *fiber.Ctx) error {
 	return c.JSON(fiber.Map{
 		"success": true,
 		"data": fiber.Map{
+			"provider":         providerKey,
 			"out_trade_no":     outTradeNo,
-			"trade_no":         resp.TradeNo,
-			"gateway_pay_type": resp.PayType,
-			"pay_info":         resp.PayInfo,
+			"trade_no":         result.ExternalTradeNo,
+			"gateway_pay_type": result.GatewayPayType,
+			"pay_info":         result.PayInfo,
 			"money_rmb":        database.FenToRMB(order.MoneyRMB),
 			"amount_usd":       database.MicroToUSD(order.AmountUSD),
 		},
@@ -252,33 +275,32 @@ func MyTopupOrders(c *fiber.Ctx) error {
 
 // GetTopupOptions GET /api/topup/options
 //
-// 给前端的下拉选项 + 预设金额。不需要敏感字段（pid/md5_key 不返回）。
+// 给前端的下拉选项 + 预设金额。不返回敏感字段（pid / 私钥 / webhook_secret 不下发）。
+//
+// W-1 重构（2026-05-21）：新增 providers 数组（每个 PaymentProvider 的 PublicOptions）。
+// 顶层保留 configured / methods / presets_fen 等 yifut 字段做向后兼容（取 yifut 的 options），
+// 直到前端切到 providers[] 后再删。
 func GetTopupOptions(c *fiber.Ctx) error {
-	cfg := proxy.LoadYifutConfig()
-	enabled := readStringConfig("yifut_enabled_methods", "alipay,wxpay")
-	methods := []string{}
-	for _, m := range strings.Split(enabled, ",") {
-		m = strings.TrimSpace(m)
-		if m != "" && allowedPayTypes[m] {
-			methods = append(methods, m)
-		}
+	providers := ListConfiguredPaymentProviderOptions()
+
+	// 向后兼容：顶层字段仍按 yifut 填，让没切的前端继续能用
+	var yifutOpts PaymentProviderPublicOptions
+	if p, ok := GetPaymentProvider(database.TopupProviderYifut); ok {
+		yifutOpts = p.PublicOptions()
 	}
-	// fix CRITICAL Sprint4-M3：所有金额改为 fen int64 + 汇率改为 micros int64
-	presets := []int64{}
-	for _, s := range strings.Split(readStringConfig("yifut_preset_amounts_fen", "1000,3000,5000,10000,30000,50000"), ",") {
-		s = strings.TrimSpace(s)
-		if v, err := strconv.ParseInt(s, 10, 64); err == nil && v > 0 {
-			presets = append(presets, v)
-		}
-	}
+
 	return c.JSON(fiber.Map{
 		"success": true,
 		"data": fiber.Map{
-			"configured":                       cfg.IsConfigured(),
-			"methods":                          methods,
-			"presets_fen":                      presets,
-			"min_amount_fen":                   readInt64Config("yifut_min_amount_fen", 100),
-			"max_amount_fen":                   readInt64Config("yifut_max_amount_fen", 1_000_000),
+			// W-1 新字段：所有已配齐的 provider 列表（前端按 key 渲染按钮）
+			"providers": providers,
+
+			// 向后兼容 yifut 顶层字段
+			"configured":                       yifutOpts.Configured,
+			"methods":                          yifutOpts.Methods,
+			"presets_fen":                      yifutOpts.PresetsFen,
+			"min_amount_fen":                   yifutOpts.MinAmountFen,
+			"max_amount_fen":                   yifutOpts.MaxAmountFen,
 			"exchange_rate_rmb_per_usd_micros": safeExchangeRateRmbPerUsdMicros(),
 			"product_name":                     readStringConfig("yifut_product_name", "DAOF-CPA 余额充值"),
 		},

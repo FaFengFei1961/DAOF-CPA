@@ -21,9 +21,23 @@ import (
 	"time"
 )
 
+// TopupProviderYifut / TopupProviderEpusdt 是 TopupOrder.Provider 字段的取值。
+// 一笔订单只属于一个 provider，不可改。新加 provider 时在此声明常量。
+const (
+	// TopupProviderYifut 易付通（RSA V2 协议，CNY 支付）。
+	TopupProviderYifut = "yifut"
+	// TopupProviderEpusdt epusdt sidecar（Web3 USDT/USDC 收款，链上对账）。
+	// W-1 仅声明常量；adapter 在 W-3 实现。
+	TopupProviderEpusdt = "epusdt"
+)
+
 // TopupOrder 用户充值订单
 type TopupOrder struct {
 	ID uint `gorm:"primaryKey" json:"id"`
+
+	// Provider 支付网关 key（"yifut" / "epusdt" / ...）。下单时即锁定，不可变。
+	// 历史订单（W-1 之前）migration 时回填为 "yifut"。
+	Provider string `gorm:"index;not null;default:'yifut';size:32" json:"provider"`
 
 	// OutTradeNo 商户订单号，全局唯一。形如 tp{userID}{unixmilli}{randhex4}
 	OutTradeNo string `gorm:"uniqueIndex;not null;size:64" json:"out_trade_no"`
