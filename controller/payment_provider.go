@@ -68,11 +68,27 @@ type PaymentProvider interface {
 	// 在 PaymentWebhookReceipt 里去重，匹配本地订单，然后单事务入账。
 	//
 	// 错误映射：用 ErrWebhook* sentinel 让通用层映射成对应 HTTP status code。
-	//
-	// W-3-P1（2026-05-21）：接口先加上，yifut adapter 实现就绪；YifutNotify 路由暂保留
-	// 原 inline 行为作兼容基线，W-3-P3 改造为薄壳走通用 ProcessPaymentWebhook。
 	ParseAndVerifyWebhook(input *PaymentWebhookInput) (*PaymentWebhookEvent, error)
 }
+
+// IPAllowlistedProvider 是可选接口。Provider 实现此接口表示它有 IP 白名单配置。
+// 通用层 ProcessPaymentWebhook 在调 ParseAndVerifyWebhook 前先 type assert + 检查，
+// 让伪造请求在密码学运算之前被拒。
+//
+// W-3 review M-2/M-7 引入（2026-05-21）：原 ProcessPaymentWebhook 用
+// `if providerKey == "yifut"` switch hardcode IP allowlist，违反开闭原则。
+// 改成 optional interface 后，新 provider 实现该方法即接入，无需改通用层。
+//
+// 实现约定：返回 CSV 形式（"127.0.0.1/32,10.0.0.0/8,2001:db8::/32"）；
+// 空串 = 允许所有 IP（仅依赖签名 + nonce 防御）。
+type IPAllowlistedProvider interface {
+	AllowedRemoteIPCIDRs() string
+}
+
+// MaxWebhookBodyBytes 是单次 webhook 请求 body 的硬上限。
+// W-3 review M-1 引入：epusdt POST callback 无 body 大小限制，攻击者大 body DoS。
+// 64 KB 足够任何合法 webhook（yifut/epusdt JSON 实际 < 2 KB），超出几乎肯定是恶意。
+const MaxWebhookBodyBytes = 64 * 1024
 
 // PaymentWebhookInput 是通用层从 fiber.Ctx 抽出来传给 provider 的 HTTP 上下文快照。
 //
@@ -142,6 +158,14 @@ type PaymentWebhookEvent struct {
 	//   - AmountKindFenCNY:    fen int64 (RMB × 100), 通用层用 order.ExchangeRateRmbPerUsdMicros 换算
 	//   - AmountKindMicroUSD:  micro_usd int64 (USD × 1e6), 通用层直接 == order.AmountUSD 比对
 	AmountRaw int64
+
+	// CurrencyOriginal 用户实际支付的币种符号，落 BillingEntry.CurrencyOriginal 审计字段。
+	//   - yifut:  "CNY"
+	//   - epusdt: "USDT" 或 "USDC"（按 payload.token）
+	//
+	// W-3 review M-10 引入（2026-05-21）：替代原 webhookCurrencyOriginal switch on AmountKind
+	// （那个把所有 micro_usd 一刀切映射到 "USDT" 撒谎）。Provider 自己填准确币种符号。
+	CurrencyOriginal string
 
 	// RawParams 原始回调参数（query / body 解析后），落库审计 + 异常排查用。
 	RawParams map[string]string

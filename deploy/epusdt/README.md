@@ -6,7 +6,7 @@ DAOF-CPA Web3 USDT 充值通道的 sidecar 部署 sample。配合 PaymentProvide
 ## 前提
 
 - Docker + Docker Compose 已安装
-- 至少 1 个 USDT 收款地址（DAOF 已收到 TRC20: `TMBjEGgFAPMt6DxDPKqcxsAQvWMAua8gHk`）
+- 至少 1 个 USDT 收款地址（建议每条链一个 watch-only 地址，私钥保管在你的硬件钱包 / 冷钱包，不进入 epusdt 服务器）
 - 链上 RPC 节点（默认公开节点够用；高频场景建议买 Alchemy / Infura）
 
 ## 5 步部署
@@ -33,10 +33,10 @@ docker compose logs -f epusdt   # 看初次启动日志
 浏览器访问 `http://localhost:8000/install?token=<.env 里的 install_token>`：
 - 设置 admin 用户名 + 强密码
 - 配置收款钱包地址（4 条链，每条链一个 watch-only 地址）：
-  - TRC20: `TMBjEGgFAPMt6DxDPKqcxsAQvWMAua8gHk`
-  - ERC20: `0x...`（待补）
-  - BEP20: `0x...`（待补）
-  - Polygon: `0x...`（待补）
+  - TRC20:   `T...`（你的 TRON 地址）
+  - ERC20:   `0x...`（你的 Ethereum 地址）
+  - BEP20:   `0x...`（你的 BSC 地址，可与 ERC20 同地址）
+  - Polygon: `0x...`（你的 Polygon 地址，可与 ERC20 同地址）
 - 启用对应链（admin → 链管理）
 - 创建商户 API Key → 拿到 `pid` 和 `secret_key`
 - 引导完成后立刻把 `.env` 里的 `install=false`（或删除 install_token）
@@ -80,7 +80,8 @@ DAOF admin 后台 → SysConfig → 新增 4 个 key：
 - [x] epusdt admin 后台强密码 + 限 IP 访问
 - [x] DAOF 配的 epusdt_endpoint 是私网/loopback（防 SSRF 泄漏到公网网关）
 - [x] epusdt 钱包用 watch-only 地址（私钥在用户冷钱包，不进 epusdt 服务器）
-- [x] DAOF 信号：所有 webhook 走 HMAC-MD5 + pid 双校验防跨商户重放
+- [x] DAOF 验签：所有 webhook 走 MD5(sorted_params + secret_key) + pid 双校验防跨商户重放
+- [x] DAOF IP allowlist：默认仅允许 `127.0.0.1/32, ::1/128` —— SysConfig `epusdt_notify_allowed_cidrs` 可调
 - [ ] 公测：admin 后台 USDT 入口对中国 IP 隐藏（DAOF 侧 IP geo 过滤）
 - [ ] 定期审计 PaymentWebhookReceipt 表，异常 reject 模式预警
 

@@ -21,6 +21,7 @@ import (
 	"errors"
 	"fmt"
 	"log"
+	"net"
 	"strings"
 	"time"
 
@@ -56,10 +57,18 @@ func ProcessPaymentWebhook(c *fiber.Ctx, providerKey string) error {
 		logKey = "<empty>"
 	}
 
-	// IP allowlist（W-3-P3 临时方案：yifut 走专属 CIDR 配置）
-	// 未来抽象：让 provider 暴露 AllowedRemoteIPs() / 直接在 ParseAndVerifyWebhook 检查
-	if providerKey == database.TopupProviderYifut {
-		if !checkYifutNotifyIPAllowed(input.RemoteIP) {
+	// W-3 review M-1 修复：body size 硬上限（防 DoS / OOM）。
+	// 合法 webhook 实际 < 2 KB（JSON），超 64 KB 几乎肯定是恶意。
+	if len(input.Body) > MaxWebhookBodyBytes {
+		log.Printf("[WEBHOOK-%s] body too large size=%d ip=%s", providerKey, len(input.Body), input.RemoteIP)
+		return c.Status(413).SendString("payload_too_large")
+	}
+
+	// W-3 review M-2/M-7 修复：IP allowlist 走 optional IPAllowlistedProvider interface
+	// 替代原 hardcoded `if providerKey == "yifut"` switch。新 provider 实现该方法即生效。
+	if ipProvider, ok := provider.(IPAllowlistedProvider); ok {
+		cidrs := strings.TrimSpace(ipProvider.AllowedRemoteIPCIDRs())
+		if cidrs != "" && !isRemoteIPInCIDRs(input.RemoteIP, cidrs) {
 			log.Printf("[WEBHOOK-%s] IP not allowed out_trade_no=%s ip=%s", providerKey, logKey, input.RemoteIP)
 			return c.Status(403).SendString("ip_not_allowed")
 		}
@@ -135,6 +144,32 @@ func ProcessPaymentWebhook(c *fiber.Ctx, providerKey string) error {
 	log.Printf("[WEBHOOK-%s] OK out_trade_no=%s user=%d rmb_fen=%d usd_micro=%d",
 		providerKey, event.OutTradeNo, order.UserID, order.MoneyRMB, order.AmountUSD)
 	return c.SendString("success")
+}
+
+// isRemoteIPInCIDRs 判断 remote IP 是否在 CSV CIDR 列表内。
+// W-3 review M-2 引入：通用层 IP allowlist helper，替代 yifut-specific 实现。
+// CIDR 配置非法时返回 false（fail-closed），但仅记日志不崩进程。
+func isRemoteIPInCIDRs(remoteIP, csv string) bool {
+	ip := net.ParseIP(strings.TrimSpace(remoteIP))
+	if ip == nil {
+		log.Printf("[WEBHOOK] cannot parse remote IP %q", remoteIP)
+		return false
+	}
+	for _, raw := range strings.Split(csv, ",") {
+		cidr := strings.TrimSpace(raw)
+		if cidr == "" {
+			continue
+		}
+		_, ipnet, err := net.ParseCIDR(cidr)
+		if err != nil {
+			log.Printf("[WEBHOOK] bad CIDR config %q: %v", cidr, err)
+			return false
+		}
+		if ipnet.Contains(ip) {
+			return true
+		}
+	}
+	return false
 }
 
 // buildPaymentWebhookInput 从 fiber.Ctx 抽出 PaymentWebhookInput 快照。
@@ -223,6 +258,12 @@ func finalizePaidTopupTransaction(order *database.TopupOrder, event *PaymentWebh
 		if err := tx.Select("id, quota").First(&freshUser, order.UserID).Error; err != nil {
 			return fmt.Errorf("fetch fresh quota: %w", err)
 		}
+		// W-3 review M-10 修复：用 event.CurrencyOriginal（provider 自填准确币种）
+		// 替代 webhookCurrencyOriginal 一刀切映射。fallback 兜底防 provider 未填字段。
+		currencyOriginal := event.CurrencyOriginal
+		if currencyOriginal == "" {
+			currencyOriginal = webhookCurrencyOriginal(event.AmountKind)
+		}
 		return database.WriteBillingEntry(tx, database.BillingEntryInput{
 			UserID:           order.UserID,
 			OccurredAt:       now,
@@ -232,7 +273,7 @@ func finalizePaidTopupTransaction(order *database.TopupOrder, event *PaymentWebh
 			RelatedType:      "topup_order",
 			RelatedID:        order.ID,
 			Description:      buildTopupBillingDescription(order),
-			CurrencyOriginal: webhookCurrencyOriginal(event.AmountKind),
+			CurrencyOriginal: currencyOriginal,
 			AmountOriginal:   event.AmountRaw,
 		})
 	})

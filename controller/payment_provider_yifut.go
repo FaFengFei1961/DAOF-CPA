@@ -211,15 +211,22 @@ func (p *YifutPaymentProvider) ParseAndVerifyWebhook(input *PaymentWebhookInput)
 	}
 
 	return &PaymentWebhookEvent{
-		Kind:            kind,
-		OutTradeNo:      outTradeNo,
-		ExternalTradeNo: tradeNo,
-		Nonce:           webhookNonce(database.TopupProviderYifut, params),
-		SignatureHash:   signatureHash(params["sign"]),
-		AmountKind:      AmountKindFenCNY,
-		AmountRaw:       moneyFen,
-		RawParams:       params,
+		Kind:             kind,
+		OutTradeNo:       outTradeNo,
+		ExternalTradeNo:  tradeNo,
+		Nonce:            webhookNonce(database.TopupProviderYifut, params),
+		SignatureHash:    signatureHash(params["sign"]),
+		AmountKind:       AmountKindFenCNY,
+		AmountRaw:        moneyFen,
+		CurrencyOriginal: "CNY",
+		RawParams:        params,
 	}, nil
+}
+
+// AllowedRemoteIPCIDRs 满足 IPAllowlistedProvider 可选接口（W-3 review M-2/M-7）。
+// 返回 SysConfig yifut_notify_allowed_cidrs 配置（空 = 允许所有，仅依赖 RSA + nonce）。
+func (p *YifutPaymentProvider) AllowedRemoteIPCIDRs() string {
+	return readStringConfig("yifut_notify_allowed_cidrs", "")
 }
 
 // yifutVerifyTimestamp 是 checkYifutTimestamp 的纯函数版本（无 log，便于 adapter 自检）。

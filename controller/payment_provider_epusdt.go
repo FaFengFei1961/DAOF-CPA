@@ -21,6 +21,7 @@ import (
 	"errors"
 	"fmt"
 	"math"
+	"strconv"
 	"strings"
 
 	"daof-cpa/database"
@@ -159,9 +160,11 @@ func (p *EpusdtPaymentProvider) PublicOptions() PaymentProviderPublicOptions {
 		}
 	}
 
-	// 复用 yifut 的金额预设（admin 心智一致；前端按汇率换算 USDT 展示）
+	// W-3 review M-11 修复：epusdt 用自己的 SysConfig key 命名空间，fallback 到 yifut_*
+	// 让 admin 心智模型清晰（"epusdt 跟 yifut 是平行 provider"），又不强制 admin 重新配。
 	presets := []int64{}
-	for _, s := range splitCSV(readStringConfig("yifut_preset_amounts_fen", "1000,3000,5000,10000,30000,50000")) {
+	presetCSV := readStringConfig("epusdt_preset_amounts_fen", readStringConfig("yifut_preset_amounts_fen", "1000,3000,5000,10000,30000,50000"))
+	for _, s := range splitCSV(presetCSV) {
 		if v, ok := parsePositiveInt64Helper(s); ok {
 			presets = append(presets, v)
 		}
@@ -173,8 +176,8 @@ func (p *EpusdtPaymentProvider) PublicOptions() PaymentProviderPublicOptions {
 		Configured:   cfg.IsConfigured(),
 		Currency:     "USDT",
 		PresetsFen:   presets,
-		MinAmountFen: readInt64Config("yifut_min_amount_fen", 100),       // 共用 yifut 上下限 SysConfig
-		MaxAmountFen: readInt64Config("yifut_max_amount_fen", 1_000_000), // （或单独定 epusdt_*_amount_fen，未来扩展）
+		MinAmountFen: readInt64Config("epusdt_min_amount_fen", readInt64Config("yifut_min_amount_fen", 100)),
+		MaxAmountFen: readInt64Config("epusdt_max_amount_fen", readInt64Config("yifut_max_amount_fen", 1_000_000)),
 		Methods:      methods,
 		IconKey:      "epusdt",
 	}
@@ -303,6 +306,13 @@ func (p *EpusdtPaymentProvider) ParseAndVerifyWebhook(input *PaymentWebhookInput
 	// 链上重组防御交给 epusdt sidecar 侧的确认数策略。
 	nonce := database.TopupProviderEpusdt + ":" + orderID + ":" + tradeID
 
+	// W-3 review M-10 修复：CurrencyOriginal 按实际 token（USDT / USDC）填，让审计字段准确。
+	tokenStr, _ := payload["token"].(string)
+	currencyOriginal := strings.ToUpper(strings.TrimSpace(tokenStr))
+	if currencyOriginal == "" {
+		currencyOriginal = "USDT" // fallback：epusdt 默认 USDT
+	}
+
 	// RawParams：把 JSON 字段都序列化成字符串供审计 / 通用层入账事务用
 	rawParams := make(map[string]string, len(payload))
 	for k, v := range payload {
@@ -310,15 +320,23 @@ func (p *EpusdtPaymentProvider) ParseAndVerifyWebhook(input *PaymentWebhookInput
 	}
 
 	return &PaymentWebhookEvent{
-		Kind:            kind,
-		OutTradeNo:      orderID,
-		ExternalTradeNo: tradeID,
-		Nonce:           nonce,
-		SignatureHash:   signatureHash(sigVal),
-		AmountKind:      AmountKindMicroUSD,
-		AmountRaw:       amountMicroUSD,
-		RawParams:       rawParams,
+		Kind:             kind,
+		OutTradeNo:       orderID,
+		ExternalTradeNo:  tradeID,
+		Nonce:            nonce,
+		SignatureHash:    signatureHash(sigVal),
+		AmountKind:       AmountKindMicroUSD,
+		AmountRaw:        amountMicroUSD,
+		CurrencyOriginal: currencyOriginal,
+		RawParams:        rawParams,
 	}, nil
+}
+
+// AllowedRemoteIPCIDRs 满足 IPAllowlistedProvider 可选接口（W-3 review M-2）。
+// 默认仅放行 loopback（sidecar 同机部署最常见），admin 可改 SysConfig 加远程 IP。
+// 空串明确"允许所有"——admin 需要显式 unset 才解除 IP 限制。
+func (p *EpusdtPaymentProvider) AllowedRemoteIPCIDRs() string {
+	return readStringConfig("epusdt_notify_allowed_cidrs", "127.0.0.1/32,::1/128")
 }
 
 // ─── helpers ────────────────────────────────────────────────
@@ -358,12 +376,14 @@ func chainToMethod(chain string) string {
 }
 
 // parsePositiveInt64Helper 解析正整数（>0）；失败返 0,false。
+// W-3 review M-6 修复：原 fmt.Sscanf 会 silent 接受 trailing garbage（"123abc" 解析为 123）。
+// 改用 strconv.ParseInt 严格拒非数字字符。
 func parsePositiveInt64Helper(s string) (int64, bool) {
-	var v int64
-	if _, err := fmt.Sscanf(strings.TrimSpace(s), "%d", &v); err == nil && v > 0 {
-		return v, true
+	v, err := strconv.ParseInt(strings.TrimSpace(s), 10, 64)
+	if err != nil || v <= 0 {
+		return 0, false
 	}
-	return 0, false
+	return v, true
 }
 
 // epusdtStringify 序列化 JSON 解析后的 any 值为字符串（落 RawParams 审计用）。
