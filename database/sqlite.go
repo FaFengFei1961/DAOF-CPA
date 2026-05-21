@@ -291,8 +291,12 @@ func InitDB() {
 		DB.Exec(`DROP INDEX IF EXISTS uniq_users_github_id_nonempty`)
 		// 删列。SQLite 3.35+（2021-03）支持 ALTER TABLE DROP COLUMN，
 		// 项目内嵌 mattn/go-sqlite3 自带较新 SQLite，足够。
+		//
+		// fix H-Audit H-4（2026-05-20）：改 log.Fatalf。原 log.Printf 让启动继续，
+		// 老 github_id 列残留 → 后续 AutoMigrate 可能重新解释该列 → 数据漂移。
+		// SQLite < 3.35 不支持 DROP COLUMN，会失败 → 必须让运维感知到环境不达标。
 		if err := DB.Exec(`ALTER TABLE users DROP COLUMN github_id`).Error; err != nil {
-			log.Printf("[H-3b] DROP COLUMN users.github_id failed: %v", err)
+			log.Fatalf("[H-3b] DROP COLUMN users.github_id failed (SQLite 需 >= 3.35): %v", err)
 		}
 	}
 

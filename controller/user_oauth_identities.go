@@ -131,6 +131,22 @@ func PrepareOAuthLink(c *fiber.Ctx) error {
 // 解绑一条 OAuth identity（软删 unlinked_at）。
 //
 // 安全：必须保证用户至少保留一个 auth method（防完全失联）。
+//
+// fix HIGH H-Audit H-2（2026-05-20）：原版本 "userHasOtherAuthMethod check → Update
+// unlinked_at" 两步无事务，双 tab 并发解绑可让两个 unlink 都通过检查 → 账号 stranded。
+// 现在把"找 row + 检查 + 软删 + 审计"全部合并到 database.DB.Transaction，
+// SQLite 串行写下保证检查 + 写入原子。
+//
+// 注意：proxy.RefreshUserAuth + LogOperationBy 在 tx 外面（前者写内存，后者写另一张表）
+// —— 见 fix H-Audit M7：log 必须在 tx 提交后立即写，再 refresh，否则 cache 修正时
+// 审计可能尚未持久化。
+type unlinkOutcome struct {
+	row     database.OAuthIdentity
+	skipped bool   // not found
+	blocked bool   // last auth method
+	dberr   error
+}
+
 func UnlinkMyOAuthIdentity(c *fiber.Ctx) error {
 	user, err := getCurrentUser(c)
 	if err != nil {
@@ -141,29 +157,53 @@ func UnlinkMyOAuthIdentity(c *fiber.Ctx) error {
 		return c.Status(400).JSON(fiber.Map{"success": false, "message_code": "ERR_OAUTH_PROVIDER_UNKNOWN"})
 	}
 
-	// 找到这个 user 在 providerKey 下的 active identity
-	var row database.OAuthIdentity
-	if err := database.DB.
-		Where("user_id = ? AND provider = ? AND unlinked_at IS NULL", user.ID, providerKey).
-		First(&row).Error; err != nil {
-		if errors.Is(err, gorm.ErrRecordNotFound) {
-			return c.Status(404).JSON(fiber.Map{
-				"success":      false,
-				"message_code": "ERR_OAUTH_IDENTITY_NOT_FOUND",
-				"provider":     providerKey,
-			})
+	now := time.Now()
+	outcome := unlinkOutcome{}
+	txErr := database.DB.Transaction(func(tx *gorm.DB) error {
+		// 1. 事务内重新读 active identity
+		var row database.OAuthIdentity
+		if err := tx.
+			Where("user_id = ? AND provider = ? AND unlinked_at IS NULL", user.ID, providerKey).
+			First(&row).Error; err != nil {
+			if errors.Is(err, gorm.ErrRecordNotFound) {
+				outcome.skipped = true
+				return nil // 让 tx commit 但 handler 返 404
+			}
+			outcome.dberr = err
+			return err
 		}
-		log.Printf("[OAUTH-UNLINK] lookup failed user=%d provider=%s: %v", user.ID, providerKey, err)
+		// 2. 事务内重新计算 hasOther（SQLite 串行写，这里独占）
+		hasOther, err := userHasOtherAuthMethodTx(tx, user, providerKey)
+		if err != nil {
+			outcome.dberr = err
+			return err
+		}
+		if !hasOther {
+			outcome.blocked = true
+			return nil // tx commit 但 handler 返 409；不实际 update
+		}
+		// 3. 软删
+		if err := tx.Model(&database.OAuthIdentity{}).
+			Where("id = ? AND unlinked_at IS NULL", row.ID).
+			Update("unlinked_at", now).Error; err != nil {
+			outcome.dberr = err
+			return err
+		}
+		outcome.row = row
+		return nil
+	})
+	if txErr != nil {
+		log.Printf("[OAUTH-UNLINK] tx failed user=%d provider=%s: %v", user.ID, providerKey, txErr)
 		return c.Status(500).JSON(fiber.Map{"success": false, "message_code": "ERR_DB_QUERY"})
 	}
-
-	// "至少保留一个 auth method" 校验：解绑后用户至少还要有一种凭据
-	hasOther, err := userHasOtherAuthMethod(user, providerKey)
-	if err != nil {
-		log.Printf("[OAUTH-UNLINK] auth method count failed user=%d: %v", user.ID, err)
-		return c.Status(500).JSON(fiber.Map{"success": false, "message_code": "ERR_DB_QUERY"})
+	if outcome.skipped {
+		return c.Status(404).JSON(fiber.Map{
+			"success":      false,
+			"message_code": "ERR_OAUTH_IDENTITY_NOT_FOUND",
+			"provider":     providerKey,
+		})
 	}
-	if !hasOther {
+	if outcome.blocked {
 		return c.Status(409).JSON(fiber.Map{
 			"success":      false,
 			"message_code": "ERR_CANNOT_UNLINK_LAST_AUTH",
@@ -171,18 +211,10 @@ func UnlinkMyOAuthIdentity(c *fiber.Ctx) error {
 		})
 	}
 
-	// 软删：仅写 unlinked_at（append-only invariant 允许这一列 update）
-	now := time.Now()
-	if err := database.DB.Model(&database.OAuthIdentity{}).
-		Where("id = ? AND unlinked_at IS NULL", row.ID).
-		Update("unlinked_at", now).Error; err != nil {
-		log.Printf("[OAUTH-UNLINK] update failed id=%d: %v", row.ID, err)
-		return c.Status(500).JSON(fiber.Map{"success": false, "message_code": "ERR_DB_UPDATE"})
-	}
-
-	proxy.RefreshUserAuth(user.ID)
+	// fix H-Audit M7：审计先于 cache 失效，确保 unlink 事件可追溯
 	LogOperationBy(0, user.ID, "user", "OAUTH_UNLINK", c.IP(),
-		fmt.Sprintf(`[{"type":"OAUTH_UNLINK","provider":%q,"external_id":%q}]`, providerKey, row.ExternalID))
+		fmt.Sprintf(`[{"type":"OAUTH_UNLINK","provider":%q,"external_id":%q}]`, providerKey, outcome.row.ExternalID))
+	proxy.RefreshUserAuth(user.ID)
 	return c.JSON(fiber.Map{
 		"success":      true,
 		"message_code": "SUCCESS_OAUTH_UNLINKED",
@@ -266,7 +298,11 @@ func finishOAuthLinkToExistingUser(c *fiber.Ctx, userID uint, providerKey string
 //   (a) phone（SMS 路径）
 //   (b) email + password verified
 //   (c) 至少一条其它 provider 的 active identity
-func userHasOtherAuthMethod(user *database.User, excludedProvider string) (bool, error) {
+//
+// fix H-Audit H-2：从原 userHasOtherAuthMethod 改写为接受 *gorm.DB 参数的 tx 版本，
+// 让 UnlinkMyOAuthIdentity 能在事务内调用，避免 TOCTOU race。
+// 保留 user struct 入参（phone/email 来自 user 表的 lock-snapshot，不在 oauth_identities 表内）。
+func userHasOtherAuthMethodTx(tx *gorm.DB, user *database.User, excludedProvider string) (bool, error) {
 	if user.Phone != "" {
 		return true, nil
 	}
@@ -274,7 +310,7 @@ func userHasOtherAuthMethod(user *database.User, excludedProvider string) (bool,
 		return true, nil
 	}
 	var n int64
-	q := database.DB.Model(&database.OAuthIdentity{}).
+	q := tx.Model(&database.OAuthIdentity{}).
 		Where("user_id = ? AND unlinked_at IS NULL", user.ID)
 	if excludedProvider != "" {
 		q = q.Where("provider <> ?", excludedProvider)

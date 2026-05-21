@@ -657,160 +657,227 @@ const oauthProviderOverrideKey = "oauth_provider_override"
 //
 // **行为兼容**：保留原 GithubCallback 的所有响应字段 / message_code（不区分 provider 的部分）
 // 以减少前端改动面。
+//
+// fix H-Audit H-3（2026-05-20）：原 240 行 / 7 职责单体拆成 pipeline：
+//   resolveOAuthProviderFromCtx → consumeOAuthCallbackInputs → runProviderExchange
+//     → linkMode? finishOAuthLinkToExistingUser
+//     → existingUser? finishOAuthExistingUserLogin
+//     → emailCollision? blockEmailCollision
+//     → finishOAuthRegisterIntent (issue tmp_token)
 func OAuthCallback(c *fiber.Ctx) error {
-	providerKey := strings.ToLower(strings.TrimSpace(c.Params("provider")))
+	// 每个 helper 返回 done=true 表示已经写过响应，caller 立即 return nil（fiber 已收到 body）。
+	provider, providerKey, done := resolveOAuthProviderFromCtx(c)
+	if done {
+		return nil
+	}
+	cb, done := consumeOAuthCallbackInputs(c)
+	if done {
+		return nil
+	}
+	identity, done := runProviderExchange(c, provider, providerKey, cb.code, cb.codeVerifier)
+	if done {
+		return nil
+	}
+
+	// H-5：link-mode（已登录用户 link 新 provider）
+	if cb.linkUserID != 0 {
+		return finishOAuthLinkToExistingUser(c, cb.linkUserID, providerKey, identity)
+	}
+
+	// 查 oauth_identities：identity 是否已绑某个 DAOF user
+	existingUser, found, lookupErr := lookupActiveUserByOAuthIdentity(providerKey, identity.ExternalID)
+	if lookupErr != nil {
+		log.Printf("[OAUTH] identity lookup failed provider=%s ext_id=%s: %v", providerKey, identity.ExternalID, lookupErr)
+		return c.Status(500).JSON(fiber.Map{"success": false, "message_code": "ERR_DB_QUERY"})
+	}
+	if found {
+		return finishOAuthExistingUserLogin(c, existingUser, providerKey, identity)
+	}
+
+	// H-6：跨 provider 邮箱冲突预检
+	if done := blockOnEmailCollision(c, providerKey, identity); done {
+		return nil
+	}
+
+	// 新用户分支
+	return finishOAuthRegisterIntent(c, providerKey, identity, cb.refUser)
+}
+
+// oauthCallbackInputs 是 OAuthCallback 第二阶段（"解 / 校验"输入）的产物。
+type oauthCallbackInputs struct {
+	code         string
+	codeVerifier string
+	linkUserID   uint
+	refUser      string
+}
+
+// resolveOAuthProviderFromCtx 从 :provider URL 参数（或 Locals override，测试用）
+// 取已注册的 provider。done=true 时 caller 应立即 return（响应已写）。
+func resolveOAuthProviderFromCtx(c *fiber.Ctx) (provider OAuthProvider, providerKey string, done bool) {
+	providerKey = strings.ToLower(strings.TrimSpace(c.Params("provider")))
 	if providerKey == "" {
-		// 允许通过 Locals 注入（GithubCallback alias / test 用）
 		if v, ok := c.Locals(oauthProviderOverrideKey).(string); ok {
 			providerKey = v
 		}
 	}
 	if providerKey == "" {
-		return c.Status(400).JSON(fiber.Map{"success": false, "message_code": "ERR_OAUTH_PROVIDER_UNKNOWN"})
+		_ = c.Status(400).JSON(fiber.Map{"success": false, "message_code": "ERR_OAUTH_PROVIDER_UNKNOWN"})
+		return nil, "", true
 	}
-	provider, ok := GetOAuthProvider(providerKey)
+	p, ok := GetOAuthProvider(providerKey)
 	if !ok {
-		return c.Status(400).JSON(fiber.Map{"success": false, "message_code": "ERR_OAUTH_PROVIDER_UNKNOWN"})
+		_ = c.Status(400).JSON(fiber.Map{"success": false, "message_code": "ERR_OAUTH_PROVIDER_UNKNOWN"})
+		return nil, "", true
 	}
+	return p, providerKey, false
+}
 
+// consumeOAuthCallbackInputs 校验 code/state 并一次性消费 state（拿 verifier + linkUserID）。
+// 同时解析 body 内的可选 ref（推荐人 username）。
+func consumeOAuthCallbackInputs(c *fiber.Ctx) (cb oauthCallbackInputs, done bool) {
 	var payload GithubAuthRequest
 	_ = c.BodyParser(&payload) // body 只承载可选 ref；code/state 必须来自 query
 	code := strings.TrimSpace(c.Query("code"))
 	state := strings.TrimSpace(c.Query("state"))
 	if code == "" {
-		return c.Status(400).JSON(fiber.Map{"success": false, "message": "授权码 (OAuth Code) 验证失败或无效", "message_code": "ERR_INVALID_OAUTH_CODE"})
+		_ = c.Status(400).JSON(fiber.Map{"success": false, "message": "授权码 (OAuth Code) 验证失败或无效", "message_code": "ERR_INVALID_OAUTH_CODE"})
+		return oauthCallbackInputs{}, true
 	}
 	codeVerifier, linkUserID, ok := consumeOAuthStateFull(state)
 	if !ok {
-		return c.Status(403).JSON(fiber.Map{
+		_ = c.Status(403).JSON(fiber.Map{
 			"success":      false,
 			"message":      "OAuth 状态校验失败，请重新发起登录",
 			"message_code": oauthStateInvalidMessageCode(),
 		})
+		return oauthCallbackInputs{}, true
 	}
+	refUser := strings.TrimSpace(payload.Ref)
+	if refUser == "" {
+		refUser = strings.TrimSpace(c.Query("ref"))
+	}
+	return oauthCallbackInputs{code: code, codeVerifier: codeVerifier, linkUserID: linkUserID, refUser: refUser}, false
+}
 
-	// 取风控配置（与 provider 无关）
-	proxy.SysConfigMutex.RLock()
-	regStrategy := proxy.SysConfigCache["reg_strategy"] // trust, strict, dynamic
-	regIpLimitStr := proxy.SysConfigCache["reg_ip_limit"]
-	proxy.SysConfigMutex.RUnlock()
-
-	identity, err := provider.Exchange(c.UserContext(), code, codeVerifier)
+// runProviderExchange 调 provider.Exchange，按 provider 映射错误响应。
+func runProviderExchange(c *fiber.Ctx, provider OAuthProvider, providerKey, code, codeVerifier string) (identity *OAuthIdentityData, done bool) {
+	id, err := provider.Exchange(c.UserContext(), code, codeVerifier)
 	if err != nil {
 		// GitHub 路径保留旧 ERR_GITHUB_* 错误码不变；其它 provider 用 generic 映射
 		if providerKey == database.OAuthProviderGitHub {
-			return mapOAuthProviderErrorGitHub(c, err)
+			_ = mapOAuthProviderErrorGitHub(c, err)
+		} else {
+			_ = mapOAuthProviderErrorGeneric(c, providerKey, err)
 		}
-		return mapOAuthProviderErrorGeneric(c, providerKey, err)
+		return nil, true
 	}
+	return id, false
+}
 
+// finishOAuthExistingUserLogin 老用户回归路径。Banned 用户保留 appeal session。
+func finishOAuthExistingUserLogin(c *fiber.Ctx, existingUser *database.User, providerKey string, identity *OAuthIdentityData) error {
 	extID := identity.ExternalID
 	displayName := identity.Username
-
-	// H-5：link-mode 分支。state 是 "已登录用户 link 新 provider" 的请求，跳过 find /
-	// create 路径，直接把 identity 绑到 LinkUserID。
-	if linkUserID != 0 {
-		return finishOAuthLinkToExistingUser(c, linkUserID, providerKey, identity)
-	}
-
-	// 查 oauth_identities：identity 已绑过哪个 DAOF user？
-	existingUser, found, lookupErr := lookupActiveUserByOAuthIdentity(providerKey, extID)
-	if lookupErr != nil {
-		log.Printf("[OAUTH] identity lookup failed provider=%s ext_id=%s: %v", providerKey, extID, lookupErr)
-		return c.Status(500).JSON(fiber.Map{"success": false, "message_code": "ERR_DB_QUERY"})
-	}
-	if found {
-		// 老用户回归
-		if existingUser.Status == 2 {
-			// Banned 用户保留 session 供 appeal 流程使用
-			sessionID, err := database.CreateUserSession(existingUser.ID, c.Get("User-Agent"), c.IP())
-			if err != nil {
-				log.Printf("[OAUTH] create appeal session failed banned user=%d: %v", existingUser.ID, err)
-				return c.Status(500).JSON(fiber.Map{"success": false, "message_code": "ERR_DB_INSERT_FAILED"})
-			}
-			LogOperationBy(existingUser.ID, existingUser.ID, "user", "LOGIN_BANNED_APPEAL", c.IP(),
-				fmt.Sprintf(`[{"type":"LOGIN_BANNED_APPEAL","via":%q,"username":%q,"external_id":%q}]`,
-					providerKey, existingUser.Username, extID))
-			return c.JSON(fiber.Map{
-				"success":        true,
-				"message_code":   "SUCCESS_APPEAL_SESSION",
-				"account_status": 2,
-				"ban_reason":     existingUser.BanReason,
-				"session_id":     sessionID,
-			})
-		}
-		LogOperationBy(existingUser.ID, existingUser.ID, "user", "LOGIN", c.IP(),
-			fmt.Sprintf(`[{"type":"LOGIN","via":%q,"username":%q,"external_id":%q}]`,
-				providerKey, existingUser.Username, extID))
+	if existingUser.Status == 2 {
 		sessionID, err := database.CreateUserSession(existingUser.ID, c.Get("User-Agent"), c.IP())
 		if err != nil {
-			log.Printf("[OAUTH] create session failed existing user=%d: %v", existingUser.ID, err)
+			log.Printf("[OAUTH] create appeal session failed banned user=%d: %v", existingUser.ID, err)
 			return c.Status(500).JSON(fiber.Map{"success": false, "message_code": "ERR_DB_INSERT_FAILED"})
 		}
+		LogOperationBy(existingUser.ID, existingUser.ID, "user", "LOGIN_BANNED_APPEAL", c.IP(),
+			fmt.Sprintf(`[{"type":"LOGIN_BANNED_APPEAL","via":%q,"username":%q,"external_id":%q}]`,
+				providerKey, existingUser.Username, extID))
 		return c.JSON(fiber.Map{
-			"success":      true,
-			"msg":          "欢迎回归, " + displayName,
-			"msg_code":     "SUCCESS_WELCOME_BACK",
-			"gh_name":      displayName, // 字段名保持 gh_name 兼容现有前端；H-3b 改 display_name
-			"session_id":   sessionID,
+			"success":        true,
+			"message_code":   "SUCCESS_APPEAL_SESSION",
+			"account_status": 2,
+			"ban_reason":     existingUser.BanReason,
+			"session_id":     sessionID,
 		})
 	}
-
-	// ====== 跨 provider 邮箱冲突防御（Phase H-6，2026-05-20）======
-	//
-	// 防御场景：用户已用 GitHub（邮箱 alice@x.com）注册过 DAOF 账号 A，
-	// 现在又用 Google（同邮箱）走 OAuth 登录。如果直接走新建账号路径，会得到独立账号 B，
-	// 余额/订阅/历史全部割裂——这是设计漏洞，必须拦截。
-	//
-	// 拦截条件（同时满足才拒）：
-	//   1. provider 明确告知 email_verified=true（防 attacker 在 GitHub 设置 secondary email
-	//      占别人位；未验证邮箱不构成冲突）
-	//   2. DAOF 内存在一个 active（status=1）用户，其 email 等于 provider.email 且
-	//      DAOF 自身的 email_verified_at != NULL（用户在 DAOF 内点过验证链接确认拥有该邮箱）
-	//
-	// 拒绝时返 409 + ERR_OAUTH_EMAIL_TAKEN_LINK_REQUIRED，引导用户先登录原账号，
-	// 然后在「设置 → 第三方账号」中通过 link 流程绑定。
-	//
-	// fail-closed：DB lookup 错误时返 500 而不是建账号——宁可让用户重试也不要冒"两 user 共邮箱"风险。
-	//
-	// 兜底：sqlite.go 的 uniq_users_email_nonempty partial unique index 会在并发竞态时
-	// 拦下双 INSERT。此处的预检只是提供更友好的错误响应。
-	if identity.Email != "" && identity.EmailVerified {
-		normEmail := strings.ToLower(strings.TrimSpace(identity.Email))
-		if normEmail != "" {
-			var existingByEmail database.User
-			err := database.DB.
-				Where("LOWER(email) = ? AND email_verified_at IS NOT NULL AND status = 1", normEmail).
-				First(&existingByEmail).Error
-			if err == nil {
-				log.Printf("[OAUTH-EMAIL-COLLISION] provider=%s ext=%s collides with user=%d email=%s",
-					providerKey, extID, existingByEmail.ID, maskEmailForAdmin(normEmail))
-				LogOperationBy(0, existingByEmail.ID, "system", "OAUTH_EMAIL_COLLISION_BLOCKED", c.IP(),
-					fmt.Sprintf(`[{"type":"OAUTH_EMAIL_COLLISION_BLOCKED","provider":%q,"external_id":%q,"email_hint":%q}]`,
-						providerKey, extID, maskEmailForAdmin(normEmail)))
-				return c.Status(409).JSON(fiber.Map{
-					"success":      false,
-					"message_code": "ERR_OAUTH_EMAIL_TAKEN_LINK_REQUIRED",
-					"message":      "该第三方邮箱已被另一个账号占用，请先登录原账号后在「设置 → 第三方账号」中绑定。",
-					"email_hint":   maskEmailForAdmin(normEmail),
-					"provider":     providerKey,
-				})
-			} else if !errors.Is(err, gorm.ErrRecordNotFound) {
-				log.Printf("[OAUTH-EMAIL-COLLISION] lookup failed provider=%s email=%s: %v",
-					providerKey, maskEmailForAdmin(normEmail), err)
-				return c.Status(500).JSON(fiber.Map{"success": false, "message_code": "ERR_DB_QUERY"})
-			}
-		}
+	LogOperationBy(existingUser.ID, existingUser.ID, "user", "LOGIN", c.IP(),
+		fmt.Sprintf(`[{"type":"LOGIN","via":%q,"username":%q,"external_id":%q}]`,
+			providerKey, existingUser.Username, extID))
+	sessionID, err := database.CreateUserSession(existingUser.ID, c.Get("User-Agent"), c.IP())
+	if err != nil {
+		log.Printf("[OAUTH] create session failed existing user=%d: %v", existingUser.ID, err)
+		return c.Status(500).JSON(fiber.Map{"success": false, "message_code": "ERR_DB_INSERT_FAILED"})
 	}
+	return c.JSON(fiber.Map{
+		"success":      true,
+		"msg":          "欢迎回归, " + displayName,
+		"msg_code":     "SUCCESS_WELCOME_BACK",
+		"message":      "欢迎回归, " + displayName,
+		"message_code": "SUCCESS_WELCOME_BACK",
+		"gh_name":      displayName, // 兼容字段，前端切换到 display_name 后下版本删
+		"display_name": displayName,
+		"session_id":   sessionID,
+	})
+}
 
-	// ====== 新用户分支 ======
+// blockOnEmailCollision 跨 provider 邮箱冲突防御（Phase H-6）。
+// done=true 表示拦截已发响应（caller 应 return nil）；done=false 表示无冲突可继续。
+//
+// 防御场景：用户已用 GitHub（邮箱 alice@x.com）注册过 DAOF 账号 A，
+// 现在又用 Google（同邮箱）走 OAuth 登录。如果直接走新建账号路径，会得到独立账号 B，
+// 余额/订阅/历史全部割裂——这是设计漏洞，必须拦截。
+//
+// 拦截条件（同时满足才拒）：
+//  1. provider 明确告知 email_verified=true（防 attacker 在 GitHub 设置 secondary
+//     email 占别人位；未验证邮箱不构成冲突）
+//  2. DAOF 内存在一个 active（status=1）用户，其 email 等于 provider.email 且
+//     DAOF 自身的 email_verified_at != NULL
+//
+// fail-closed：DB lookup 错误返 500，宁可让用户重试也不要冒"两 user 共邮箱"风险。
+// 兜底：uniq_users_email_nonempty partial unique index 拦下并发竞态。
+func blockOnEmailCollision(c *fiber.Ctx, providerKey string, identity *OAuthIdentityData) bool {
+	if identity.Email == "" || !identity.EmailVerified {
+		return false
+	}
+	normEmail := strings.ToLower(strings.TrimSpace(identity.Email))
+	if normEmail == "" {
+		return false
+	}
+	var existing database.User
+	err := database.DB.
+		Where("LOWER(email) = ? AND email_verified_at IS NOT NULL AND status = 1", normEmail).
+		First(&existing).Error
+	if errors.Is(err, gorm.ErrRecordNotFound) {
+		return false
+	}
+	if err != nil {
+		log.Printf("[OAUTH-EMAIL-COLLISION] lookup failed provider=%s email=%s: %v",
+			providerKey, maskEmailForAdmin(normEmail), err)
+		_ = c.Status(500).JSON(fiber.Map{"success": false, "message_code": "ERR_DB_QUERY"})
+		return true
+	}
+	log.Printf("[OAUTH-EMAIL-COLLISION] provider=%s ext=%s collides with user=%d email=%s",
+		providerKey, identity.ExternalID, existing.ID, maskEmailForAdmin(normEmail))
+	LogOperationBy(0, existing.ID, "system", "OAUTH_EMAIL_COLLISION_BLOCKED", c.IP(),
+		fmt.Sprintf(`[{"type":"OAUTH_EMAIL_COLLISION_BLOCKED","provider":%q,"external_id":%q,"email_hint":%q}]`,
+			providerKey, identity.ExternalID, maskEmailForAdmin(normEmail)))
+	_ = c.Status(409).JSON(fiber.Map{
+		"success":      false,
+		"message_code": "ERR_OAUTH_EMAIL_TAKEN_LINK_REQUIRED",
+		"message":      "该第三方邮箱已被另一个账号占用，请先登录原账号后在「设置 → 第三方账号」中绑定。",
+		"email_hint":   maskEmailForAdmin(normEmail),
+		"provider":     providerKey,
+	})
+	return true
+}
+
+// finishOAuthRegisterIntent 新用户路径：检查 user cap、跑风控、签发 tmp_token。
+// 不直接建账号——让前端走 CompleteRisk（SMS 路径）或 CompleteProfile（trust 路径）。
+func finishOAuthRegisterIntent(c *fiber.Ctx, providerKey string, identity *OAuthIdentityData, refUser string) error {
 	if rejectIfUserCapReached(c) {
 		return nil
 	}
+	proxy.SysConfigMutex.RLock()
+	regStrategy := proxy.SysConfigCache["reg_strategy"]
+	regIpLimitStr := proxy.SysConfigCache["reg_ip_limit"]
+	proxy.SysConfigMutex.RUnlock()
 
-	currentIP := c.IP()
 	needSmsBind := false
-
 	switch regStrategy {
 	case "strict":
 		needSmsBind = true
@@ -820,20 +887,14 @@ func OAuthCallback(c *fiber.Ctx) error {
 			limit = 3
 		}
 		var ipRegCount int64
-		if err := database.DB.Model(&database.User{}).Where("reg_ip = ?", currentIP).Count(&ipRegCount).Error; err != nil {
-			log.Printf("[REG-IP-CHECK] count query failed for ip=%s: %v — fail-closed (force SMS bind)", currentIP, err)
+		if err := database.DB.Model(&database.User{}).Where("reg_ip = ?", c.IP()).Count(&ipRegCount).Error; err != nil {
+			log.Printf("[REG-IP-CHECK] count query failed for ip=%s: %v — fail-closed (force SMS bind)", c.IP(), err)
 			needSmsBind = true
 		} else if ipRegCount >= limit {
 			needSmsBind = true
 		}
 	default:
 		// trust 模式
-		needSmsBind = false
-	}
-
-	refUser := strings.TrimSpace(payload.Ref)
-	if refUser == "" {
-		refUser = strings.TrimSpace(c.Query("ref"))
 	}
 
 	tokenType := "clean"
@@ -846,7 +907,7 @@ func OAuthCallback(c *fiber.Ctx) error {
 		messageCode = "ERR_REQUIRE_SMS_BIND"
 		message = "安全校验未完成：受新账号安全策略影响，请先验证手机号码以完成注册核验。"
 	}
-	safeTmpToken, _ := utils.Encrypt(buildOAuthTmpTokenPayload(tokenType, providerKey, extID, displayName, refUser))
+	safeTmpToken, _ := utils.Encrypt(buildOAuthTmpTokenPayload(tokenType, providerKey, identity.ExternalID, identity.Username, refUser))
 	resp := fiber.Map{
 		"success":      false,
 		"action":       action,
@@ -855,7 +916,7 @@ func OAuthCallback(c *fiber.Ctx) error {
 		"message_code": messageCode,
 	}
 	if !needSmsBind {
-		resp["default_name"] = suggestUsernameFromOAuthName(displayName)
+		resp["default_name"] = suggestUsernameFromOAuthName(identity.Username)
 	}
 	return c.JSON(resp)
 }

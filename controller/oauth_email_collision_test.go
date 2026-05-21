@@ -3,20 +3,26 @@
 // Phase H-6（2026-05-20）单元测试：跨 provider 邮箱冲突防御。
 //
 // 验证场景：
-//   1. 命中：DAOF 内有 verified 邮箱用户，OAuth 同邮箱 → 409 + ERR_OAUTH_EMAIL_TAKEN_LINK_REQUIRED
-//   2. bypass：identity.Email == "" → 正常走新建账号路径
-//   3. bypass：identity.EmailVerified == false → 正常走新建账号路径
-//   4. bypass：DAOF user 邮箱未验证（email_verified_at IS NULL）→ 正常走新建账号路径
-//   5. bypass：DAOF user 已封禁（status != 1）→ 正常走新建账号路径
-//   6. 大小写不敏感：DAOF 存 lowercased，provider 给 mixed case 也应命中
+//  1. 命中：DAOF 内有 verified 邮箱用户，OAuth 同邮箱 + EmailVerified=true → 409
+//  2. bypass：identity.Email == "" → 正常走新建账号路径
+//  3. bypass：identity.EmailVerified == false → 正常走新建账号路径（fail-closed 设计）
+//  4. bypass：DAOF user 邮箱未验证（email_verified_at IS NULL）→ 正常走新建账号路径
+//  5. bypass：DAOF user 已封禁（status != 1）→ 正常走新建账号路径
+//  6. 大小写不敏感：DAOF 存 lowercased，provider 给 mixed case 也应命中
+//
+// Phase H-Audit H-1（2026-05-20）：GitHub provider 收紧 EmailVerified=false（防
+// secondary public email 占位攻击）。这些测试因此改用 stub provider，让测试可控
+// EmailVerified 字段，不依赖任何真实 provider 的语义。
 package controller
 
 import (
+	"bytes"
+	"context"
 	"encoding/json"
+	"errors"
 	"net/http"
 	"net/http/httptest"
 	"strings"
-	"sync/atomic"
 	"testing"
 	"time"
 
@@ -25,84 +31,87 @@ import (
 	"github.com/gofiber/fiber/v2"
 )
 
-// installMockGitHubWithEmail 与 installMockGitHub 一样，但允许 mock /user 返回指定的 email。
-// 用于验证邮箱冲突路径，因为基础 installMockGitHub 不返 email 字段。
-func installMockGitHubWithEmail(t *testing.T, expectedVerifier, mockEmail string) *atomic.Int64 {
-	t.Helper()
-	var tokenHits atomic.Int64
-	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		switch r.URL.Path {
-		case "/login/oauth/access_token":
-			tokenHits.Add(1)
-			var payload map[string]string
-			if err := json.NewDecoder(r.Body).Decode(&payload); err != nil {
-				t.Errorf("decode token request: %v", err)
-				w.WriteHeader(http.StatusBadRequest)
-				return
-			}
-			if payload["code_verifier"] != expectedVerifier {
-				w.WriteHeader(http.StatusBadRequest)
-				_, _ = w.Write([]byte(`{"error":"bad_verifier"}`))
-				return
-			}
-			w.Header().Set("Content-Type", "application/json")
-			_, _ = w.Write([]byte(`{"access_token":"github-access"}`))
-		case "/user":
-			w.Header().Set("Content-Type", "application/json")
-			// 真实 GitHub /user 在用户公开了 primary email 时会返回 email 字段
-			body := map[string]any{
-				"id":    int64(99001),
-				"login": "newcomer",
-				"email": mockEmail,
-			}
-			out, _ := json.Marshal(body)
-			_, _ = w.Write(out)
-		default:
-			t.Errorf("unexpected GitHub mock path %s", r.URL.Path)
-			w.WriteHeader(http.StatusNotFound)
-		}
-	}))
-	t.Cleanup(server.Close)
+// stubOAuthProvider 是测试专用的 OAuth provider，让单测可控
+// EmailVerified / Email / ExternalID 三个关键字段。
+type stubOAuthProvider struct {
+	key      string
+	email    string
+	verified bool
+	extID    string
+	username string
+}
 
-	oldTokenEndpoint := githubTokenEndpoint
-	oldUserEndpoint := githubUserEndpoint
-	oldClient := githubHTTPClient
-	githubTokenEndpoint = server.URL + "/login/oauth/access_token"
-	githubUserEndpoint = server.URL + "/user"
-	githubHTTPClient = server.Client()
+func (s *stubOAuthProvider) Key() string         { return s.key }
+func (s *stubOAuthProvider) IsConfigured() bool  { return true }
+func (s *stubOAuthProvider) Exchange(_ context.Context, _, _ string) (*OAuthIdentityData, error) {
+	if s.extID == "" {
+		return nil, errors.New("stub: extID required")
+	}
+	return &OAuthIdentityData{
+		Provider:      s.key,
+		ExternalID:    s.extID,
+		Email:         s.email,
+		Username:      s.username,
+		EmailVerified: s.verified,
+	}, nil
+}
+
+// registerStubProvider 注册 stub provider 到 OAuthProviderRegistry，
+// 并在测试结束时还原（若 key 原本未注册则 delete）。
+func registerStubProvider(t *testing.T, stub *stubOAuthProvider) {
+	t.Helper()
+	old, exists := GetOAuthProvider(stub.key)
+	RegisterOAuthProvider(stub)
 	t.Cleanup(func() {
-		githubTokenEndpoint = oldTokenEndpoint
-		githubUserEndpoint = oldUserEndpoint
-		githubHTTPClient = oldClient
+		if exists {
+			RegisterOAuthProvider(old)
+		} else {
+			oauthProvidersMu.Lock()
+			delete(oauthProviders, stub.key)
+			oauthProvidersMu.Unlock()
+		}
 	})
-	return &tokenHits
+}
+
+// postStubProviderCallback 走 /callback/:provider 路由触发 OAuthCallback。
+func postStubProviderCallback(t *testing.T, app *fiber.App, providerKey, code, state string) *http.Response {
+	t.Helper()
+	req := httptest.NewRequest(http.MethodPost,
+		"/callback/"+providerKey+"?code="+code+"&state="+state,
+		bytes.NewBufferString(`{"ref":""}`))
+	req.Header.Set("Content-Type", "application/json")
+	resp, err := app.Test(req)
+	if err != nil {
+		t.Fatalf("callback request: %v", err)
+	}
+	return resp
+}
+
+func newStubCollisionApp() *fiber.App {
+	app := fiber.New(fiber.Config{DisableStartupMessage: true})
+	app.Post("/callback/:provider", OAuthCallback)
+	return app
 }
 
 func TestOAuthCallback_EmailCollision_Rejects(t *testing.T) {
 	setupOAuthControllerTestDB(t)
 	setOAuthSysConfigForTest(t)
+	registerStubProvider(t, &stubOAuthProvider{
+		key: "stubverif", email: "alice@example.com", verified: true,
+		extID: "stub-99001", username: "alice_stub",
+	})
 
-	// 场景：DAOF 内已经有一个 verified 邮箱用户 alice@example.com
+	// DAOF 内已有一个 verified 邮箱用户 alice@example.com
 	now := time.Now()
-	existing := database.User{
-		Username:        "alice",
-		Role:            "user",
-		Token:           "sk-alice-existing",
-		Status:          1,
-		Email:           "alice@example.com",
-		EmailVerifiedAt: &now,
-	}
-	if err := database.DB.Create(&existing).Error; err != nil {
+	if err := database.DB.Create(&database.User{
+		Username: "alice", Role: "user", Token: "sk-alice-existing", Status: 1,
+		Email: "alice@example.com", EmailVerifiedAt: &now,
+	}).Error; err != nil {
 		t.Fatalf("seed existing: %v", err)
 	}
 
-	// GitHub OAuth 现在返同邮箱 → 应拒
-	state, verifier := prepareOAuthStateForTest(t)
-	installMockGitHubWithEmail(t, verifier, "alice@example.com")
-
-	app := fiber.New(fiber.Config{DisableStartupMessage: true})
-	app.Post("/callback", GithubCallback)
-	resp := postGithubCallback(t, app, "code-ok", state)
+	state, _ := prepareOAuthStateForTest(t)
+	resp := postStubProviderCallback(t, newStubCollisionApp(), "stubverif", "code-ok", state)
 	if resp.StatusCode != http.StatusConflict {
 		t.Fatalf("status=%d, want 409", resp.StatusCode)
 	}
@@ -113,7 +122,7 @@ func TestOAuthCallback_EmailCollision_Rejects(t *testing.T) {
 	if body["message_code"] != "ERR_OAUTH_EMAIL_TAKEN_LINK_REQUIRED" {
 		t.Errorf("message_code=%v, want ERR_OAUTH_EMAIL_TAKEN_LINK_REQUIRED", body["message_code"])
 	}
-	if body["provider"] != "github" {
+	if body["provider"] != "stubverif" {
 		t.Errorf("provider=%v", body["provider"])
 	}
 	hint, _ := body["email_hint"].(string)
@@ -144,27 +153,21 @@ func TestOAuthCallback_EmailCollision_Rejects(t *testing.T) {
 func TestOAuthCallback_EmailCollision_BypassWhenIdentityEmailEmpty(t *testing.T) {
 	setupOAuthControllerTestDB(t)
 	setOAuthSysConfigForTest(t)
+	registerStubProvider(t, &stubOAuthProvider{
+		key: "stubnoemail", email: "", verified: false,
+		extID: "stub-empty", username: "noemail",
+	})
 
-	// DAOF 内已有 alice@example.com 但 provider 返空 email → 不构成冲突
 	now := time.Now()
 	if err := database.DB.Create(&database.User{
-		Username:        "alice",
-		Role:            "user",
-		Token:           "sk-alice",
-		Status:          1,
-		Email:           "alice@example.com",
-		EmailVerifiedAt: &now,
+		Username: "alice", Role: "user", Token: "sk-alice", Status: 1,
+		Email: "alice@example.com", EmailVerifiedAt: &now,
 	}).Error; err != nil {
 		t.Fatalf("seed: %v", err)
 	}
 
-	state, verifier := prepareOAuthStateForTest(t)
-	installMockGitHub(t, verifier) // 这个 mock 不返 email
-
-	app := fiber.New(fiber.Config{DisableStartupMessage: true})
-	app.Post("/callback", GithubCallback)
-	resp := postGithubCallback(t, app, "code-ok", state)
-	// 应正常走新用户分支 → 返回 require_profile_setup（非 409）
+	state, _ := prepareOAuthStateForTest(t)
+	resp := postStubProviderCallback(t, newStubCollisionApp(), "stubnoemail", "code-ok", state)
 	if resp.StatusCode == http.StatusConflict {
 		t.Fatalf("status=409 (collision falsely triggered)")
 	}
@@ -177,29 +180,55 @@ func TestOAuthCallback_EmailCollision_BypassWhenIdentityEmailEmpty(t *testing.T)
 	}
 }
 
+func TestOAuthCallback_EmailCollision_BypassWhenIdentityUnverified(t *testing.T) {
+	// 验证 H-Audit H-1：provider 返 email 但 EmailVerified=false（GitHub 当前默认行为）
+	// → 不参与冲突检测，正常走新注册路径
+	setupOAuthControllerTestDB(t)
+	setOAuthSysConfigForTest(t)
+	registerStubProvider(t, &stubOAuthProvider{
+		key: "stubunverif", email: "alice@example.com", verified: false,
+		extID: "stub-unverif", username: "unverif",
+	})
+
+	now := time.Now()
+	if err := database.DB.Create(&database.User{
+		Username: "alice", Role: "user", Token: "sk-alice", Status: 1,
+		Email: "alice@example.com", EmailVerifiedAt: &now,
+	}).Error; err != nil {
+		t.Fatalf("seed: %v", err)
+	}
+
+	state, _ := prepareOAuthStateForTest(t)
+	resp := postStubProviderCallback(t, newStubCollisionApp(), "stubunverif", "code-ok", state)
+	if resp.StatusCode == http.StatusConflict {
+		t.Fatalf("status=409 (unverified identity should not trigger collision)")
+	}
+	var body map[string]any
+	_ = json.NewDecoder(resp.Body).Decode(&body)
+	if body["action"] != "require_profile_setup" {
+		t.Errorf("action=%v, want require_profile_setup", body["action"])
+	}
+}
+
 func TestOAuthCallback_EmailCollision_BypassWhenDAOFEmailUnverified(t *testing.T) {
 	setupOAuthControllerTestDB(t)
 	setOAuthSysConfigForTest(t)
+	registerStubProvider(t, &stubOAuthProvider{
+		key: "stubverif2", email: "alice@example.com", verified: true,
+		extID: "stub-99002", username: "alice2",
+	})
 
-	// DAOF 内 alice@example.com 但 email_verified_at == NULL（绑了邮箱但没点验证链接）
-	// → 不构成冲突（恶意 attacker 可绑别人邮箱占位，必须 verified 才算 ground truth）
+	// DAOF 内 alice@example.com 但 email_verified_at == NULL
 	if err := database.DB.Create(&database.User{
-		Username: "alice",
-		Role:     "user",
-		Token:    "sk-alice",
-		Status:   1,
-		Email:    "alice@example.com",
+		Username: "alice", Role: "user", Token: "sk-alice", Status: 1,
+		Email: "alice@example.com",
 		// EmailVerifiedAt: nil
 	}).Error; err != nil {
 		t.Fatalf("seed: %v", err)
 	}
 
-	state, verifier := prepareOAuthStateForTest(t)
-	installMockGitHubWithEmail(t, verifier, "alice@example.com")
-
-	app := fiber.New(fiber.Config{DisableStartupMessage: true})
-	app.Post("/callback", GithubCallback)
-	resp := postGithubCallback(t, app, "code-ok", state)
+	state, _ := prepareOAuthStateForTest(t)
+	resp := postStubProviderCallback(t, newStubCollisionApp(), "stubverif2", "code-ok", state)
 	if resp.StatusCode == http.StatusConflict {
 		t.Fatalf("status=409 (unverified DAOF email triggered collision)")
 	}
@@ -213,27 +242,22 @@ func TestOAuthCallback_EmailCollision_BypassWhenDAOFEmailUnverified(t *testing.T
 func TestOAuthCallback_EmailCollision_BypassWhenDAOFUserBanned(t *testing.T) {
 	setupOAuthControllerTestDB(t)
 	setOAuthSysConfigForTest(t)
+	registerStubProvider(t, &stubOAuthProvider{
+		key: "stubverif3", email: "alice@example.com", verified: true,
+		extID: "stub-99003", username: "alice3",
+	})
 
-	// DAOF 内 alice@example.com 已 verified 但用户被封禁（status=2）
-	// → 不算"有效占用"，新用户可以走正常路径建账号
 	now := time.Now()
 	if err := database.DB.Create(&database.User{
-		Username:        "alice_banned",
-		Role:            "user",
-		Token:           "sk-alice-banned",
-		Status:          2, // banned
-		Email:           "alice@example.com",
-		EmailVerifiedAt: &now,
+		Username: "alice_banned", Role: "user", Token: "sk-alice-banned",
+		Status: 2, // banned
+		Email:  "alice@example.com", EmailVerifiedAt: &now,
 	}).Error; err != nil {
 		t.Fatalf("seed: %v", err)
 	}
 
-	state, verifier := prepareOAuthStateForTest(t)
-	installMockGitHubWithEmail(t, verifier, "alice@example.com")
-
-	app := fiber.New(fiber.Config{DisableStartupMessage: true})
-	app.Post("/callback", GithubCallback)
-	resp := postGithubCallback(t, app, "code-ok", state)
+	state, _ := prepareOAuthStateForTest(t)
+	resp := postStubProviderCallback(t, newStubCollisionApp(), "stubverif3", "code-ok", state)
 	if resp.StatusCode == http.StatusConflict {
 		t.Fatalf("status=409 (banned user falsely blocked new register)")
 	}
@@ -247,26 +271,21 @@ func TestOAuthCallback_EmailCollision_BypassWhenDAOFUserBanned(t *testing.T) {
 func TestOAuthCallback_EmailCollision_CaseInsensitive(t *testing.T) {
 	setupOAuthControllerTestDB(t)
 	setOAuthSysConfigForTest(t)
+	registerStubProvider(t, &stubOAuthProvider{
+		key: "stubverif4", email: "Alice@Example.COM", verified: true,
+		extID: "stub-99004", username: "alice4",
+	})
 
-	// DAOF 存的是 lowercase（G-1 规范化），provider 给 mixed case
 	now := time.Now()
 	if err := database.DB.Create(&database.User{
-		Username:        "alice",
-		Role:            "user",
-		Token:           "sk-alice",
-		Status:          1,
-		Email:           "alice@example.com",
-		EmailVerifiedAt: &now,
+		Username: "alice", Role: "user", Token: "sk-alice", Status: 1,
+		Email: "alice@example.com", EmailVerifiedAt: &now,
 	}).Error; err != nil {
 		t.Fatalf("seed: %v", err)
 	}
 
-	state, verifier := prepareOAuthStateForTest(t)
-	installMockGitHubWithEmail(t, verifier, "Alice@Example.COM")
-
-	app := fiber.New(fiber.Config{DisableStartupMessage: true})
-	app.Post("/callback", GithubCallback)
-	resp := postGithubCallback(t, app, "code-ok", state)
+	state, _ := prepareOAuthStateForTest(t)
+	resp := postStubProviderCallback(t, newStubCollisionApp(), "stubverif4", "code-ok", state)
 	if resp.StatusCode != http.StatusConflict {
 		t.Fatalf("status=%d, want 409 (case-insensitive match)", resp.StatusCode)
 	}

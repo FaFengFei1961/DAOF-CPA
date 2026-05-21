@@ -159,11 +159,23 @@ func (p *GitHubProvider) Exchange(ctx context.Context, code, codeVerifier string
 		Email:      ghEmail,
 		Username:   ghLogin,
 		AvatarURL:  avatar,
-		// Phase H-6（2026-05-20）：GitHub /user 不返 email_verified；但 GitHub 不允许把
-		// 未验证邮箱设为 primary email，所以 /user.email 非空就等价于 verified。
-		// （要拿 /user/emails 列表 + 显式 verified 字段需要 `user:email` scope，目前 OAuth
-		//  scope 留空因此走默认 read:user，已经能拿到 primary email；不需要扩展 scope。）
-		EmailVerified: ghEmail != "",
+		// Phase H-Audit H-1（2026-05-20）：保守置 false。
+		//
+		// 历史：H-6 时把 EmailVerified 设为 `ghEmail != ""`，假设 GitHub /user.email
+		// 一定是 verified primary。审查发现 GitHub 实际允许用户把 secondary public
+		// email 设为公开邮箱，且 /user.email 仅返"primary 公开 OR 未设公开 secondary"，
+		// 并非保证 verified——攻击者可在 GitHub 加未验证 secondary、设为 public，
+		// 让其在 /user.email 出现并冒充受害者邮箱占位 DAOF 账号（DoS）。
+		//
+		// 修复：除非扩 `user:email` scope 调 /user/emails 显式拿 verified=true，
+		// 否则一律按"未验证"处理。H-6 跨 provider 邮箱冲突预检会因此对 GitHub
+		// bypass，但这是 fail-closed 的设计：宁可漏检（让 partial unique index
+		// 兜底）也不要被 secondary email 占位骗过。
+		//
+		// 若未来需要让 GitHub 也参与冲突检测，应扩 scope 到 `user:email`，调
+		// GET /user/emails 找 `primary=true && verified=true` 的条目，并仅在此
+		// 字段标 EmailVerified=true。
+		EmailVerified: false,
 	}, nil
 }
 
