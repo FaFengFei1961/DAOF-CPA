@@ -49,18 +49,12 @@ const getCouponCacheKey = () => {
 
 const displayPackageName = (pkg) => String(pkg.name || '');
 const displayPackageDescription = (pkg) => String(pkg.description || '');
-const displayHighlightTag = (tag) => {
-  const normalized = String(tag || '').trim();
-  const legacyMap = {
-    Pro: '轻量',
-    'Max 5x': '中等',
-    'Max 20x': '重度',
-  };
-  return legacyMap[normalized] || normalized;
-};
+// Audit DELETE-3 fix: legacyMap 已删（subscription_seeds 已存中文 highlight_tag，
+// 旧英文标签 Pro/Max 5x/Max 20x 在公测期数据库里不可能存在）
+const displayHighlightTag = (tag) => String(tag || '').trim();
 
 const PLAN_LIMIT_CALLS_UNIT = '\u6b21\u8c03\u7528';
-const LEGACY_TRINITY_NAME = '\u5fa1\u4e09\u5bb6';
+// Audit DELETE-4 fix: LEGACY_TRINITY_NAME \u5df2\u5220\uff08subscription_seeds \u5df2\u5b58 'Combo'\uff09
 
 const formatPlanLimit = (plan, t) => {
   const value = Number(plan?.limit_value || 0);
@@ -341,8 +335,7 @@ const UpgradePage = ({ onPurchaseSuccess, embedded = false }) => {
                           <Check size={12} className="text-success shrink-0 mt-0.5" aria-hidden="true" />
                           <span className="min-w-0 break-words leading-relaxed">
                             {String(p.plan?.display_name || p.plan?.name || '')
-                              .replaceAll('GPT', 'Codex')
-                              .replaceAll(LEGACY_TRINITY_NAME, 'Combo')}
+                              .replaceAll('GPT', 'Codex')}
                             {formatPlanLimit(p.plan, t) && (
                               <span className="text-outline"> · {formatPlanLimit(p.plan, t)}</span>
                             )}

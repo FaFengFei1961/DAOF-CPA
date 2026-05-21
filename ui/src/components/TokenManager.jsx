@@ -356,7 +356,10 @@ const TokenManager = ({ isAuthenticated }) => {
                                             <div className="flex items-center gap-2">
                                                 <span className="truncate max-w-[150px]" title={token.name}>{token.name}</span>
                                                 <button
+                                                    type="button"
                                                     onClick={() => handleEditName(token)}
+                                                    aria-label={t('TOKEN_MGMT.EDIT_NAME_TOOLTIP', '编辑名称')}
+                                                    title={t('TOKEN_MGMT.EDIT_NAME_TOOLTIP', '编辑名称')}
                                                     className="text-on-surface-variant hover:text-white opacity-0 group-hover/name:opacity-100 p-1 rounded-control hover:bg-surface-container-high"
                                                 >
                                                     <Edit2 size={12} />
@@ -411,7 +414,13 @@ const TokenManager = ({ isAuthenticated }) => {
                                         )}
                                     </td>
                                     <td className="p-4">
-                                        <button onClick={() => handleToggleStatus(token.id, token.status)}>
+                                        <button
+                                            type="button"
+                                            onClick={() => handleToggleStatus(token.id, token.status)}
+                                            aria-label={token.status === 1
+                                                ? t('TOKEN_MGMT.FREEZE_TOOLTIP', '冻结令牌')
+                                                : t('TOKEN_MGMT.ACTIVATE_TOOLTIP', '激活令牌')}
+                                        >
                                             <StatusBadge variant={token.status === 1 ? 'success' : 'error'} className="cursor-pointer hover:opacity-80">
                                                 <Power size={12} className="mr-1" />
                                                 {token.status === 1 ? t('TOKEN_MGMT.STATUS_ACTIVE') : t('TOKEN_MGMT.STATUS_FROZEN')}

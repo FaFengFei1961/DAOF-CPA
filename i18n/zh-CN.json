@@ -854,6 +854,9 @@
   "TOKEN_MGMT": {
     "MAIN_TITLE": "API 令牌管理",
     "MAIN_DESC": "管理您的 API 调用凭证，并监控相关的消费流水日志。",
+    "EDIT_NAME_TOOLTIP": "编辑名称",
+    "FREEZE_TOOLTIP": "冻结令牌",
+    "ACTIVATE_TOOLTIP": "激活令牌",
     "BASE_URL_TITLE": "API 接口基地址 (Base URL)",
     "BASE_URL_DESC": "这是您的应用程序 (如 Chatbox、NextChat等) 调用大模型所需的 Base URL 地址",
     "COPY_URL": "复制链接",
@@ -2349,9 +2352,6 @@
     "SUCCESS_UPDATED": "更新成功。",
     "SUCCESS_WELCOME_BACK": "欢迎回来, {{ghName}}"
   },
-  "MOBILE_NAV": {
-    "BOTTOM_LABEL": "底部导航"
-  },
   "PAGINATION": {
     "SUMMARY": "共 {{total}} 条 · 第 {{page}}/{{total_pages}} 页",
     "SIZE_LABEL": "每页条数",
@@ -2516,9 +2516,6 @@
       "SECTION_ERROR": "错误详情",
       "ERROR_NO_MESSAGE": "(无 message)"
     }
-  },
-  "SIDEBAR": {
-    "TAGLINE": "AI 模型聚合"
   },
   "SHELL": {
     "ADMIN": {

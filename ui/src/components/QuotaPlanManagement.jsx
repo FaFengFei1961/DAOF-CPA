@@ -56,17 +56,18 @@ const QuotaPlanManagement = () => {
   const [editing, setEditing] = useState(null); // null | EMPTY_PLAN | existing
   const [saving, setSaving] = useState(false);
 
+  // Audit 2026-05-21 HIGH-1 fix：raw fetch 跳过 authFetch 的 401 session-expiry
+  // 与 402 topup-redirect 流程；改用 authFetch 走统一通道。
   const load = useCallback(async () => {
     try {
-      const res = await fetch('/api/admin/quota-plans', { credentials: 'include' });
-      const json = await res.json();
-      if (json.success) setPlans(json.data || []);
+      const json = await authFetch('/api/admin/quota-plans');
+      if (json?.success) setPlans(json.data || []);
     } catch {
       toast.error(t('QUOTA_PLAN.LOAD_FAIL', '加载失败'));
     } finally {
       setLoading(false);
     }
-  }, []);
+  }, [t]);
 
   useEffect(() => { load(); }, [load]);
 
@@ -95,17 +96,14 @@ const QuotaPlanManagement = () => {
     setSaving(true);
     const isNew = !editing.id;
     try {
-      const res = await fetch(
+      const json = await authFetch(
         isNew ? '/api/admin/quota-plans' : `/api/admin/quota-plans/${editing.id}`,
         {
           method: isNew ? 'POST' : 'PUT',
-          credentials: 'include',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify(editing),
+          body: editing,
         }
       );
-      const json = await res.json();
-      if (json.success) {
+      if (json?.success) {
         toast.success(isNew ? t('QUOTA_PLAN.CREATE_OK', '创建成功') : t('QUOTA_PLAN.UPDATE_OK', '已更新'));
         setEditing(null);
         load();
@@ -122,14 +120,11 @@ const QuotaPlanManagement = () => {
   const remove = async (p) => {
     if (!(await confirm(t('QUOTA_PLAN.DELETE_CONFIRM', '删除配额计划「{{name}}」？', { name: p.name })))) return;
     try {
-      const res = await fetch(`/api/admin/quota-plans/${p.id}`, {
-        method: 'DELETE', credentials: 'include',
-      });
-      const json = await res.json();
-      if (json.success) {
+      const json = await authFetch(`/api/admin/quota-plans/${p.id}`, { method: 'DELETE' });
+      if (json?.success) {
         toast.success(t('QUOTA_PLAN.DELETE_OK', '已删除'));
         load();
-      } else if (json.message_code === 'ERR_PLAN_IN_USE') {
+      } else if (json?.message_code === 'ERR_PLAN_IN_USE') {
         toast.error(t('QUOTA_PLAN.PLAN_IN_USE', '仍被 {{count}} 个套餐引用', { count: json.ref_count }));
       } else {
         toast.error(json.message || t('QUOTA_PLAN.DELETE_FAIL', '删除失败'));

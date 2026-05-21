@@ -671,8 +671,10 @@ const UserManagement = () => {
                                                                     if (c.type === 'DELETE') return t('USER_MGMT.LOG_DELETE', { target: c.target });
                                                                     if (c.type === 'LOGIN') return t('USER_MGMT.LOG_LOGIN', '通过 [{{via}}] 登录回归', { via: c.via || 'unknown' });
                                                                     if (c.type === 'REGISTER') {
-                                                                        // Phase H-3b：oauth.go 写 external_id 而非 github_id；老记录仍可能有 github_id
-                                                                        const oauthExt = c.external_id || c.github_id;
+                                                                        // Audit DELETE-1 fix：c.github_id 兼容读已删除 ——
+                                                                        // H-3b 把 User.GithubID 列删了，oauth.go 只写 external_id；
+                                                                        // 公测期无历史数据需兼容。
+                                                                        const oauthExt = c.external_id;
                                                                         const oauthLabel = c.via && c.via !== 'sms' && c.via !== 'email' ? c.via : 'gh';
                                                                         return t('USER_MGMT.LOG_REGISTER', '经 [{{via}}] 完成注册（用户名 [{{username}}]{{extra}}）', {
                                                                             via: c.via || 'unknown',
@@ -707,7 +709,8 @@ const UserManagement = () => {
                                                                     if (c.type === 'BULK_HARD_DELETE') return t('USER_MGMT.LOG_BULK_HARD_DELETE', '物理抹除用户 [{{target}}]（ID {{id}}{{extra}}）', {
                                                                         target: c.target,
                                                                         id: c.user_id,
-                                                                        extra: c.github_id ? `, gh:${c.github_id}` : '',
+                                                                        // Audit DELETE-1: c.github_id 已不再写入（H-3b 已删 User.GithubID），extra 永远空
+                                                                        extra: '',
                                                                     });
                                                                     if (c.type === 'ADMIN_LOGIN') return t('USER_MGMT.LOG_ADMIN_LOGIN', '管理员账号 [{{username}}] 登录成功', { username: c.username });
                                                                     if (c.type === 'ADMIN_LOGIN_FAIL') return t('USER_MGMT.LOG_ADMIN_LOGIN_FAIL', '管理员账号 [{{username}}] 登录失败（密码错误）', { username: c.username });

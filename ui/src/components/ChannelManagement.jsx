@@ -404,8 +404,9 @@ const ChannelManagement = () => {
         );
     };
 
-    // Fetch Channels
-    const fetchChannels = async () => {
+    // Audit HIGH-3 fix：fetchChannels 用 useCallback 包起来，让 useEffect deps
+    // 能正确列出，stale closure 风险消除。t 改变（语言切换）也会触发重拉。
+    const fetchChannels = React.useCallback(async () => {
         setLoading(true);
         try {
             const data = await authFetch('/api/admin/channels');
@@ -416,11 +417,11 @@ const ChannelManagement = () => {
         } finally {
             setLoading(false);
         }
-    };
+    }, [t]);
 
     useEffect(() => {
         if (view === 'channels') fetchChannels();
-    }, [view]);
+    }, [view, fetchChannels]);
 
     // Fetch Models for a Channel
     const fetchModels = async (chanId) => {

@@ -6,6 +6,7 @@ import {
 import { useTranslation } from 'react-i18next';
 import toast from 'react-hot-toast';
 import { remainingColor, fmtTime, fmtAbsoluteShort, safePct } from '../utils/credits';
+import { authFetch } from '../utils/authFetch';
 
 // Provider metadata.
 const PROVIDER_META = {
@@ -252,34 +253,31 @@ const CreditsMonitor = () => {
     }
   }, []);
 
+  // Audit 2026-05-21 HIGH-2 fix：raw fetch 跳过 authFetch 的统一 402-topup-redirect
+  // 与网络异常归一化处理；改走 authFetch，本地仍按 status 分支 401/403。
   const load = useCallback(async (showLoading = false) => {
     if (sessionExpiredRef.current) return;
     if (showLoading) setLoading(true);
-    try {
-      const res = await fetch('/api/admin/credits-pool', {
-        credentials: 'include',
-        cache: 'no-store',
-      });
-      if (res.status === 401 || res.status === 403) {
-        sessionExpiredRef.current = true;
-        stopPolling();
-        toast.error(t('CREDITS.SESSION_EXPIRED', '管理员会话已过期，请重新登录'), { id: 'credits-session-expired' });
-        return;
-      }
-      const json = await res.json();
-      if (!mountedRef.current) return;
-      if (json.success) {
-        setData(json.data);
-      } else {
-        toast.error(json.message || t('CREDITS.LOAD_FAIL', '号池数据加载失败'), { id: 'credits-load-error' });
-      }
-    } catch (err) {
-      if (mountedRef.current) {
-        toast.error(t('CREDITS.LOAD_NETWORK_FAIL', '网络异常，无法加载号池数据'), { id: 'credits-load-error' });
-      }
-    } finally {
-      if (mountedRef.current) setLoading(false);
+    const json = await authFetch('/api/admin/credits-pool', { cache: 'no-store' });
+    if (!mountedRef.current) return;
+    if (json?.status === 401 || json?.status === 403) {
+      sessionExpiredRef.current = true;
+      stopPolling();
+      toast.error(t('CREDITS.SESSION_EXPIRED', '管理员会话已过期，请重新登录'), { id: 'credits-session-expired' });
+      setLoading(false);
+      return;
     }
+    if (json?.status === 0) {
+      toast.error(t('CREDITS.LOAD_NETWORK_FAIL', '网络异常，无法加载号池数据'), { id: 'credits-load-error' });
+      setLoading(false);
+      return;
+    }
+    if (json?.success) {
+      setData(json.data);
+    } else {
+      toast.error(json?.message || t('CREDITS.LOAD_FAIL', '号池数据加载失败'), { id: 'credits-load-error' });
+    }
+    setLoading(false);
   }, [stopPolling, t]);
 
   useEffect(() => {
@@ -304,24 +302,25 @@ const CreditsMonitor = () => {
     pendingTimeoutsRef.current = [];
 
     try {
-      const res = await fetch('/api/admin/credits-pool/refresh', {
-        method: 'POST',
-        credentials: 'include',
-      });
-      if (res.status === 401 || res.status === 403) {
+      // Audit HIGH-2 fix：refresh trigger 同样改走 authFetch
+      const json = await authFetch('/api/admin/credits-pool/refresh', { method: 'POST' });
+      if (json?.status === 401 || json?.status === 403) {
         sessionExpiredRef.current = true;
         stopPolling();
         toast.error(t('CREDITS.SESSION_EXPIRED', '管理员会话已过期，请重新登录'), { id: 'credits-session-expired' });
         return;
       }
-      if (res.status === 409) {
+      if (json?.status === 409) {
         toast(t('CREDITS.REFRESH_BUSY', '已有刷新任务在进行中'), { id: 'credits-refresh-busy' });
         return;
       }
-      const json = await res.json();
-      if (!json.success) {
+      if (json?.status === 0) {
+        toast.error(t('CREDITS.NETWORK_ERROR', '网络异常'));
+        return;
+      }
+      if (!json?.success) {
         // Backend returns explicit failure reasons such as CPA missing/unreachable/auth failure.
-        toast.error(json.message || t('CREDITS.REFRESH_FAIL', '刷新失败'), {
+        toast.error(json?.message || t('CREDITS.REFRESH_FAIL', '刷新失败'), {
           id: 'credits-refresh-fail',
           duration: 6000,
         });
@@ -335,8 +334,6 @@ const CreditsMonitor = () => {
         setTimeout(() => mountedRef.current && load(false), 30000),
       ];
       pendingTimeoutsRef.current.push(...ids);
-    } catch (err) {
-      toast.error(t('CREDITS.NETWORK_ERROR', '网络异常'));
     } finally {
       // Avoid scheduling state updates after session expiry or unmount.
       if (sessionExpiredRef.current || !mountedRef.current) {

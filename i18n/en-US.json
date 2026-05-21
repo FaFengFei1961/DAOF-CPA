@@ -854,6 +854,9 @@
   "TOKEN_MGMT": {
     "MAIN_TITLE": "API Token Management",
     "MAIN_DESC": "Manage access tokens and monitor proxy logs.",
+    "EDIT_NAME_TOOLTIP": "Edit name",
+    "FREEZE_TOOLTIP": "Freeze token",
+    "ACTIVATE_TOOLTIP": "Activate token",
     "BASE_URL_TITLE": "API Base URL",
     "BASE_URL_DESC": "Use this as the Base URL in your applications (e.g. Chatbox, NextChat) to access models.",
     "COPY_URL": "Copy URL",
@@ -2349,9 +2352,6 @@
     "SUCCESS_UPDATED": "Updated successfully.",
     "SUCCESS_WELCOME_BACK": "Welcome back, {{ghName}}"
   },
-  "MOBILE_NAV": {
-    "BOTTOM_LABEL": "Bottom navigation"
-  },
   "PAGINATION": {
     "SUMMARY": "{{total}} total · Page {{page}}/{{total_pages}}",
     "SIZE_LABEL": "Rows per page",
@@ -2516,9 +2516,6 @@
       "SECTION_ERROR": "Error details",
       "ERROR_NO_MESSAGE": "(no message)"
     }
-  },
-  "SIDEBAR": {
-    "TAGLINE": "AI model aggregator"
   },
   "SHELL": {
     "ADMIN": {
