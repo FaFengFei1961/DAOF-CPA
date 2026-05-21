@@ -8,8 +8,9 @@
  *     - 行点击 → Drawer 显示完整 17+ 字段（precheck / upstream / latency / error 等）
  *     - 顶部筛选条 + 分页控件 + CSV 导出独立放置
  */
-import React, { useEffect, useState } from 'react';
+import React, { useEffect, useMemo, useState } from 'react';
 import { useSearchParams } from 'react-router-dom';
+import { useTranslation } from 'react-i18next';
 import { Activity, RefreshCw, Download, Filter } from 'lucide-react';
 import toast from 'react-hot-toast';
 import {
@@ -28,17 +29,15 @@ const isAuxiliaryEvent = (event) => (
   String(event?.request_path || '').includes('/messages/count_tokens')
 );
 
-const auxiliaryEventLabel = (event) => (
-  isAuxiliaryEvent(event) ? '辅助接口' : '生成请求'
-);
-
-const STATUS_OPTIONS = [
-  { v: '',         l: '全部状态' },
-  { v: 'success',  l: '成功' },
-  { v: 'failed',   l: '失败' },
+// IA audit C7 fix: status options are built inside the component so labels
+// honor the user's current locale (was hardcoded Chinese array at module scope).
+const buildStatusOptions = (t) => [
+  { v: '',         l: t('ADMIN.AUDIT.STATUS_ALL') },
+  { v: 'success',  l: t('ADMIN.AUDIT.STATUS_SUCCESS') },
+  { v: 'failed',   l: t('ADMIN.AUDIT.STATUS_FAILED') },
   { v: '400',      l: '400' },
   { v: '401',      l: '401' },
-  { v: '402',      l: '402（预检/额度）' },
+  { v: '402',      l: t('ADMIN.AUDIT.STATUS_402_LABEL') },
   { v: '403',      l: '403' },
   { v: '404',      l: '404' },
   { v: '500',      l: '500' },
@@ -63,9 +62,17 @@ const PeriodSwitch = ({ value, onChange }) => (
 
 const AuditEventsPage = () => {
   const [searchParams, setSearchParams] = useSearchParams();
+  const { t } = useTranslation();
   const { formatCurrencyFixed } = useCurrency();
   const formatMeterCost = makeFormatMeterCost(formatCurrencyFixed);
   const formatEventFailure = makeFormatEventFailure(formatMeterCost);
+  // Memo so toggling locale rebuilds; cheap dependency on t.
+  const STATUS_OPTIONS = useMemo(() => buildStatusOptions(t), [t]);
+  const auxiliaryEventLabel = (event) => (
+    isAuxiliaryEvent(event)
+      ? t('ADMIN.AUDIT.AUXILIARY')
+      : t('ADMIN.AUDIT.GENERATIVE')
+  );
 
   const [period, setPeriod] = useState(searchParams.get('period') || '7d');
   const [page, setPage] = useState(1);
@@ -90,9 +97,9 @@ const AuditEventsPage = () => {
       const res = await fetch(`/api/admin/users-usage/events?${params}`, { credentials: 'include' });
       const json = await res.json();
       if (json.success) setData(json.data);
-      else toast.error(json.message || '加载请求事件失败');
+      else toast.error(json.message || t('ADMIN.AUDIT.TOAST_LOAD_FAIL'));
     } catch {
-      toast.error('网络异常');
+      toast.error(t('ADMIN.AUDIT.TOAST_NET_ERROR'));
     }
     setLoading(false);
   };
@@ -118,10 +125,14 @@ const AuditEventsPage = () => {
 
   const handleExportCsv = () => {
     if (!events.length) {
-      toast.error('当前页无数据可导出');
+      toast.error(t('ADMIN.AUDIT.TOAST_EXPORT_EMPTY'));
       return;
     }
-    const header = ['时间', '用户', '接口类型', '请求模型', '服务模型', '上游Provider', '上游账号索引', 'Token Source', '状态', '失败类型', '失败摘要', '预检输入', '预检输出', '预检扣减成本', '预检剩余额度', '请求路径', '延迟ms', '输入', '输出', '思考', '总Token', '媒体用量', '原始成本', '扣减成本', '模型权重', 'Fallback授权', 'IP'];
+    // CSV header stays English for machine-friendly processing and analyst
+    // tooling that pivots on column names. Localizing would break downstream
+    // pipelines without giving humans a meaningful win (they get the same
+    // tab-separated columns either way).
+    const header = ['time', 'user', 'interface', 'requested_model', 'served_model', 'upstream_provider', 'upstream_auth_index', 'token_source', 'status', 'error_type', 'error_summary', 'precheck_input', 'precheck_output', 'precheck_charged_cost', 'precheck_quota_remaining', 'request_path', 'latency_ms', 'input', 'output', 'reasoning', 'total_tokens', 'media_usage', 'raw_cost', 'charged_cost', 'model_weight', 'fallback_opt_in', 'ip'];
     const rows = events.map(e => [
       formatTime(e.created_at), e.username || `#${e.user_id}`, auxiliaryEventLabel(e), e.requested_model || e.model_name, e.served_model || e.model_name,
       e.upstream_provider || '', e.upstream_auth_index || '',
@@ -145,16 +156,16 @@ const AuditEventsPage = () => {
 
   // 6 个核心列。完整字段在 Drawer 里看
   const columns = [
-    { key: 'time', header: '时间', width: 140, render: e => (
+    { key: 'time', header: t('ADMIN.AUDIT.COL_TIME'), width: 140, render: e => (
       <span className="text-[11px] text-on-surface-variant font-mono whitespace-nowrap">{formatTime(e.created_at)}</span>
     ) },
-    { key: 'user', header: '用户', truncate: 160, render: e => (
+    { key: 'user', header: t('ADMIN.AUDIT.COL_USER'), truncate: 160, render: e => (
       <div className="min-w-0">
         <div className="text-on-surface text-xs">{e.username || `#${e.user_id}`}</div>
         <div className="text-[10px] text-on-surface-variant truncate">{e.token_name || '-'}</div>
       </div>
     ) },
-    { key: 'model', header: '模型', truncate: 220, render: e => (
+    { key: 'model', header: t('ADMIN.AUDIT.COL_MODEL'), truncate: 220, render: e => (
       <div className="min-w-0">
         <div className="flex items-center gap-1.5 min-w-0">
           <div className="text-on-surface text-xs font-mono truncate" title={e.requested_model || e.model_name}>
@@ -163,9 +174,9 @@ const AuditEventsPage = () => {
           {isAuxiliaryEvent(e) && (
             <span
               className="shrink-0 inline-flex items-center h-5 px-1.5 rounded-full text-[10px] font-medium bg-primary-container/60 text-on-primary-container border border-primary/30"
-              title="辅助接口：Token 计数，不生成回复，不扣费"
+              title={t('ADMIN.AUDIT.AUXILIARY_BADGE_TIP')}
             >
-              辅助接口
+              {t('ADMIN.AUDIT.AUXILIARY')}
             </span>
           )}
         </div>
@@ -176,7 +187,7 @@ const AuditEventsPage = () => {
         )}
       </div>
     ) },
-    { key: 'status', header: '状态', width: 120, render: e => {
+    { key: 'status', header: t('ADMIN.AUDIT.COL_STATUS'), width: 120, render: e => {
       if (e.error_type) {
         const failure = formatEventFailure(e);
         const isPrecheck = isPrecheckLimitEvent(e);
@@ -203,7 +214,7 @@ const AuditEventsPage = () => {
         </span>
       );
     } },
-    { key: 'usage', header: '用量', align: 'right', render: e => {
+    { key: 'usage', header: t('ADMIN.AUDIT.COL_USAGE'), align: 'right', render: e => {
       const lines = usageLinesOf(e);
       if (lines.length > 0) {
         return (
@@ -217,7 +228,7 @@ const AuditEventsPage = () => {
       }
       return <span className="font-mono">{formatTokens(e.total_tokens || 0)}</span>;
     } },
-    { key: 'cost', header: '扣减', align: 'right', mono: true, render: e => (
+    { key: 'cost', header: t('ADMIN.AUDIT.COL_COST'), align: 'right', mono: true, render: e => (
       <span className="text-primary">{formatMeterCost(e.charged_cost ?? e.cost)}</span>
     ) },
   ];
@@ -234,7 +245,7 @@ const AuditEventsPage = () => {
         }`}
       >
         <Filter size={12} />
-        筛选
+        {t('ADMIN.AUDIT.FILTER_BTN')}
         {(userIdFilter || modelFilter || statusFilter || errorTypeFilter) && (
           <span className="inline-block w-1.5 h-1.5 rounded-full bg-primary" />
         )}
@@ -252,7 +263,7 @@ const AuditEventsPage = () => {
         type="button"
         onClick={fetchData}
         className="p-2 rounded-control border border-outline-variant text-on-surface-variant hover:text-on-surface transition"
-        aria-label="刷新"
+        aria-label={t('ADMIN.AUDIT.REFRESH_ARIA')}
       >
         <RefreshCw size={14} className={loading ? 'animate-spin' : ''} />
       </button>
@@ -262,8 +273,8 @@ const AuditEventsPage = () => {
   return (
     <PageContainer>
       <PageHeader
-        title="请求事件审计"
-        sub="按时间倒序的所有 LLM 请求事件。点击行查看完整字段（预检 / 上游归因 / 延迟 / 错误）。"
+        title={t('ADMIN.AUDIT.TITLE')}
+        sub={t('ADMIN.AUDIT.SUB')}
         actions={headerActions}
       />
 
@@ -279,7 +290,7 @@ const AuditEventsPage = () => {
             <input
               value={modelFilter}
               onChange={(e) => setModelFilter(e.target.value)}
-              placeholder="模型 (substring)"
+              placeholder={t('ADMIN.AUDIT.FILTER_MODEL_PH')}
               className="bg-surface-container-high border border-outline-variant text-on-surface text-sm rounded-control px-3 py-1.5 outline-none focus:border-primary"
             />
             <select
@@ -292,7 +303,7 @@ const AuditEventsPage = () => {
             <input
               value={errorTypeFilter}
               onChange={(e) => setErrorTypeFilter(e.target.value)}
-              placeholder="error_type (e.g. upstream_unmetered)"
+              placeholder={t('ADMIN.AUDIT.FILTER_ERROR_TYPE_PH')}
               className="bg-surface-container-high border border-outline-variant text-on-surface text-sm rounded-control px-3 py-1.5 outline-none focus:border-primary"
             />
           </div>
@@ -301,7 +312,7 @@ const AuditEventsPage = () => {
               type="button"
               onClick={() => { setUserIdFilter(''); setModelFilter(''); setStatusFilter(''); setErrorTypeFilter(''); }}
               className="text-xs text-on-surface-variant hover:text-on-surface"
-            >清空筛选</button>
+            >{t('ADMIN.AUDIT.FILTER_CLEAR')}</button>
           </div>
         </Section>
       )}
@@ -311,8 +322,10 @@ const AuditEventsPage = () => {
         rows={events}
         rowKey={e => e.id}
         loading={loading}
-        emptyTitle="暂无请求事件"
-        emptySub={(userIdFilter || modelFilter || statusFilter || errorTypeFilter) ? '试试清空筛选' : '该时间窗内还没有请求'}
+        emptyTitle={t('ADMIN.AUDIT.EMPTY_TITLE')}
+        emptySub={(userIdFilter || modelFilter || statusFilter || errorTypeFilter)
+          ? t('ADMIN.AUDIT.FILTER_TIP_TRY_CLEAR')
+          : t('ADMIN.AUDIT.EMPTY_NORMAL_DESC')}
         emptyIcon={Activity}
         onRowClick={setDrawerEvent}
         pagination={{
@@ -326,21 +339,27 @@ const AuditEventsPage = () => {
       <Drawer
         open={!!drawerEvent}
         onClose={() => setDrawerEvent(null)}
-        title={drawerEvent ? `请求 #${drawerEvent.id}` : ''}
+        title={drawerEvent ? `${t('ADMIN.AUDIT.DRAWER_PREFIX')} #${drawerEvent.id}` : ''}
         description={drawerEvent ? `${drawerEvent.username || `#${drawerEvent.user_id}`} · ${formatTime(drawerEvent.created_at)}` : ''}
         size="lg"
       >
         {drawerEvent && (
-          <EventDetail event={drawerEvent} formatMeterCost={formatMeterCost} formatEventFailure={formatEventFailure} />
+          <EventDetail event={drawerEvent} formatMeterCost={formatMeterCost} formatEventFailure={formatEventFailure} t={t} />
         )}
       </Drawer>
     </PageContainer>
   );
 };
 
-const EventDetail = ({ event, formatMeterCost, formatEventFailure }) => {
+const EventDetail = ({ event, formatMeterCost, formatEventFailure, t }) => {
   const failure = formatEventFailure(event);
   const isPrecheck = isPrecheckLimitEvent(event);
+  const aux = isAuxiliaryEvent(event);
+  const revenueLabel = event.revenue_source === 'subscription'
+    ? t('ADMIN.AUDIT.REVENUE_SUBSCRIPTION')
+    : event.revenue_source === 'balance'
+      ? t('ADMIN.AUDIT.REVENUE_BALANCE')
+      : t('ADMIN.AUDIT.REVENUE_NONE');
   return (
     <div className="space-y-5">
       {/* 状态条 */}
@@ -350,7 +369,7 @@ const EventDetail = ({ event, formatMeterCost, formatEventFailure }) => {
           : 'bg-success/10 border-success/30'
       }`}>
         <div className={`text-sm font-semibold ${failure ? (isPrecheck ? 'text-warning' : 'text-error') : 'text-success'}`}>
-          {failure ? failure.label : `成功 (${event.status})`}
+          {failure ? failure.label : t('ADMIN.AUDIT.STATUS_OK_PREFIX', { status: event.status })}
         </div>
         {failure?.detail && (
           <div className="text-xs text-on-surface-variant mt-1 break-all">{failure.detail}</div>
@@ -359,59 +378,54 @@ const EventDetail = ({ event, formatMeterCost, formatEventFailure }) => {
 
       {/* 三列分组 */}
       <Section flat noPadding>
-        <Field label="模型 (请求 → 服务)" mono value={`${event.requested_model || event.model_name} → ${event.served_model || event.model_name}`} />
+        <Field label={t('ADMIN.AUDIT.DETAIL_MODEL_LABEL')} mono value={`${event.requested_model || event.model_name} → ${event.served_model || event.model_name}`} />
         <Field
-          label="接口类型"
-          value={isAuxiliaryEvent(event) ? '辅助接口（Token 计数，不生成/不扣费）' : '生成请求'}
-          highlight={isAuxiliaryEvent(event)}
+          label={t('ADMIN.AUDIT.DETAIL_INTERFACE_LABEL')}
+          value={aux ? t('ADMIN.AUDIT.AUXILIARY_TIP') : t('ADMIN.AUDIT.GENERATIVE')}
+          highlight={aux}
         />
-        <Field label="Token Source" mono value={event.token_name || '-'} />
-        <Field label="路径" mono value={event.request_path || '-'} />
-        <Field label="客户端 IP" mono value={event.ip_address || '-'} />
-        <Field label="延迟" value={formatLatency(event.latency_ms)} />
-        <Field label="HTTP 状态" value={event.status} />
+        <Field label={t('ADMIN.AUDIT.DETAIL_TOKEN_SOURCE')} mono value={event.token_name || '-'} />
+        <Field label={t('ADMIN.AUDIT.DETAIL_PATH')} mono value={event.request_path || '-'} />
+        <Field label={t('ADMIN.AUDIT.DETAIL_IP')} mono value={event.ip_address || '-'} />
+        <Field label={t('ADMIN.AUDIT.DETAIL_LATENCY')} value={formatLatency(event.latency_ms)} />
+        <Field label={t('ADMIN.AUDIT.DETAIL_HTTP_STATUS')} value={event.status} />
         {event.fallback_user_opt_in && (
-          <Field label="Fallback opt-in" value={event.fallback_reason || '用户已显式允许 fallback'} />
+          <Field label={t('ADMIN.AUDIT.DETAIL_FALLBACK_LABEL')} value={event.fallback_reason || t('ADMIN.AUDIT.DETAIL_FALLBACK_DEFAULT')} />
         )}
       </Section>
 
-      <Section title="计费明细" flat>
+      <Section title={t('ADMIN.AUDIT.SECTION_BILLING')} flat>
         <div className="grid grid-cols-2 gap-x-4">
-          <Field label="原始成本 (raw)" mono value={formatMeterCost(event.raw_cost ?? event.cost)} />
-          <Field label="订阅口径 (charged)" mono value={formatMeterCost(event.charged_cost ?? event.cost)} />
+          <Field label={t('ADMIN.AUDIT.DETAIL_RAW_COST')} mono value={formatMeterCost(event.raw_cost ?? event.cost)} />
+          <Field label={t('ADMIN.AUDIT.DETAIL_CHARGED_COST')} mono value={formatMeterCost(event.charged_cost ?? event.cost)} />
+          <Field label={t('ADMIN.AUDIT.DETAIL_REVENUE_SOURCE')} value={revenueLabel} />
           <Field
-            label="实际营收来源"
-            value={event.revenue_source === 'subscription' ? '订阅扣减'
-              : event.revenue_source === 'balance' ? '余额扣减 (raw 1:1)'
-              : '未记录（失败/pending）'}
-          />
-          <Field
-            label="实际营收金额"
+            label={t('ADMIN.AUDIT.DETAIL_REVENUE_AMOUNT')}
             mono
             value={event.revenue_source ? formatMeterCost(event.effective_revenue || 0) : '-'}
             highlight={!!event.revenue_source}
           />
-          <Field label="模型权重" mono value={`×${Number(event.model_weight || 1).toFixed(2)}`} />
+          <Field label={t('ADMIN.AUDIT.DETAIL_MODEL_WEIGHT')} mono value={`×${Number(event.model_weight || 1).toFixed(2)}`} />
           {Number(event.health_multiplier || 1) !== 1 && (
-            <Field label="高峰系数" mono value={`H×${Number(event.health_multiplier || 1).toFixed(2)}`} />
+            <Field label={t('ADMIN.AUDIT.DETAIL_HEALTH_MULT')} mono value={`H×${Number(event.health_multiplier || 1).toFixed(2)}`} />
           )}
-          <Field label="规则版本" mono value={event.billing_rules_version || '-'} />
+          <Field label={t('ADMIN.AUDIT.DETAIL_RULES_VERSION')} mono value={event.billing_rules_version || '-'} />
         </div>
       </Section>
 
-      <Section title="Token 明细" flat>
+      <Section title={t('ADMIN.AUDIT.SECTION_TOKEN')} flat>
         <div className="grid grid-cols-2 gap-x-4">
-          <Field label="输入" mono value={(event.prompt_tokens || 0).toLocaleString()} />
-          <Field label="输出" mono value={(event.completion_tokens || 0).toLocaleString()} />
-          <Field label="思考 (reasoning)" mono value={(event.reasoning_tokens || 0).toLocaleString()} />
-          <Field label="缓存读" mono value={(event.cached_tokens || 0).toLocaleString()} />
-          <Field label="缓存写" mono value={(event.cache_write_tokens || 0).toLocaleString()} />
-          <Field label="总 Token" mono value={(event.total_tokens || 0).toLocaleString()} highlight />
+          <Field label={t('ADMIN.AUDIT.DETAIL_INPUT')} mono value={(event.prompt_tokens || 0).toLocaleString()} />
+          <Field label={t('ADMIN.AUDIT.DETAIL_OUTPUT')} mono value={(event.completion_tokens || 0).toLocaleString()} />
+          <Field label={t('ADMIN.AUDIT.DETAIL_REASONING')} mono value={(event.reasoning_tokens || 0).toLocaleString()} />
+          <Field label={t('ADMIN.AUDIT.DETAIL_CACHE_READ')} mono value={(event.cached_tokens || 0).toLocaleString()} />
+          <Field label={t('ADMIN.AUDIT.DETAIL_CACHE_WRITE')} mono value={(event.cache_write_tokens || 0).toLocaleString()} />
+          <Field label={t('ADMIN.AUDIT.DETAIL_TOTAL_TOKENS')} mono value={(event.total_tokens || 0).toLocaleString()} highlight />
         </div>
       </Section>
 
       {usageLinesOf(event).length > 0 && (
-        <Section title="媒体用量" flat sub="图片 / 视频等非 token 计费事实">
+        <Section title={t('ADMIN.AUDIT.SECTION_MEDIA')} flat sub={t('ADMIN.AUDIT.SECTION_MEDIA_SUB')}>
           <div className="space-y-2">
             {usageLinesOf(event).map((line) => (
               <div key={line.id || `${line.unit}-${line.direction}-${line.quantity}`} className="rounded-control border border-outline-variant bg-surface-container/40 px-3 py-2">
@@ -433,25 +447,27 @@ const EventDetail = ({ event, formatMeterCost, formatEventFailure }) => {
       )}
 
       {(event.precheck_input_tokens || event.precheck_charged_cost || event.precheck_quota_limit) && (
-        <Section title="预检 (precheck) 状态" flat sub="路由决策时的估算与窗口快照">
+        <Section title={t('ADMIN.AUDIT.SECTION_PRECHECK')} flat sub={t('ADMIN.AUDIT.SECTION_PRECHECK_SUB')}>
           <div className="grid grid-cols-2 gap-x-4">
-            <Field label="预估输入" mono value={(event.precheck_input_tokens || 0).toLocaleString()} />
-            <Field label="预估输出" mono value={(event.precheck_output_tokens || 0).toLocaleString()} />
-            <Field label="预估原始成本" mono value={formatMeterCost(event.precheck_raw_cost || 0)} />
-            <Field label="预估扣减成本" mono value={formatMeterCost(event.precheck_charged_cost || 0)} />
-            <Field label="窗口限额" mono value={formatMeterCost(event.precheck_quota_limit || 0)} />
-            <Field label="窗口已用" mono value={formatMeterCost(event.precheck_quota_used || 0)} />
-            <Field label="窗口剩余" mono value={formatMeterCost(event.precheck_quota_remaining || 0)} />
-            <Field label="窗口结束" mono value={event.precheck_window_end_at ? formatTime(event.precheck_window_end_at) : '-'} />
-            <Field label="拦截 plan_id" mono value={event.precheck_quota_plan_id || '-'} />
+            <Field label={t('ADMIN.AUDIT.DETAIL_PC_INPUT')} mono value={(event.precheck_input_tokens || 0).toLocaleString()} />
+            <Field label={t('ADMIN.AUDIT.DETAIL_PC_OUTPUT')} mono value={(event.precheck_output_tokens || 0).toLocaleString()} />
+            <Field label={t('ADMIN.AUDIT.DETAIL_PC_RAW_COST')} mono value={formatMeterCost(event.precheck_raw_cost || 0)} />
+            <Field label={t('ADMIN.AUDIT.DETAIL_PC_CHARGED_COST')} mono value={formatMeterCost(event.precheck_charged_cost || 0)} />
+            <Field label={t('ADMIN.AUDIT.DETAIL_PC_QUOTA_LIMIT')} mono value={formatMeterCost(event.precheck_quota_limit || 0)} />
+            <Field label={t('ADMIN.AUDIT.DETAIL_PC_QUOTA_USED')} mono value={formatMeterCost(event.precheck_quota_used || 0)} />
+            <Field label={t('ADMIN.AUDIT.DETAIL_PC_QUOTA_REMAIN')} mono value={formatMeterCost(event.precheck_quota_remaining || 0)} />
+            <Field label={t('ADMIN.AUDIT.DETAIL_PC_WINDOW_END')} mono value={event.precheck_window_end_at ? formatTime(event.precheck_window_end_at) : '-'} />
+            <Field label={t('ADMIN.AUDIT.DETAIL_PC_PLAN_ID')} mono value={event.precheck_quota_plan_id || '-'} />
+            {/* block_reason / provider / auth_index etc remain English machine codes — labels stay literal */}
             <Field label="block_reason" mono value={event.block_reason || '-'} />
           </div>
         </Section>
       )}
 
       {(event.upstream_provider || event.upstream_auth_index) && (
-        <Section title="上游归因" flat sub="本平台从 CLIProxy usage queue 同步并匹配到的上游账号">
+        <Section title={t('ADMIN.AUDIT.SECTION_UPSTREAM')} flat sub={t('ADMIN.AUDIT.SECTION_UPSTREAM_SUB')}>
           <div className="grid grid-cols-2 gap-x-4">
+            {/* Upstream attribution field labels stay literal — they are machine-side identifiers. */}
             <Field label="provider" mono value={event.upstream_provider || '-'} />
             <Field label="auth_index" mono value={event.upstream_auth_index || '-'} />
             <Field label="auth_type" mono value={event.upstream_auth_type || '-'} />
@@ -465,10 +481,10 @@ const EventDetail = ({ event, formatMeterCost, formatEventFailure }) => {
       )}
 
       {(event.error_type || event.error_message) && (
-        <Section title="错误详情" flat>
+        <Section title={t('ADMIN.AUDIT.SECTION_ERROR')} flat>
           <Field label="error_type" mono value={event.error_type || '-'} />
           <div className="mt-2 text-[11px] text-error font-mono whitespace-pre-wrap break-all bg-error/5 border border-error/20 rounded-control p-2">
-            {event.error_message || '(无 message)'}
+            {event.error_message || t('ADMIN.AUDIT.ERROR_NO_MESSAGE')}
           </div>
         </Section>
       )}
