@@ -4,6 +4,7 @@ import { Wallet, RefreshCw, ExternalLink, Banknote, Coins } from 'lucide-react';
 import toast from 'react-hot-toast';
 import { QRCodeSVG } from 'qrcode.react';
 import { authFetch, readAuthState } from '../utils/authFetch';
+import { useAuth } from '../context/AuthContext';
 import { isPageCacheFresh, readPageCache, writePageCache } from '../utils/pageCache';
 import { StorePage, StoreSection } from './store/StorePrimitives';
 import PageHeader from './ui/PageHeader';
@@ -68,8 +69,17 @@ const getTopupHistoryCacheKey = (page) => {
   return `topup:history:${isAdmin ? 'admin' : userToken || 'guest'}:${page}`;
 };
 
-const Topup = ({ isAuthenticated }) => {
+const Topup = () => {
   const { t } = useTranslation();
+  // 用户反馈"默认进充值页看不到历史，得点立即支付才出来"：
+  //   - 原签名是 `Topup = ({ isAuthenticated })`，但 routes.jsx 渲染时是
+  //     <RouteGuard><Topup /></RouteGuard>，根本没传 isAuthenticated prop
+  //   - 所以 loadHistory 顶上 `if (!isAuthenticated) return` 永远早返
+  //   - 创建订单后那个 polling useEffect 不查 isAuthenticated，所以会
+  //     绕过 guard 把 /api/topup/mine 的数据写进 cache + state，于是历史
+  //     "拉起二维码后"才出现
+  // 修法：从 AuthContext 取真实 isAuthenticated，跟 UpgradePage / Dashboard 一致。
+  const { isAuthenticated } = useAuth();
 
   const [opts, setOpts] = useState(() => readPageCache(TOPUP_OPTIONS_CACHE_KEY));
   const [loadingOpts, setLoadingOpts] = useState(() => !readPageCache(TOPUP_OPTIONS_CACHE_KEY));
