@@ -74,48 +74,49 @@ const AuthModal = ({ isOpen, onClose, onLoginSuccess, initialStep = 'github', tm
 
   if (!isOpen) return null;
 
-  const handleGithubLogin = async () => {
+  // fix H-Audit L8（2026-05-21）：handleOAuthLogin 用 server 提供的 oauth_provider_metadata
+  // 统一处理 GitHub / Google / 未来任意 provider。原 handleGithubLogin + handleGoogleLogin
+  // 两个手写函数已删，添加新 provider 仅需 admin 配 client_id/secret，前端不动。
+  const handleOAuthLogin = async (providerKey) => {
     setLoading(true);
     try {
-
       const [pubRes, stateRes] = await Promise.all([
         fetch('/api/public-config'),
-        fetch('/api/auth/oauth/github/prepare', { credentials: 'include' }),
+        fetch(`/api/auth/oauth/${encodeURIComponent(providerKey)}/prepare`, { credentials: 'include' }),
       ]);
-
-      if (!pubRes.ok) {
-        toast.error(t('AUTH.GITHUB_CONFIG_HTTP_ERROR', {
-          status: pubRes.status,
-          defaultValue: '服务端异常 (HTTP {{status}})，无法读取 GitHub OAuth 配置',
-        }));
-        setLoading(false);
-        return;
-      }
-      if (!stateRes.ok) {
+      if (!pubRes.ok || !stateRes.ok) {
         toast.error(t('AUTH.OAUTH_STATE_HTTP_ERROR', {
-          status: stateRes.status,
-          defaultValue: '服务端异常 (HTTP {{status}})，无法生成 OAuth state',
+          status: pubRes.ok ? stateRes.status : pubRes.status,
+          defaultValue: '服务端异常，无法启动登录',
         }));
         setLoading(false);
         return;
       }
       const pub = await pubRes.json();
       const stateJson = await stateRes.json();
-      if (!pub.success || !pub.github_client_id) {
-        toast.error(t('AUTH.GITHUB_NOT_CONFIGURED'));
+      // 找到 provider 元数据（兼容老字段：若新字段缺失，按 key 自拼）
+      const metaList = Array.isArray(pub?.oauth_provider_metadata) ? pub.oauth_provider_metadata : [];
+      let meta = metaList.find((m) => m?.key === providerKey);
+      if (!meta) {
+        // 兼容：老 server 未返 oauth_provider_metadata，从顶层 [provider]_client_id 兜底
+        const fallbackClientID = (pub?.[`${providerKey}_client_id`] || '').trim();
+        if (!fallbackClientID) {
+          toast.error(t('API.ERR_OAUTH_PROVIDER_NOT_CONFIGURED', '该第三方登录未配置'));
+          setLoading(false);
+          return;
+        }
+        meta = { key: providerKey, client_id: fallbackClientID, authorize_endpoint: '', default_params: {} };
+      }
+      if (!meta.client_id || !meta.authorize_endpoint) {
+        toast.error(t('API.ERR_OAUTH_PROVIDER_NOT_CONFIGURED', '该第三方登录未配置'));
         setLoading(false);
         return;
       }
-      if (!stateJson.success || !stateJson.state || !stateJson.code_challenge || !stateJson.code_challenge_method) {
-        toast.error(t('AUTH.GITHUB_FETCH_ERROR'));
+      if (!stateJson.success || !stateJson.state || !stateJson.code_challenge) {
+        toast.error(t('AUTH.OAUTH_STATE_HTTP_ERROR', '无法生成 OAuth state'));
         setLoading(false);
         return;
       }
-      const client_id = pub.github_client_id.trim();
-
-
-
-
       const baseAddress = (() => {
         const raw = (pub.server_address || '').trim().replace(/\/$/, '');
         if (!raw) return window.location.origin;
@@ -127,78 +128,23 @@ const AuthModal = ({ isOpen, onClose, onLoginSuccess, initialStep = 'github', tm
         }
         return window.location.origin;
       })();
-      const callbackUri = `${baseAddress}/oauth/github`;
-      const url = `https://github.com/login/oauth/authorize?client_id=${client_id}` +
-        `&redirect_uri=${encodeURIComponent(callbackUri)}` +
-        `&state=${encodeURIComponent(stateJson.state)}` +
-        `&code_challenge=${encodeURIComponent(stateJson.code_challenge)}` +
-        `&code_challenge_method=${encodeURIComponent(stateJson.code_challenge_method)}`;
-      window.location.href = url;
+      const params = new URLSearchParams();
+      Object.entries(meta.default_params || {}).forEach(([k, v]) => params.set(k, v));
+      // 强制覆盖五个运行时参数
+      params.set('client_id', meta.client_id);
+      params.set('redirect_uri', `${baseAddress}/oauth/${providerKey}`);
+      params.set('state', stateJson.state);
+      params.set('code_challenge', stateJson.code_challenge);
+      params.set('code_challenge_method', stateJson.code_challenge_method || 'S256');
+      window.location.assign(`${meta.authorize_endpoint}?${params.toString()}`);
     } catch {
-      toast.error(t('AUTH.GITHUB_FETCH_ERROR'));
+      toast.error(t('AUTH.OAUTH_STATE_HTTP_ERROR', '无法启动第三方登录'));
       setLoading(false);
     }
   };
 
-  // Phase H-4：Google OAuth 登录入口。
-  // 与 handleGithubLogin 同范式：拿 public-config 里的 google_client_id + /oauth/google/prepare
-  // 的 state/code_challenge，拼 https://accounts.google.com/o/oauth2/v2/auth 跳转。
-  const handleGoogleLogin = async () => {
-    setLoading(true);
-    try {
-      const [pubRes, stateRes] = await Promise.all([
-        fetch('/api/public-config'),
-        fetch('/api/auth/oauth/google/prepare', { credentials: 'include' }),
-      ]);
-      if (!pubRes.ok || !stateRes.ok) {
-        toast.error(t('AUTH.OAUTH_STATE_HTTP_ERROR', {
-          status: pubRes.ok ? stateRes.status : pubRes.status,
-          defaultValue: '服务端异常，无法启动 Google 登录',
-        }));
-        setLoading(false);
-        return;
-      }
-      const pub = await pubRes.json();
-      const stateJson = await stateRes.json();
-      if (!pub.success || !pub.google_client_id) {
-        toast.error(t('AUTH.GOOGLE_NOT_CONFIGURED', '管理员未配置 Google 登录'));
-        setLoading(false);
-        return;
-      }
-      if (!stateJson.success || !stateJson.state || !stateJson.code_challenge) {
-        toast.error(t('AUTH.GOOGLE_FETCH_ERROR', '无法生成 Google OAuth state'));
-        setLoading(false);
-        return;
-      }
-      const baseAddress = (() => {
-        const raw = (pub.server_address || '').trim().replace(/\/$/, '');
-        if (!raw) return window.location.origin;
-        try {
-          const u = new URL(raw);
-          if (u.origin === window.location.origin) return raw;
-        } catch {
-          // fall through
-        }
-        return window.location.origin;
-      })();
-      const callbackUri = `${baseAddress}/oauth/google`;
-      const params = new URLSearchParams({
-        client_id: pub.google_client_id.trim(),
-        redirect_uri: callbackUri,
-        response_type: 'code',
-        scope: 'openid email profile',
-        state: stateJson.state,
-        code_challenge: stateJson.code_challenge,
-        code_challenge_method: stateJson.code_challenge_method || 'S256',
-        access_type: 'online',
-        prompt: 'select_account',
-      });
-      window.location.href = `https://accounts.google.com/o/oauth2/v2/auth?${params.toString()}`;
-    } catch {
-      toast.error(t('AUTH.GOOGLE_FETCH_ERROR', '无法启动 Google 登录'));
-      setLoading(false);
-    }
-  };
+  const handleGithubLogin = () => handleOAuthLogin('github');
+  const handleGoogleLogin = () => handleOAuthLogin('google');
 
   const handleSendCode = async () => {
     if (!phone || sendingSms) return;

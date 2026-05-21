@@ -32,38 +32,35 @@ const GoogleIconSVG = () => (
   </svg>
 );
 
-// 把 admin 配置的 provider key 对应到展示信息（label / OAuth authorize URL 拼装函数）。
-const PROVIDER_META = {
-  github: {
-    labelKey: 'ACCOUNT.OAUTH_GITHUB',
-    fallbackLabel: 'GitHub',
-    IconSVG: GitHubIconSVG,
-    authorizeUrl: ({ clientID, callbackUri, state, codeChallenge, codeChallengeMethod }) =>
-      `https://github.com/login/oauth/authorize?client_id=${encodeURIComponent(clientID)}` +
-      `&redirect_uri=${encodeURIComponent(callbackUri)}` +
-      `&state=${encodeURIComponent(state)}` +
-      `&code_challenge=${encodeURIComponent(codeChallenge)}` +
-      `&code_challenge_method=${encodeURIComponent(codeChallengeMethod || 'S256')}`,
-  },
-  google: {
-    labelKey: 'ACCOUNT.OAUTH_GOOGLE',
-    fallbackLabel: 'Google',
-    IconSVG: GoogleIconSVG,
-    authorizeUrl: ({ clientID, callbackUri, state, codeChallenge, codeChallengeMethod }) => {
-      const params = new URLSearchParams({
-        client_id: clientID,
-        redirect_uri: callbackUri,
-        response_type: 'code',
-        scope: 'openid email profile',
-        state,
-        code_challenge: codeChallenge,
-        code_challenge_method: codeChallengeMethod || 'S256',
-        access_type: 'online',
-        prompt: 'select_account',
-      });
-      return `https://accounts.google.com/o/oauth2/v2/auth?${params.toString()}`;
-    },
-  },
+// 仅图标按 icon_key 选内置 brand SVG，其它字段（label / authorize URL / default params）
+// 全部从后端 GET /api/public-config.oauth_provider_metadata 拉取。
+//
+// fix H-Audit L8（2026-05-21）：原 PROVIDER_META 是 hardcoded github/google map +
+// 每个 provider 一个 authorizeUrl 拼装函数，添加新 provider（Discord / Microsoft 等）
+// 必须前端发版。现在前端纯渲染层，加新 provider 仅后端 oauth_provider_<key>.go 一份。
+const PROVIDER_ICONS = {
+  github: GitHubIconSVG,
+  google: GoogleIconSVG,
+  // 未知 provider 用 fallback（在 render 处处理）
+};
+
+// buildOAuthAuthorizeURL 根据 server 元数据拼 authorize URL。
+// 强制注入参数（client_id / redirect_uri / state / code_challenge / code_challenge_method）
+// 永远从运行时来，不可被 server defaults 覆盖；server 提供的 default_params 用来塞
+// provider-specific 选项（如 Google 的 scope / access_type / prompt）。
+const buildOAuthAuthorizeURL = (meta, { callbackUri, state, codeChallenge, codeChallengeMethod }) => {
+  const params = new URLSearchParams();
+  // 1. 先填 server 默认（按 key 排序保证幂等）
+  Object.entries(meta.default_params || {}).forEach(([k, v]) => {
+    params.set(k, v);
+  });
+  // 2. 运行时强制覆盖（哪怕 server 误传也以前端为准）
+  params.set('client_id', meta.client_id || '');
+  params.set('redirect_uri', callbackUri);
+  params.set('state', state);
+  params.set('code_challenge', codeChallenge);
+  params.set('code_challenge_method', codeChallengeMethod || 'S256');
+  return `${meta.authorize_endpoint}?${params.toString()}`;
 };
 
 const formatLinkedAt = (iso) => {
@@ -109,11 +106,22 @@ const UserLinkedAccounts = () => {
 
   useEffect(() => { load(); }, [load]);
 
+  // 从 publicConfig.oauth_provider_metadata 找指定 provider 的元数据
+  const findProviderMeta = (providerKey) => {
+    const list = publicConfig?.oauth_provider_metadata;
+    if (!Array.isArray(list)) return null;
+    return list.find((m) => m?.key === providerKey) || null;
+  };
+
   const handleLink = async (providerKey) => {
     if (submittingProvider) return;
-    const meta = PROVIDER_META[providerKey];
+    const meta = findProviderMeta(providerKey);
     if (!meta) {
       toast.error(t('API.ERR_OAUTH_PROVIDER_UNKNOWN', '未知的第三方登录渠道'));
+      return;
+    }
+    if (!meta.client_id) {
+      toast.error(t('API.ERR_OAUTH_PROVIDER_NOT_CONFIGURED', '该第三方登录未配置'));
       return;
     }
     setSubmittingProvider(providerKey);
@@ -124,14 +132,6 @@ const UserLinkedAccounts = () => {
       });
       if (!json?.success) {
         toast.error(json?.message_code ? t('API.' + json.message_code, json.message) : (json?.message || t('API.ERR_OAUTH_INTERNAL', '无法启动绑定')));
-        setSubmittingProvider('');
-        return;
-      }
-      const clientID = providerKey === 'google'
-        ? (publicConfig?.google_client_id || '').trim()
-        : (publicConfig?.github_client_id || '').trim();
-      if (!clientID) {
-        toast.error(t('API.ERR_OAUTH_PROVIDER_NOT_CONFIGURED', '该第三方登录未配置'));
         setSubmittingProvider('');
         return;
       }
@@ -146,14 +146,12 @@ const UserLinkedAccounts = () => {
         }
         return window.location.origin;
       })();
-      const url = meta.authorizeUrl({
-        clientID,
+      const url = buildOAuthAuthorizeURL(meta, {
         callbackUri: `${baseAddress}/oauth/${providerKey}`,
         state: json.state,
         codeChallenge: json.code_challenge,
         codeChallengeMethod: json.code_challenge_method || 'S256',
       });
-      // 用 assign(...) 代替 `window.location.href = url` 以满足 react-hooks/immutability lint
       window.location.assign(url);
     } catch {
       toast.error(t('API.ERR_OAUTH_INTERNAL', '无法启动绑定'));
@@ -191,9 +189,15 @@ const UserLinkedAccounts = () => {
     return <div className="text-sm text-on-surface-variant py-4">{t('COMMON.LOADING', '加载中…')}</div>;
   }
 
-  // admin 已配置的 provider 列表（registry 注册 + IsConfigured 返 true）
-  const configured = Array.isArray(publicConfig?.oauth_providers) ? publicConfig.oauth_providers : [];
-  if (configured.length === 0) {
+  // fix H-Audit L8：admin 已配置的 provider 元数据列表（含 label / authorize_endpoint /
+  // default_params / icon_key）。从 server 取，前端不再 hardcode。老字段 oauth_providers
+  // ([]string) 作为兜底——当 server 未返新字段时退回 key-only 渲染。
+  const configuredMeta = Array.isArray(publicConfig?.oauth_provider_metadata)
+    ? publicConfig.oauth_provider_metadata
+    : (Array.isArray(publicConfig?.oauth_providers)
+        ? publicConfig.oauth_providers.map((k) => ({ key: k, label: k, icon_key: k, default_params: {} }))
+        : []);
+  if (configuredMeta.length === 0) {
     return (
       <section className="rounded-overlay border border-outline-variant bg-surface-container p-6">
         <div className="flex items-start gap-3">
@@ -234,12 +238,13 @@ const UserLinkedAccounts = () => {
       </header>
 
       <ul className="space-y-2">
-        {configured.map((providerKey) => {
-          const meta = PROVIDER_META[providerKey];
-          if (!meta) return null;
-          const label = t(meta.labelKey, meta.fallbackLabel);
+        {configuredMeta.map((meta) => {
+          const providerKey = meta.key;
+          // i18n key 优先（用户可在 i18n 里覆盖），fallback 用 server label
+          const i18nKey = `ACCOUNT.OAUTH_${providerKey.toUpperCase()}`;
+          const label = t(i18nKey, meta.label || providerKey);
           const linked = linkedMap.get(providerKey);
-          const IconSVG = meta.IconSVG;
+          const IconSVG = PROVIDER_ICONS[meta.icon_key] || PROVIDER_ICONS[providerKey] || null;
           const isSubmitting = submittingProvider === providerKey;
           return (
             <li

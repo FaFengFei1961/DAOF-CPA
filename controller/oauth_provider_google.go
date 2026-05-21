@@ -68,6 +68,28 @@ func (p *GoogleProvider) IsConfigured() bool {
 	return clientID != "" && clientSecret != ""
 }
 
+// PublicMetadata 返回前端渲染 Google 登录按钮 + 拼 authorize URL 所需的元数据。
+// fix H-Audit L8（2026-05-21）：默认参数与原 AuthModal.jsx / UserLinkedAccounts.jsx
+// hardcoded 配置保持一致，前端切换到读 server 后行为不变。
+func (p *GoogleProvider) PublicMetadata() OAuthProviderPublicMetadata {
+	proxy.SysConfigMutex.RLock()
+	clientID := proxy.SysConfigCache["google_client_id"]
+	proxy.SysConfigMutex.RUnlock()
+	return OAuthProviderPublicMetadata{
+		Key:               database.OAuthProviderGoogle,
+		Label:             "Google",
+		ClientID:          clientID,
+		AuthorizeEndpoint: "https://accounts.google.com/o/oauth2/v2/auth",
+		DefaultParams: map[string]string{
+			"response_type": "code",
+			"scope":         "openid email profile",
+			"access_type":   "online",
+			"prompt":        "select_account",
+		},
+		IconKey: "google",
+	}
+}
+
 // Exchange code → user identity。
 func (p *GoogleProvider) Exchange(ctx context.Context, code, codeVerifier string) (*OAuthIdentityData, error) {
 	proxy.SysConfigMutex.RLock()

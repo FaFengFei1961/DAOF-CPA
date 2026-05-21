@@ -601,7 +601,6 @@ func AdminListSubscriptions(c *fiber.Ctx) error {
 	// Phase H-3b / H-Audit M6：批量预加载活跃 OAuth 绑定。
 	// loadFailed 用于把"DB 失败"和"无绑定"区分开（admin UI 可显示警告 banner）。
 	identitiesByUser, identitiesLoadFailed := loadActiveOAuthIdentitiesForUsers(users)
-	_ = identitiesLoadFailed // TODO admin/订阅列表 wire 层加 identities_load_failed 字段
 
 	var allUsages []database.SubscriptionUsage
 	if len(subIDs) > 0 {
@@ -770,9 +769,15 @@ func AdminListSubscriptions(c *fiber.Ctx) error {
 		out = append(out, item)
 	}
 
-	return c.JSON(fiber.Map{
+	// fix H-Audit M6 / wire-followup（2026-05-21）：把 oauth identities 加载失败标志
+	// 透传给前端，让 admin UI 能区分"用户没绑 OAuth"和"DB 抖动导致没读到"。
+	resp := fiber.Map{
 		"success": true,
 		"data":    out,
 		"meta":    fiber.Map{"total": total, "page": page, "page_size": pageSize},
-	})
+	}
+	if identitiesLoadFailed {
+		resp["identities_load_failed"] = true
+	}
+	return c.JSON(resp)
 }

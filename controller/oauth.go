@@ -983,14 +983,21 @@ func GetPublicConfig(c *fiber.Ctx) error {
 	paidSpendRewardBPS, paidSpendRewardWindowSeconds := readReferralPaidSpendRewardConfig()
 
 	// oauth_providers：列已配置（registry 注册 + IsConfigured 返 true）的 provider key
-	// 前端用这个数组渲染登录按钮（"用 GitHub / Google 登录"）
+	// 前端用这个数组渲染登录按钮（"用 GitHub / Google 登录"）。
+	//
+	// fix H-Audit L8（2026-05-21）：同时返结构化 oauth_provider_metadata 数组，
+	// 前端用元数据字段直接渲染按钮 + 拼 authorize URL，添加新 provider 时
+	// 前端无需发版。oauth_providers/[provider]_client_id 保留兼容老前端，
+	// 下一版可删除。
 	providers := ListConfiguredOAuthProviders()
+	providerMetadata := ListConfiguredOAuthProviderMetadata()
 
 	return c.JSON(fiber.Map{
 		"success":                          true,
 		"github_client_id":                 githubClientID,
 		"google_client_id":                 googleClientID,
-		"oauth_providers":                  providers, // []string{"github", "google", ...}
+		"oauth_providers":                  providers,        // []string{"github", "google", ...}（兼容字段）
+		"oauth_provider_metadata":          providerMetadata, // L8：结构化元数据
 		"server_address":                   serverAddress,
 		"exchange_rate_rmb_per_usd_micros": rateStr,
 		"referral_incentives": fiber.Map{

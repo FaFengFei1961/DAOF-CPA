@@ -52,6 +52,23 @@ func (p *GitHubProvider) IsConfigured() bool {
 	return clientID != "" && clientSecret != ""
 }
 
+// PublicMetadata 返回前端渲染 GitHub 登录按钮 + 拼 authorize URL 所需的元数据。
+// fix H-Audit L8（2026-05-21）：让前端不再 hardcode GitHub-specific 参数。
+func (p *GitHubProvider) PublicMetadata() OAuthProviderPublicMetadata {
+	proxy.SysConfigMutex.RLock()
+	clientID := proxy.SysConfigCache["github_client_id"]
+	proxy.SysConfigMutex.RUnlock()
+	return OAuthProviderPublicMetadata{
+		Key:               database.OAuthProviderGitHub,
+		Label:             "GitHub",
+		ClientID:          clientID,
+		AuthorizeEndpoint: "https://github.com/login/oauth/authorize",
+		// GitHub OAuth 默认 scope 即可拿到 primary email；前端无需追加 query
+		DefaultParams: map[string]string{},
+		IconKey:       "github",
+	}
+}
+
 // Exchange code → user identity。
 //
 // endpoints + http client 通过 oauth.go 顶部的 package-level globals 引用，

@@ -40,8 +40,11 @@ type stubOAuthProvider struct {
 	username string
 }
 
-func (s *stubOAuthProvider) Key() string         { return s.key }
-func (s *stubOAuthProvider) IsConfigured() bool  { return true }
+func (s *stubOAuthProvider) Key() string        { return s.key }
+func (s *stubOAuthProvider) IsConfigured() bool { return true }
+func (s *stubOAuthProvider) PublicMetadata() OAuthProviderPublicMetadata {
+	return OAuthProviderPublicMetadata{Key: s.key, Label: s.key, ClientID: "stub-client-id", IconKey: "fallback"}
+}
 func (s *stubOAuthProvider) Exchange(_ context.Context, _, _ string) (*OAuthIdentityData, error) {
 	if s.extID == "" {
 		return nil, errors.New("stub: extID required")
