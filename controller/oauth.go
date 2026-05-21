@@ -744,6 +744,53 @@ func OAuthCallback(c *fiber.Ctx) error {
 		})
 	}
 
+	// ====== 跨 provider 邮箱冲突防御（Phase H-6，2026-05-20）======
+	//
+	// 防御场景：用户已用 GitHub（邮箱 alice@x.com）注册过 DAOF 账号 A，
+	// 现在又用 Google（同邮箱）走 OAuth 登录。如果直接走新建账号路径，会得到独立账号 B，
+	// 余额/订阅/历史全部割裂——这是设计漏洞，必须拦截。
+	//
+	// 拦截条件（同时满足才拒）：
+	//   1. provider 明确告知 email_verified=true（防 attacker 在 GitHub 设置 secondary email
+	//      占别人位；未验证邮箱不构成冲突）
+	//   2. DAOF 内存在一个 active（status=1）用户，其 email 等于 provider.email 且
+	//      DAOF 自身的 email_verified_at != NULL（用户在 DAOF 内点过验证链接确认拥有该邮箱）
+	//
+	// 拒绝时返 409 + ERR_OAUTH_EMAIL_TAKEN_LINK_REQUIRED，引导用户先登录原账号，
+	// 然后在「设置 → 第三方账号」中通过 link 流程绑定。
+	//
+	// fail-closed：DB lookup 错误时返 500 而不是建账号——宁可让用户重试也不要冒"两 user 共邮箱"风险。
+	//
+	// 兜底：sqlite.go 的 uniq_users_email_nonempty partial unique index 会在并发竞态时
+	// 拦下双 INSERT。此处的预检只是提供更友好的错误响应。
+	if identity.Email != "" && identity.EmailVerified {
+		normEmail := strings.ToLower(strings.TrimSpace(identity.Email))
+		if normEmail != "" {
+			var existingByEmail database.User
+			err := database.DB.
+				Where("LOWER(email) = ? AND email_verified_at IS NOT NULL AND status = 1", normEmail).
+				First(&existingByEmail).Error
+			if err == nil {
+				log.Printf("[OAUTH-EMAIL-COLLISION] provider=%s ext=%s collides with user=%d email=%s",
+					providerKey, extID, existingByEmail.ID, maskEmailForAdmin(normEmail))
+				LogOperationBy(0, existingByEmail.ID, "system", "OAUTH_EMAIL_COLLISION_BLOCKED", c.IP(),
+					fmt.Sprintf(`[{"type":"OAUTH_EMAIL_COLLISION_BLOCKED","provider":%q,"external_id":%q,"email_hint":%q}]`,
+						providerKey, extID, maskEmailForAdmin(normEmail)))
+				return c.Status(409).JSON(fiber.Map{
+					"success":      false,
+					"message_code": "ERR_OAUTH_EMAIL_TAKEN_LINK_REQUIRED",
+					"message":      "该第三方邮箱已被另一个账号占用，请先登录原账号后在「设置 → 第三方账号」中绑定。",
+					"email_hint":   maskEmailForAdmin(normEmail),
+					"provider":     providerKey,
+				})
+			} else if !errors.Is(err, gorm.ErrRecordNotFound) {
+				log.Printf("[OAUTH-EMAIL-COLLISION] lookup failed provider=%s email=%s: %v",
+					providerKey, maskEmailForAdmin(normEmail), err)
+				return c.Status(500).JSON(fiber.Map{"success": false, "message_code": "ERR_DB_QUERY"})
+			}
+		}
+	}
+
 	// ====== 新用户分支 ======
 	if rejectIfUserCapReached(c) {
 		return nil

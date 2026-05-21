@@ -76,6 +76,14 @@ const OAuthCallbackHandler = () => {
           window.dispatchEvent(new CustomEvent('daof_banned', {
             detail: data.ban_reason || (data.message ? data.message.replace(BANNED_PREFIX, '').replace(BANNED_REASON_PREFIX, '').trim() : ''),
           }));
+        } else if (data.message_code === 'ERR_OAUTH_EMAIL_TAKEN_LINK_REQUIRED') {
+          // H-6：跨 provider 邮箱冲突。停留更久的 toast + 引导用户先用原账号登录后再 link。
+          toast.error(
+            t('API.ERR_OAUTH_EMAIL_TAKEN_LINK_REQUIRED', '该第三方邮箱已被另一个账号占用，请先登录原账号后在「设置 → 第三方账号」中绑定。')
+            + (data.email_hint ? `\n(${data.email_hint})` : ''),
+            { duration: 8000 },
+          );
+          openLogin({ step: 'github' });
         } else {
           toast.error((data.message_code ? t('API.' + data.message_code) : data.message) || t('APP.OAUTH_FAILED', '第三方登录失败'));
           openLogin({ step: 'github' });

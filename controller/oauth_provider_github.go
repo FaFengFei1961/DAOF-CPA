@@ -154,12 +154,16 @@ func (p *GitHubProvider) Exchange(ctx context.Context, code, codeVerifier string
 	avatar, _ := ghUser["avatar_url"].(string)
 
 	return &OAuthIdentityData{
-		Provider:      database.OAuthProviderGitHub,
-		ExternalID:    ghID,
-		Email:         ghEmail,
-		Username:      ghLogin,
-		AvatarURL:     avatar,
-		EmailVerified: false, // GitHub /user 端点不返 email_verified；保守视为未验证
+		Provider:   database.OAuthProviderGitHub,
+		ExternalID: ghID,
+		Email:      ghEmail,
+		Username:   ghLogin,
+		AvatarURL:  avatar,
+		// Phase H-6（2026-05-20）：GitHub /user 不返 email_verified；但 GitHub 不允许把
+		// 未验证邮箱设为 primary email，所以 /user.email 非空就等价于 verified。
+		// （要拿 /user/emails 列表 + 显式 verified 字段需要 `user:email` scope，目前 OAuth
+		//  scope 留空因此走默认 read:user，已经能拿到 primary email；不需要扩展 scope。）
+		EmailVerified: ghEmail != "",
 	}, nil
 }
 
