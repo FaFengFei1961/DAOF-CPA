@@ -310,7 +310,15 @@ const Topup = () => {
     try {
       const json = await authFetch('/api/topup/create', { method: 'POST', body });
       if (json.success && json.data) {
-        setOrderResult(json.data);
+        // 用户反馈"先创单 ¥1，再把输入框改成 500，订单卡片也跟着显示 ¥500，
+        // 但二维码还是原来的 ¥1"：原 display 直接读输入框 state `amount` →
+        // 输入框改了就被污染。把"下单当刻"的金额 + USD 估算 snap 进 orderResult，
+        // 显示路径只读 orderResult，跟输入框完全解耦。
+        setOrderResult({
+          ...json.data,
+          snapshot_amount_fen: amountFen,
+          snapshot_usd_estimate: usdEstimate,
+        });
 
         if (json.data.pay_info) {
           // 按 provider 不同提示语
@@ -584,9 +592,13 @@ const Topup = () => {
           )}
 
           <div className="text-center space-y-1">
-            <div className="text-2xl font-bold text-primary">¥{Number(amount).toFixed(2)}</div>
-            {usdEstimate && (
-              <div className="text-xs text-on-surface-variant">≈ ${usdEstimate} USD</div>
+            <div className="text-2xl font-bold text-primary">
+              ¥{((Number(orderResult.snapshot_amount_fen) || 0) / 100).toFixed(2)}
+            </div>
+            {orderResult.snapshot_usd_estimate && (
+              <div className="text-xs text-on-surface-variant">
+                ≈ ${orderResult.snapshot_usd_estimate} USD
+              </div>
             )}
           </div>
 
