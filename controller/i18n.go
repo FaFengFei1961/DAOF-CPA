@@ -3,6 +3,7 @@ package controller
 import (
 	"encoding/json"
 	"fmt"
+	"log"
 	"os"
 	"path/filepath"
 	"regexp"
@@ -76,6 +77,9 @@ func GetLocalesList(c *fiber.Ctx) error {
 		}
 		info, err := f.Info()
 		if err != nil {
+			// Phase I-2 fix：locale 文件 stat 失败时 silent skip 会让 admin
+			// 看到目录里有但 API 没列出，怀疑上传丢失。log 出来定位文件权限。
+			log.Printf("[I18N] stat locale file %s failed: %v — skipping", f.Name(), err)
 			continue
 		}
 		name := id

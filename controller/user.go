@@ -1025,6 +1025,9 @@ func BulkDeleteUsers(c *fiber.Ctx) error {
 			return LogOperationByTx(tx, adminID, u.ID, "admin", "BULK_DELETE", c.IP(), string(change))
 		})
 		if err != nil {
+			// Phase I-2 fix：旧代码 continue 静默吞错，admin 拿到 200 + deleted: N
+			// 但 N 可能远小于请求，且不知道哪个 user_id 失败 / 为何失败。
+			log.Printf("[BULK-DELETE] user_id=%d tx failed: %v", u.ID, err)
 			continue
 		}
 		// fix Minor Mi22-4（codex 第二十二轮）：每个删除成功的用户都要清订阅缓存

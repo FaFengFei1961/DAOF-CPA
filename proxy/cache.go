@@ -251,7 +251,11 @@ func SyncCacheConfig() {
 		// Decrypt values as they come out of the DB
 		decrypted, err := utils.Decrypt(sc.Value)
 		if err != nil {
-			log.Printf("[CACHE] WARN decrypt SysConfig key=%q failed: %v (fallback 默认值)", sc.Key, err)
+			// Phase I-2 fix：旧 log 写"fallback 默认值"但实际只是 continue，
+			// key 直接消失，调用方读到空串误以为是默认。提升到 ERROR + 描述
+			// 实际行为，避免误导。billing / moderation 关键 key 解密失败
+			// 应该让运维看到告警而非静默 fallback。
+			log.Printf("[CACHE] ERROR decrypt SysConfig key=%q failed (key dropped from cache, callers will see empty string): %v", sc.Key, err)
 			continue
 		}
 		newSysConfigMap[sc.Key] = decrypted

@@ -245,7 +245,13 @@ func CancelBillingRuleRevision(c *fiber.Ctx) error {
 		return c.Status(500).JSON(fiber.Map{"success": false, "message_code": "ERR_DB_WRITE"})
 	}
 	if cancel.ID == 0 {
-		_ = database.DB.Where("revision_id = ?", revision.ID).First(&cancel).Error
+		// Phase I-2 fix：OnConflict{DoNothing} 命中 → cancel.ID 为 0，需重查
+		// existing。旧 _ = 静默吞错，查失败时 cancel.ID 仍 0，audit log + 响应
+		// 包含 zero-ID 让 admin 误以为成功。改 5xx + log。
+		if err := database.DB.Where("revision_id = ?", revision.ID).First(&cancel).Error; err != nil {
+			log.Printf("[BILLING-RULES-ADMIN] post-cancel lookup revision_id=%d failed: %v", revision.ID, err)
+			return c.Status(500).JSON(fiber.Map{"success": false, "message_code": "ERR_DB_READ"})
+		}
 	}
 
 	details, _ := json.Marshal([]map[string]any{{

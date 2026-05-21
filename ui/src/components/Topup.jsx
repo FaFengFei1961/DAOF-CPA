@@ -73,6 +73,8 @@ const Topup = ({ isAuthenticated }) => {
 
   const [opts, setOpts] = useState(() => readPageCache(TOPUP_OPTIONS_CACHE_KEY));
   const [loadingOpts, setLoadingOpts] = useState(() => !readPageCache(TOPUP_OPTIONS_CACHE_KEY));
+  // 区分 "网络错"（红色 banner + 重试）vs "未配置"（橙色 banner + 等 admin）
+  const [optsLoadError, setOptsLoadError] = useState(false);
 
   // W-4：providers[] 多 provider 支持
   const [selectedProvider, setSelectedProvider] = useState('');
@@ -134,6 +136,7 @@ const Topup = ({ isAuthenticated }) => {
       setOpts(cached);
       initFromOpts(cached);
       setLoadingOpts(false);
+      setOptsLoadError(false);
       if (!force && isPageCacheFresh(TOPUP_OPTIONS_CACHE_KEY, TOPUP_CACHE_TTL_MS)) return;
     } else {
       setLoadingOpts(true);
@@ -144,9 +147,15 @@ const Topup = ({ isAuthenticated }) => {
         writePageCache(TOPUP_OPTIONS_CACHE_KEY, json.data);
         setOpts(json.data);
         initFromOpts(json.data);
+        setOptsLoadError(false);
+      } else if (!cached) {
+        // 区分"未配置"和"网络错"：success=false 但有数据 → 真未配置；其他 → 网络错。
+        setOptsLoadError(true);
       }
-    } catch {
-      // The unconfigured state below handles option-load failures.
+    } catch (err) {
+      // eslint-disable-next-line no-console
+      console.warn('[Topup] loadOptions failed', err);
+      if (!cached) setOptsLoadError(true);
     } finally {
       setLoadingOpts(false);
     }
@@ -180,13 +189,20 @@ const Topup = ({ isAuthenticated }) => {
         writePageCache(historyCacheKey, next);
         setHistory(next.rows);
         setHistoryTotal(next.total);
+      } else if (!cached) {
+        // 没缓存兜底时显式 toast，避免空表格让用户疑惑（charge 完看不到记录）。
+        toast.error(t('TOPUP.HISTORY_LOAD_FAIL', '加载充值记录失败'));
       }
-    } catch {
-      // ignore
+    } catch (err) {
+      if (!cached) {
+        toast.error(t('TOPUP.HISTORY_LOAD_FAIL', '加载充值记录失败'));
+      }
+      // eslint-disable-next-line no-console
+      console.warn('[Topup] loadHistory failed', err);
     } finally {
       setHistoryLoading(false);
     }
-  }, [isAuthenticated, historyCacheKey, historyPage]);
+  }, [isAuthenticated, historyCacheKey, historyPage, t]);
 
   useEffect(() => { loadOptions(); }, [loadOptions]);
   useEffect(() => { loadHistory(); }, [loadHistory]);
@@ -347,14 +363,28 @@ const Topup = ({ isAuthenticated }) => {
     : !!opts?.configured;
 
   if (!opts || !hasAnyConfigured) {
+    // 区分 "网络错"（红 + 重试）vs "未配置"（橙 + 等 admin），避免用户把
+    // 网络异常误读成系统问题。
+    const isNetError = optsLoadError;
     return (
       <div className="max-w-3xl mx-auto py-8">
         <StorePage title={t('TOPUP.TITLE', '余额充值')} icon={Wallet}>
-          <div className="card p-10 text-center border-warning/40">
-            <Wallet size={48} className="mx-auto mb-4 text-warning" />
+          <div className={`card p-10 text-center ${isNetError ? 'border-error/40' : 'border-warning/40'}`}>
+            <Wallet size={48} className={`mx-auto mb-4 ${isNetError ? 'text-error' : 'text-warning'}`} />
             <p className="text-sm text-on-surface-variant">
-              {t('TOPUP.UNAVAILABLE', '充值功能尚未配置，请联系管理员')}
+              {isNetError
+                ? t('TOPUP.LOAD_NET_ERROR', '加载充值通道失败，请检查网络后重试')
+                : t('TOPUP.UNAVAILABLE', '充值功能尚未配置，可提交工单咨询。')}
             </p>
+            {isNetError && (
+              <button
+                type="button"
+                onClick={() => loadOptions({ force: true })}
+                className="btn btn-secondary mt-4"
+              >
+                {t('COMMON.RELOAD', '重新加载')}
+              </button>
+            )}
           </div>
         </StorePage>
       </div>

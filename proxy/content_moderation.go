@@ -783,7 +783,17 @@ func parseOpenAICompatibleAPIError(statusCode int, body []byte, headers http.Hea
 			Code    any    `json:"code"`
 		} `json:"error"`
 	}
-	_ = json.Unmarshal(body, &parsed)
+	// Phase I-2 fix：上游错误响应 JSON 损坏时返回 zero-value struct，
+	// 调用方拿到空 error_type / message 会走错重试 / 抑制逻辑。
+	// 至少 log 出来让上游协议回归被发现。
+	if err := json.Unmarshal(body, &parsed); err != nil {
+		const previewLen = 200
+		preview := string(body)
+		if len(preview) > previewLen {
+			preview = preview[:previewLen] + "…"
+		}
+		log.Printf("[MODERATION] parseOpenAICompatibleAPIError unmarshal failed: %v (raw=%q)", err, preview)
+	}
 	code := ""
 	switch v := parsed.Error.Code.(type) {
 	case string:

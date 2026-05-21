@@ -49,8 +49,10 @@ export const AuthProvider = ({ children }) => {
       const res = await fetch('/api/user/me', { headers: { 'Authorization': `Bearer ${userToken}` } });
       const data = await res.json();
       if (data.success) setProfile(data.data);
-    } catch {
-      // 静默
+    } catch (err) {
+      // Phase I-1 fix：旧代码完全静默——充值/购买套餐后余额若刷新失败，
+      // 用户余额展示永久 stale 且无信号。至少在控制台 warn 出来。
+      logger.warn('[auth] refreshProfile failed', err);
     }
   }, []);
 

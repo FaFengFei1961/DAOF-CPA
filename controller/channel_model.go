@@ -404,7 +404,11 @@ func auditOfficialNoModerationConfirmed(c *fiber.Ctx, ch *database.Channel, cm *
 		`{"action":%q,"channel_id":%d,"channel_type":%q,"channel_base_url":%q,"model_id":%q,"override":"official_channel_moderation_off"}`,
 		action, ch.ID, ch.Type, ch.BaseURL, cm.ModelID,
 	)
-	_ = LogOperationByTx(database.DB, operatorID, 0, "admin", "OFFICIAL_NO_MODERATION_CONFIRMED", c.IP(), details)
+	// Phase I-2 fix：审计日志 fire-and-forget 是 admin 关闭审核的关键事件，
+	// 写失败必须有信号，否则封号危险操作没人知道也查不出。
+	if err := LogOperationByTx(database.DB, operatorID, 0, "admin", "OFFICIAL_NO_MODERATION_CONFIRMED", c.IP(), details); err != nil {
+		log.Printf("[AUDIT-LOG-FAILED] OFFICIAL_NO_MODERATION_CONFIRMED operator=%d channel=%d: %v", operatorID, ch.ID, err)
+	}
 }
 
 // fix Major（codex 第三轮）：旧 validateUpstreamURL 拒绝 localhost/127.*/private，

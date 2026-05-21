@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"log"
 	"net/http"
 	"net/url"
 	"sort"
@@ -135,6 +136,9 @@ func currentModerationKeywordsForPrompt(limit int) []string {
 	}
 	var arr []string
 	if err := json.Unmarshal([]byte(raw), &arr); err != nil {
+		// Phase I-2 fix：旧 return nil 让审核 bypass 静默。corrupt JSON
+		// 可能是 SysConfig 数据被人手工改坏，必须有信号让运维看到。
+		log.Printf("[MODERATION] corrupt moderation_keywords JSON: %v — falling back to no-keywords filter", err)
 		return nil
 	}
 	out := make([]string, 0, minInt(len(arr), limit))

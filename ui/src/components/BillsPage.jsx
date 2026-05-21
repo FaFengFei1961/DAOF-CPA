@@ -190,6 +190,8 @@ const BillsPage = () => {
 
   const [entries, setEntries] = useState(() => initialListCache?.entries || []);
   const [summary, setSummary] = useState(() => initialSummaryCache || null);
+  // 与 summary 配对：load 失败且无缓存时显示 banner 而非空白
+  const [summaryError, setSummaryError] = useState(false);
   const [loading, setLoading] = useState(() => !initialListCache);
   const [loadingMore, setLoadingMore] = useState(false);
   const [nextCursor, setNextCursor] = useState(() => initialListCache?.nextCursor || 0);
@@ -298,9 +300,16 @@ const BillsPage = () => {
       if (json.success) {
         writePageCache(cacheKey, json.data);
         setSummary(json.data);
+        setSummaryError(false);
+      } else if (!cached) {
+        // 没缓存兜底时显式 banner，避免 4 个 SummaryCard 神秘消失。
+        setSummaryError(true);
       }
-    } catch {
-      // Summary is non-blocking; keep the list visible if it fails.
+    } catch (err) {
+      if (myReqId !== summaryReqIdRef.current) return;
+      // eslint-disable-next-line no-console
+      console.warn('[BillsPage] loadSummary failed', err);
+      if (!cached) setSummaryError(true);
     }
   }, [billingAuthKey, buildQuery]);
 
@@ -375,6 +384,13 @@ const BillsPage = () => {
         </div>
       </header>
 
+
+      {summaryError && !summary && (
+        <div className="card p-3 text-sm text-on-surface-variant border-warning/30 flex items-center gap-2">
+          <Activity className="w-4 h-4 text-warning" />
+          {t('BILL.SUMMARY_LOAD_FAIL', '账单摘要加载失败，下方明细仍可查看')}
+        </div>
+      )}
 
       {summary && (
         <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
