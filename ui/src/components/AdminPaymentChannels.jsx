@@ -20,6 +20,12 @@ const FIELDS = [
   { key: 'yifut_min_amount_fen',       label: 'FIELD_MIN',              type: 'rmb',     hint: 'FIELD_RMB_HINT' },
   { key: 'yifut_max_amount_fen',       label: 'FIELD_MAX',              type: 'rmb',     hint: 'FIELD_RMB_HINT' },
   { key: 'yifut_product_name',         label: 'FIELD_PRODUCT_NAME',     type: 'text' },
+  // SSRF 旁路开关。默认 false：拒 198.18/15 (RFC 2544 benchmark)、100.64/10
+  // (CGNAT)、2002::/16 + 2001::/32 (IPv6 transition) 这些"代理虚拟 egress"段。
+  // admin 在本机走 Clash TUN / Cloudflare WARP / V2Ray TUN 时打开此开关，
+  // DNS 拦截返出来的代理 IP 才能放行。真私网 (10/8 / 172.16/12 / 192.168/16 /
+  // 127/8 / link-local / 元数据 IP) 仍然拒，不受此开关影响。
+  { key: 'yifut_allow_egress_proxy_ranges', label: 'FIELD_ALLOW_PROXY_EGRESS', type: 'bool', hint: 'FIELD_ALLOW_PROXY_EGRESS_HINT' },
 ];
 
 // fen ↔ RMB 单位换算辅助。
@@ -222,6 +228,28 @@ const AdminPaymentChannels = () => {
                   />
                   {f.hint && (
                     <span className="text-[11px] text-on-surface-variant">
+                      {t(`PAY_ADMIN.${f.hint}`)}
+                    </span>
+                  )}
+                </div>
+              ) : f.type === 'bool' ? (
+                <div className="space-y-1">
+                  <label className="flex items-center gap-2 cursor-pointer">
+                    <input
+                      id={fieldId}
+                      type="checkbox"
+                      checked={values[f.key] === '1' || values[f.key] === 'true'}
+                      onChange={e => setValues({ ...values, [f.key]: e.target.checked ? '1' : '0' })}
+                      className="h-4 w-4 accent-primary cursor-pointer"
+                    />
+                    <span className="text-sm text-on-surface">
+                      {(values[f.key] === '1' || values[f.key] === 'true')
+                        ? t('PAY_ADMIN.BOOL_ON', '已启用')
+                        : t('PAY_ADMIN.BOOL_OFF', '未启用')}
+                    </span>
+                  </label>
+                  {f.hint && (
+                    <span className="text-[11px] text-on-surface-variant block">
                       {t(`PAY_ADMIN.${f.hint}`)}
                     </span>
                   )}

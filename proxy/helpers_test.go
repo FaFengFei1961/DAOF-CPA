@@ -13,6 +13,7 @@ package proxy
 import (
 	"crypto/rsa"
 	"net"
+	"net/netip"
 	"strings"
 	"testing"
 	"time"
@@ -147,6 +148,67 @@ func TestYifutConfig_IsConfigured(t *testing.T) {
 // dummyRSAKey is a placeholder RSA key for testing IsConfigured pointer checks.
 // We never actually sign with it; only the non-nil pointer matters.
 var dummyRSAKey = rsa.PrivateKey{}
+
+// TestIsUnsafeYifutIP_TwoTierDenyList 锁定 2026-05-21 拆档行为：
+//   1. alwaysDeny 任何情况都拒（RFC1918 私网 / loopback / link-local / 元数据 /
+//      IPv6 ULA / 文档段）
+//   2. proxyEgress（CGNAT 100.64/10、benchmark 198.18/15、IPv6 transition）
+//      默认拒，但 admin 开 yifut_allow_egress_proxy_ranges 后放行 ——
+//      这是为了支持本机走 Clash TUN / Cloudflare WARP 这类 DNS 拦截代理。
+//   3. 公网 IP 永远放行。
+func TestIsUnsafeYifutIP_TwoTierDenyList(t *testing.T) {
+	tests := []struct {
+		name              string
+		ip                string
+		allowProxyEgress  bool
+		wantUnsafe        bool
+	}{
+		// alwaysDeny 不管 flag 开不开都拒
+		{"RFC1918 10/8 always denied", "10.0.0.1", true, true},
+		{"RFC1918 172.16/12 always denied", "172.16.0.1", true, true},
+		{"RFC1918 192.168/16 always denied", "192.168.1.1", true, true},
+		{"loopback always denied", "127.0.0.1", true, true},
+		{"link-local always denied", "169.254.169.254", true, true},
+		{"Azure metadata always denied", "168.63.129.16", true, true},
+		{"Aliyun metadata always denied", "100.100.100.200", true, true},
+		{"documentation 192.0.2/24 always denied", "192.0.2.1", true, true},
+		// proxyEgress 默认拒
+		{"CGNAT 100.64/10 denied by default", "100.64.0.1", false, true},
+		{"benchmark 198.18/15 denied by default", "198.18.0.23", false, true},
+		// proxyEgress 在 admin 开关下放行
+		{"CGNAT 100.64/10 allowed when flag on", "100.64.0.1", true, false},
+		{"benchmark 198.18/15 allowed when flag on (Clash TUN/WARP)", "198.18.0.23", true, false},
+		{"benchmark 198.19/16 allowed when flag on", "198.19.255.254", true, false},
+		// 公网无论如何放行
+		{"public IPv4 always allowed", "8.8.8.8", false, false},
+		{"public IPv4 always allowed (cf)", "104.18.32.1", true, false},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			SysConfigMutex.Lock()
+			origConfig := SysConfigCache
+			SysConfigCache = map[string]string{}
+			if tc.allowProxyEgress {
+				SysConfigCache["yifut_allow_egress_proxy_ranges"] = "1"
+			}
+			SysConfigMutex.Unlock()
+			t.Cleanup(func() {
+				SysConfigMutex.Lock()
+				SysConfigCache = origConfig
+				SysConfigMutex.Unlock()
+			})
+
+			addr, err := netip.ParseAddr(tc.ip)
+			if err != nil {
+				t.Fatalf("parse %q: %v", tc.ip, err)
+			}
+			if got := isUnsafeYifutIP(addr); got != tc.wantUnsafe {
+				t.Errorf("isUnsafeYifutIP(%s) with allowProxyEgress=%v = %v; want %v",
+					tc.ip, tc.allowProxyEgress, got, tc.wantUnsafe)
+			}
+		})
+	}
+}
 
 func TestIsAllowedWSOrigin(t *testing.T) {
 	originalFn := GetCORSAllowedOriginsFn

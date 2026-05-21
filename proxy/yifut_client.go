@@ -38,29 +38,60 @@ type YifutConfig struct {
 	PlatformPublicKey  *rsa.PublicKey
 }
 
-var yifutDenyPrefixes = []netip.Prefix{
-	netip.MustParsePrefix("169.254.0.0/16"),     // Link-local (含 IMDS)
-	netip.MustParsePrefix("100.64.0.0/10"),      // CGNAT
-	netip.MustParsePrefix("168.63.129.16/32"),   // Azure Wireserver
-	netip.MustParsePrefix("100.100.100.200/32"), // 阿里云 IMDS
-	netip.MustParsePrefix("2002::/16"),          // IPv6 6to4
-	netip.MustParsePrefix("2001::/32"),          // IPv6 Teredo
-	netip.MustParsePrefix("fd00::/8"),           // IPv6 ULA
-	netip.MustParsePrefix("fe80::/10"),          // IPv6 Link-local
-	netip.MustParsePrefix("198.18.0.0/15"),      // benchmark
-	netip.MustParsePrefix("192.0.2.0/24"),       // documentation
-	netip.MustParsePrefix("10.0.0.0/8"),
-	netip.MustParsePrefix("172.16.0.0/12"),
-	netip.MustParsePrefix("192.168.0.0/16"),
-	netip.MustParsePrefix("127.0.0.0/8"),
-	netip.MustParsePrefix("::1/128"),
+// SSRF 拒绝列表拆两档（2026-05-21 用户反馈"Clash TUN 模式下 yifut 调用被拒"）：
+//
+// alwaysDeny 是真私网/元数据范围 —— 任何场景都拒，因为这是 SSRF 攻击的真实目标
+// （内部服务、云元数据 endpoint）。
+//
+// proxyEgress 是 CGNAT / RFC 2544 benchmark / IPv6 transition 段 —— 它们的合法
+// 真实用途是 Clash TUN / Cloudflare WARP / V2Ray TUN 等本地代理的虚拟 egress IP。
+// 攻击场景下命中这里几乎拿不到任何东西（这些段没人放真实服务），所以加一个
+// admin opt-in SysConfig flag `yifut_allow_egress_proxy_ranges`，admin 在已知
+// 本机走代理时显式打开，跳过这一档（alwaysDeny 仍然生效）。
+var (
+	yifutAlwaysDenyPrefixes = []netip.Prefix{
+		netip.MustParsePrefix("169.254.0.0/16"),     // Link-local (含 IMDS)
+		netip.MustParsePrefix("168.63.129.16/32"),   // Azure Wireserver
+		netip.MustParsePrefix("100.100.100.200/32"), // 阿里云 IMDS
+		netip.MustParsePrefix("fd00::/8"),           // IPv6 ULA
+		netip.MustParsePrefix("fe80::/10"),          // IPv6 Link-local
+		netip.MustParsePrefix("192.0.2.0/24"),       // RFC 5737 documentation（攻击者可能伪造此段）
+		netip.MustParsePrefix("10.0.0.0/8"),
+		netip.MustParsePrefix("172.16.0.0/12"),
+		netip.MustParsePrefix("192.168.0.0/16"),
+		netip.MustParsePrefix("127.0.0.0/8"),
+		netip.MustParsePrefix("::1/128"),
+	}
+	yifutProxyEgressPrefixes = []netip.Prefix{
+		netip.MustParsePrefix("100.64.0.0/10"), // CGNAT - VPN / 代理常用 egress
+		netip.MustParsePrefix("198.18.0.0/15"), // RFC 2544 benchmark - Clash TUN / WARP loopback
+		netip.MustParsePrefix("2002::/16"),     // IPv6 6to4
+		netip.MustParsePrefix("2001::/32"),     // IPv6 Teredo
+	}
+)
+
+// yifutAllowEgressProxyRanges 读 admin 开关：是否在 SSRF 检查里允许 CGNAT/
+// benchmark 等代理虚拟 egress 段。默认 false，admin 在 /admin/finance/payment
+// 显式勾选后才生效。
+func yifutAllowEgressProxyRanges() bool {
+	SysConfigMutex.RLock()
+	v := strings.TrimSpace(SysConfigCache["yifut_allow_egress_proxy_ranges"])
+	SysConfigMutex.RUnlock()
+	return v == "1" || strings.EqualFold(v, "true")
 }
 
 func isUnsafeYifutIP(ip netip.Addr) bool {
 	ip = ip.Unmap()
-	for _, p := range yifutDenyPrefixes {
+	for _, p := range yifutAlwaysDenyPrefixes {
 		if p.Contains(ip) {
 			return true
+		}
+	}
+	if !yifutAllowEgressProxyRanges() {
+		for _, p := range yifutProxyEgressPrefixes {
+			if p.Contains(ip) {
+				return true
+			}
 		}
 	}
 	return false
@@ -404,7 +435,18 @@ func ssrfSafeDialContext(ctx context.Context, network, addr string) (net.Conn, e
 	// 任一 IP 命中黑名单都拒绝（防 DNS round-robin 混入内网 IP）
 	for _, ipa := range ips {
 		if isUnsafeIP(ipa.IP) {
-			return nil, fmt.Errorf("ssrf-safe: refused unsafe IP %s for host %s (private/loopback/link-local/metadata)", ipa.IP, host)
+			// 给 admin 一条可操作的线索：常见误报是本机走 Clash TUN / WARP / V2Ray
+			// 之类的代理，DNS 被劫持到 198.18.0.0/15 / 100.64.0.0/10 等代理 egress
+			// 段。这种情况下 admin 可以打开 yifut_allow_egress_proxy_ranges 开关。
+			addr, _ := netip.AddrFromSlice(ipa.IP)
+			hint := "private/loopback/link-local/metadata"
+			for _, p := range yifutProxyEgressPrefixes {
+				if p.Contains(addr.Unmap()) {
+					hint = "proxy egress range (CGNAT/benchmark/IPv6 transition) — if you intentionally route through Clash/WARP/VPN, enable yifut_allow_egress_proxy_ranges in admin finance settings"
+					break
+				}
+			}
+			return nil, fmt.Errorf("ssrf-safe: refused unsafe IP %s for host %s (%s)", ipa.IP, host, hint)
 		}
 	}
 	// 所有 IP 都安全：对预校验地址做交错拨号，避免固定第一条导致 IPv4/IPv6 失败拖慢。
