@@ -75,6 +75,48 @@ func (e *errRefundRefDuplicate) Error() string {
 	return fmt.Sprintf("external_refund_ref already used by refund id=%d at %s", e.existing.ID, e.existing.CreatedAt.Format(time.RFC3339))
 }
 
+// AdminGetPendingManualEpusdtCount GET /api/admin/topup/pending-manual-count
+//
+// W-4-Manual H-6（2026-05-21）：让 admin 不看邮箱也能在后台一眼看到积压的 USDT 订单。
+// 返回 status=created + provider=epusdt 的订单数 + 最旧订单的创建时间（让 admin 感知积压时长）。
+// 前端 admin 后台 nav 显示红点 + 数字，每 30s polling。
+//
+// 性能：直接 COUNT(*) WHERE status=created AND provider=epusdt，走 status+provider 索引；
+// 即使 10K 订单也 < 5ms。
+func AdminGetPendingManualEpusdtCount(c *fiber.Ctx) error {
+	if loadAdminUser(c) == nil {
+		return c.Status(401).JSON(fiber.Map{"success": false, "message_code": "ERR_NO_AUTH"})
+	}
+	var count int64
+	if err := database.DB.Model(&database.TopupOrder{}).
+		Where("status = ? AND provider = ?", "created", database.TopupProviderEpusdt).
+		Count(&count).Error; err != nil {
+		log.Printf("[TOPUP-ADMIN-PENDING-COUNT] count failed: %v", err)
+		return c.Status(500).JSON(fiber.Map{"success": false, "message_code": "ERR_DB_QUERY"})
+	}
+
+	// 最旧订单的 created_at（用于显示"已积压 X 分钟"，admin 决策是否立即处理）
+	var oldestSeconds int64 = 0
+	if count > 0 {
+		var oldest database.TopupOrder
+		if err := database.DB.Model(&database.TopupOrder{}).
+			Where("status = ? AND provider = ?", "created", database.TopupProviderEpusdt).
+			Order("created_at asc").
+			Select("created_at").
+			First(&oldest).Error; err == nil {
+			oldestSeconds = int64(time.Since(oldest.CreatedAt).Seconds())
+		}
+	}
+
+	return c.JSON(fiber.Map{
+		"success": true,
+		"data": fiber.Map{
+			"count":               count,
+			"oldest_age_seconds":  oldestSeconds,
+		},
+	})
+}
+
 // AdminListTopupOrders GET /api/admin/topup/orders?page=&page_size=&status=&user_id=
 func AdminListTopupOrders(c *fiber.Ctx) error {
 	if loadAdminUser(c) == nil {

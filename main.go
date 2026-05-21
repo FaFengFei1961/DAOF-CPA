@@ -698,6 +698,8 @@ func main() {
 		},
 	})
 	adminApi.Get("/topup/orders", controller.AdminListTopupOrders)
+	// W-4-Manual H-6：admin badge polling 端点（轻量 count + 最旧 age）
+	adminApi.Get("/topup/pending-manual-count", controller.AdminGetPendingManualEpusdtCount)
 	adminApi.Post("/topup/orders/:id/mark-paid", refundLimiter, controller.AdminMarkTopupPaid)
 	adminApi.Post("/topup/orders/:id/refund", refundLimiter, controller.AdminRefundTopup)
 

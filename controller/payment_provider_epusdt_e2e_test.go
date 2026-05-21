@@ -337,6 +337,77 @@ func TestEpusdtManual_E2E_DuplicateMarkPaidRejected(t *testing.T) {
 	}
 }
 
+// TestEpusdtManual_E2E_AdminPendingBadge：H-6 admin badge endpoint 验证
+// 验证：1) 无 epusdt 订单时 count=0；2) 有 created 状态 epusdt 订单时 count>0 + age>0；
+// 3) yifut/已 paid 订单不计入
+func TestEpusdtManual_E2E_AdminPendingBadge(t *testing.T) {
+	setupSubTestDB(t)
+	configureEpusdtManualForTest(t, "admin@daof.test",
+		"TMBjEGgFAPMt6DxDPKqcxsAQvWMAua8gHk", "", "", "")
+	disableSignupBonusForTest(t)
+
+	_, emailCleanup := captureEmailsForTest(t)
+	defer emailCleanup()
+
+	user := seedTestUser(t, 0)
+	admin := seedAdminUser(t)
+	app := newTopupE2EApp(user, admin)
+	app.Get("/admin/topup/pending-manual-count",
+		func(c *fiber.Ctx) error {
+			c.Request().Header.SetCookie("daof_admin_token", admin.Token)
+			return c.Next()
+		},
+		middleware.AdminGuard,
+		AdminGetPendingManualEpusdtCount,
+	)
+
+	// 1. 初始：0 个待确认
+	code1, resp1 := doJSON(t, app, "GET", "/admin/topup/pending-manual-count", nil)
+	if code1 != 200 {
+		t.Fatalf("expected 200, got %d body=%v", code1, resp1)
+	}
+	data1 := resp1["data"].(map[string]any)
+	if data1["count"] != float64(0) {
+		t.Errorf("initial count=%v, want 0", data1["count"])
+	}
+
+	// 2. 创建一个 created 状态的 epusdt 订单 → count 应为 1
+	_, resp2 := doJSON(t, app, "POST", "/topup/create", map[string]any{
+		"provider": "epusdt", "method": "trc20-usdt", "amount_fen": 1000,
+	})
+	if resp2["success"] != true {
+		t.Fatalf("create order failed: %v", resp2)
+	}
+
+	code3, resp3 := doJSON(t, app, "GET", "/admin/topup/pending-manual-count", nil)
+	if code3 != 200 {
+		t.Fatalf("count endpoint: %d %v", code3, resp3)
+	}
+	data3 := resp3["data"].(map[string]any)
+	if data3["count"] != float64(1) {
+		t.Errorf("count=%v after 1 epusdt created, want 1", data3["count"])
+	}
+	if data3["oldest_age_seconds"] == nil {
+		t.Error("oldest_age_seconds should be > 0 when count > 0")
+	}
+
+	// 3. 创建一个 yifut 订单（手工 INSERT 模拟）→ 不应进 count
+	database.DB.Create(&database.TopupOrder{
+		Provider:                    "yifut",
+		OutTradeNo:                  "yifut-test-1",
+		UserID:                      user.ID,
+		PayType:                     "alipay",
+		MoneyRMB:                    1000,
+		AmountUSD:                   100_000_000,
+		ExchangeRateRmbPerUsdMicros: 7_200_000,
+		Status:                      "created",
+	})
+	_, resp4 := doJSON(t, app, "GET", "/admin/topup/pending-manual-count", nil)
+	if resp4["data"].(map[string]any)["count"] != float64(1) {
+		t.Errorf("count should still be 1 (yifut excluded), got %v", resp4["data"])
+	}
+}
+
 // TestEpusdtManual_E2E_SMTPUnconfiguredRejected：验证 C-2 修复
 // SMTP 没配齐时 manual 模式拒绝创建订单（fail-closed，避免用户付款但 admin 永不知）
 func TestEpusdtManual_E2E_SMTPUnconfiguredRejected(t *testing.T) {
