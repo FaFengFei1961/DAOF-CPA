@@ -410,8 +410,11 @@ func epusdtStringify(v any) string {
 	}
 }
 
-// 编译期 assertion：EpusdtPaymentProvider 必须实现 PaymentProvider interface。
-var _ PaymentProvider = (*EpusdtPaymentProvider)(nil)
+// 编译期 assertion（W-3 review L-4：interface 检查保留在生产文件，IPAllowlistedProvider 也加上）。
+var (
+	_ PaymentProvider       = (*EpusdtPaymentProvider)(nil)
+	_ IPAllowlistedProvider = (*EpusdtPaymentProvider)(nil)
+)
 
 // 错误兜底（确保未使用的 sentinel 不被 linter 投诉）
 var _ = errors.Is

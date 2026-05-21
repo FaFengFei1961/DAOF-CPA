@@ -229,6 +229,12 @@ func (p *YifutPaymentProvider) AllowedRemoteIPCIDRs() string {
 	return readStringConfig("yifut_notify_allowed_cidrs", "")
 }
 
+// 编译期 assertion（W-3 review L-4 修复：从测试文件搬到生产文件，让 go build 即捕获）。
+var (
+	_ PaymentProvider       = (*YifutPaymentProvider)(nil)
+	_ IPAllowlistedProvider = (*YifutPaymentProvider)(nil)
+)
+
 // yifutVerifyTimestamp 是 checkYifutTimestamp 的纯函数版本（无 log，便于 adapter 自检）。
 // 接受 unix 秒字符串，与服务器时间漂移 ≤ notifyTimestampSkewSeconds（300s）则通过。
 func yifutVerifyTimestamp(ts string) bool {

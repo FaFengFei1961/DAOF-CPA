@@ -174,11 +174,13 @@ func isRemoteIPInCIDRs(remoteIP, csv string) bool {
 
 // buildPaymentWebhookInput 从 fiber.Ctx 抽出 PaymentWebhookInput 快照。
 // 让 provider.ParseAndVerifyWebhook 不依赖 fiber，便于单测。
+//
+// W-3 review L-3 修复：用 Header.All() iter.Seq2 替代弃用的 VisitAll（staticcheck SA1019）。
 func buildPaymentWebhookInput(c *fiber.Ctx) *PaymentWebhookInput {
 	headers := map[string]string{}
-	c.Request().Header.VisitAll(func(k, v []byte) {
+	for k, v := range c.Request().Header.All() {
 		headers[strings.ToLower(string(k))] = string(v)
-	})
+	}
 	return &PaymentWebhookInput{
 		Method:      string(c.Request().Header.Method()),
 		Headers:     headers,

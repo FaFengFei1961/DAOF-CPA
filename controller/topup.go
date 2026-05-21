@@ -25,6 +25,7 @@ package controller
 
 import (
 	"context"
+	"errors"
 	"log"
 	"strconv"
 	"time"
@@ -193,7 +194,17 @@ func CreateTopup(c *fiber.Ctx) error {
 		if updErr := database.DB.Model(&order).Updates(map[string]any{"status": "failed"}).Error; updErr != nil {
 			log.Printf("[TOPUP] mark failed order=%s err=%v", outTradeNo, updErr)
 		}
-		return c.Status(502).JSON(fiber.Map{"success": false, "message_code": "ERR_GATEWAY_REJECT"})
+		// W-3 review L-2 修复：按 sentinel 分类返合理 status + message_code
+		switch {
+		case errors.Is(err, ErrPaymentProviderInternal):
+			// adapter 内部错（如 RawExtras method 非法 / nil request）：4xx 用户输入问题
+			return c.Status(400).JSON(fiber.Map{"success": false, "message_code": "ERR_PAY_TYPE_INVALID"})
+		case errors.Is(err, ErrPaymentProviderNotConfigured):
+			return c.Status(503).JSON(fiber.Map{"success": false, "message_code": "ERR_PAYMENT_UNAVAILABLE"})
+		default:
+			// 网关网络错 / 业务拒：5xx
+			return c.Status(502).JSON(fiber.Map{"success": false, "message_code": "ERR_GATEWAY_REJECT"})
+		}
 	}
 
 	// 3. 持久化网关返回

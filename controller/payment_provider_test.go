@@ -291,6 +291,4 @@ func TestYifutPaymentProvider_PublicOptions(t *testing.T) {
 
 // ─── 静态接口校验 ──────────────────────────────────────────────
 
-// 编译期 assertion：YifutPaymentProvider 必须实现 PaymentProvider interface。
-// 如果 interface 增减方法，这里会编译失败。
-var _ PaymentProvider = (*YifutPaymentProvider)(nil)
+// 编译期 assertion 已搬到 payment_provider_yifut.go (L-4 修复)，此处去重。

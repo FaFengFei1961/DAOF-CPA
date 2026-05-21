@@ -649,5 +649,4 @@ func TestChainToMethod(t *testing.T) {
 	}
 }
 
-// 编译期 assertion
-var _ PaymentProvider = (*EpusdtPaymentProvider)(nil)
+// 编译期 assertion 已搬到 payment_provider_epusdt.go (L-4 修复)，此处去重。
