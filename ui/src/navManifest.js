@@ -8,11 +8,10 @@
  * Sidebar / AdminSidebar / MobileBottomNav 都从这里读，避免菜单分散在多处。
  */
 import {
-  Home, KeySquare, BarChart2, CreditCard, Package, Wallet,
+  Home, KeySquare, BarChart2, CreditCard, Wallet,
   Receipt, MessageSquare, Settings as SettingsIcon,
   Network, Activity, Layers, Package as PackageIcon,
-  ShieldAlert, Users, BarChart3, Bell, Globe, Key, Shield, ShieldCheck,
-  Mail,
+  ShieldAlert, Users, BarChart3, Bell, Globe, Shield, ShieldCheck,
 } from 'lucide-react';
 
 // ─── User-side ───────────────────────────────────────────────────
@@ -81,10 +80,9 @@ export const adminNav = [
     items: [
       { id: 'sync',           standalone: true, path: '/admin/sync',          icon: Activity,     labelKey: 'SETTINGS.TAB_SYNC',      labelFallback: '号池同步' },
       { id: 'general',        standalone: true, path: '/admin/general',       icon: SettingsIcon, labelKey: 'SETTINGS.TAB_GENERAL',   labelFallback: '常规设置' },
-      { id: 'oauth',          standalone: true, path: '/admin/oauth',         icon: Key,          labelKey: 'SETTINGS.TAB_OAUTH',     labelFallback: 'OAuth' },
-      { id: 'sms',            standalone: true, path: '/admin/sms',           icon: MessageSquare,labelKey: 'SETTINGS.TAB_SMS',       labelFallback: '短信' },
-      { id: 'email',          standalone: true, path: '/admin/email',         icon: Mail,         labelKey: 'SETTINGS.TAB_EMAIL',     labelFallback: '邮件' },
-      { id: 'risk',           standalone: true, path: '/admin/risk',          icon: ShieldCheck,  labelKey: 'SETTINGS.TAB_RISK',      labelFallback: '风控' },
+      // J-2: 旧 oauth / sms / email / risk 4 个独立入口合并为 /admin/auth
+      //      一站页面 + 内部 tab（?tab=oauth|email|sms|risk）。
+      { id: 'auth',           standalone: true, path: '/admin/auth',          matchPrefix: true, icon: ShieldCheck, labelKey: 'SETTINGS.TAB_AUTH',      labelFallback: '认证管理' },
       { id: 'notifications',  standalone: true, path: '/admin/notifications', icon: Bell,         labelKey: 'NOTIF.ADMIN.TAB',        labelFallback: '通知管理' },
       { id: 'admin_tickets',  standalone: true, path: '/admin/tickets',       icon: MessageSquare,labelKey: 'TICKET.ADMIN.TAB',       labelFallback: '工单管理' },
       { id: 'i18n',           standalone: true, path: '/admin/i18n',          icon: Globe,        labelKey: 'SETTINGS.TAB_I18N',      labelFallback: '国际化' },

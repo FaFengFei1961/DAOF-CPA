@@ -1029,6 +1029,10 @@ func mapOAuthProviderErrorGeneric(c *fiber.Ctx, providerKey string, err error) e
 // oauth_providers 三个旧字段。前端 AuthModal.jsx + UserLinkedAccounts.jsx
 // 现统一从 oauth_provider_metadata 结构化数组读取，不再走 flat 字段兜底。
 // 公测期不需要向后兼容；同仓部署不会出现"前端旧、后端新"窗口。
+//
+// Sprint J-1（2026-05-21）：新增 email_features 暴露 SMTP master / signup /
+// login 三个开关，让 AuthModal 能在前端按 admin 配置过滤登录方式 —— admin
+// 关闭邮箱后用户看不到"用邮箱登录 / 注册"按钮，不再到点了才弹错。
 func GetPublicConfig(c *fiber.Ctx) error {
 	proxy.SysConfigMutex.RLock()
 	serverAddress := proxy.SysConfigCache["server_address"]
@@ -1042,9 +1046,19 @@ func GetPublicConfig(c *fiber.Ctx) error {
 	// OAuth 跳转所需的所有信息。
 	providerMetadata := ListConfiguredOAuthProviderMetadata()
 
+	// email_features：admin 邮箱开关三态。signup / login 都依赖 master enabled。
+	emailMaster := readBoolConfig("email_enabled", false)
+	emailSignup := emailMaster && readBoolConfig("email_signup_enabled", false)
+	emailLogin := emailMaster && readBoolConfig("email_login_enabled", false)
+
 	return c.JSON(fiber.Map{
 		"success":                          true,
 		"oauth_provider_metadata":          providerMetadata,
+		"email_features": fiber.Map{
+			"enabled":        emailMaster,
+			"signup_enabled": emailSignup,
+			"login_enabled":  emailLogin,
+		},
 		"server_address":                   serverAddress,
 		"exchange_rate_rmb_per_usd_micros": rateStr,
 		"referral_incentives": fiber.Map{

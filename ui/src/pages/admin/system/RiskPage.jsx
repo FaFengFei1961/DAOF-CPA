@@ -1,7 +1,7 @@
 import React, { useEffect, useState } from 'react';
 import { useTranslation } from 'react-i18next';
 import { ShieldCheck, Info } from 'lucide-react';
-import { PageContainer, PageHeader, Section } from '../../../components/ui';
+import { Section } from '../../../components/ui';
 import TextInput from '../../../components/ui/TextInput';
 import Select from '../../../components/ui/Select';
 import UsdAmountInput from '../../../components/ui/UsdAmountInput';
@@ -126,10 +126,12 @@ const StrategyDetail = ({ strategy, ipLimit, t }) => {
 };
 
 /**
- * Registration risk controls + referral incentives.
+ * Registration risk controls + referral incentives sub-form.
  *
  * 号池额度采集器（credits_refresh_interval / credits_max_retries / credits_retry_interval）
  * 已挪到 /admin/sync —— 与 CLIProxy 用量同步同属"后台从 CPA 拉数据"语义。
+ *
+ * Sprint J-2: 仅作为 AuthAdminPage 的内嵌 tab 渲染；父级负责头部和分区切换。
  */
 const RiskPage = () => {
   const { t } = useTranslation();
@@ -161,13 +163,7 @@ const RiskPage = () => {
   ];
 
   return (
-    <PageContainer>
-      <PageHeader
-        title={t('ADMIN_SYS.RISK.TITLE')}
-        sub={t('ADMIN_SYS.RISK.DESC')}
-        icon={ShieldCheck}
-      />
-
+    <>
       <Section title={t('ADMIN_SYS.RISK.STRATEGY_SECTION_TITLE')}>
         <div className="py-3 border-b border-outline-variant/30">
           <div className="flex flex-col md:flex-row md:items-center justify-between gap-4">
@@ -280,7 +276,7 @@ const RiskPage = () => {
       </Section>
 
       <SaveBar loading={loading} onSave={handleSave} />
-    </PageContainer>
+    </>
   );
 };
 

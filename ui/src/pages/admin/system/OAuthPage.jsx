@@ -1,14 +1,15 @@
 import React from 'react';
 import { useNavigate } from 'react-router-dom';
 import { useTranslation } from 'react-i18next';
-import { Key } from 'lucide-react';
-import { PageContainer, PageHeader } from '../../../components/ui';
 import { useAdminConfigs } from '../../../hooks/useAdminConfigs';
 import { SaveBar, SecretInputField, SectionCard } from './_AdminFormPrimitives';
 import { useMaskState } from '../../../hooks/useMaskState';
 
 /**
- * GitHub OAuth configuration page.
+ * GitHub OAuth configuration sub-form.
+ *
+ * Sprint J-2: 仅作为 AuthAdminPage 的内嵌 tab 渲染。父级负责
+ * PageContainer + PageHeader，本组件只输出表单 body。
  */
 const OAuthPage = () => {
   const { t } = useTranslation();
@@ -17,13 +18,7 @@ const OAuthPage = () => {
   const [mask, toggleMask] = useMaskState();
 
   return (
-    <PageContainer>
-      <PageHeader
-        title={t('ADMIN_SYS.OAUTH.TITLE')}
-        sub={t('ADMIN_SYS.OAUTH.DESC')}
-        icon={Key}
-      />
-
+    <>
       <SectionCard title={t('ADMIN_SYS.OAUTH.APP_PARAMS_TITLE')}>
         <div className="flex flex-col gap-6">
           <SecretInputField
@@ -75,7 +70,7 @@ const OAuthPage = () => {
       </SectionCard>
 
       <SaveBar loading={loading} onSave={handleSave} />
-    </PageContainer>
+    </>
   );
 };
 

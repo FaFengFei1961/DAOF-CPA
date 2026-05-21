@@ -28,6 +28,37 @@ const AuthModal = ({ isOpen, onClose, onLoginSuccess, initialStep = 'github', tm
   const modalRef = useRef(null);
   const { onBackdropClick } = useModalA11y(isOpen, onClose, closeBtnRef, modalRef);
 
+  // Sprint J-1: 按 admin 配置过滤登录方式。打开 modal 时拉一次 publicConfig，
+  // 根据 oauth_provider_metadata 决定显示哪些 OAuth 按钮，根据 email_features
+  // 决定显示"邮箱登录 / 注册"按钮。旧实现是点了才 fetch + 报"该方式未配置"。
+  const [enabledProviders, setEnabledProviders] = useState([]); // ['github', 'google', ...]
+  const [emailFeatures, setEmailFeatures] = useState({ enabled: false, signup_enabled: false, login_enabled: false });
+
+  useEffect(() => {
+    if (!isOpen) return;
+    let alive = true;
+    fetch('/api/public-config', { credentials: 'same-origin' })
+      .then(res => res.json())
+      .then(data => {
+        if (!alive || !data?.success) return;
+        const metaList = Array.isArray(data.oauth_provider_metadata) ? data.oauth_provider_metadata : [];
+        setEnabledProviders(metaList.map(m => m.key).filter(Boolean));
+        if (data.email_features) setEmailFeatures(data.email_features);
+      })
+      .catch(() => {
+        // 拉失败 fallback：所有按钮展示（旧行为），让用户点了才知道未配置
+        setEnabledProviders(['github', 'google']);
+        setEmailFeatures({ enabled: true, signup_enabled: true, login_enabled: true });
+      });
+    return () => { alive = false; };
+  }, [isOpen]);
+
+  const hasGithub = enabledProviders.includes('github');
+  const hasGoogle = enabledProviders.includes('google');
+  const hasEmail = emailFeatures.signup_enabled || emailFeatures.login_enabled;
+  // 至少要有一种登录方式，否则展示 admin 还没配的提示
+  const hasAnyMethod = hasGithub || hasGoogle || hasEmail;
+
 
   useEffect(() => () => {
     if (countdownTimerRef.current) clearInterval(countdownTimerRef.current);
@@ -358,10 +389,14 @@ const AuthModal = ({ isOpen, onClose, onLoginSuccess, initialStep = 'github', tm
           {/* GitHub Step */}
           {step === 'github' && (
             <div className="w-full flex flex-col gap-3 items-center">
-               {/* fix P2（codex review verify-1）：避开 hardcoded hex 违反 design-system/strict-tokens。
-                   GitHub 官方品牌色（#24292f）不属于本项目 design token，但作为 OAuth 提供商
-                   品牌按钮是合理破例 → 用 style 内联绕过 Tailwind lint。 */}
-               <button
+               {!hasAnyMethod && (
+                 <div className="card w-full p-4 text-center text-sm text-on-surface-variant" style={{ borderColor: 'var(--warning)' }}>
+                   {t('AUTH.NO_METHOD_CONFIGURED', '管理员尚未配置任何登录方式，请稍后再试。')}
+                 </div>
+               )}
+
+               {hasGithub && (
+                 <button
                   type="button"
                   onClick={() => handleOAuthLogin('github')}
                   disabled={loading}
@@ -370,7 +405,7 @@ const AuthModal = ({ isOpen, onClose, onLoginSuccess, initialStep = 'github', tm
                     color: '#ffffff',
                   }}
                   className="w-full h-12 font-semibold rounded-overlay flex items-center justify-center gap-3 hover:brightness-110 active:scale-[0.98] transition-all disabled:opacity-70 disabled:active:scale-100 focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-primary"
-               >
+                 >
                  {loading ? (
                    <span className="flex items-center gap-2">
                      <div className="w-4 h-4 border-2 border-white/30 border-t-white rounded-full animate-spin"></div>
@@ -385,11 +420,10 @@ const AuthModal = ({ isOpen, onClose, onLoginSuccess, initialStep = 'github', tm
                    </>
                  )}
                </button>
+               )}
 
-               {/* Phase H-4：Google OAuth 按钮。Google 品牌色（white bg + colored G logo）。
-                   admin 未配 google client 时隐藏（handleGoogleLogin 会失败 + 弹 toast；
-                   按钮是否显示由 publicConfig.oauth_provider_metadata 决定）。 */}
-               <button
+               {hasGoogle && (
+                 <button
                   type="button"
                   onClick={() => handleOAuthLogin('google')}
                   disabled={loading}
@@ -399,7 +433,7 @@ const AuthModal = ({ isOpen, onClose, onLoginSuccess, initialStep = 'github', tm
                     border: '1px solid #dadce0',
                   }}
                   className="w-full h-12 font-semibold rounded-overlay flex items-center justify-center gap-3 hover:bg-gray-50 active:scale-[0.98] transition-all disabled:opacity-70 disabled:active:scale-100 focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-primary"
-               >
+                 >
                  <svg height="20" width="20" viewBox="0 0 48 48">
                    <path fill="#EA4335" d="M24 9.5c3.54 0 6.71 1.22 9.21 3.6l6.85-6.85C35.9 2.38 30.47 0 24 0 14.62 0 6.51 5.38 2.56 13.22l7.98 6.19C12.43 13.72 17.74 9.5 24 9.5z"/>
                    <path fill="#4285F4" d="M46.98 24.55c0-1.57-.15-3.09-.38-4.55H24v9.02h12.94c-.58 2.96-2.26 5.48-4.78 7.18l7.73 6c4.51-4.18 7.09-10.36 7.09-17.65z"/>
@@ -407,22 +441,26 @@ const AuthModal = ({ isOpen, onClose, onLoginSuccess, initialStep = 'github', tm
                    <path fill="#34A853" d="M24 48c6.48 0 11.93-2.13 15.89-5.81l-7.73-6c-2.15 1.45-4.92 2.3-8.16 2.3-6.26 0-11.57-4.22-13.47-9.91l-7.98 6.19C6.51 42.62 14.62 48 24 48z"/>
                  </svg>
                  {loading ? t('AUTH.BTN_GOOGLE_LOADING', '正在跳转 Google ...') : t('AUTH.BTN_GOOGLE', '用 Google 登录')}
-               </button>
+                 </button>
+               )}
 
-               {/* Phase G-2.6：在 GitHub 按钮下方提供"使用邮箱登录/注册"入口 */}
-               <div className="flex items-center w-full gap-3 my-1">
-                 <div className="flex-1 h-px bg-outline-variant" />
-                 <span className="text-xs text-on-surface-variant">{t('AUTH.OR', '或')}</span>
-                 <div className="flex-1 h-px bg-outline-variant" />
-               </div>
-               <button
-                 type="button"
-                 onClick={() => setStep('email-login')}
-                 className="w-full h-11 bg-surface-container-high border border-outline text-on-surface rounded-control text-sm font-medium flex items-center justify-center gap-2 hover:bg-surface-container active:scale-[0.99] transition-all"
-               >
-                 <Mail size={16} />
-                 {t('AUTH.BTN_USE_EMAIL', '使用邮箱登录 / 注册')}
-               </button>
+               {hasEmail && (hasGithub || hasGoogle) && (
+                 <div className="flex items-center w-full gap-3 my-1">
+                   <div className="flex-1 h-px bg-outline-variant" />
+                   <span className="text-xs text-on-surface-variant">{t('AUTH.OR', '或')}</span>
+                   <div className="flex-1 h-px bg-outline-variant" />
+                 </div>
+               )}
+               {hasEmail && (
+                 <button
+                   type="button"
+                   onClick={() => setStep('email-login')}
+                   className="w-full h-11 bg-surface-container-high border border-outline text-on-surface rounded-control text-sm font-medium flex items-center justify-center gap-2 hover:bg-surface-container active:scale-[0.99] transition-all"
+                 >
+                   <Mail size={16} />
+                   {t('AUTH.BTN_USE_EMAIL', '使用邮箱登录 / 注册')}
+                 </button>
+               )}
             </div>
           )}
 

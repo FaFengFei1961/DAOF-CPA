@@ -1,13 +1,13 @@
 import React from 'react';
 import { useTranslation } from 'react-i18next';
-import { MessageSquare } from 'lucide-react';
-import { PageContainer, PageHeader } from '../../../components/ui';
 import { useAdminConfigs } from '../../../hooks/useAdminConfigs';
 import { SaveBar, SecretInputField, SectionCard } from './_AdminFormPrimitives';
 import { useMaskState } from '../../../hooks/useMaskState';
 
 /**
- * Aliyun SMS credential and template configuration.
+ * Aliyun SMS credential and template configuration sub-form.
+ *
+ * Sprint J-2: 仅作为 AuthAdminPage 的内嵌 tab 渲染；父级负责头部和分区切换。
  */
 const SmsPage = () => {
   const { t } = useTranslation();
@@ -15,13 +15,7 @@ const SmsPage = () => {
   const [mask, toggleMask] = useMaskState();
 
   return (
-    <PageContainer>
-      <PageHeader
-        title={t('ADMIN_SYS.SMS.TITLE')}
-        sub={t('ADMIN_SYS.SMS.DESC')}
-        icon={MessageSquare}
-      />
-
+    <>
       <SectionCard
         title={t('ADMIN_SYS.SMS.RAM_TITLE')}
         accent="bg-warning"
@@ -60,7 +54,7 @@ const SmsPage = () => {
       </SectionCard>
 
       <SaveBar loading={loading} onSave={handleSave} />
-    </PageContainer>
+    </>
   );
 };
 

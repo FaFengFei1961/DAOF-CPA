@@ -63,16 +63,16 @@ const AdminCustomerMessages = lazy(() => import('./components/AdminCustomerMessa
 const I18nManagement = lazy(() => import('./components/I18nManagement'));
 
 // Admin system form pages.
-const OAuthPage = lazy(() => import('./pages/admin/system/OAuthPage'));
-const SmsPage = lazy(() => import('./pages/admin/system/SmsPage'));
-const EmailPage = lazy(() => import('./pages/admin/system/EmailPage'));
+// Sprint J-2 IA: GitHub OAuth / Email SMTP / SMS / Risk 四个旧入口合并为
+// /admin/auth 一站页面 + 内部 tab。OAuthPage / EmailPage / SmsPage / RiskPage
+// 仍 import 但只在 AuthAdminPage 内部用 embedded 模式渲染，旧的独立路由删除。
+const AuthAdminPage = lazy(() => import('./pages/admin/system/AuthAdminPage'));
 const ModerationPage = lazy(() => import('./pages/admin/system/ModerationPage'));
 const CouponsPage = lazy(() => import('./pages/admin/system/CouponsPage'));
 const SyncPage = lazy(() => import('./pages/admin/system/SyncPage'));
 
 // Remaining admin forms and finance workspace.
 const GeneralAdminPage = lazy(() => import('./pages/admin/system/GeneralAdminPage'));
-const RiskPage = lazy(() => import('./pages/admin/system/RiskPage'));
 const FinanceShell = lazy(() => import('./pages/admin/finance/FinancePage'));
 const FinanceSettingsPage = lazy(() => import('./pages/admin/finance/FinanceSettingsPage'));
 const BillingRulesAdminPage = lazy(() => import('./pages/admin/finance/BillingRulesPage'));
@@ -127,15 +127,14 @@ const router = createBrowserRouter([
       { path: 'tickets',         element: <AdminCustomerMessages /> },
       { path: 'i18n',            element: <I18nManagement /> },
 
-      { path: 'oauth',           element: <OAuthPage /> },
-      { path: 'sms',             element: <SmsPage /> },
-      { path: 'email',           element: <EmailPage /> },
+      // J-2: 旧 /admin/oauth /admin/sms /admin/email /admin/risk 4 入口
+      // 合并为 /admin/auth?tab=oauth|sms|email|risk 单页面。
+      { path: 'auth',            element: <AuthAdminPage /> },
       { path: 'moderation',      element: <ModerationPage /> },
       { path: 'coupons',         element: <CouponsPage /> },
       { path: 'sync',            element: <SyncPage /> },
 
       { path: 'general',         element: <GeneralAdminPage /> },
-      { path: 'risk',            element: <RiskPage /> },
       // Finance workspace nested routes keep each sub-tab deep-linkable.
       {
         path: 'finance',

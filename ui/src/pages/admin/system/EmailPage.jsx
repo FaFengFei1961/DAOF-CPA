@@ -1,18 +1,20 @@
-// Phase G-1.8（2026-05-20）：Admin SMTP 配置面板。
-//
-// 与其他 admin/system/*Page.jsx 不同，本页用 G-1.6 的专用端点（/api/admin/email/config）
-// 而不是通用 BatchUpdateSysConfigs：
-//   - GET 返回 has_password 而不是密码 blob（共享终端不暴露密钥）
-//   - PUT 用指针字段（nil = 不修改）；password 留空不动，输入新值即替换
-//   - 还多了一个 test-send 按钮，admin 验证 SMTP 拨号 + 模板渲染 + 服务商可达
 import React, { useState, useEffect, useCallback } from 'react';
 import { useTranslation } from 'react-i18next';
-import { Mail, Send, ShieldCheck, AlertTriangle } from 'lucide-react';
+import { Send, ShieldCheck, AlertTriangle } from 'lucide-react';
 import toast from 'react-hot-toast';
 import { authFetch } from '../../../utils/authFetch';
-import { PageContainer, PageHeader } from '../../../components/ui';
 import { SectionCard } from './_AdminFormPrimitives';
 
+/**
+ * Email / SMTP configuration sub-form.
+ *
+ * Sprint J-2: 仅作为 AuthAdminPage 的内嵌 tab 渲染。
+ * 与其他 system 子表单不同，本组件用 G-1.6 的专用端点
+ * （/api/admin/email/config + /test-send），不走通用 BatchUpdateSysConfigs：
+ *   - GET 返回 has_password 而不是密码 blob（共享终端不暴露密钥）
+ *   - PUT 用指针字段（nil = 不修改）；password 留空不动，输入新值即替换
+ *   - 还多了一个 test-send 按钮，admin 验证 SMTP 拨号 + 模板渲染 + 服务商可达
+ */
 const EmailPage = () => {
   const { t } = useTranslation();
   const [config, setConfig] = useState(null);
@@ -124,13 +126,7 @@ const EmailPage = () => {
   const hasPwd = !!config?.has_password;
 
   return (
-    <PageContainer>
-      <PageHeader
-        title={t('ADMIN_SYS.EMAIL.TITLE', '邮件 / SMTP 配置')}
-        sub={t('ADMIN_SYS.EMAIL.DESC', '配置 SMTP 服务器并控制邮件功能的启用范围（绑定 / 注册 / 登录）')}
-        icon={Mail}
-      />
-
+    <>
       <SectionCard title={t('ADMIN_SYS.EMAIL.MASTER_TITLE', '功能开关')} accent="bg-primary">
         <div className="space-y-3 text-sm">
           <label className="flex items-center gap-3 cursor-pointer">
@@ -264,7 +260,7 @@ const EmailPage = () => {
           {saving ? t('COMMON.SAVING', '保存中...') : t('COMMON.SAVE', '保存')}
         </button>
       </div>
-    </PageContainer>
+    </>
   );
 };
 

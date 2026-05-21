@@ -956,7 +956,8 @@
     "EMAIL_SIGNUP_FAILED": "Sign-up failed",
     "EMAIL_SIGNUP_NET_ERROR": "Sign-up network error",
     "EMAIL_FORGOT_FAILED": "Request failed",
-    "EMAIL_FORGOT_NET_ERROR": "Network error"
+    "EMAIL_FORGOT_NET_ERROR": "Network error",
+    "NO_METHOD_CONFIGURED": "No sign-in method has been configured by the administrator yet."
   },
   "EMAIL": {
     "BIND": {
@@ -1054,9 +1055,7 @@
     "NOTIFICATION_PREFS_DESC": "Configure how you receive in-app, email, and SMS notifications.",
     "TAB_USERS": "User Management",
     "TAB_I18N": "Language Packs",
-    "TAB_OAUTH": "GitHub Auth",
-    "TAB_SMS": "Aliyun SMS",
-    "TAB_RISK": "Risk & Registration Policy",
+    "TAB_AUTH": "Authentication",
     "TAB_MODERATION": "Content Moderation",
     "TAB_COUPONS": "Coupon Templates",
     "TAB_MY_COUPONS": "My Coupons",
@@ -1084,29 +1083,6 @@
     "THEME_SYSTEM": "System Default",
     "THEME_DARK": "Dark Mode",
     "THEME_LIGHT": "Light Mode",
-    "OAUTH_TITLE": "GitHub Authentication Center",
-    "SECURE_ZONE_DESC": "[SECURE AREA] System encrypts and stores your keys securely.",
-    "OAUTH_APP_PARAMS": "OAuth Application Parameters",
-    "OAUTH_CALLBACK_TITLE": "Unified Callback URL",
-    "SERVER_ADDR_LABEL": "Server Public Address",
-    "SERVER_ADDR_DESC": "Must strictly match the Authorization callback URL registered in GitHub (including trailing slash)",
-    "SMS_TITLE": "Aliyun SMS Gateway",
-    "SMS_RAM_TITLE": "Aliyun RAM Access Control Keys",
-    "SMS_TPL_TITLE": "SMS Template Control",
-    "SMS_SIGN_LABEL": "SMS SignName",
-    "SMS_TPL_LABEL": "Verification Code TemplateCode",
-    "RISK_TITLE": "Anti-Fraud & Access Policy Engine",
-    "RISK_DESC": "Configure risk control policies against malicious bulk registration. Enforce SMS validation upon reaching IP thresholds.",
-    "RISK_STRATEGY_LABEL": "Registration Risk Policy",
-    "RISK_STRATEGY_DESC": "Determines the verification strictness for new registrations.",
-    "STRATEGY_TRUST": "Permissive (No phone verification required)",
-    "STRATEGY_DYNAMIC": "Dynamic (SMS verification upon reaching IP limits)",
-    "STRATEGY_STRICT": "Strict (All registrations require SMS verification)",
-    "IP_LIMIT_LABEL": "IP Reputation Tolerance Limit",
-    "IP_LIMIT_DESC": "Under Dynamic Mode, when signups from the same IP exceed this limit, SMS verification will be enforced.",
-    "UNIT_COUNT": "units",
-    "BTN_SAVING": "Saving...",
-    "BTN_SAVE": "Save Configuration",
     "SIGNUP_COUPON_TITLE": "Auto-grant coupon for new users",
     "SIGNUP_COUPON_DESC": "Choose an enabled coupon template. New users receive one coupon from that template when registration completes; choose “Do not auto-grant” to disable it.",
     "SIGNUP_COUPON_NONE": "Do not auto-grant",
@@ -2793,6 +2769,15 @@
       "TEST_DESC": "After saving, send a test email to a specific address to verify the SMTP server, TLS, and provider deliverability.",
       "TEST_BUTTON": "Send test email"
     }
+  },
+  "ADMIN_AUTH": {
+    "TITLE": "Authentication",
+    "SUB": "Third-party login / email / SMS / registration policy — one-stop configuration",
+    "NAV_LABEL": "Authentication sections",
+    "TAB_OAUTH": "Third-party",
+    "TAB_EMAIL": "Email",
+    "TAB_SMS": "SMS",
+    "TAB_RISK": "Registration policy"
   },
   "ACCOUNT": {
     "ADMIN_UPDATE_WARN": "Warning: updating these credentials will change your current administrator identity.\nYour admin entry URL will become ?sys={{username}}.\n\nSave these changes?",

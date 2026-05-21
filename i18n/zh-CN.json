@@ -956,7 +956,8 @@
     "EMAIL_SIGNUP_FAILED": "注册失败",
     "EMAIL_SIGNUP_NET_ERROR": "注册网络异常",
     "EMAIL_FORGOT_FAILED": "请求失败",
-    "EMAIL_FORGOT_NET_ERROR": "网络异常"
+    "EMAIL_FORGOT_NET_ERROR": "网络异常",
+    "NO_METHOD_CONFIGURED": "管理员尚未配置任何登录方式，请稍后再试。"
   },
   "EMAIL": {
     "BIND": {
@@ -1054,9 +1055,7 @@
     "NOTIFICATION_PREFS_DESC": "配置站内铃铛、邮件、短信等通知渠道的接收偏好",
     "TAB_USERS": "常规用户管理",
     "TAB_I18N": "界面语言管理",
-    "TAB_OAUTH": "GitHub 鉴权",
-    "TAB_SMS": "阿里短信服务",
-    "TAB_RISK": "验证注册与拦截策略",
+    "TAB_AUTH": "认证管理",
     "TAB_MODERATION": "内容审核",
     "TAB_COUPONS": "优惠券模板",
     "TAB_MY_COUPONS": "我的优惠券",
@@ -1084,29 +1083,6 @@
     "THEME_SYSTEM": "跟随系统",
     "THEME_DARK": "黑暗模式",
     "THEME_LIGHT": "明亮模式",
-    "OAUTH_TITLE": "GitHub 鉴权中心",
-    "SECURE_ZONE_DESC": "[SECURE ZONE] 系统底层的 AES-256-GCM 引擎将在此拦截并加密您的密钥。",
-    "OAUTH_APP_PARAMS": "OAuth Application 参数",
-    "OAUTH_CALLBACK_TITLE": "统一回调寻址配置",
-    "SERVER_ADDR_LABEL": "服务端公网地址",
-    "SERVER_ADDR_DESC": "必须与 GitHub 注册的 Authorization callback URL 严格一致 (含尾部斜杠)",
-    "SMS_TITLE": "阿里云短息服务防刷网关",
-    "SMS_RAM_TITLE": "Aliyun RAM 访问控制密钥",
-    "SMS_TPL_TITLE": "短信模板控制",
-    "SMS_SIGN_LABEL": "短信签名名称",
-    "SMS_TPL_LABEL": "验证码模板",
-    "RISK_TITLE": "注册风控配置",
-    "RISK_DESC": "设置防恶意批量注册策略。在动态或严格模式下强制用户绑定手机。",
-    "RISK_STRATEGY_LABEL": "注册鉴权策略",
-    "RISK_STRATEGY_DESC": "新用户的默认信任级别",
-    "STRATEGY_TRUST": "宽松模式 (无需手机)",
-    "STRATEGY_DYNAMIC": "动态风控 (结合IP信誉度弹性弹窗)",
-    "STRATEGY_STRICT": "严格模式 (强制绑定手机)",
-    "IP_LIMIT_LABEL": "IP 热点容忍阈值",
-    "IP_LIMIT_DESC": "在“动态风控”模式下，当同一个IP产生的注册账号超过此数量，即标记为“高危”，强制阻断无感流程。",
-    "UNIT_COUNT": "个",
-    "BTN_SAVING": "配置参数上传保存中...",
-    "BTN_SAVE": "保存配置",
     "SIGNUP_COUPON_TITLE": "新用户自动发券",
     "SIGNUP_COUPON_DESC": "选择一个已启用的优惠券模板。新用户完成注册时会自动获得一张该模板的券；选择“不自动发放”则关闭此流程。",
     "SIGNUP_COUPON_NONE": "不自动发放",
@@ -2793,6 +2769,15 @@
       "TEST_DESC": "保存配置后，可发送一封测试邮件到指定地址，验证 SMTP 服务器、TLS 与服务商风控是否正常。",
       "TEST_BUTTON": "发送测试邮件"
     }
+  },
+  "ADMIN_AUTH": {
+    "TITLE": "认证管理",
+    "SUB": "第三方登录 / 邮箱 / 短信 / 注册策略 — 一站式配置",
+    "NAV_LABEL": "认证配置分区",
+    "TAB_OAUTH": "第三方登录",
+    "TAB_EMAIL": "邮箱",
+    "TAB_SMS": "短信",
+    "TAB_RISK": "注册策略"
   },
   "ACCOUNT": {
     "ADMIN_UPDATE_WARN": "警告：更新后您当前的管理员身份将变更！\n您的管理入口将变为 ?sys={{username}}\n\n确定要保存配置吗？",
