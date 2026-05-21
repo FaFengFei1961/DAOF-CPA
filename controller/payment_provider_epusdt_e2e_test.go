@@ -62,9 +62,18 @@ func captureEmailsForTest(t *testing.T) (sink func() []proxy.EmailMessage, clean
 		copy(out, captured)
 		return out
 	}
+	// W-4-Manual Tier 3 M-1/M-2 修复（2026-05-21）：cleanup 显式清掉 SMTP 配置和加密缓存，
+	// 避免下个测试继承本测试的 SMTP 状态（导致 SMTP-not-configured 场景测试错过分支）。
 	cleanup = func() {
 		proxy.SetEmailQueueSyncForTest(false)
 		proxy.SetSendEmailViaSMTPHookForTest(nil)
+		proxy.SysConfigMutex.Lock()
+		delete(proxy.SysConfigCache, "smtp_host")
+		delete(proxy.SysConfigCache, "smtp_port")
+		delete(proxy.SysConfigCache, "smtp_username")
+		delete(proxy.SysConfigCache, "smtp_password")
+		delete(proxy.SysConfigCache, "smtp_from")
+		proxy.SysConfigMutex.Unlock()
 	}
 	return sink, cleanup
 }
@@ -325,6 +334,43 @@ func TestEpusdtManual_E2E_DuplicateMarkPaidRejected(t *testing.T) {
 	database.DB.First(&u, user.ID)
 	if u.Quota != order.AmountUSD {
 		t.Errorf("quota=%d want %d (must not double-credit on duplicate mark-paid)", u.Quota, order.AmountUSD)
+	}
+}
+
+// TestEpusdtManual_E2E_SMTPUnconfiguredRejected：验证 C-2 修复
+// SMTP 没配齐时 manual 模式拒绝创建订单（fail-closed，避免用户付款但 admin 永不知）
+func TestEpusdtManual_E2E_SMTPUnconfiguredRejected(t *testing.T) {
+	setupSubTestDB(t)
+	// 故意只配 epusdt 不配 SMTP
+	configureEpusdtManualForTest(t, "admin@daof.test",
+		"TMBjEGgFAPMt6DxDPKqcxsAQvWMAua8gHk", "", "", "")
+	disableSignupBonusForTest(t)
+	// 不调 captureEmailsForTest 让 SMTP 保持未配齐
+
+	user := seedTestUser(t, 0)
+	admin := seedAdminUser(t)
+	app := newTopupE2EApp(user, admin)
+
+	code, resp := doJSON(t, app, "POST", "/topup/create", map[string]any{
+		"provider":   "epusdt",
+		"method":     "trc20-usdt",
+		"amount_fen": 1000,
+	})
+	// C-2 修复：SMTP 未配齐 → 503 ERR_PAYMENT_UNAVAILABLE，订单不创建
+	if code != 503 {
+		t.Errorf("expected 503 (SMTP not configured) got %d body=%v", code, resp)
+	}
+	if resp["message_code"] != "ERR_PAYMENT_UNAVAILABLE" {
+		t.Errorf("message_code=%v want ERR_PAYMENT_UNAVAILABLE", resp["message_code"])
+	}
+	// 验证：订单已建但立即标 failed（CreateTopup 先 Create 再调 provider，provider 拒后 mark failed）
+	// 关键不变量：没有 status=created 的 epusdt 订单悬挂等待付款
+	var createdCount int64
+	database.DB.Model(&database.TopupOrder{}).
+		Where("provider = ? AND status = ?", "epusdt", "created").
+		Count(&createdCount)
+	if createdCount != 0 {
+		t.Errorf("epusdt order in created state despite SMTP unconfigured: count=%d (would let user pay but admin never knows)", createdCount)
 	}
 }
 

@@ -1842,6 +1842,7 @@
     "ERR_CLIPROXY_UNREACHABLE": "Proxy upstream is unreachable.",
     "ERR_CLIPROXY_UPSTREAM": "Proxy upstream returned an error.",
     "ERR_CLIPROXY_URL_UNSAFE": "Proxy URL is unsafe or not allowed.",
+    "ERR_EPUSDT_ADDRESS_INVALID": "Invalid USDT receiving address format. TRC20 must start with T and be 34 chars; EVM must start with 0x and be 40 hex chars. Wrong address causes user fund loss.",
     "ERR_ACCOUNT_COST_NOT_FOUND": "Upstream account cost configuration was not found.",
     "ERR_CONFIG_BATCH_FAILED": "Some system settings failed to save. Check the details.",
     "ERR_CORRUPTED_CREDENTIALS": "Credential format corrupted",

@@ -1842,6 +1842,7 @@
     "ERR_CLIPROXY_UNREACHABLE": "代理上游不可达。",
     "ERR_CLIPROXY_UPSTREAM": "代理上游返回异常。",
     "ERR_CLIPROXY_URL_UNSAFE": "代理地址不安全或不允许访问。",
+    "ERR_EPUSDT_ADDRESS_INVALID": "USDT 收款地址格式不合法。TRC20 必须 T 开头 34 位；EVM 必须 0x 开头 40 位 hex。错误地址会导致用户付款丢失。",
     "ERR_ACCOUNT_COST_NOT_FOUND": "未找到该上游账号成本配置。",
     "ERR_CONFIG_BATCH_FAILED": "部分系统配置保存失败，请检查返回明细。",
     "ERR_CORRUPTED_CREDENTIALS": "凭证格式无效。",

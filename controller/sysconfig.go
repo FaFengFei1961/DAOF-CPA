@@ -369,6 +369,29 @@ func BatchUpdateSysConfigs(c *fiber.Ctx) error {
 			})
 		}
 	}
+
+	// W-4-Manual Tier 2 H-3 修复（2026-05-21）：epusdt 钱包地址格式校验。
+	// admin 错填地址（如 ERC20 误填到 TRC20 字段 / 截断 / 大小写混淆）会让用户付款进
+	// 无主地址，资金永久丢失。在事务前拒掉。空值跳过（=该链不启用）。
+	epusdtAddressFields := map[string]string{
+		"epusdt_manual_address_trc20":   "tron",
+		"epusdt_manual_address_erc20":   "ethereum",
+		"epusdt_manual_address_bep20":   "bsc",
+		"epusdt_manual_address_polygon": "polygon",
+	}
+	for key, network := range epusdtAddressFields {
+		raw, ok := payload[key]
+		if !ok || raw == "" {
+			continue
+		}
+		if err := proxy.ValidateEpusdtAddress(network, raw); err != nil {
+			return c.Status(400).JSON(fiber.Map{
+				"success":      false,
+				"message":      fmt.Sprintf("%s 不合法: %v", key, err),
+				"message_code": "ERR_EPUSDT_ADDRESS_INVALID",
+			})
+		}
+	}
 	failedKeys := []string{}
 	skippedMasked := []string{}
 	updated := 0

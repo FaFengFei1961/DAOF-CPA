@@ -832,4 +832,54 @@ func TestEpusdtManualMode_PublicOptionsFollowsAddressConfig(t *testing.T) {
 	}
 }
 
+// W-4-Manual Tier 2 H-3：钱包地址校验 helper 测试
+func TestValidateEpusdtAddress(t *testing.T) {
+	cases := []struct {
+		name    string
+		network string
+		address string
+		wantOK  bool
+	}{
+		// 空地址 = 不启用，通过
+		{"empty trc20", "tron", "", true},
+		{"empty erc20", "ethereum", "", true},
+
+		// 合法 TRC20（用户已提供的真实测试地址 + 其他几个）
+		{"valid trc20 1", "tron", "TMBjEGgFAPMt6DxDPKqcxsAQvWMAua8gHk", true},
+		{"valid trc20 2", "tron", "T9yD14Nj9j7xAB4dbGeiX9h8unkKHxuWwb", true},
+
+		// 合法 EVM
+		{"valid erc20", "ethereum", "0x742d35Cc6634C0532925a3b844Bc9e7595f0bEb0", true},
+		{"valid bep20", "bsc", "0x742d35Cc6634C0532925a3b844Bc9e7595f0bEb0", true},
+		{"valid polygon", "polygon", "0xabcdef1234567890abcdef1234567890abcdef12", true},
+		{"valid erc20 upper hex", "ethereum", "0xABCDEF1234567890ABCDEF1234567890ABCDEF12", true},
+
+		// 非法：TRC20 槽填 EVM 地址（admin 最常见错填）
+		{"erc20 in trc20 slot", "tron", "0x742d35Cc6634C0532925a3b844Bc9e7595f0bEb0", false},
+
+		// 非法：EVM 槽填 TRC20 地址
+		{"trc20 in erc20 slot", "ethereum", "TMBjEGgFAPMt6DxDPKqcxsAQvWMAua8gHk", false},
+
+		// 非法：截断 / 长度错
+		{"trc20 too short", "tron", "TMBjE", false},
+		{"erc20 missing 0x", "ethereum", "742d35Cc6634C0532925a3b844Bc9e7595f0bEb0", false},
+		{"erc20 too short", "ethereum", "0x742d35Cc", false},
+		{"erc20 invalid hex", "ethereum", "0xZZZZZZ1234567890ABCDEF1234567890ABCDEF12", false},
+
+		// 非法：未知 network
+		{"unknown network", "solana", "ABC123", false},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			err := proxy.ValidateEpusdtAddress(tc.network, tc.address)
+			if tc.wantOK && err != nil {
+				t.Errorf("ValidateEpusdtAddress(%q, %q) err=%v, want nil", tc.network, tc.address, err)
+			}
+			if !tc.wantOK && err == nil {
+				t.Errorf("ValidateEpusdtAddress(%q, %q) returned nil, want error", tc.network, tc.address)
+			}
+		})
+	}
+}
+
 // 编译期 assertion 已搬到 payment_provider_epusdt.go (L-4 修复)，此处去重。
