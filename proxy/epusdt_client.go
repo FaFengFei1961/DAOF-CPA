@@ -29,15 +29,49 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"log"
 	"net"
 	"net/http"
 	"net/netip"
 	"net/url"
+	"regexp"
 	"sort"
 	"strconv"
 	"strings"
 	"time"
 )
+
+// Tier 2 H-3 修复（2026-05-21）：钱包地址格式校验。
+// admin 错填地址（如 ERC20 放到 TRC20 槽 / 地址截断 / 大小写混淆）会让用户付款进无主地址，
+// 资金永久丢失。SysConfig 保存时调 ValidateEpusdtAddress 在 DAOF 入口拒掉。
+var (
+	tronAddressRegex = regexp.MustCompile(`^T[1-9A-HJ-NP-Za-km-z]{33}$`) // TRON base58check, 34 chars total
+	evmAddressRegex  = regexp.MustCompile(`^0x[0-9a-fA-F]{40}$`)         // EVM hex, 40 hex chars after 0x
+)
+
+// ValidateEpusdtAddress 校验地址格式与所属链是否匹配。
+// network: "tron" / "ethereum" / "bsc" / "polygon"
+// 返回 nil 表示通过；空地址也通过（admin 可以留空表示"该链不启用"）。
+func ValidateEpusdtAddress(network, address string) error {
+	address = strings.TrimSpace(address)
+	if address == "" {
+		return nil // 空 = 不启用该链
+	}
+	network = strings.ToLower(strings.TrimSpace(network))
+	switch network {
+	case "tron":
+		if !tronAddressRegex.MatchString(address) {
+			return fmt.Errorf("TRC20 address must start with 'T' and be 34 base58 chars (got %d chars)", len(address))
+		}
+	case "ethereum", "bsc", "polygon":
+		if !evmAddressRegex.MatchString(address) {
+			return fmt.Errorf("EVM address must be 0x followed by 40 hex chars (got %d chars)", len(address))
+		}
+	default:
+		return fmt.Errorf("unknown network %q (expected tron/ethereum/bsc/polygon)", network)
+	}
+	return nil
+}
 
 // ─── 配置 ─────────────────────────────────────────────────
 
@@ -85,13 +119,21 @@ type EpusdtConfig struct {
 //   - epusdt_mode=auto:   读 endpoint/pid/secret_key
 //   - epusdt_mode=manual: 读 manual_address_* / manual_admin_email
 //   - 缺省 / 非法值 → 默认 manual（零部署友好）
+//
+// Tier 2 M-4 修复（2026-05-21）：非空但非法的 mode 值打 warning log，
+// 让 admin 错填（如 "AUTO"/"automatic"）能从日志看到，而不是 silent fallback。
 func LoadEpusdtConfig() EpusdtConfig {
 	SysConfigMutex.RLock()
 	defer SysConfigMutex.RUnlock()
 
 	// Mode（默认 manual 让零部署成为最低阻力路径）
-	mode := EpusdtMode(strings.ToLower(strings.TrimSpace(SysConfigCache["epusdt_mode"])))
+	rawMode := strings.TrimSpace(SysConfigCache["epusdt_mode"])
+	mode := EpusdtMode(strings.ToLower(rawMode))
 	if mode != EpusdtModeAuto && mode != EpusdtModeManual {
+		if rawMode != "" {
+			// 非空但非法 → 用户配错了，发出告警让 ops 能从日志发现
+			log.Printf("[EPUSDT-CONFIG] WARN: unknown epusdt_mode %q, falling back to manual", rawMode)
+		}
 		mode = EpusdtModeManual
 	}
 

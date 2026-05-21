@@ -173,11 +173,19 @@ func TestEpusdtManual_E2E_FullHappyPath(t *testing.T) {
 	if mail.To != "admin@daof.test" {
 		t.Errorf("email To=%q want admin@daof.test", mail.To)
 	}
-	if !strings.Contains(mail.Subject, "USDT") {
-		t.Errorf("subject doesn't mention USDT: %q", mail.Subject)
+	// Tier 2 H-4 修复后：subject 不暴露金额 / 链类型给移动端推送预览
+	if !strings.Contains(mail.Subject, "新充值订单待确认") {
+		t.Errorf("subject doesn't mention 充值订单: %q", mail.Subject)
 	}
-	if !strings.Contains(mail.Subject, "TRC20") {
-		t.Errorf("subject doesn't mention TRC20: %q", mail.Subject)
+	if strings.Contains(mail.Subject, "USDT") || strings.Contains(mail.Subject, "TRC20") {
+		t.Errorf("subject should NOT leak token/chain (mobile notification preview risk): %q", mail.Subject)
+	}
+	// 详情仍在 body
+	if !strings.Contains(mail.TextBody, "USDT") {
+		t.Errorf("body must contain USDT: %q", mail.TextBody)
+	}
+	if !strings.Contains(mail.TextBody, "TRC20") {
+		t.Errorf("body must contain TRC20: %q", mail.TextBody)
 	}
 	if !strings.Contains(mail.TextBody, outTradeNo) {
 		t.Errorf("body missing outTradeNo %q", outTradeNo)

@@ -22,6 +22,7 @@ import (
 
 	"daof-cpa/database"
 	"daof-cpa/proxy"
+	"daof-cpa/utils"
 )
 
 // configureEpusdtForTest 注入 SysConfig 让 IsConfigured 返 true (auto 模式)，
@@ -716,10 +717,21 @@ func TestEpusdtManualMode_CreateOrder_GeneratesLocalOrder(t *testing.T) {
 	configureEpusdtManualForTest(t, "admin@example.com",
 		"TMBjEGgFAPMt6DxDPKqcxsAQvWMAua8gHk", "", "", "")
 
+	// C-2 修复：manual 模式现在要求 SMTP 配齐才能下单（让 admin 一定收到通知）
+	utils.InitCrypto()
+	encPwd, _ := utils.Encrypt("test-fake-pwd")
+	proxy.SysConfigMutex.Lock()
+	proxy.SysConfigCache["smtp_host"] = "localhost"
+	proxy.SysConfigCache["smtp_port"] = "587"
+	proxy.SysConfigCache["smtp_username"] = "test@example.com"
+	proxy.SysConfigCache["smtp_password"] = encPwd
+	proxy.SysConfigCache["smtp_from"] = "test@example.com"
+	proxy.SysConfigMutex.Unlock()
+
 	// 拦截邮件发送让测试可断言
 	proxy.SetEmailQueueSyncForTest(true)
 	proxy.SetSendEmailViaSMTPHookForTest(func(cfg proxy.SMTPConfig, msg proxy.EmailMessage) error {
-		return nil // SMTP not configured for test; queue path is what we care about
+		return nil
 	})
 	t.Cleanup(func() {
 		proxy.SetEmailQueueSyncForTest(false)
@@ -783,15 +795,18 @@ func TestEpusdtManualMode_CreateOrder_RejectsUnconfiguredChain(t *testing.T) {
 
 func TestEpusdtManualMode_RejectsWebhook(t *testing.T) {
 	// manual 模式下 webhook 应直接拒（防错配/扫端口/攻击者）
-	configureEpusdtManualForTest(t, "admin@example.com", "TXXX", "", "", "")
+	// Tier 2 H-2 修复：用 ErrWebhookUnsupported（405）替代 NotConfigured（503）
+	// 避免让 admin 误判为"SysConfig 没配齐"
+	configureEpusdtManualForTest(t, "admin@example.com",
+		"TMBjEGgFAPMt6DxDPKqcxsAQvWMAua8gHk", "", "", "")
 
 	p := NewEpusdtPaymentProvider()
 	_, err := p.ParseAndVerifyWebhook(&PaymentWebhookInput{
 		Method: "POST",
 		Body:   []byte(`{"pid":1,"order_id":"x","amount":10,"trade_id":"y","status":2,"signature":"abc"}`),
 	})
-	if !errors.Is(err, ErrWebhookProviderNotConfigured) {
-		t.Errorf("err=%v, want ErrWebhookProviderNotConfigured in manual mode", err)
+	if !errors.Is(err, ErrWebhookUnsupported) {
+		t.Errorf("err=%v, want ErrWebhookUnsupported in manual mode", err)
 	}
 }
 

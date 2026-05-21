@@ -155,10 +155,26 @@ func (p *EpusdtPaymentProvider) createOrderAuto(ctx context.Context, cfg proxy.E
 // 10000 个未决订单内不冲突；超出后环回，admin 仍可按时间 + 金额双锚点定位。
 //
 // 订单过期：10 分钟（与 epusdt 默认 order_expiration_time 一致）。
+//
+// Tier 1 C-2 修复（2026-05-21）：manual 模式强依赖邮件通知，SMTP 未配齐时不应创建订单
+// （否则用户付款但 admin 永不知情）。fail-closed 在订单创建前先验证 SMTP。
+//
+// Tier 2 L-2 修复（2026-05-21）：OrderID==0 防御（理论上 GORM auto-increment 不会返 0，
+// 但守卫一下让万一出现时立即报错而不是给所有订单生成相同的尾数 0）。
 func (p *EpusdtPaymentProvider) createOrderManual(cfg proxy.EpusdtConfig, req *PaymentCreateOrderRequest, token, network string) (*PaymentCreateOrderResult, error) {
+	if req.OrderID == 0 {
+		return nil, fmt.Errorf("%w: OrderID==0; DB insert may have failed silently", ErrPaymentProviderInternal)
+	}
+
 	address := cfg.ManualAddresses.AddressFor(network)
 	if address == "" {
 		return nil, fmt.Errorf("%w: admin has not configured %s address", ErrPaymentProviderNotConfigured, strings.ToUpper(network))
+	}
+
+	// C-2: SMTP 必须先配齐，否则 admin 收不到通知 → 用户付款也无人确认 → 钱丢
+	if smtpCfg, smtpErr := proxy.LoadSMTPConfig(); smtpErr != nil || !smtpCfg.IsConfigured() {
+		log.Printf("[EPUSDT-MANUAL] reject order: SMTP not configured (manual mode requires email notify) order_id=%d", req.OrderID)
+		return nil, fmt.Errorf("%w: manual mode requires SMTP configured for admin notification", ErrPaymentProviderNotConfigured)
 	}
 
 	const amountStepMicro = int64(100) // 0.0001 USDT
@@ -195,6 +211,11 @@ func (p *EpusdtPaymentProvider) createOrderManual(cfg proxy.EpusdtConfig, req *P
 		ExpireAt:    expireAt,
 		ProductName: req.ProductName,
 	})
+
+	// Tier 2 M-8 修复（2026-05-21）：补业务级别日志，让 admin 排查 "用户说付了但没到账"
+	// 时能 grep [EPUSDT-MANUAL] 直接定位订单上下文。
+	log.Printf("[EPUSDT-MANUAL] order created order_id=%d out_trade_no=%s user_id=%d network=%s token=%s amount=%.4f expire_at=%d",
+		req.OrderID, req.OutTradeNo, req.UserID, network, strings.ToUpper(token), actualUSDT, expireAt)
 
 	return &PaymentCreateOrderResult{
 		ExternalTradeNo: tradeID,
@@ -239,8 +260,9 @@ func sendEpusdtManualAdminEmail(adminEmail string, ctx manualOrderEmailContext) 
 		chainLabel = "Polygon"
 	}
 
-	subject := fmt.Sprintf("[DAOF] 新 USDT 充值订单待确认 #%d (%.4f %s / %s)",
-		ctx.OrderID, ctx.AmountUSDT, ctx.Token, chainLabel)
+	// Tier 2 H-4 修复（2026-05-21）：subject 不含金额 / 链类型 / token，避免移动端推送通知
+	// 弹窗直接暴露资金流向给旁观者（家人/同事看到屏幕预览）。详情仍在 body。
+	subject := fmt.Sprintf("[DAOF] 新充值订单待确认 #%d", ctx.OrderID)
 
 	expiresLocal := time.Unix(ctx.ExpireAt, 0).Format("2006-01-02 15:04:05")
 
@@ -282,13 +304,22 @@ func sendEpusdtManualAdminEmail(adminEmail string, ctx manualOrderEmailContext) 
 
 // maskEpusdtEmail 把邮箱中间打码，避免 log 泄漏 admin 邮件全文。
 // "admin@example.com" → "a***n@example.com"
+//
+// Tier 2 M-3 修复（2026-05-21）：原 `at <= 1 → 返 raw email` 让 "a@x.com" / "@bad" /
+// 空串 / 无 @ 字符串 silent 泄漏到 log。改为这些异常输入返常量占位符 "***@***"
+// 而不是 raw 邮箱。
 func maskEpusdtEmail(email string) string {
 	at := strings.Index(email, "@")
-	if at <= 1 {
-		return email
+	// 无 @ / @ 在最前 / 空串：返占位符（不暴露原文）
+	if at <= 0 {
+		return "***@***"
 	}
 	prefix := email[:at]
-	if len(prefix) <= 2 {
+	if len(prefix) == 1 {
+		// "a@x.com" → "a***@x.com"（让用户能从 log 认出自己的邮箱前缀字符，但不全暴露）
+		return prefix + "***" + email[at:]
+	}
+	if len(prefix) == 2 {
 		return prefix[:1] + "***" + email[at:]
 	}
 	return prefix[:1] + "***" + prefix[len(prefix)-1:] + email[at:]
@@ -368,8 +399,11 @@ func (p *EpusdtPaymentProvider) ParseAndVerifyWebhook(input *PaymentWebhookInput
 
 	// W-4-Manual：manual 模式下不应有 webhook 推送（admin 用 AdminMarkTopupPaid 入账）
 	// 拒掉所有 manual 模式下进入 /api/payment/notify/epusdt 的请求，防错配 / 攻击者扫端口
+	//
+	// Tier 1 H-2 修复（2026-05-21）：改用 ErrWebhookUnsupported（405）替代 NotConfigured（503），
+	// 让 admin 看到准确错误信号"manual 模式不接 webhook"而非"SysConfig 没配齐"。
 	if cfg.Mode == proxy.EpusdtModeManual {
-		return nil, fmt.Errorf("%w: manual mode does not accept webhook callbacks", ErrWebhookProviderNotConfigured)
+		return nil, fmt.Errorf("%w: manual mode", ErrWebhookUnsupported)
 	}
 
 	// epusdt 回调是 POST application/json

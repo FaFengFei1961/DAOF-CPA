@@ -343,6 +343,11 @@ func handleWebhookError(c *fiber.Ctx, providerKey, logKey string, input *Payment
 		log.Printf("[WEBHOOK-%s] not configured out_trade_no=%s", providerKey, logKey)
 		return c.Status(503).SendString("not_configured")
 
+	case errors.Is(err, ErrWebhookUnsupported):
+		// Tier 1 H-2: manual 模式 / 不支持 webhook 的 provider，405 而非 503/404 避免误导
+		log.Printf("[WEBHOOK-%s] callback rejected (unsupported in current mode) out_trade_no=%s", providerKey, logKey)
+		return c.Status(405).SendString("method_not_allowed")
+
 	case errors.Is(err, ErrWebhookSignatureInvalid):
 		log.Printf("[WEBHOOK-%s] sign verify FAILED out_trade_no=%s ip=%s", providerKey, logKey, input.RemoteIP)
 		return c.Status(403).SendString("sign_invalid")

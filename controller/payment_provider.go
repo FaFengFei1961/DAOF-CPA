@@ -195,6 +195,10 @@ var (
 	ErrWebhookMalformed = errors.New("webhook: payload malformed")
 	// ErrWebhookProviderNotConfigured admin 还没配齐 provider 凭据。503。
 	ErrWebhookProviderNotConfigured = errors.New("webhook: provider not configured")
+	// ErrWebhookUnsupported provider 当前配置 / 模式不接受 webhook（如 epusdt manual 模式
+	// 没有 sidecar 推送，所有进入路由的请求都是错配或攻击）。405 Method Not Allowed。
+	// Tier 1 H-2 修复（2026-05-21）：替代滥用 ErrWebhookProviderNotConfigured 让 admin 误判。
+	ErrWebhookUnsupported = errors.New("webhook: provider does not accept callbacks in current mode")
 )
 
 // PaymentCreateOrderRequest 是 controller 传给 provider 的下单请求快照。

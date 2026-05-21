@@ -179,6 +179,13 @@ func AdminMarkTopupPaid(c *fiber.Ctx) error {
 	}
 
 	now := time.Now()
+	// Tier 2 H-5 注释（2026-05-21）：并发安全不变量。
+	// 事务外的 order.Status 检查（第 178 行）仅是 fast-path 优化。真正的串行化靠：
+	//  1. lockUserForUpdate 持有 user 行锁 → 同一用户的所有 mark-paid 事务串行化
+	//     （order 必属于唯一 user，所以同 order 的并发也被串行）
+	//  2. 事务内 freshOrder 重读 + Status != "created" → 第二个事务读到第一个 commit 后的 'paid'
+	//  3. UPDATE WHERE status='created' CAS 兜底（即使前两层失效，最终也只有一个事务 RowsAffected=1）
+	// 不变量：单一 order.Status 转换 created→paid 在系统中最多发生一次。
 	txErr := database.DB.Transaction(func(tx *gorm.DB) error {
 		if err := lockUserForUpdate(tx, order.UserID); err != nil {
 			return fmt.Errorf("lock user: %w", err)
@@ -237,7 +244,26 @@ func AdminMarkTopupPaid(c *fiber.Ctx) error {
 		if err := tx.Select("id, quota").First(&freshUser, freshOrder.UserID).Error; err != nil {
 			return fmt.Errorf("fetch fresh quota: %w", err)
 		}
-		desc := fmt.Sprintf("充值补登 ¥%s（%s，凭证 %s）", database.FormatFen(freshOrder.MoneyRMB), freshOrder.PayType, externalRef)
+
+		// W-4-Manual Tier 1 C-1 修复（2026-05-21）：原硬编码 CurrencyOriginal="CNY" +
+		// AmountOriginal=MoneyRMB 对 epusdt 订单是审计字段撒谎（manual epusdt 没 fen，
+		// MoneyRMB=0）。按 order.Provider 分支选准确的币种 + 金额。
+		var (
+			desc             string
+			currencyOriginal string
+			amountOriginal   int64
+		)
+		switch freshOrder.Provider {
+		case database.TopupProviderEpusdt:
+			usdtAmount := float64(freshOrder.AmountUSD) / 1_000_000.0
+			desc = fmt.Sprintf("USDT 链上充值补登 %.4f USDT（凭证 %s）", usdtAmount, externalRef)
+			currencyOriginal = "USDT"
+			amountOriginal = freshOrder.AmountUSD // micro_usd ≡ micro_usdt（1:1）
+		default: // yifut 或未知 provider 退化到 CNY
+			desc = fmt.Sprintf("充值补登 ¥%s（%s，凭证 %s）", database.FormatFen(freshOrder.MoneyRMB), freshOrder.PayType, externalRef)
+			currencyOriginal = "CNY"
+			amountOriginal = freshOrder.MoneyRMB
+		}
 		if reason != "" {
 			desc += " · " + reason
 		}
@@ -250,8 +276,8 @@ func AdminMarkTopupPaid(c *fiber.Ctx) error {
 			RelatedType:      "topup_order",
 			RelatedID:        freshOrder.ID,
 			Description:      desc,
-			CurrencyOriginal: "CNY",
-			AmountOriginal:   freshOrder.MoneyRMB,
+			CurrencyOriginal: currencyOriginal,
+			AmountOriginal:   amountOriginal,
 		}); err != nil {
 			return fmt.Errorf("write billing entry: %w", err)
 		}
