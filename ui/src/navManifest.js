@@ -51,8 +51,9 @@ export const mobileMoreNav = [
 
 // ─── Admin-side ──────────────────────────────────────────────────
 //
-// standalone: true → 走独立 page；tab: 'xxx' → 复用 Settings hideNav initialTab
-// Phase 4 后已无 tab 项；spread 仍保留以备未来增量 admin form
+// 所有 admin 项都走独立 page (standalone: true)。
+// IA audit Mi-5 cleanup: 删除 adminTabItems 导出 + routes.jsx 占位 spread —
+// filter (item.tab && !item.standalone) 永远空，是公测期重构残留。
 //
 export const adminNav = [
   {
@@ -92,6 +93,5 @@ export const adminNav = [
   },
 ];
 
-// 扁平化 admin 项。tab 项才走 Settings wrapper；standalone 项要在 routes children 单独写明
+// 扁平化 admin 项。给 AdminSidebar / 路由迭代用。
 export const adminFlatItems = adminNav.flatMap(g => g.items);
-export const adminTabItems = adminFlatItems.filter(item => item.tab && !item.standalone);

@@ -19,24 +19,33 @@ import "fmt"
 // 与 ui/src/App.jsx 的 allowedViews 严格对齐。
 //
 // 新增 / 重命名 view 必须同步两端，否则通知跳转死链。
+//
+// IA audit Mi-3 cleanup: 移除 ViewUpgrade —— 前端 /upgrade 路由 + UpgradeRedirect
+// shim 删除后，"我的订阅"通知直接落 Dashboard ('/')，营销类落 Dashboard +
+// ?openBrowse=store，由 MySubscriptions 监听 query 自动弹 modal。
 const (
-	ViewUpgrade  = "upgrade"  // 产品中心（订阅/增量包/购买）
 	ViewTopup    = "topup"    // 充值
 	ViewBills    = "bills"    // 账单流水
 	ViewTickets  = "tickets"  // 工单
 	ViewSettings = "settings" // 设置
 )
 
-// LinkUpgradeMine 跳到产品中心-我的 tab。
+// LinkUpgradeMine 跳到 Dashboard（用户的订阅列表已嵌入主页）。
 // 通知里"查看订阅 / 续费 / 退款查看"等动作的统一入口。
+//
+// 公测期 Mi-3 重构：旧链接 "/upgrade?pane=mine" 经 UpgradeRedirect 转发
+// 也只是 Navigate('/')，现直接生成最终 URL，删 shim。
 func LinkUpgradeMine() string {
-	return "/" + ViewUpgrade + "?pane=mine"
+	return "/"
 }
 
-// LinkUpgradeStore 跳到产品中心-商店 tab。
+// LinkUpgradeStore 跳到 Dashboard 并触发"浏览套餐"modal。
 // 用于"快去看看新套餐"营销类通知。
+//
+// 公测期 Mi-3 重构：MySubscriptions.jsx 监听 ?openBrowse=store 自动弹 modal，
+// 取代旧 "/upgrade?pane=store" → Dashboard 的 compat 跳转。
 func LinkUpgradeStore() string {
-	return "/" + ViewUpgrade + "?pane=store"
+	return "/?openBrowse=store"
 }
 
 // LinkTopup 跳到充值页。

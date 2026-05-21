@@ -26,8 +26,10 @@ func TestLinkBuilders(t *testing.T) {
 		got  string
 		want string
 	}{
-		{"LinkUpgradeMine", LinkUpgradeMine(), "/upgrade?pane=mine"},
-		{"LinkUpgradeStore", LinkUpgradeStore(), "/upgrade?pane=store"},
+		// Mi-3 cleanup: /upgrade compat shim 删除后，"我的订阅"通知直接落 Dashboard，
+		// "看新套餐"营销通知带 ?openBrowse=store 由 MySubscriptions 自动弹 modal。
+		{"LinkUpgradeMine", LinkUpgradeMine(), "/"},
+		{"LinkUpgradeStore", LinkUpgradeStore(), "/?openBrowse=store"},
 		{"LinkTopup", LinkTopup(), "/topup"},
 		{"LinkBills no filter", LinkBills(""), "/bills"},
 		{"LinkBills with filter", LinkBills("topup"), "/bills?filter=topup"},
