@@ -740,6 +740,9 @@ func main() {
 	// 复用 refundLimiter（金融敏感操作；按 admin token 限速 10 次/分钟，与退款同等约束）
 	// fix MINOR（codex 第二十轮）：原注释写"6 次/分钟"与实际 Max:10 不一致，已统一描述。
 	adminApi.Post("/subscriptions/grant", refundLimiter, controller.AdminGrantSubscription)
+	// 批量赠送：一个请求处理最多 grantBatchMaxUsers (200) 个 user_ids，逐用户独立事务，
+	// 失败不传染。用户反馈"只能 1:1 赠送太麻烦，搞个支持批量 id"。
+	adminApi.Post("/subscriptions/grant-batch", refundLimiter, controller.AdminGrantSubscriptionBatch)
 
 	// ==========================================
 	// 业务接口防爆盾

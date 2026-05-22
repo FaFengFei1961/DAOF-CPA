@@ -45,7 +45,9 @@ const AdminGrantSubscriptionModal = ({ open, onClose, onSuccess, prefillUser = n
   // User search state.
   const [userQuery, setUserQuery] = useState('');
   const [userSuggestions, setUserSuggestions] = useState([]);
-  const [selectedUser, setSelectedUser] = useState(null);
+  // 用户反馈"只能一个个赠送"——改成多用户支持。selectedUsers 是有序去重的 chip 列表，
+  // 每个元素是 { id, username }。submit 时如果 ≥1 个就批量调 grant-batch endpoint。
+  const [selectedUsers, setSelectedUsers] = useState([]);
   const [searchingUsers, setSearchingUsers] = useState(false);
 
   // Package selection.
@@ -69,8 +71,8 @@ const AdminGrantSubscriptionModal = ({ open, onClose, onSuccess, prefillUser = n
   // Initialize/reset each time open transitions to true.
   useEffect(() => {
     if (open) {
-      setUserQuery(prefillUser?.username || '');
-      setSelectedUser(prefillUser);
+      setUserQuery('');
+      setSelectedUsers(prefillUser ? [{ id: prefillUser.id, username: prefillUser.username }] : []);
       setUserSuggestions([]);
       setSelectedPackageId('');
       setQuantity(1);
@@ -126,29 +128,35 @@ const AdminGrantSubscriptionModal = ({ open, onClose, onSuccess, prefillUser = n
   useEffect(() => {
     if (!open) return;
     const trimmed = userQuery.trim();
-    // Do not re-query after selecting a user whose username matches the input.
-    if (selectedUser && trimmed === selectedUser.username) {
-      setUserSuggestions([]);
-      return;
-    }
     const handle = setTimeout(() => searchUsers(trimmed), 300);
     return () => clearTimeout(handle);
-  }, [userQuery, open, selectedUser, searchUsers]);
+  }, [userQuery, open, searchUsers]);
 
   if (!open) return null;
+
+  // Multi-user helpers.
+  const addUser = (u) => {
+    if (!u?.id) return;
+    setSelectedUsers((prev) => (prev.some((x) => x.id === u.id) ? prev : [...prev, { id: u.id, username: u.username }]));
+    setUserQuery('');
+    setUserSuggestions([]);
+  };
+  const removeUser = (id) => {
+    setSelectedUsers((prev) => prev.filter((u) => u.id !== id));
+  };
 
   // Basic form validity for disabling submit and reducing invalid clicks.
   const customValidSecondsInt = Math.floor(Number(customValidSeconds) || 0);
   const hasCustomValidSeconds = customValidityOpen && customValidSecondsInt > 0;
   const isCustomValidityValid = !customValidityOpen ||
     (customValidSecondsInt > 0 && customValidSecondsInt <= MAX_GRANT_VALID_SECONDS);
-  const isFormValid = !!selectedUser?.id && !!selectedPackageId && reason.trim().length > 0 && isCustomValidityValid;
+  const isFormValid = selectedUsers.length > 0 && !!selectedPackageId && reason.trim().length > 0 && isCustomValidityValid;
   const submitDisabledHint = !isCustomValidityValid
     ? t('ADMIN_GRANT.ERR_VALID_SECONDS_INVALID', '启用自定义有效期后，请填写 1 秒到 5 年之间的时长')
     : t('ADMIN_GRANT.SUBMIT_DISABLED_HINT', '请先选择目标用户、套餐并填写理由');
 
   const submit = async () => {
-    if (!selectedUser?.id) {
+    if (selectedUsers.length === 0) {
       toast.error(t('ADMIN_GRANT.ERR_NO_USER', '请先选择目标用户'));
       return;
     }
@@ -185,8 +193,10 @@ const AdminGrantSubscriptionModal = ({ open, onClose, onSuccess, prefillUser = n
 
     setSubmitting(true);
     try {
+      // 始终走 grant-batch endpoint —— 单个用户也用同一条路径，少分支逻辑。
+      // 后端会对 user_ids 去重 + 拒 admin 自己，并按 user 隔离失败。
       const payload = {
-        user_id: selectedUser.id,
+        user_ids: selectedUsers.map((u) => u.id),
         package_id: parseInt(selectedPackageId, 10),
         quantity: qty,
         reason: trimmedReason,
@@ -194,17 +204,47 @@ const AdminGrantSubscriptionModal = ({ open, onClose, onSuccess, prefillUser = n
       if (hasCustomValidSeconds) {
         payload.valid_seconds = customValidSecondsInt;
       }
-      const json = await authFetch('/api/admin/subscriptions/grant', {
+      const json = await authFetch('/api/admin/subscriptions/grant-batch', {
         method: 'POST',
         body: payload,
       });
-      if (json?.success) {
-        toast.success(t('ADMIN_GRANT.SUCCESS', '已赠送 {{qty}} 份', { qty }));
+      if (!json?.success) {
+        toast.error(adminGrantApiMessage(json?.message_code, t) || json?.message || t('ADMIN_GRANT.FAIL', '赠送失败'));
+        return;
+      }
+      const okCount = json.data?.success_count || 0;
+      const failCount = json.data?.failure_count || 0;
+      const failures = Array.isArray(json.data?.failures) ? json.data.failures : [];
+      if (okCount > 0 && failCount === 0) {
+        toast.success(t('ADMIN_GRANT.SUCCESS_BATCH', '全部成功：{{n}} 个用户 × {{qty}} 份', { n: okCount, qty }));
         onSuccess?.();
         onClose();
-      } else {
-        toast.error(adminGrantApiMessage(json?.message_code, t) || json?.message || t('ADMIN_GRANT.FAIL', '赠送失败'));
+        return;
       }
+      if (okCount > 0 && failCount > 0) {
+        // 部分失败：留住弹窗，详情列出来让 admin 知道哪些用户没成功。
+        const tail = failures.slice(0, 5)
+          .map((f) => `#${f.user_id} ${f.message_code || ''}`.trim())
+          .join('；');
+        toast.error(
+          t('ADMIN_GRANT.PARTIAL', '成功 {{ok}}，失败 {{fail}}（{{detail}}{{more}}）', {
+            ok: okCount,
+            fail: failCount,
+            detail: tail,
+            more: failures.length > 5 ? '…' : '',
+          }),
+          { duration: 8000 },
+        );
+        onSuccess?.();
+        return;
+      }
+      // 全部失败
+      const firstFail = failures[0];
+      toast.error(
+        firstFail
+          ? t('ADMIN_GRANT.ALL_FAIL_WITH_DETAIL', '全部失败：{{detail}}', { detail: `#${firstFail.user_id} ${firstFail.message || firstFail.message_code || ''}` })
+          : t('ADMIN_GRANT.FAIL', '赠送失败'),
+      );
     } catch {
       toast.error(t('API.ERR_NETWORK', '网络异常'));
     } finally {
@@ -241,12 +281,14 @@ const AdminGrantSubscriptionModal = ({ open, onClose, onSuccess, prefillUser = n
 
         {/* Body */}
         <div className="px-5 py-4 space-y-4">
-          {/* User selection */}
+          {/* User selection — 多用户 chip 列表 */}
           <div>
             <label htmlFor="grant-target-user" className="block text-sm text-on-surface mb-1">
               {t('ADMIN_GRANT.TARGET_USER', '目标用户')} <span className="text-error">*</span>
+              <span className="ml-2 text-xs text-on-surface-variant font-normal">
+                {t('ADMIN_GRANT.TARGET_USER_MULTI_HINT', '支持批量：可多次搜索添加')}
+              </span>
             </label>
-            {/* Use a plain button list with Tab navigation instead of partial listbox semantics. */}
             <div className="relative">
               <Search size={14} className="absolute left-3 top-1/2 -translate-y-1/2 text-on-surface-variant" />
               <input
@@ -254,51 +296,76 @@ const AdminGrantSubscriptionModal = ({ open, onClose, onSuccess, prefillUser = n
                 id="grant-target-user"
                 type="text"
                 value={userQuery}
-                onChange={(e) => {
-                  setUserQuery(e.target.value);
-                  setSelectedUser(null);
-                }}
+                onChange={(e) => setUserQuery(e.target.value)}
                 placeholder={t('ADMIN_GRANT.USER_SEARCH_PH', '输入用户名 / 手机号 / GitHub ID（≥2 字符）')}
                 className="w-full bg-surface-container-high border border-outline-variant rounded-control pl-9 pr-3 py-2 text-sm focus:outline-none focus:border-primary"
                 disabled={submitting}
                 aria-autocomplete="list"
-                aria-expanded={userSuggestions.length > 0 && !selectedUser}
+                aria-expanded={userSuggestions.length > 0}
                 aria-controls="grant-user-suggestions"
               />
             </div>
-            {/* Suggestions: plain button group, traversable with Tab. */}
-            {userSuggestions.length > 0 && !selectedUser && (
+            {/* Suggestions: 点一个加一个进 chip 列表 */}
+            {userSuggestions.length > 0 && (
               <ul
                 id="grant-user-suggestions"
                 aria-label={t('ADMIN_GRANT.SUGGESTIONS_ARIA', '用户建议列表')}
                 className="mt-1 bg-surface-container-high border border-outline-variant rounded-control max-h-44 overflow-y-auto"
               >
-                {userSuggestions.map((u) => (
-                  <li key={u.id}>
-                    <button
-                      type="button"
-                      onClick={() => {
-                        setSelectedUser({ id: u.id, username: u.username });
-                        setUserQuery(u.username);
-                        setUserSuggestions([]);
-                      }}
-                      className="w-full text-left px-3 py-2 hover:bg-surface-container text-sm border-b border-outline-variant/40 last:border-0"
-                    >
-                      <div className="text-on-surface">
-                        {u.username} <span className="text-on-surface-variant text-xs">#{u.id}</span>
-                      </div>
-                      {u.phone && <div className="text-xs text-on-surface-variant font-mono">{u.phone}</div>}
-                    </button>
-                  </li>
-                ))}
+                {userSuggestions.map((u) => {
+                  const already = selectedUsers.some((x) => x.id === u.id);
+                  return (
+                    <li key={u.id}>
+                      <button
+                        type="button"
+                        onClick={() => !already && addUser(u)}
+                        disabled={already}
+                        className="w-full text-left px-3 py-2 hover:bg-surface-container text-sm border-b border-outline-variant/40 last:border-0 disabled:opacity-50 disabled:cursor-not-allowed"
+                      >
+                        <div className="text-on-surface flex items-center justify-between">
+                          <span>
+                            {u.username} <span className="text-on-surface-variant text-xs">#{u.id}</span>
+                          </span>
+                          {already && (
+                            <span className="text-[10px] text-on-surface-variant">
+                              {t('ADMIN_GRANT.ALREADY_SELECTED', '已添加')}
+                            </span>
+                          )}
+                        </div>
+                        {u.phone && <div className="text-xs text-on-surface-variant font-mono">{u.phone}</div>}
+                      </button>
+                    </li>
+                  );
+                })}
               </ul>
             )}
             {searchingUsers && (
               <div className="text-xs text-on-surface-variant mt-1">{t('ADMIN_GRANT.SEARCHING', '搜索中...')}</div>
             )}
-            {selectedUser && (
-              <div className="mt-1 text-xs text-success">
-                {t('ADMIN_GRANT.SELECTED_USER', '已选择')}: {selectedUser.username} #{selectedUser.id}
+            {/* 已选 chip 列表 */}
+            {selectedUsers.length > 0 && (
+              <div className="mt-2 flex flex-wrap gap-1.5">
+                {selectedUsers.map((u) => (
+                  <span
+                    key={u.id}
+                    className="inline-flex items-center gap-1.5 rounded-control bg-success/15 border border-success/30 text-success px-2 py-0.5 text-xs"
+                  >
+                    {u.username}
+                    <span className="text-success/70 font-mono">#{u.id}</span>
+                    <button
+                      type="button"
+                      onClick={() => removeUser(u.id)}
+                      disabled={submitting}
+                      className="text-success/70 hover:text-success disabled:opacity-50"
+                      aria-label={t('ADMIN_GRANT.REMOVE_USER_ARIA', '移除 {{name}}', { name: u.username })}
+                    >
+                      <X size={11} />
+                    </button>
+                  </span>
+                ))}
+                <span className="text-[11px] text-on-surface-variant self-center ml-1">
+                  {t('ADMIN_GRANT.SELECTED_COUNT', '共 {{n}} 个目标', { n: selectedUsers.length })}
+                </span>
               </div>
             )}
           </div>
