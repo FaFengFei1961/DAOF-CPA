@@ -77,6 +77,58 @@ func runSubscriptionCronOnce() {
 	cleanupClosedTickets()
 	cleanupStaleCPACredentials()
 	monitorApiLogRevenueOrphans()
+	expireStaleTopupOrders()
+}
+
+// expireStaleTopupOrders 把超过 TTL 仍未付款的 topup_order 转成 canceled。
+//
+// 用户反馈"待支付订单挂着 4+ 小时不动"——原系统只有 3 条状态转换路径：付款回调 →
+// paid / 退款 → refunded / admin 手动改 → canceled。没有任何后台机制处理"用户拉
+// 起二维码后就没付款"的常见路径，导致 待支付 列表无界增长。
+//
+// 设计：
+//   - TTL 从 SysConfig 读 topup_order_expire_minutes，默认 30 分钟（跟 yifut 网关
+//     QR 码自身 TTL 接近）。低于 5 分钟视为误配置，强制取下限。
+//   - 批量 UPDATE 把所有 status='created' AND created_at < now-TTL 的订单一次转
+//     canceled，描述写明"自动过期"便于审计区分手动取消。
+//   - 不删除行（订单是金融事实表，append-only）。
+//   - 安全：用 status='created' 做 WHERE 防止覆盖已 paid / 已 refunded 的订单（
+//     即便有 webhook 回调竞态正在写，SQL 层 row lock 也能避免脏写）。
+func expireStaleTopupOrders() {
+	if !database.DB.Migrator().HasTable(&database.TopupOrder{}) {
+		return
+	}
+	ttlMin := readTopupExpireMinutes()
+	cutoff := time.Now().Add(-time.Duration(ttlMin) * time.Minute)
+	res := database.DB.Model(&database.TopupOrder{}).
+		Where("status = ? AND created_at < ?", "created", cutoff).
+		Updates(map[string]any{
+			"status":     "canceled",
+			"updated_at": time.Now(),
+		})
+	if res.Error != nil {
+		log.Printf("[TOPUP-EXPIRE-CRON] sweep failed ttl=%dmin: %v", ttlMin, res.Error)
+		return
+	}
+	if res.RowsAffected > 0 {
+		log.Printf("[TOPUP-EXPIRE-CRON] 自动取消 %d 个超 %d 分钟未付款的订单", res.RowsAffected, ttlMin)
+	}
+}
+
+// readTopupExpireMinutes 读 admin 配置的订单过期分钟数，默认 30，下限 5 分钟。
+// 下限存在的原因：少于 5 分钟容易把用户还在扫码付款中的订单干掉，体验崩坏。
+func readTopupExpireMinutes() int64 {
+	SysConfigMutex.RLock()
+	raw := strings.TrimSpace(SysConfigCache["topup_order_expire_minutes"])
+	SysConfigMutex.RUnlock()
+	if raw == "" {
+		return 30
+	}
+	n, err := strconv.ParseInt(raw, 10, 64)
+	if err != nil || n < 5 {
+		return 30
+	}
+	return n
 }
 
 // monitorApiLogRevenueOrphans 周期检查"ApiLog 主表写成功但 ApiLogRevenue 侧表写失败"
