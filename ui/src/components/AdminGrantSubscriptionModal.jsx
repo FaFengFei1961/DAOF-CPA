@@ -103,7 +103,14 @@ const AdminGrantSubscriptionModal = ({ open, onClose, onSuccess, prefillUser = n
   // fix MAJOR M9 (gemini round 20): reqIdRef prevents slow searches from overwriting newer results.
   const searchReqRef = useRef(0);
   const searchUsers = useCallback(async (q) => {
-    if (!q || q.length < 2) {
+    // 用户反馈"输入 ID 数字时不显示"：纯数字（user.id）哪怕 1 字符也走精确 id=? 路径，
+    // 跟后端 isAllDigitsForSearch 决策对齐；非数字输入仍要 ≥2 字符防 LIKE '%a%' 全表扫描。
+    if (!q) {
+      setUserSuggestions([]);
+      return;
+    }
+    const isDigitOnly = /^\d+$/.test(q);
+    if (!isDigitOnly && q.length < 2) {
       setUserSuggestions([]);
       return;
     }
@@ -297,7 +304,7 @@ const AdminGrantSubscriptionModal = ({ open, onClose, onSuccess, prefillUser = n
                 type="text"
                 value={userQuery}
                 onChange={(e) => setUserQuery(e.target.value)}
-                placeholder={t('ADMIN_GRANT.USER_SEARCH_PH', '输入用户名 / 手机号 / GitHub ID（≥2 字符）')}
+                placeholder={t('ADMIN_GRANT.USER_SEARCH_PH', '输入用户 ID / 用户名 / 手机号 / OAuth ID')}
                 className="w-full bg-surface-container-high border border-outline-variant rounded-control pl-9 pr-3 py-2 text-sm focus:outline-none focus:border-primary"
                 disabled={submitting}
                 aria-autocomplete="list"

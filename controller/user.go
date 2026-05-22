@@ -53,6 +53,21 @@ func protectsPaidQuotaReduction(before database.User, nextQuotaMicro int64) bool
 	return nextQuotaMicro < before.Quota && nextQuotaMicro < before.PaidQuota
 }
 
+// isAllDigitsForSearch 判断 search 输入是否纯数字（user.id 永远是数字，
+// 用于决定要不要走精确 id = ? 路径，跳过 LIKE 模糊匹配最小长度限制）。
+// 空字符串返回 false（让 caller 显式处理空 search）。
+func isAllDigitsForSearch(s string) bool {
+	if s == "" {
+		return false
+	}
+	for _, r := range s {
+		if r < '0' || r > '9' {
+			return false
+		}
+	}
+	return true
+}
+
 func GetUsers(c *fiber.Ctx) error {
 	searchQuery := strings.TrimSpace(c.Query("search", ""))
 	sortBy := c.Query("sort", "id_desc")
@@ -63,7 +78,11 @@ func GetUsers(c *fiber.Ctx) error {
 	if len(searchQuery) > 64 {
 		return c.Status(400).JSON(fiber.Map{"success": false, "message": "search 不能超过 64 字符", "message_code": "ERR_SEARCH_TOO_LONG"})
 	}
-	if searchQuery != "" && len(searchQuery) < 2 {
+	// 用户反馈"按 ID 搜不到"：纯数字输入（user.id 永远是数字）走精确 id = ? 路径，
+	// 跟模糊 LIKE 路径互不影响。精确匹配在 PRIMARY KEY 上，1 字符也安全（没有
+	// LIKE '%a%' 那种全表扫描风险），所以纯数字时跳过 ≥2 字符的最小长度限制。
+	isDigitOnly := searchQuery != "" && isAllDigitsForSearch(searchQuery)
+	if searchQuery != "" && !isDigitOnly && len(searchQuery) < 2 {
 		return c.Status(400).JSON(fiber.Map{"success": false, "message": "search 至少 2 字符", "message_code": "ERR_SEARCH_TOO_SHORT"})
 	}
 	page, _ := strconv.Atoi(c.Query("page", "1"))
@@ -84,13 +103,33 @@ func GetUsers(c *fiber.Ctx) error {
 		//
 		// Phase H-3b：原直接 LIKE users.github_id 已删；改用子查询命中 oauth_identities，
 		// 这样不论 provider 是 github / google 都能搜到。
+		//
+		// 用户反馈"按 ID 搜不到"：纯数字输入额外加一条 `id = ?` 精确匹配，
+		// 让 admin 直接通过用户 ID 定位（赠送订阅时尤其常用）。
 		escaped := strings.NewReplacer("\\", "\\\\", "%", "\\%", "_", "\\_").Replace(searchQuery)
 		searchParam := "%" + escaped + "%"
-		db = db.Where(
-			"username LIKE ? ESCAPE '\\' OR phone LIKE ? ESCAPE '\\' OR "+
-				"id IN (SELECT user_id FROM oauth_identities WHERE external_id LIKE ? ESCAPE '\\' AND unlinked_at IS NULL)",
-			searchParam, searchParam, searchParam,
-		)
+		if isDigitOnly {
+			if uid, err := strconv.ParseUint(searchQuery, 10, 64); err == nil && uid > 0 {
+				db = db.Where(
+					"id = ? OR username LIKE ? ESCAPE '\\' OR phone LIKE ? ESCAPE '\\' OR "+
+						"id IN (SELECT user_id FROM oauth_identities WHERE external_id LIKE ? ESCAPE '\\' AND unlinked_at IS NULL)",
+					uid, searchParam, searchParam, searchParam,
+				)
+			} else {
+				// 数字溢出 uint64 等极端情况：退回纯 LIKE 路径（保留行为不卡死）
+				db = db.Where(
+					"username LIKE ? ESCAPE '\\' OR phone LIKE ? ESCAPE '\\' OR "+
+						"id IN (SELECT user_id FROM oauth_identities WHERE external_id LIKE ? ESCAPE '\\' AND unlinked_at IS NULL)",
+					searchParam, searchParam, searchParam,
+				)
+			}
+		} else {
+			db = db.Where(
+				"username LIKE ? ESCAPE '\\' OR phone LIKE ? ESCAPE '\\' OR "+
+					"id IN (SELECT user_id FROM oauth_identities WHERE external_id LIKE ? ESCAPE '\\' AND unlinked_at IS NULL)",
+				searchParam, searchParam, searchParam,
+			)
+		}
 	}
 
 	switch sortBy {
