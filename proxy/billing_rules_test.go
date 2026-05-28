@@ -294,6 +294,109 @@ func TestActivateDueBillingRuleRevisionsSkipsCanceledAndAppliesLatestDue(t *test
 	}
 }
 
+// TestActivateDueBillingRuleRevisions_UTCComparison is a regression test for the
+// "billing rules 莫名回弹" incident (2026-05-26).
+//
+// Root cause: activateDueBillingRuleRevisions used time.Now() (local time) as the
+// SQL parameter for "effective_at <= ?".  SQLite stores effective_at as UTC RFC3339
+// strings (e.g. "2026-05-26T09:19:56Z").  On a server running in America/Chicago
+// (UTC-5) the local-time string (e.g. "2026-05-26 04:20:00-05:00") is
+// lexicographically LESS than any "2026-05-26T…" UTC string because ASCII ' '
+// (0x20) < 'T' (0x54).  This made the due revision appear "not yet due" and kept
+// reactivating the older revision id=2 every 60 s.
+//
+// Fix: now = now.UTC() at the top of activateDueBillingRuleRevisions (and callers
+// use time.Now().UTC()).  This test verifies that a Chicago-local time.Time whose
+// UTC equivalent is 4 s after effective_at correctly activates the new revision.
+func TestActivateDueBillingRuleRevisions_UTCComparison(t *testing.T) {
+	utils.InitCrypto()
+	db, err := gorm.Open(sqlite.Open("file:billing_utc_regression?mode=memory&cache=shared"), &gorm.Config{})
+	if err != nil {
+		t.Fatalf("open db: %v", err)
+	}
+	if err := db.AutoMigrate(
+		&database.SysConfig{}, &database.BillingRuleRevision{}, &database.BillingRuleRevisionCancellation{},
+		&database.Channel{}, &database.ChannelModel{}, &database.User{}, &database.AccessToken{},
+	); err != nil {
+		t.Fatalf("migrate: %v", err)
+	}
+	oldDB := database.DB
+	database.DB = db
+	t.Cleanup(func() { database.DB = oldDB })
+
+	oldCache := replaceSysConfigForTest(map[string]string{})
+	defer replaceSysConfigForTest(oldCache)
+
+	// Old revision — was "live" 30 days before the incident; serves as the decoy
+	// that the broken local-time query would have selected instead of the new one.
+	oldEffectiveAt := time.Date(2026, 4, 26, 0, 0, 0, 0, time.UTC)
+	oldPub := oldEffectiveAt
+	oldRev := database.BillingRuleRevision{
+		Version:               "old-revision-v1",
+		EffectiveSince:        oldEffectiveAt.Format("2006-01-02"),
+		PublishedAt:           &oldPub,
+		EffectiveAt:           &oldEffectiveAt,
+		ModelWeightsJSON:      `[{"pattern":"claude-opus-*","weight":1.25}]`,
+		HealthMultipliersJSON: `[{"pattern":"*","weight":1}]`,
+		ModelCount:            1,
+		HealthCount:           1,
+	}
+	if err := db.Create(&oldRev).Error; err != nil {
+		t.Fatalf("create old revision: %v", err)
+	}
+
+	// New revision — exact timestamps from the production incident.
+	// effective_at = 2026-05-26T09:19:56Z, which is 04:19:56 CDT.
+	newEffectiveAt := time.Date(2026, 5, 26, 9, 19, 56, 0, time.UTC)
+	newPub := newEffectiveAt
+	newRev := database.BillingRuleRevision{
+		Version:               "new-revision-v2",
+		EffectiveSince:        newEffectiveAt.Format("2006-01-02"),
+		PublishedAt:           &newPub,
+		EffectiveAt:           &newEffectiveAt,
+		ModelWeightsJSON:      `[{"pattern":"claude-opus-*","weight":2}]`,
+		HealthMultipliersJSON: `[{"pattern":"*","weight":1}]`,
+		ModelCount:            1,
+		HealthCount:           1,
+	}
+	if err := db.Create(&newRev).Error; err != nil {
+		t.Fatalf("create new revision: %v", err)
+	}
+
+	// Simulate the server's wall-clock at the moment the cron fires:
+	//   local (CDT/UTC-5): 2026-05-26 04:20:00-05:00
+	//   UTC equivalent:    2026-05-26T09:20:00Z  (4 s after newRev.effective_at)
+	//
+	// We use a fixed-offset zone so the test doesn't require tzdata on the host.
+	cdt := time.FixedZone("CDT", -5*3600)
+	chicagoNow := time.Date(2026, 5, 26, 4, 20, 0, 0, cdt)
+
+	// Sanity-check the test data itself.
+	if utc := chicagoNow.UTC(); !utc.After(newEffectiveAt) {
+		t.Fatalf("test setup: chicagoNow.UTC()=%v must be after newRev.effective_at=%v", utc, newEffectiveAt)
+	}
+
+	// Call with the local-timezone time.  The fix inside activateDueBillingRuleRevisions
+	// normalises to UTC before the SQL comparison, so newRev (the most-recently-due
+	// non-cancelled revision) must win over oldRev.
+	//
+	// Without the fix the WHERE clause compared "2026-05-26T09:19:56Z" against the
+	// local-time string "2026-05-26 04:20:00-05:00" lexicographically: 'T' > ' '
+	// caused newRev to appear "not yet due", so oldRev would have been (incorrectly)
+	// selected and the rules would have reverted.
+	activateDueBillingRuleRevisions(chicagoNow)
+
+	if got := readPlainSysConfigForBillingRulesTest(t, BillingRulesVersionConfigKey); got != newRev.Version {
+		t.Fatalf("version = %q, want %q\n(regression: local-time string comparison would have activated old revision instead)", got, newRev.Version)
+	}
+	if got := readPlainSysConfigForBillingRulesTest(t, BillingRulesRevisionIDConfigKey); got != strconv.Itoa(int(newRev.ID)) {
+		t.Fatalf("revision_id = %q, want %d\n(regression: local-time string comparison would have activated old revision instead)", got, newRev.ID)
+	}
+	if got := readPlainSysConfigForBillingRulesTest(t, BillingModelWeightsConfigKey); got != newRev.ModelWeightsJSON {
+		t.Fatalf("model_weights = %q, want %q", got, newRev.ModelWeightsJSON)
+	}
+}
+
 func replaceSysConfigForTest(next map[string]string) map[string]string {
 	SysConfigMutex.Lock()
 	defer SysConfigMutex.Unlock()

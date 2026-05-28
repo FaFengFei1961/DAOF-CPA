@@ -2,7 +2,6 @@ package controller
 
 import (
 	"encoding/json"
-	"errors"
 	"fmt"
 	"log"
 	"regexp"
@@ -175,7 +174,19 @@ func UpdateBillingRules(c *fiber.Ctx) error {
 		return c.Status(500).JSON(fiber.Map{"success": false, "message_code": "ERR_DB_WRITE"})
 	}
 	if activateNow {
-		proxy.SyncCacheConfig()
+		// 直接把已知明文值注入缓存，彻底消除任何 DB read 竞争：
+		// - 计费规则仅影响 SysConfigCache，不涉及 channel/route/auth cache
+		// - PatchSysConfigCache 直接 patch 具体 key，无需全量 DB round-trip
+		// - 不再调用 go SyncCacheConfig()：它会整体替换 SysConfigCache，在并发场景
+		//   可能用旧快照覆盖刚写入的 patch；billing rules 变更的 60s 定时 cron 会自然刷新
+		proxy.PatchSysConfigCache(map[string]string{
+			proxy.BillingModelWeightsConfigKey:      string(modelJSON),
+			proxy.BillingHealthMultipliersConfigKey: string(healthJSON),
+			proxy.BillingRulesVersionConfigKey:      version,
+			proxy.BillingRulesPublishedAtConfigKey:  now.Format(time.RFC3339),
+			proxy.BillingRulesEffectiveAtConfigKey:  effectiveAt.Format(time.RFC3339),
+			proxy.BillingRulesRevisionIDConfigKey:   strconv.FormatUint(uint64(revision.ID), 10),
+		})
 	}
 
 	details, _ := json.Marshal([]map[string]any{{
@@ -351,39 +362,87 @@ func persistBillingRulesUpdate(values map[string]string, revision database.Billi
 		if err := tx.Create(&revision).Error; err != nil {
 			return fmt.Errorf("create billing rule revision: %w", err)
 		}
+		log.Printf("[BILLING-RULES-DIAG] created revision id=%d version=%q activateNow=%v", revision.ID, revision.Version, activateNow)
 		if !activateNow {
 			return nil
 		}
-		values[proxy.BillingRulesRevisionIDConfigKey] = strconv.Itoa(int(revision.ID))
+
+		// fix ROOT-CAUSE（billing rules 定时回弹）：
+		// 立即发布时，自动撤销所有 effective_at > 当前时间 且尚未被撤销的预发布版本。
+		// 背景：cron 每 60s 运行 activateDueBillingRuleRevisions，查询
+		//   ORDER BY effective_at DESC 找最新到期版本。若存在 effective_at 更晚的预发布版本，
+		//   它会在到期时被 cron 激活，把刚保存的立即发布版本覆盖回去，导致"莫名回弹"。
+		// 修复：立即发布 = 撤销所有未来预发布，确保当前版本永远是 effective_at 最大的。
+		if revision.EffectiveAt != nil {
+			var futureRevs []database.BillingRuleRevision
+			if scanErr := tx.Where("effective_at > ?", *revision.EffectiveAt).
+				Where("id != ?", revision.ID).
+				Where(`NOT EXISTS (
+					SELECT 1 FROM billing_rule_revision_cancellations c WHERE c.revision_id = billing_rule_revisions.id
+				)`).
+				Find(&futureRevs).Error; scanErr != nil {
+				// 非致命：auto-cancel 失败不阻塞本次保存，但务必 log 以便排查
+				log.Printf("[BILLING-RULES] auto-cancel scan failed (non-fatal): %v", scanErr)
+			} else {
+				for _, frev := range futureRevs {
+					cancel := database.BillingRuleRevisionCancellation{
+						RevisionID: frev.ID,
+						Reason: fmt.Sprintf("auto-canceled: superseded by immediate revision id=%d version=%q",
+							revision.ID, revision.Version),
+						CreatedBy: revision.CreatedBy,
+					}
+					if cerr := tx.Clauses(clause.OnConflict{DoNothing: true}).Create(&cancel).Error; cerr != nil {
+						log.Printf("[BILLING-RULES] auto-cancel revision id=%d failed (non-fatal): %v", frev.ID, cerr)
+					} else {
+						effectiveAtStr := ""
+						if frev.EffectiveAt != nil {
+							effectiveAtStr = frev.EffectiveAt.UTC().Format(time.RFC3339)
+						}
+						log.Printf("[BILLING-RULES] ✅ auto-canceled scheduled revision id=%d version=%q effective_at=%s (superseded by immediate id=%d)",
+							frev.ID, frev.Version, effectiveAtStr, revision.ID)
+					}
+				}
+			}
+		}
+
+		values[proxy.BillingRulesRevisionIDConfigKey] = strconv.FormatUint(uint64(revision.ID), 10)
 		for k, v := range values {
 			enc, err := utils.Encrypt(v)
 			if err != nil {
 				return fmt.Errorf("encrypt %s: %w", k, err)
 			}
-			// Phase H C-2 fix：原代码只用 RowsAffected>0 区分 update/create，
-			// 不区分 "key 不存在" vs "First() 失败"。若 DB busy / lock timeout，
-			// RowsAffected=0 会让逻辑 fall-through 到 Create，触发 unique-violation
-			// 而真实失败原因被掩盖。改用 errors.Is(gorm.ErrRecordNotFound) 显式区分，
-			// 与 admin_email.go:396 的标准范式一致。
-			var existing database.SysConfig
-			res := tx.Where("key = ?", k).First(&existing)
-			if res.Error != nil && !errors.Is(res.Error, gorm.ErrRecordNotFound) {
-				return fmt.Errorf("lookup %s: %w", k, res.Error)
+			// fix ROOT-CAUSE（billing rules save 无效）：
+			// 原 GORM tx.Save(&existing) 在 string primary key 场景下静默产生
+			// 0 RowsAffected + nil Error（GORM v2 对 string PK 的 BeforeSave 钩子
+			// 路径与 uint PK 不同，导致 UPDATE 语句被跳过）。
+			// 改用 SQLite 原生 INSERT OR REPLACE：语义明确、无 GORM 中间层、
+			// 行为完全可预期；对 string PK 表（SysConfig）最简且最可靠。
+			result := tx.Exec(
+				"INSERT OR REPLACE INTO sys_configs (key, value) VALUES (?, ?)",
+				k, enc,
+			)
+			if result.Error != nil {
+				return fmt.Errorf("upsert sys_config key=%s: %w", k, result.Error)
 			}
-			if res.Error == nil {
-				existing.Value = enc
-				if err := tx.Save(&existing).Error; err != nil {
-					return fmt.Errorf("save %s: %w", k, err)
-				}
-			} else {
-				if err := tx.Create(&database.SysConfig{Key: k, Value: enc}).Error; err != nil {
-					return fmt.Errorf("create %s: %w", k, err)
-				}
-			}
+			log.Printf("[BILLING-RULES-DIAG] upsert key=%s rows_affected=%d err=nil", k, result.RowsAffected)
 		}
 		return nil
 	})
-	return revision, err
+	if err != nil {
+		return revision, err
+	}
+	// diag: read back revision_id from DB immediately after commit to confirm write persisted
+	if activateNow {
+		var sc database.SysConfig
+		if dbErr := database.DB.Where("key = ?", proxy.BillingRulesRevisionIDConfigKey).First(&sc).Error; dbErr != nil {
+			log.Printf("[BILLING-RULES-DIAG] read-back billing_rules_revision_id failed: %v", dbErr)
+		} else {
+			decrypted, decErr := utils.Decrypt(sc.Value)
+			log.Printf("[BILLING-RULES-DIAG] read-back billing_rules_revision_id=%q (want %d) decrypt_err=%v",
+				decrypted, revision.ID, decErr)
+		}
+	}
+	return revision, nil
 }
 
 func parseBillingRulePayloads(raw string) []billingRulePayload {

@@ -264,5 +264,56 @@ func SyncCacheConfig() {
 	SysConfigCache = newSysConfigMap
 	SysConfigMutex.Unlock()
 
-	log.Printf("🚀 内存缓存加载完成: 同步了 %d 个活跃渠道, %d 个模型路由配置, %d 个授权用户凭证", len(channels), len(channelModels), len(users))
+	// diag: show what billing rule revision the full sync picked up from DB
+	log.Printf("🚀 内存缓存加载完成: 同步了 %d 个活跃渠道, %d 个模型路由配置, %d 个授权用户凭证 [billing_rules_revision_id=%q billing_rules_version=%q]",
+		len(channels), len(channelModels), len(users),
+		newSysConfigMap["billing_rules_revision_id"],
+		newSysConfigMap["billing_rules_version"])
+}
+
+// SyncSysConfigCache 轻量同步：仅重新查询 sys_configs 表并原子刷新 SysConfigCache。
+//
+// 对比 SyncCacheConfig 的 5 次全量查询，本函数仅需 1 次 SELECT；专用于"计费规则写入后
+// 需要立即对调用方可见"的场景（channel / route / auth / token 缓存不受影响，
+// 绝不会被部分结果误覆盖）。
+//
+// 调用方应在同一事务提交后调用，若需同时刷新其余 cache 则异步 go SyncCacheConfig()。
+func SyncSysConfigCache() {
+	var sysConfigs []database.SysConfig
+	if err := database.DB.Find(&sysConfigs).Error; err != nil {
+		log.Printf("[CACHE] SyncSysConfigCache: load sys_configs failed, cache unchanged: %v", err)
+		return
+	}
+	newSysConfigMap := make(map[string]string)
+	for _, sc := range sysConfigs {
+		decrypted, err := utils.Decrypt(sc.Value)
+		if err != nil {
+			log.Printf("[CACHE] SyncSysConfigCache: decrypt key=%q failed (dropped): %v", sc.Key, err)
+			continue
+		}
+		newSysConfigMap[sc.Key] = decrypted
+	}
+	SysConfigMutex.Lock()
+	SysConfigCache = newSysConfigMap
+	SysConfigMutex.Unlock()
+	log.Printf("[CACHE] SyncSysConfigCache: refreshed %d sys_config entries", len(newSysConfigMap))
+}
+
+// PatchSysConfigCache 直接将已知明文键值写入 SysConfigCache，无需再次查询 DB。
+//
+// 适用于：事务刚提交、明文值就在调用方内存中已知的场景（如计费规则立即发布）。
+// 相比 SyncSysConfigCache 的"写完再读"，本函数完全消除 SQLite WAL 读快照竞争窗口：
+// 不管连接池是否拿到旧 WAL snapshot，都能保证 cache 与刚提交的事务一致。
+//
+// 调用后建议异步 go SyncCacheConfig() 做全量校验，以修复任何残余不一致。
+func PatchSysConfigCache(plainKV map[string]string) {
+	SysConfigMutex.Lock()
+	defer SysConfigMutex.Unlock()
+	if SysConfigCache == nil {
+		SysConfigCache = make(map[string]string)
+	}
+	for k, v := range plainKV {
+		SysConfigCache[k] = v
+	}
+	log.Printf("[CACHE] PatchSysConfigCache: patched %d keys", len(plainKV))
 }

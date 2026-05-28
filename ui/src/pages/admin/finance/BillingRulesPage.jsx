@@ -99,7 +99,7 @@ const BillingRulesPage = () => {
     setLoading(true);
     setError('');
     try {
-      const res = await fetch('/api/billing/rules', { credentials: 'same-origin' });
+      const res = await fetch('/api/billing/rules', { credentials: 'same-origin', cache: 'no-store' });
       const json = await res.json();
       if (!res.ok || !json.success) throw new Error(json.message || `HTTP ${res.status}`);
       const data = json.data || {};
@@ -130,7 +130,7 @@ const BillingRulesPage = () => {
   const loadHistory = async () => {
     setHistoryLoading(true);
     try {
-      const res = await fetch('/api/billing/rules/history?limit=50', { credentials: 'same-origin' });
+      const res = await fetch('/api/billing/rules/history?limit=50', { credentials: 'same-origin', cache: 'no-store' });
       const json = await res.json();
       if (!res.ok || !json.success) throw new Error(json.message || `HTTP ${res.status}`);
       setHistoryRows(json.data || []);
@@ -233,6 +233,10 @@ const BillingRulesPage = () => {
       toast.success(publishMode === 'scheduled'
         ? t('ADMIN_BILLING_RULES.SCHEDULED_OK', '计费规则已预发布，到点后自动生效')
         : t('ADMIN_BILLING_RULES.PUBLISHED_OK', '计费规则已立即发布'));
+      // 保存成功后重新从服务端拉取最新生效规则，确保表单与缓存完全一致。
+      // SyncSysConfigCache() 已在保存后同步刷新了服务端内存缓存；
+      // load() 带 cache:'no-store' 保证浏览器不会命中旧 HTTP 缓存。
+      setVersion('');
       load();
       loadHistory();
     } catch (e) {
@@ -527,13 +531,21 @@ const BillingRulesPage = () => {
   );
 };
 
-const RevisionHistoryCard = ({ rows, loading, cancelingId, onReload, onCancel, t }) => (
+const RevisionHistoryCard = ({ rows, loading, cancelingId, onReload, onCancel, t }) => {
+  // 预发布（待生效）版本全部展示，历史版本最多显示 5 条，避免列表无限增长但不遮挡危险的定时回弹版本。
+  // 这是"莫名回弹"的根本 UI fix：之前只显示最新 6 条，如果第 7 条是一个 scheduled 定时版本，
+  // admin 无法看到它、无法撤销它，直到它到期并覆盖了最新的立即发布版本。
+  const scheduledRows = rows.filter((r) => r.status === 'scheduled');
+  const otherRows = rows.filter((r) => r.status !== 'scheduled').slice(0, 5);
+  const visibleRows = [...scheduledRows, ...otherRows];
+
+  return (
   <section className="rounded-overlay border border-outline-variant/60 bg-surface overflow-hidden">
     <header className="px-4 py-2.5 bg-surface-container-highest border-b border-outline-variant/40 flex items-center justify-between flex-wrap gap-2">
       <div>
         <h3 className="text-sm font-semibold text-on-surface">{t('ADMIN_BILLING_RULES.REVISION_TITLE', '发布计划与历史')}</h3>
         <p className="text-[11px] text-on-surface-variant mt-0.5">
-          {t('ADMIN_BILLING_RULES.REVISION_SUB', '立即发布会马上生效；预发布会在生效时间到达后自动切换。')}
+          {t('ADMIN_BILLING_RULES.REVISION_SUB', '立即发布会马上生效并自动撤销所有"待生效"版本，防止定时版本回弹。预发布仅在无更新立即版本时才生效。')}
         </p>
       </div>
       <button
@@ -546,6 +558,12 @@ const RevisionHistoryCard = ({ rows, loading, cancelingId, onReload, onCancel, t
         {t('BILLING_RULES.HISTORY_RELOAD', '刷新历史')}
       </button>
     </header>
+    {scheduledRows.length > 0 && (
+      <div className="px-4 py-2 bg-warning/8 border-b border-warning/20 flex items-center gap-2 text-xs text-warning">
+        <AlertTriangle size={12} />
+        {t('ADMIN_BILLING_RULES.SCHEDULED_WARNING', '⚠ 存在 {{n}} 个"待生效"预发布版本，它们将在到期后覆盖当前规则。如不需要，请撤销。立即发布会自动撤销它们。', { n: scheduledRows.length })}
+      </div>
+    )}
     <div className="divide-y divide-outline-variant/30">
       {loading && rows.length === 0 && (
         <div className="px-4 py-6 text-center text-sm text-on-surface-variant">{t('COMMON.LOADING', '加载中…')}</div>
@@ -553,8 +571,8 @@ const RevisionHistoryCard = ({ rows, loading, cancelingId, onReload, onCancel, t
       {!loading && rows.length === 0 && (
         <div className="px-4 py-6 text-center text-sm text-on-surface-variant">{t('BILLING_RULES.HISTORY_EMPTY', '暂无历史版本')}</div>
       )}
-      {rows.slice(0, 6).map((row) => (
-        <div key={row.id} className="px-4 py-3 flex items-center justify-between gap-3 flex-wrap">
+      {visibleRows.map((row) => (
+        <div key={row.id} className={`px-4 py-3 flex items-center justify-between gap-3 flex-wrap ${row.status === 'scheduled' ? 'bg-warning/5' : ''}`}>
           <div className="min-w-0">
             <div className="flex items-center gap-2 flex-wrap">
               <span className="font-mono text-xs text-on-surface truncate">{row.version || '-'}</span>
@@ -586,7 +604,8 @@ const RevisionHistoryCard = ({ rows, loading, cancelingId, onReload, onCancel, t
       ))}
     </div>
   </section>
-);
+  );
+};
 
 const RuleTableCard = ({ icon: Icon, title, scope, onAdd, addLabel, children }) => (
   <section className="rounded-overlay border border-outline-variant/60 bg-surface overflow-hidden">

@@ -178,7 +178,7 @@ func maybeActivateDueBillingRuleRevisions() {
 	if database.DB == nil {
 		return
 	}
-	now := time.Now()
+	now := time.Now().UTC() // fix: must be UTC — DB stores effective_at in UTC strings
 	billingRuleActivationMu.Lock()
 	defer billingRuleActivationMu.Unlock()
 	if !lastBillingRuleActivationCheck.IsZero() && now.Sub(lastBillingRuleActivationCheck) < 15*time.Second {
@@ -197,11 +197,14 @@ func ActivateDueBillingRuleRevisions() {
 	}
 	billingRuleActivationMu.Lock()
 	defer billingRuleActivationMu.Unlock()
-	lastBillingRuleActivationCheck = time.Now()
+	lastBillingRuleActivationCheck = time.Now().UTC() // fix: must be UTC
 	activateDueBillingRuleRevisions(lastBillingRuleActivationCheck)
 }
 
 func activateDueBillingRuleRevisions(now time.Time) {
+	// Defensive: normalize to UTC so string comparison with UTC effective_at in SQLite is correct.
+	// Callers already pass UTC, but guard against any future non-UTC call site.
+	now = now.UTC()
 	if !database.DB.Migrator().HasTable(&database.BillingRuleRevision{}) ||
 		!database.DB.Migrator().HasTable(&database.BillingRuleRevisionCancellation{}) {
 		return
@@ -222,8 +225,14 @@ func activateDueBillingRuleRevisions(now time.Time) {
 		return
 	}
 	if rev.ID == 0 {
+		// diag: no due revision found
+		log.Printf("[BILLING-RULES-DIAG] no due non-canceled revision found (now=%s)", now.UTC().Format(time.RFC3339))
 		return
 	}
+
+	// diag: show which revision the query selected
+	log.Printf("[BILLING-RULES-DIAG] query winner: id=%d version=%q effective_at=%s",
+		rev.ID, rev.Version, billingRuleTimeString(rev.EffectiveAt, rev.CreatedAt))
 
 	applied, err := applyBillingRuleRevision(rev)
 	if err != nil {
@@ -231,7 +240,20 @@ func activateDueBillingRuleRevisions(now time.Time) {
 		return
 	}
 	if applied {
-		SyncCacheConfig()
+		// fix：改用 PatchSysConfigCache 替代 SyncCacheConfig()。
+		// SyncCacheConfig() 做 5 次全量 SELECT 并原子替换整个 SysConfigCache，
+		// 若在 WAL snapshot 老旧窗口内执行，会将刚写入的 billing rule 键值覆盖回
+		// 旧快照数据。PatchSysConfigCache 只替换已知的 billing rule 键，不触碰其他
+		// SysConfig（email/moderation/subscription 等），且完全不依赖 DB 读取，
+		// 直接用 revision 结构体里的明文值注入缓存，不存在快照竞争。
+		PatchSysConfigCache(map[string]string{
+			BillingModelWeightsConfigKey:      rev.ModelWeightsJSON,
+			BillingHealthMultipliersConfigKey: rev.HealthMultipliersJSON,
+			BillingRulesVersionConfigKey:      rev.Version,
+			BillingRulesPublishedAtConfigKey:  billingRuleTimeString(rev.PublishedAt, rev.CreatedAt),
+			BillingRulesEffectiveAtConfigKey:  billingRuleTimeString(rev.EffectiveAt, now),
+			BillingRulesRevisionIDConfigKey:   strconv.FormatUint(uint64(rev.ID), 10),
+		})
 		log.Printf("[BILLING-RULES-SCHEDULE] activated revision id=%d version=%q effective_at=%s",
 			rev.ID, rev.Version, billingRuleTimeString(rev.EffectiveAt, now))
 	}
@@ -254,16 +276,23 @@ func applyBillingRuleRevision(rev database.BillingRuleRevision) (bool, error) {
 			return nil
 		}
 		currentRevisionID := strings.TrimSpace(readPlainSysConfigInTx(tx, BillingRulesRevisionIDConfigKey))
-		if currentRevisionID == strconv.Itoa(int(rev.ID)) {
+		wantID := strconv.FormatUint(uint64(rev.ID), 10)
+		// diag: always log DB revision ID vs candidate so we can see if DB write is sticking
+		log.Printf("[BILLING-RULES-DIAG] applyBillingRuleRevision: db_revision_id=%q want=%q match=%v",
+			currentRevisionID, wantID, currentRevisionID == wantID)
+		if currentRevisionID == wantID {
 			return nil
 		}
+		// 即将覆盖当前活跃规则：打印警告，便于排查"莫名回弹"。
+		log.Printf("[BILLING-RULES-SCHEDULE] ⚠️  ACTIVATING revision id=%d version=%q (current db_revision_id=%q) — if this looks wrong, check for un-canceled scheduled revisions",
+			rev.ID, rev.Version, currentRevisionID)
 		values := map[string]string{
 			BillingModelWeightsConfigKey:      rev.ModelWeightsJSON,
 			BillingHealthMultipliersConfigKey: rev.HealthMultipliersJSON,
 			BillingRulesVersionConfigKey:      rev.Version,
 			BillingRulesPublishedAtConfigKey:  billingRuleTimeString(rev.PublishedAt, rev.CreatedAt),
 			BillingRulesEffectiveAtConfigKey:  billingRuleTimeString(rev.EffectiveAt, now),
-			BillingRulesRevisionIDConfigKey:   strconv.Itoa(int(rev.ID)),
+			BillingRulesRevisionIDConfigKey:   strconv.FormatUint(uint64(rev.ID), 10),
 		}
 		for key, value := range values {
 			if err := upsertEncryptedSysConfigInTx(tx, key, value); err != nil {
@@ -281,17 +310,18 @@ func upsertEncryptedSysConfigInTx(tx *gorm.DB, key, value string) error {
 	if err != nil {
 		return fmt.Errorf("encrypt %s: %w", key, err)
 	}
-	var existing database.SysConfig
-	res := tx.Where("key = ?", key).First(&existing)
-	if res.RowsAffected > 0 {
-		existing.Value = enc
-		if err := tx.Save(&existing).Error; err != nil {
-			return fmt.Errorf("save %s: %w", key, err)
-		}
-		return nil
-	}
-	if err := tx.Create(&database.SysConfig{Key: key, Value: enc}).Error; err != nil {
-		return fmt.Errorf("create %s: %w", key, err)
+	// fix ROOT-CAUSE（scheduled billing revision activation 无法写库）：
+	// 原实现 First(&existing) → tx.Save(&existing) 在 string primary key 场景下
+	// 静默产生 0 RowsAffected + nil Error（GORM v2 对 string PK 的 BeforeSave
+	// 钩子路径不触发 UPDATE），导致 DB 始终保留旧值，每 60s cron 重新尝试但
+	// 永远无法提交，进而触发 SyncCacheConfig() 将缓存回滚到旧值。
+	// 改用 SQLite 原生 INSERT OR REPLACE：语义明确，无 GORM 中间层。
+	result := tx.Exec(
+		"INSERT OR REPLACE INTO sys_configs (key, value) VALUES (?, ?)",
+		key, enc,
+	)
+	if result.Error != nil {
+		return fmt.Errorf("upsert sys_config key=%s: %w", key, result.Error)
 	}
 	return nil
 }

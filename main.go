@@ -40,6 +40,11 @@ func main() {
 	// 3. 从底层物理硬盘中抽取全部配置存入极速幻影内存 RAM (SyncCacheConfig)
 	proxy.SyncCacheConfig()
 
+	// 3.0 立即激活到期计费规则快照（消除 SyncCacheConfig 读取旧 DB 值后、
+	// 首次 cron 运行前的 ~10-70s 窗口：若 billing_rules_revision_id 与最新
+	// 已生效 revision 不符，直接用 INSERT OR REPLACE 修正 DB 并 PatchSysConfigCache）
+	proxy.ActivateDueBillingRuleRevisions()
+
 	// 3.1 加载内容审核关键字词库（依赖 SysConfigCache 已就绪）
 	proxy.LoadKeywordsFromConfig()
 
@@ -424,6 +429,7 @@ func main() {
 	adminApi.Get("/users-usage", controller.GetUsersUsage)
 	adminApi.Get("/users-usage/timeseries", controller.GetUsersUsageTimeseries)
 	adminApi.Get("/users-usage/events", controller.GetUsersUsageEvents)
+	adminApi.Get("/users-usage/models", controller.GetUsersUsageModelBreakdown)
 	adminApi.Get("/upstream-account-cost-presets", controller.ListUpstreamAccountCostPresets)
 	adminApi.Get("/upstream-accounts", controller.ListUpstreamAccountCosts)
 	adminApi.Get("/upstream-accounts/candidates", controller.ListUpstreamAccountCandidates)
