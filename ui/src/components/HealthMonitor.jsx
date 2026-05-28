@@ -2,256 +2,305 @@ import React, { useMemo, useState, useRef, useEffect, useCallback } from 'react'
 import { createPortal } from 'react-dom';
 import { useTranslation } from 'react-i18next';
 
-const BLOCKS_COUNT = 60;
-const TOOLTIP_SAFE_WIDTH = 240;
-const TOOLTIP_SAFE_HEIGHT = 100;
-const TOOLTIP_OFFSET = 12;
+// ─── Grid constants ───────────────────────────────────────────────────────────
+// 7 rows × 48 cols = 336 buckets. grid-auto-flow: column so time runs L→R,
+// each column fills top-to-bottom. Matches CPA USAGE KEEPER's visual density.
+const ROWS = 7;
+const COLS = 48;
+const TOTAL_BLOCKS = ROWS * COLS; // 336
 
-function calculateServiceHealthData(logs, globalSummary) {
-    if (!logs || logs.length === 0) {
-        return {
-            successRate: globalSummary ? (globalSummary.successReqs / (globalSummary.totalReqs || 1)) * 100 : 100,
-            totalSuccess: globalSummary ? globalSummary.successReqs : 0,
-            totalFailure: globalSummary ? globalSummary.failedReqs : 0,
-            blockDetails: Array.from({ length: BLOCKS_COUNT }).map(() => ({
-                success: 0,
-                failure: 0,
-                rate: -1,
-                startTime: Date.now(),
-                endTime: Date.now()
-            }))
-        };
+const BLOCK_PX  = 8;   // px per cell (both sides)
+const GAP_PX    = 2;   // gap between cells
+const GRID_H    = ROWS * BLOCK_PX + (ROWS - 1) * GAP_PX; // 68px total
+
+const TOOLTIP_SAFE_W  = 220;
+const TOOLTIP_SAFE_H  = 110;
+const TOOLTIP_OFFSET  = 10;
+
+// ─── Smooth colour scale: red(0%) → yellow(50%) → green(100%) ────────────────
+// Matches CPA USAGE KEEPER's rateToColor with three-stop linear RGB blend.
+function rateToColor(rate) {
+    if (rate < 0) return null; // idle → CSS variable fallback
+    const clamp = Math.min(1, Math.max(0, rate));
+    if (clamp <= 0.5) {
+        const t = clamp / 0.5;
+        return `rgb(${lerp(239, 250, t)},${lerp(68, 204, t)},${lerp(68, 21, t)})`;
     }
+    const t = (clamp - 0.5) / 0.5;
+    return `rgb(${lerp(250, 16, t)},${lerp(204, 185, t)},${lerp(21, 129, t)})`;
+}
+const lerp = (a, b, t) => Math.round(a + (b - a) * t);
 
-    let minTime = Number.MAX_SAFE_INTEGER;
-    let maxTime = Number.MIN_SAFE_INTEGER;
+// ─── Build time-bucketed health data from raw log array ──────────────────────
+function buildHealthData(logs, summary) {
+    const now = Date.now();
+
     let totalSuccess = 0;
     let totalFailure = 0;
+    let minTime = now - 24 * 3_600_000; // default: last 24 h
+    const maxTime = now;
 
-    logs.forEach(log => {
-        const t = new Date(log.created_at).getTime();
-        if (t < minTime) minTime = t;
-        if (t > maxTime) maxTime = t;
-        if (log.failed) {
-            totalFailure++;
-        } else {
-            totalSuccess++;
-        }
-    });
-
-    if (minTime === maxTime || maxTime === Number.MIN_SAFE_INTEGER) {
-        minTime = Date.now() - 3600000; // default 1 hour fallback
-        maxTime = Date.now();
+    if (logs && logs.length > 0) {
+        let earliest = now;
+        logs.forEach(log => {
+            const t = new Date(log.created_at).getTime();
+            if (t < earliest) earliest = t;
+            if (log.failed) totalFailure++; else totalSuccess++;
+        });
+        // Never let minTime exceed maxTime − 1 h so blocks have meaningful width
+        minTime = Math.min(earliest, now - 3_600_000);
+    } else if (summary) {
+        // Derive totals from summary even when detailed logs are unavailable
+        totalSuccess = summary.successReqs ?? 0;
+        totalFailure = summary.failedReqs ?? 0;
     }
 
-    const timeSpan = maxTime - minTime;
-    const blockDuration = Math.max(1000, timeSpan / BLOCKS_COUNT);
+    const blockMs = (maxTime - minTime) / TOTAL_BLOCKS;
 
-    const blocks = Array.from({ length: BLOCKS_COUNT }, (_, i) => ({
+    const blocks = Array.from({ length: TOTAL_BLOCKS }, (_, i) => ({
         success: 0,
         failure: 0,
-        startTime: minTime + i * blockDuration,
-        endTime: minTime + (i + 1) * blockDuration,
+        startTime: minTime + i * blockMs,
+        endTime:   minTime + (i + 1) * blockMs,
         rate: -1,
     }));
 
-    logs.forEach(log => {
-        const t = new Date(log.created_at).getTime();
-        let idx = Math.floor((t - minTime) / blockDuration);
-        if (idx >= BLOCKS_COUNT) idx = BLOCKS_COUNT - 1;
-        if (idx < 0) idx = 0;
-
-        if (log.failed) {
-            blocks[idx].failure++;
-        } else {
-            blocks[idx].success++;
-        }
-    });
+    if (logs) {
+        logs.forEach(log => {
+            const t = new Date(log.created_at).getTime();
+            let idx = Math.floor((t - minTime) / blockMs);
+            if (idx >= TOTAL_BLOCKS) idx = TOTAL_BLOCKS - 1;
+            if (idx < 0) idx = 0;
+            if (log.failed) blocks[idx].failure++; else blocks[idx].success++;
+        });
+    }
 
     blocks.forEach(b => {
         const total = b.success + b.failure;
-        b.rate = total === 0 ? -1 : b.success / total;
+        if (total > 0) b.rate = b.success / total;
     });
 
-    const successRate = (totalSuccess / (totalSuccess + totalFailure || 1)) * 100;
+    const hasData = totalSuccess + totalFailure > 0;
+    const successRate = hasData ? (totalSuccess / (totalSuccess + totalFailure)) * 100 : null;
 
-    return {
-        successRate,
-        totalSuccess,
-        totalFailure,
-        blockDetails: blocks
-    };
+    return { blocks, totalSuccess, totalFailure, successRate, minTime, maxTime, hasData };
 }
 
-const rateToColor = (rate) => {
-    if (rate === -1) return '#ffffff0a';
-    if (rate >= 0.9) return '#10b981';
-    if (rate >= 0.5) return '#f59e0b';
-    return '#ef4444';
-};
-
-const formatDateTime = (ts) => {
+// ─── Formatting helpers ───────────────────────────────────────────────────────
+const fmtDt = (ts) => {
     const d = new Date(ts);
-    const month = String(d.getMonth() + 1).padStart(2, '0');
-    const day = String(d.getDate()).padStart(2, '0');
-    const h = String(d.getHours()).padStart(2, '0');
-    const m = String(d.getMinutes()).padStart(2, '0');
-    return `${month}/${day} ${h}:${m}`;
+    const mm  = String(d.getMonth() + 1).padStart(2, '0');
+    const dd  = String(d.getDate()).padStart(2, '0');
+    const hh  = String(d.getHours()).padStart(2, '0');
+    const min = String(d.getMinutes()).padStart(2, '0');
+    return `${mm}/${dd} ${hh}:${min}`;
 };
 
+// ─── HealthMonitor component ──────────────────────────────────────────────────
 export function HealthMonitor({ logs, summary }) {
     const { t } = useTranslation();
     const [activeTooltip, setActiveTooltip] = useState(null);
     const gridRef = useRef(null);
 
-    const healthData = useMemo(() => calculateServiceHealthData(logs, summary), [logs, summary]);
-    const hasData = healthData.totalSuccess + healthData.totalFailure > 0;
+    const { blocks, totalSuccess, totalFailure, successRate, minTime, maxTime, hasData } =
+        useMemo(() => buildHealthData(logs, summary), [logs, summary]);
 
+    // Use summary successRate as fallback when no detailed logs are available
+    const displayRate = successRate ??
+        (summary?.totalReqs > 0 ? (summary.successReqs / summary.totalReqs) * 100 : null);
+
+    const rateColour = displayRate == null ? 'text-on-surface-variant'
+        : displayRate >= 95 ? 'text-success'
+        : displayRate >= 80 ? 'text-warning'
+        : 'text-error';
+
+    // ── Tooltip positioning ──────────────────────────────────────────────────
+    const buildTooltipState = useCallback((idx, anchorEl) => {
+        if (!anchorEl?.isConnected) return null;
+        const rect = anchorEl.getBoundingClientRect();
+        const cx = rect.left + rect.width / 2;
+        const horizontal = cx <= TOOLTIP_SAFE_W / 2 ? 'left'
+            : cx >= window.innerWidth - TOOLTIP_SAFE_W / 2 ? 'right'
+            : 'center';
+        const left = horizontal === 'center' ? cx
+            : horizontal === 'right' ? rect.right : rect.left;
+        const vertical  = rect.top <= TOOLTIP_SAFE_H ? 'below' : 'above';
+        const top       = vertical === 'below' ? rect.bottom + TOOLTIP_OFFSET : rect.top - TOOLTIP_OFFSET;
+        const translateX = horizontal === 'center' ? '-50%' : horizontal === 'right' ? '-100%' : '0';
+        const translateY = vertical === 'below' ? '0' : '-100%';
+        return { idx, anchorEl, left: Math.round(left), top: Math.round(top),
+                 transform: `translate(${translateX}, ${translateY})` };
+    }, []);
+
+    const openTooltip = useCallback((idx, el) =>
+        setActiveTooltip(buildTooltipState(idx, el)), [buildTooltipState]);
+
+    // Close on outside click
     useEffect(() => {
         if (!activeTooltip) return;
         const handler = (e) => {
-            if (gridRef.current && !gridRef.current.contains(e.target)) {
-                setActiveTooltip(null);
-            }
+            if (gridRef.current && !gridRef.current.contains(e.target)) setActiveTooltip(null);
         };
         document.addEventListener('pointerdown', handler);
         return () => document.removeEventListener('pointerdown', handler);
     }, [activeTooltip]);
 
-    const buildTooltipState = useCallback((idx, anchorEl) => {
-        if (!anchorEl || !anchorEl.isConnected) return null;
-        const rect = anchorEl.getBoundingClientRect();
-        const centerX = rect.left + rect.width / 2;
-
-        let horizontal = 'center';
-        let left = centerX;
-
-        if (centerX <= TOOLTIP_SAFE_WIDTH / 2) {
-            horizontal = 'left';
-            left = rect.left;
-        } else if (centerX >= window.innerWidth - TOOLTIP_SAFE_WIDTH / 2) {
-            horizontal = 'right';
-            left = rect.right;
-        }
-
-        const vertical = rect.top <= TOOLTIP_SAFE_HEIGHT ? 'below' : 'above';
-        const top = vertical === 'below' ? rect.bottom + TOOLTIP_OFFSET : rect.top - TOOLTIP_OFFSET;
-        const translateX = horizontal === 'center' ? '-50%' : horizontal === 'right' ? '-100%' : '0';
-        const translateY = vertical === 'below' ? '0' : '-100%';
-
-        return {
-            idx, anchorEl, horizontal, vertical,
-            left: Math.round(left), top: Math.round(top),
-            transform: `translate(${translateX}, ${translateY})`
-        };
-    }, []);
-
-    const openTooltip = useCallback((idx, anchorEl) => {
-        setActiveTooltip(buildTooltipState(idx, anchorEl));
-    }, [buildTooltipState]);
-
-    const handlePointerEnter = useCallback((e, idx) => {
-        if (e.pointerType === "mouse") openTooltip(idx, e.currentTarget);
-    }, [openTooltip]);
-
-    const handlePointerLeave = useCallback((e) => {
-        if (e.pointerType === "mouse") setActiveTooltip(null);
-    }, []);
-
-    const handlePointerDown = useCallback((e, idx) => {
-        if (e.pointerType === "touch") {
-            e.preventDefault();
-            const anchorEl = e.currentTarget;
-            setActiveTooltip((prev) => (prev?.idx === idx ? null : buildTooltipState(idx, anchorEl)));
-        }
-    }, [buildTooltipState]);
-
+    // Reposition on scroll/resize
     useEffect(() => {
         if (!activeTooltip) return;
-        const updateTooltipPosition = () => {
-            if (!document.body.contains(activeTooltip.anchorEl)) {
-                setActiveTooltip(null);
-                return;
-            }
+        const update = () => {
+            if (!document.body.contains(activeTooltip.anchorEl)) { setActiveTooltip(null); return; }
             setActiveTooltip(buildTooltipState(activeTooltip.idx, activeTooltip.anchorEl));
         };
-        window.addEventListener('resize', updateTooltipPosition);
-        window.addEventListener('scroll', updateTooltipPosition, true);
+        window.addEventListener('resize', update);
+        window.addEventListener('scroll', update, true);
         return () => {
-            window.removeEventListener('resize', updateTooltipPosition);
-            window.removeEventListener('scroll', updateTooltipPosition, true);
+            window.removeEventListener('resize', update);
+            window.removeEventListener('scroll', update, true);
         };
     }, [activeTooltip, buildTooltipState]);
 
-    const renderTooltip = (detail, tooltipState) => {
-        const total = detail.success + detail.failure;
-        const timeRange = `${formatDateTime(detail.startTime)} - ${formatDateTime(detail.endTime)}`;
-
-        const tooltip = (
-            <div role="tooltip" className="fixed z-50 bg-surface-container-high border border-outline-variant p-3 rounded-control shadow-black/50 pointer-events-none"
-                 style={{ left: `${tooltipState.left}px`, top: `${tooltipState.top}px`, transform: tooltipState.transform }}>
-                <div className="text-[10px] text-on-surface-variant mb-1.5 whitespace-nowrap">{timeRange}</div>
+    // ── Tooltip renderer (portal so it escapes overflow:hidden parents) ───────
+    const renderTooltip = (block, state) => {
+        const total = block.success + block.failure;
+        const node = (
+            <div
+                role="tooltip"
+                className="fixed z-50 pointer-events-none min-w-[180px]
+                           bg-surface-container-high border border-outline-variant
+                           rounded-control p-3 shadow-lg shadow-black/50"
+                style={{ left: `${state.left}px`, top: `${state.top}px`, transform: state.transform }}
+            >
+                <div className="text-[10px] text-on-surface-variant mb-2 font-mono">
+                    {fmtDt(block.startTime)} – {fmtDt(block.endTime)}
+                </div>
                 {total > 0 ? (
-                    <div className="flex items-center gap-3 text-xs">
-                        <span className="text-success font-mono">{t('HEALTH.SUCCESS', '成功')}: {detail.success}</span>
-                        <span className="text-error font-mono">{t('HEALTH.FAILURE', '失败')}: {detail.failure}</span>
-                        <span className="text-on-surface font-mono">({(detail.rate * 100).toFixed(1)}%)</span>
+                    <div className="space-y-1.5 text-xs">
+                        <div className="flex items-center justify-between gap-6">
+                            <span className="text-on-surface-variant">{t('HEALTH.SUCCESS', '成功')}</span>
+                            <span className="font-mono font-semibold text-success">{block.success}</span>
+                        </div>
+                        <div className="flex items-center justify-between gap-6">
+                            <span className="text-on-surface-variant">{t('HEALTH.FAILURE', '失败')}</span>
+                            <span className="font-mono font-semibold text-error">{block.failure}</span>
+                        </div>
+                        <div className="flex items-center justify-between gap-6 border-t border-outline-variant/60 pt-1.5">
+                            <span className="text-on-surface-variant">{t('HEALTH.RATE', '成功率')}</span>
+                            <span className={`font-mono font-bold text-sm
+                                ${block.rate >= 0.95 ? 'text-success'
+                                  : block.rate >= 0.80 ? 'text-warning'
+                                  : 'text-error'}`}>
+                                {(block.rate * 100).toFixed(1)}%
+                            </span>
+                        </div>
                     </div>
                 ) : (
-                    <div className="text-xs text-on-surface-variant font-mono">{t('HEALTH.NO_REQUESTS', '无请求')}</div>
+                    <div className="text-xs text-on-surface-variant">{t('HEALTH.NO_REQUESTS', '无请求')}</div>
                 )}
             </div>
         );
-        return typeof document === 'undefined' ? tooltip : createPortal(tooltip, document.body);
+        return typeof document === 'undefined' ? node : createPortal(node, document.body);
     };
 
+    // ── Render ────────────────────────────────────────────────────────────────
     return (
-        <div className="bg-surface border border-outline-variant rounded-overlay p-5 w-full mb-6 relative overflow-hidden group">
-            <div className="flex items-center justify-between mb-4">
-                <div className="flex items-center gap-2">
-                    <h3 className="text-sm font-semibold text-on-surface-variant">{t('HEALTH.TITLE', '服务健康监测')}</h3>
-                    <div className="px-2 py-0.5 rounded-control text-[10px] bg-surface-container border border-outline-variant text-on-surface-variant">{t('HEALTH.RECENT_LOGS', '最近日志')}</div>
+        <div className="bg-surface border border-outline-variant rounded-overlay p-5 w-full mb-6">
+
+            {/* ─ Header ─ */}
+            <div className="flex items-start justify-between mb-4">
+                <div className="min-w-0">
+                    <div className="flex items-center gap-2 mb-1">
+                        <span className="inline-flex items-center text-[10px] font-mono font-bold tracking-widest uppercase
+                                         text-on-surface-variant border border-outline-variant
+                                         px-1.5 py-0.5 rounded-control select-none">
+                            {t('HEALTH.RELIABILITY_LABEL', 'RELIABILITY')}
+                        </span>
+                    </div>
+                    <h3 className="text-sm font-semibold text-on-surface leading-tight">
+                        {t('HEALTH.TIMELINE_TITLE', 'Request Health Timeline')}
+                    </h3>
+                    <p className="text-[11px] text-on-surface-variant font-mono mt-0.5">
+                        {hasData
+                            ? `${fmtDt(minTime)} – ${fmtDt(maxTime)}`
+                            : t('HEALTH.NO_DATA', '暂无请求数据')}
+                    </p>
                 </div>
-                <div className="flex items-center gap-2">
-                    <span className="text-xs text-on-surface-variant">{t('HEALTH.OVERALL_AVAILABILITY', '整体可用率')}</span>
-                    <span className={`text-sm font-bold font-mono ${healthData.successRate >= 90 ? 'text-success' : healthData.successRate >= 50 ? 'text-warning' : 'text-error'}`}>
-                        {hasData ? `${healthData.successRate.toFixed(1)}%` : '--'}
-                    </span>
+
+                {/* Right: big rate + success/failure counts */}
+                <div className="text-right shrink-0 ml-4">
+                    <div className={`text-2xl font-bold font-mono leading-none ${rateColour}`}>
+                        {displayRate != null ? `${displayRate.toFixed(1)}%` : '--'}
+                    </div>
+                    {hasData && (
+                        <div className="flex items-center justify-end gap-3 mt-1.5 text-[11px] font-mono">
+                            <span className="flex items-center gap-1 text-success">
+                                <span className="w-1.5 h-1.5 rounded-full bg-success" />
+                                {totalSuccess.toLocaleString()}
+                            </span>
+                            <span className="flex items-center gap-1 text-error">
+                                <span className="w-1.5 h-1.5 rounded-full bg-error" />
+                                {totalFailure.toLocaleString()}
+                            </span>
+                        </div>
+                    )}
                 </div>
             </div>
 
-            <div className="w-full flex justify-between gap-1 h-12">
-                {healthData.blockDetails.map((detail, idx) => {
-                    const isIdle = detail.rate === -1;
-                    const blockStyle = {
-                        backgroundColor: rateToColor(detail.rate),
-                        opacity: isIdle ? 0.3 : 1
-                    };
+            {/* ─ Block matrix (7 rows × 48 cols, time flows left → right) ─ */}
+            <div
+                ref={gridRef}
+                style={{
+                    display: 'grid',
+                    gridTemplateRows: `repeat(${ROWS}, ${BLOCK_PX}px)`,
+                    gridAutoFlow: 'column',
+                    gridAutoColumns: '1fr',
+                    gap: `${GAP_PX}px`,
+                    height: `${GRID_H}px`,
+                }}
+            >
+                {blocks.map((block, idx) => {
+                    const bg  = rateToColor(block.rate);
                     const isActive = activeTooltip?.idx === idx;
-
                     return (
                         <div
                             key={idx}
-                            className={`flex-1 h-full rounded-control-[2px] transition-all duration-200 cursor-pointer ${isActive ? 'scale-110 brightness-125 z-10' : 'hover:scale-105 hover:brightness-110'}`}
-                            style={blockStyle}
-                            onPointerEnter={(e) => handlePointerEnter(e, idx)}
-                            onPointerLeave={handlePointerLeave}
-                            onPointerDown={(e) => handlePointerDown(e, idx)}
+                            className={`rounded-[1px] transition-all duration-150 cursor-pointer
+                                ${isActive
+                                    ? 'scale-125 opacity-90 z-10 relative'
+                                    : 'hover:scale-110 hover:opacity-80'}`}
+                            style={{ backgroundColor: bg ?? 'rgba(255,255,255,0.05)' }}
+                            onPointerEnter={(e) => { if (e.pointerType === 'mouse') openTooltip(idx, e.currentTarget); }}
+                            onPointerLeave={(e) => { if (e.pointerType === 'mouse') setActiveTooltip(null); }}
+                            onPointerDown={(e) => {
+                                if (e.pointerType === 'touch') {
+                                    e.preventDefault();
+                                    setActiveTooltip(prev =>
+                                        prev?.idx === idx ? null : buildTooltipState(idx, e.currentTarget));
+                                }
+                            }}
                         >
-                            {isActive && activeTooltip && renderTooltip(detail, activeTooltip)}
+                            {isActive && activeTooltip && renderTooltip(block, activeTooltip)}
                         </div>
                     );
                 })}
             </div>
 
-            <div className="flex items-center justify-between mt-3 px-1 text-[10px] text-on-surface-variant font-mono">
-                <span>{hasData ? formatDateTime(healthData.blockDetails[0].startTime) : t('HEALTH.LONG_AGO', '很久以前')}</span>
+            {/* ─ Footer: time labels + legend ─ */}
+            <div className="flex items-center justify-between mt-2.5 text-[10px] text-on-surface-variant font-mono">
+                <span>{hasData ? fmtDt(minTime) : '─'}</span>
 
                 <div className="flex items-center gap-3">
-                    <div className="flex items-center gap-1"><span className="w-2 h-2 rounded-control-[1px] bg-white/10"></span>{t('HEALTH.IDLE', '闲置')}</div>
-                    <div className="flex items-center gap-1"><span className="w-2 h-2 rounded-control-[1px] bg-error"></span>{t('HEALTH.FAULTY', '故障')}</div>
-                    <div className="flex items-center gap-1"><span className="w-2 h-2 rounded-control-[1px] bg-warning"></span>{t('HEALTH.DEGRADED', '部分可用')}</div>
-                    <div className="flex items-center gap-1"><span className="w-2 h-2 rounded-control-[1px] bg-success"></span>{t('HEALTH.NORMAL', '正常')}</div>
+                    {[
+                        { cls: 'bg-white/[0.05] border border-white/10', label: t('HEALTH.IDLE',     '空闲') },
+                        { cls: 'bg-error',                                label: t('HEALTH.FAULTY',   '故障') },
+                        { cls: 'bg-warning',                              label: t('HEALTH.DEGRADED', '降级') },
+                        { cls: 'bg-success',                              label: t('HEALTH.NORMAL',   '正常') },
+                    ].map(({ cls, label }) => (
+                        <span key={label} className="flex items-center gap-1">
+                            <span className={`w-2 h-2 rounded-[1px] shrink-0 ${cls}`} />
+                            {label}
+                        </span>
+                    ))}
                 </div>
 
                 <span>{t('HEALTH.NOW', '现在')}</span>
