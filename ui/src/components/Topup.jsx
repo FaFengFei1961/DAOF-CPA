@@ -59,6 +59,7 @@ const getTopupStatusLabel = (status, t) => {
     case 'paid': return t('TOPUP.STATUS_PAID', '已到账');
     case 'failed': return t('TOPUP.STATUS_FAILED', '失败/取消');
     case 'refunded': return t('TOPUP.STATUS_REFUNDED', '已退款');
+    case 'canceled': return t('TOPUP.STATUS_CANCELED', '已过期');
     default: return status;
   }
 };
@@ -359,6 +360,23 @@ const Topup = () => {
       setSubmitting(false);
     }
   };
+
+  const resumePayment = useCallback((o) => {
+    setOrderResult({
+      provider: o.provider,
+      out_trade_no: o.out_trade_no,
+      trade_no: o.trade_no,
+      gateway_pay_type: o.gateway_pay_type,
+      pay_info: o.pay_info,
+      money_rmb: o.money_rmb,
+      amount_usd: o.amount_usd,
+      snapshot_amount_fen: Math.round((o.money_rmb || 0) * 100),
+      snapshot_usd_estimate: (o.amount_usd || 0).toFixed(2),
+    });
+    setTimeout(() => {
+      document.getElementById('topup-payment-panel')?.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
+    }, 50);
+  }, []);
 
   // 汇率（RMB / USD）—— 不依赖用户输入，options 加载完就能算，给"始终展示汇率"
   // 这条 UX 用。用户反馈"未实时显示汇率，选金额后才显示"——这里独立成 const，
@@ -707,7 +725,7 @@ const Topup = () => {
 
 
       {orderResult && !isEpusdtOrder && (
-        <section className="card p-8 flex flex-col items-center gap-5 border-primary/40 shadow-primary/5">
+        <section id="topup-payment-panel" className="card p-8 flex flex-col items-center gap-5 border-primary/40 shadow-primary/5">
           <div className="text-center">
             <div className="text-base font-semibold text-on-surface flex items-center justify-center gap-2">
               <span className={`w-2 h-2 rounded-full bg-primary animate-pulse`} />
@@ -821,6 +839,15 @@ const Topup = () => {
                       <span className={statusClass(o.status)}>
                         {getTopupStatusLabel(o.status, t)}
                       </span>
+                      {o.status === 'created' && o.pay_info && (
+                        <button
+                          type="button"
+                          onClick={() => resumePayment(o)}
+                          className="ml-2 text-xs font-semibold text-primary hover:underline"
+                        >
+                          {t('TOPUP.RESUME_PAY', '继续支付')}
+                        </button>
+                      )}
                     </td>
                     <td className="px-3 py-2 text-xs font-mono text-on-surface-variant max-w-[180px] truncate" title={o.out_trade_no}>
                       {o.out_trade_no}
@@ -853,6 +880,7 @@ const statusClass = (s) => {
     case 'created': return 'text-warning text-xs';
     case 'failed': return 'text-error text-xs';
     case 'refunded': return 'text-on-surface-variant text-xs line-through';
+    case 'canceled': return 'text-on-surface-variant text-xs';
     default: return 'text-on-surface-variant text-xs';
   }
 };
