@@ -284,6 +284,11 @@ type UpstreamUsageRecord struct {
 	RequestID           string    `gorm:"index;size:64;default:''" json:"request_id"`
 	Timestamp           time.Time `gorm:"index" json:"timestamp"`
 	Latency             int64     `gorm:"default:0" json:"latency_ms"`
+	// TTFTMs Time-To-First-Token（首字延迟，毫秒）——CLIProxyAPI 2026-05-28 commit 94c1b251
+	// 在 usage event 新增 "ttft_ms" 字段。Latency 是完整 RTT，TTFT 是从请求到模型吐出
+	// 第一个 token 的时间，是 LLM 服务核心 SLA 指标（用户感知"反应速度"）。
+	// 上游不报时为 0；DAOF-CPA 不计算此值，纯透传 cliproxy 上报。
+	TTFTMs              int64     `gorm:"default:0" json:"ttft_ms"`
 	InputTokens         int       `gorm:"default:0" json:"input_tokens"`
 	OutputTokens        int       `gorm:"default:0" json:"output_tokens"`
 	ReasoningTokens     int       `gorm:"default:0" json:"reasoning_tokens"`
@@ -293,6 +298,7 @@ type UpstreamUsageRecord struct {
 	TotalTokens         int       `gorm:"default:0" json:"total_tokens"`
 	Failed              bool      `gorm:"default:false" json:"failed"`
 	Status              int       `gorm:"default:0" json:"status"`
+	ReasoningEffort     string    `gorm:"size:32;default:''" json:"reasoning_effort"`    // CLIProxyAPI 上报的客户端思考级别（low/medium/high 等）
 	FailBody            string    `gorm:"size:512;default:''" json:"fail_body"`
 	ResponseHeadersJSON string    `gorm:"type:text;default:''" json:"response_headers_json"`
 	MatchedApiLogID     uint      `gorm:"index;default:0" json:"matched_api_log_id"`

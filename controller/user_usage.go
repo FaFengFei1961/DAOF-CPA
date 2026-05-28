@@ -380,9 +380,11 @@ func GetUsersUsageTimeseries(c *fiber.Ctx) error {
 	}
 	var rows []bucketRow
 	// fix MAJOR M22-6（codex 第二十二轮）：检查 Scan 错误，避免 timeseries 静默返回空数据
+	// 2026-05-28 审查 H2：原 `return nil` 在 fiber handler 里 = 返回 200 空 body，
+	// 前端无法区分"查询失败"与"无数据"。改 fail-closed 500，与本文件其余 handler 一致。
 	if err := q.Scan(&rows).Error; err != nil {
 		log.Printf("[USERS-USAGE] timeseries bucket scan failed: %v", err)
-		return nil
+		return c.Status(500).JSON(fiber.Map{"success": false, "message_code": "ERR_DB_QUERY"})
 	}
 
 	// 生成完整 bucket 轴。不能只返回有数据的 bucket，否则 7 天窗口内只有一次调用时，
@@ -674,10 +676,18 @@ func GetUsersUsageEvents(c *fiber.Ctx) error {
 	// 避免依赖 ApiLog.ChargedCost 推断（订阅扣 charged、余额扣 raw 后两者口径不一致）。
 	revenueByLog := map[uint]database.ApiLogRevenue{}
 	usageLinesByLog := map[uint][]database.PublicApiLogUsageLine{}
+	// upstreamByID 缓存本页 ApiLog 已匹配到的 UpstreamUsageRecord，用于回填上游侧指标
+	// （目前只用 TTFTMs，未来如果还想暴露其它上游字段直接从这个 map 取）。
+	// key 是 UpstreamUsageRecord.ID。
+	upstreamByID := map[uint]database.UpstreamUsageRecord{}
 	if len(logs) > 0 {
 		logIDs := make([]uint, 0, len(logs))
+		upstreamIDs := make([]uint, 0, len(logs))
 		for _, l := range logs {
 			logIDs = append(logIDs, l.ID)
+			if l.UpstreamUsageRecordID > 0 {
+				upstreamIDs = append(upstreamIDs, l.UpstreamUsageRecordID)
+			}
 		}
 		var revenues []database.ApiLogRevenue
 		if err := database.DB.Where("api_log_id IN ?", logIDs).Find(&revenues).Error; err != nil {
@@ -693,6 +703,15 @@ func GetUsersUsageEvents(c *fiber.Ctx) error {
 			}
 			for _, line := range usageLines {
 				usageLinesByLog[line.ApiLogID] = append(usageLinesByLog[line.ApiLogID], line.ToPublic())
+			}
+		}
+		if len(upstreamIDs) > 0 {
+			var upstreamRecords []database.UpstreamUsageRecord
+			if err := database.DB.Where("id IN ?", upstreamIDs).Find(&upstreamRecords).Error; err != nil {
+				log.Printf("[USERS-USAGE-EVENTS] upstream usage lookup failed: %v", err)
+			}
+			for _, r := range upstreamRecords {
+				upstreamByID[r.ID] = r
 			}
 		}
 	}
@@ -773,6 +792,10 @@ func GetUsersUsageEvents(c *fiber.Ctx) error {
 		UpstreamUsageRecordID  uint                             `json:"upstream_usage_record_id"`
 		UpstreamUsageMatch     string                           `json:"upstream_usage_match"`
 		Latency                int64                            `json:"latency_ms"`
+		// UpstreamTTFTMs 来自上游 UpstreamUsageRecord.TTFTMs（CLIProxyAPI 2026-05-28
+		// 新增的 ttft_ms 字段）。Time-To-First-Token：从请求到模型吐第一个 token
+		// 的毫秒数。LLM 服务核心 SLA 指标。未匹配到上游 record 或上游不报时为 0。
+		UpstreamTTFTMs         int64                            `json:"upstream_ttft_ms"`
 		Status                 int                              `json:"status"`
 		IPAddress              string                           `json:"ip_address"`
 		RequestPath            string                           `json:"request_path"`
@@ -828,6 +851,7 @@ func GetUsersUsageEvents(c *fiber.Ctx) error {
 			UpstreamUsageRecordID:  l.UpstreamUsageRecordID,
 			UpstreamUsageMatch:     l.UpstreamUsageMatch,
 			Latency:                l.Latency,
+			UpstreamTTFTMs:         upstreamByID[l.UpstreamUsageRecordID].TTFTMs,
 			Status:                 l.Status,
 			IPAddress:              l.IPAddress,
 			RequestPath:            l.RequestPath,
@@ -919,4 +943,130 @@ func effectivePositive(v, fallback float64) float64 {
 		return v
 	}
 	return fallback
+}
+
+// GetUsersUsageModelBreakdown 全局模型使用分布（admin 饼图 / 排行榜数据源）。
+//
+// Query 参数：
+//   - period: 24h / 7d / 30d / all（默认 7d）
+//   - top_n: 最多返回多少个独立模型（默认 10，上限 50），超出部分合并成"其他"
+//
+// 响应 data：
+//
+//	{
+//	  period, total_requests, total_tokens, total_cost,
+//	  models: [{ model_name, requests, tokens, cost, charged_cost, req_pct, token_pct }]
+//	}
+func GetUsersUsageModelBreakdown(c *fiber.Ctx) error {
+	period := c.Query("period", "7d")
+	topN := 10
+	if n, err := strconv.Atoi(c.Query("top_n", "10")); err == nil && n > 0 && n <= 50 {
+		topN = n
+	}
+
+	cutoff := resolvePeriodCutoff(period)
+
+	type modelRow struct {
+		ModelName   string
+		Requests    int64
+		Tokens      int64
+		Cost        int64
+		ChargedCost int64
+	}
+
+	q := database.DB.Model(&database.ApiLog{}).
+		Select(`model_name,
+			COUNT(*) AS requests,
+			COALESCE(SUM(prompt_tokens + completion_tokens), 0) AS tokens,
+			COALESCE(SUM(cost), 0) AS cost,
+			COALESCE(SUM(CASE WHEN charged_cost > 0 THEN charged_cost ELSE cost END), 0) AS charged_cost`).
+		Group("model_name").
+		Order("requests DESC")
+	if !cutoff.IsZero() {
+		q = q.Where("created_at >= ?", cutoff)
+	}
+
+	var rows []modelRow
+	if err := q.Scan(&rows).Error; err != nil {
+		log.Printf("[MODEL-BREAKDOWN] scan failed: %v", err)
+		return c.Status(500).JSON(fiber.Map{"success": false, "message_code": "ERR_DB_QUERY"})
+	}
+
+	var totalRequests, totalTokens, totalCostMicro int64
+	for _, r := range rows {
+		totalRequests += r.Requests
+		totalTokens += r.Tokens
+		totalCostMicro += r.Cost
+	}
+
+	type resultItem struct {
+		ModelName   string  `json:"model_name"`
+		Requests    int64   `json:"requests"`
+		Tokens      int64   `json:"tokens"`
+		Cost        float64 `json:"cost"`
+		ChargedCost float64 `json:"charged_cost"`
+		ReqPct      float64 `json:"req_pct"`   // % of total requests
+		TokenPct    float64 `json:"token_pct"` // % of total tokens
+	}
+
+	result := make([]resultItem, 0, topN+1)
+	var otherReq, otherTok, otherCost, otherCharged int64
+
+	for i, r := range rows {
+		reqPct := float64(0)
+		if totalRequests > 0 {
+			reqPct = float64(r.Requests) / float64(totalRequests) * 100
+		}
+		tokPct := float64(0)
+		if totalTokens > 0 {
+			tokPct = float64(r.Tokens) / float64(totalTokens) * 100
+		}
+		if i < topN {
+			result = append(result, resultItem{
+				ModelName:   r.ModelName,
+				Requests:    r.Requests,
+				Tokens:      r.Tokens,
+				Cost:        database.MicroToUSD(r.Cost),
+				ChargedCost: database.MicroToUSD(effectiveAggregateChargedCost(r.ChargedCost, r.Cost)),
+				ReqPct:      reqPct,
+				TokenPct:    tokPct,
+			})
+		} else {
+			otherReq += r.Requests
+			otherTok += r.Tokens
+			otherCost += r.Cost
+			otherCharged += r.ChargedCost
+		}
+	}
+
+	if otherReq > 0 {
+		otherReqPct := float64(0)
+		if totalRequests > 0 {
+			otherReqPct = float64(otherReq) / float64(totalRequests) * 100
+		}
+		otherTokPct := float64(0)
+		if totalTokens > 0 {
+			otherTokPct = float64(otherTok) / float64(totalTokens) * 100
+		}
+		result = append(result, resultItem{
+			ModelName:   "其他",
+			Requests:    otherReq,
+			Tokens:      otherTok,
+			Cost:        database.MicroToUSD(otherCost),
+			ChargedCost: database.MicroToUSD(effectiveAggregateChargedCost(otherCharged, otherCost)),
+			ReqPct:      otherReqPct,
+			TokenPct:    otherTokPct,
+		})
+	}
+
+	return c.JSON(fiber.Map{
+		"success": true,
+		"data": fiber.Map{
+			"period":         period,
+			"total_requests": totalRequests,
+			"total_tokens":   totalTokens,
+			"total_cost":     database.MicroToUSD(totalCostMicro),
+			"models":         result,
+		},
+	})
 }

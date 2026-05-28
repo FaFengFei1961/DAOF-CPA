@@ -132,13 +132,13 @@ const AuditEventsPage = () => {
     // tooling that pivots on column names. Localizing would break downstream
     // pipelines without giving humans a meaningful win (they get the same
     // tab-separated columns either way).
-    const header = ['time', 'user', 'interface', 'requested_model', 'served_model', 'upstream_provider', 'upstream_auth_index', 'token_source', 'status', 'error_type', 'error_summary', 'precheck_input', 'precheck_output', 'precheck_charged_cost', 'precheck_quota_remaining', 'request_path', 'latency_ms', 'input', 'output', 'reasoning', 'total_tokens', 'media_usage', 'raw_cost', 'charged_cost', 'model_weight', 'fallback_opt_in', 'ip'];
+    const header = ['time', 'user', 'interface', 'requested_model', 'served_model', 'upstream_provider', 'upstream_auth_index', 'token_source', 'status', 'error_type', 'error_summary', 'precheck_input', 'precheck_output', 'precheck_charged_cost', 'precheck_quota_remaining', 'request_path', 'ttft_ms', 'latency_ms', 'input', 'output', 'reasoning', 'total_tokens', 'media_usage', 'raw_cost', 'charged_cost', 'model_weight', 'fallback_opt_in', 'ip'];
     const rows = events.map(e => [
       formatTime(e.created_at), e.username || `#${e.user_id}`, auxiliaryEventLabel(e), e.requested_model || e.model_name, e.served_model || e.model_name,
       e.upstream_provider || '', e.upstream_auth_index || '',
       e.token_name || '', e.status, e.error_type || '', formatEventFailure(e)?.detail || e.error_message || '',
       e.precheck_input_tokens || 0, e.precheck_output_tokens || 0, e.precheck_charged_cost || 0, e.precheck_quota_remaining || 0,
-      e.request_path || '', e.latency_ms || 0,
+      e.request_path || '', e.upstream_ttft_ms || 0, e.latency_ms || 0,
       e.prompt_tokens || 0, e.completion_tokens || 0, e.reasoning_tokens || 0, e.total_tokens || 0,
       formatUsageLinesSummary(e, formatMeterCost),
       e.raw_cost ?? e.cost, e.charged_cost ?? e.cost, e.model_weight || 1,
@@ -154,46 +154,53 @@ const AuditEventsPage = () => {
     setTimeout(() => URL.revokeObjectURL(url), 1000);
   };
 
-  // 6 个核心列。完整字段在 Drawer 里看
+  // 6 核心列（compact 模式）：完整字段在右侧 Drawer 查看。
+  // Token 总量折入 model 列次行，新增 latency 列方便排查慢响应。
   const columns = [
-    { key: 'time', header: t('ADMIN.AUDIT.COL_TIME'), width: 140, render: e => (
-      <span className="text-[11px] text-on-surface-variant font-mono whitespace-nowrap">{formatTime(e.created_at)}</span>
+    { key: 'time', header: t('ADMIN.AUDIT.COL_TIME'), width: 118, render: e => (
+      <span className="text-[10px] text-on-surface-variant font-mono whitespace-nowrap">{formatTime(e.created_at)}</span>
     ) },
-    { key: 'user', header: t('ADMIN.AUDIT.COL_USER'), truncate: 160, render: e => (
+    { key: 'user', header: t('ADMIN.AUDIT.COL_USER'), truncate: 140, render: e => (
       <div className="min-w-0">
         <div className="text-on-surface text-xs">{e.username || `#${e.user_id}`}</div>
-        <div className="text-[10px] text-on-surface-variant truncate">{e.token_name || '-'}</div>
+        <div className="text-[10px] text-on-surface-variant font-mono truncate">{e.token_name || '-'}</div>
       </div>
     ) },
-    { key: 'model', header: t('ADMIN.AUDIT.COL_MODEL'), truncate: 220, render: e => (
+    { key: 'model', header: t('ADMIN.AUDIT.COL_MODEL'), truncate: 200, render: e => (
       <div className="min-w-0">
-        <div className="flex items-center gap-1.5 min-w-0">
-          <div className="text-on-surface text-xs font-mono truncate" title={e.requested_model || e.model_name}>
+        <div className="flex items-center gap-1 min-w-0">
+          <span className="text-xs font-mono text-on-surface truncate" title={e.requested_model || e.model_name}>
             {e.requested_model || e.model_name}
-          </div>
+          </span>
           {isAuxiliaryEvent(e) && (
             <span
-              className="shrink-0 inline-flex items-center h-5 px-1.5 rounded-full text-[10px] font-medium bg-primary-container/60 text-on-primary-container border border-primary/30"
+              className="shrink-0 inline-flex items-center px-1 h-4 rounded text-[9px] font-medium bg-primary-container/60 text-on-primary-container border border-primary/30"
               title={t('ADMIN.AUDIT.AUXILIARY_BADGE_TIP')}
             >
               {t('ADMIN.AUDIT.AUXILIARY')}
             </span>
           )}
         </div>
-        {e.served_model && e.requested_model && e.served_model !== e.requested_model && (
-          <div className="text-[10px] text-warning font-mono truncate" title={`served as ${e.served_model}`}>
-            → {e.served_model}
-          </div>
-        )}
+        {/* tokens + served-model redirect in subrow */}
+        <div className="flex items-center gap-2 mt-0.5 min-w-0">
+          <span className="text-[10px] text-on-surface-variant font-mono">
+            {formatTokens((e.total_tokens || 0))} tok
+          </span>
+          {e.served_model && e.requested_model && e.served_model !== e.requested_model && (
+            <span className="text-[10px] text-warning font-mono truncate" title={`served as ${e.served_model}`}>
+              → {e.served_model}
+            </span>
+          )}
+        </div>
       </div>
     ) },
-    { key: 'status', header: t('ADMIN.AUDIT.COL_STATUS'), width: 120, render: e => {
+    { key: 'status', header: t('ADMIN.AUDIT.COL_STATUS'), width: 100, render: e => {
       if (e.error_type) {
         const failure = formatEventFailure(e);
         const isPrecheck = isPrecheckLimitEvent(e);
         return (
           <span
-            className={`inline-flex items-center gap-1 px-2 h-6 rounded-full text-[11px] font-medium border ${
+            className={`inline-flex items-center gap-1 px-1.5 h-5 rounded-full text-[10px] font-medium border ${
               isPrecheck
                 ? 'bg-warning/10 text-warning border-warning/30'
                 : 'bg-error/10 text-error border-error/30'
@@ -206,7 +213,7 @@ const AuditEventsPage = () => {
       }
       const ok = e.status >= 200 && e.status < 300;
       return (
-        <span className={`inline-flex items-center px-2 h-6 rounded-full text-[11px] font-medium border ${
+        <span className={`inline-flex items-center px-1.5 h-5 rounded-full text-[10px] font-medium border ${
           ok ? 'bg-success/10 text-success border-success/30'
              : 'bg-error/10 text-error border-error/30'
         }`}>
@@ -214,22 +221,21 @@ const AuditEventsPage = () => {
         </span>
       );
     } },
-    { key: 'usage', header: t('ADMIN.AUDIT.COL_USAGE'), align: 'right', render: e => {
-      const lines = usageLinesOf(e);
-      if (lines.length > 0) {
-        return (
-          <div className="text-right max-w-[220px]">
-            <div className="text-[11px] text-on-surface font-mono truncate" title={formatUsageLine(lines[0], formatMeterCost)}>
-              {formatUsageLine(lines[0], formatMeterCost)}
-            </div>
-            {lines.length > 1 && <div className="text-[10px] text-outline">+{lines.length - 1}</div>}
-          </div>
-        );
-      }
-      return <span className="font-mono">{formatTokens(e.total_tokens || 0)}</span>;
+    // TTFT (Time-To-First-Token) 从 CLIProxyAPI 上游 usage event 同步过来。
+    // 阈值：>3s warn (LLM 反应慢)；>5s error (用户基本会觉得卡死)。
+    // 0 = 上游未上报（旧 record 或非流式调用），用 "-" 显示。
+    { key: 'ttft', header: t('ADMIN.AUDIT.COL_TTFT', '首字'), width: 76, align: 'right', render: e => {
+      const ms = e.upstream_ttft_ms || 0;
+      const cls = ms > 5_000 ? 'text-error' : ms > 3_000 ? 'text-warning' : 'text-on-surface-variant';
+      return <span className={`font-mono text-[11px] ${cls}`}>{ms ? formatLatency(ms) : '-'}</span>;
     } },
-    { key: 'cost', header: t('ADMIN.AUDIT.COL_COST'), align: 'right', mono: true, render: e => (
-      <span className="text-primary">{formatMeterCost(e.charged_cost ?? e.cost)}</span>
+    { key: 'latency', header: t('ADMIN.AUDIT.COL_LATENCY', '延迟'), width: 76, align: 'right', render: e => {
+      const ms = e.latency_ms || 0;
+      const cls = ms > 10_000 ? 'text-error' : ms > 3_000 ? 'text-warning' : 'text-on-surface-variant';
+      return <span className={`font-mono text-[11px] ${cls}`}>{ms ? formatLatency(ms) : '-'}</span>;
+    } },
+    { key: 'cost', header: t('ADMIN.AUDIT.COL_COST'), align: 'right', render: e => (
+      <span className="font-mono text-[11px] text-primary">{formatMeterCost(e.charged_cost ?? e.cost)}</span>
     ) },
   ];
 
@@ -318,6 +324,7 @@ const AuditEventsPage = () => {
       )}
 
       <DataTable
+        compact
         columns={columns}
         rows={events}
         rowKey={e => e.id}
@@ -388,6 +395,7 @@ const EventDetail = ({ event, formatMeterCost, formatEventFailure, t }) => {
         <Field label={t('ADMIN.AUDIT.DETAIL_PATH')} mono value={event.request_path || '-'} />
         <Field label={t('ADMIN.AUDIT.DETAIL_IP')} mono value={event.ip_address || '-'} />
         <Field label={t('ADMIN.AUDIT.DETAIL_LATENCY')} value={formatLatency(event.latency_ms)} />
+        <Field label={t('ADMIN.AUDIT.DETAIL_TTFT', '首字延迟')} value={event.upstream_ttft_ms ? formatLatency(event.upstream_ttft_ms) : '-'} />
         <Field label={t('ADMIN.AUDIT.DETAIL_HTTP_STATUS')} value={event.status} />
         {event.fallback_user_opt_in && (
           <Field label={t('ADMIN.AUDIT.DETAIL_FALLBACK_LABEL')} value={event.fallback_reason || t('ADMIN.AUDIT.DETAIL_FALLBACK_DEFAULT')} />

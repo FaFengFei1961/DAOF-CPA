@@ -44,8 +44,23 @@ type cpaUsageQueueRecord struct {
 	AuthType        string         `json:"auth_type"`
 	APIKey          string         `json:"api_key"`
 	RequestID       string         `json:"request_id"`
+	// ReasoningEffort 是 CLIProxyAPI 上报的思考级别。
+	// 历史：
+	//   2026-05-19 commit 0de0ad0d 新增此字段（语义：客户端请求级别）。
+	//   2026-05-20 commit de039491 Codex 等级扩到 {none,minimal,low,medium,high,xhigh}。
+	//   2026-05-27 commit 11f0f906 + manager.go 注释改语义：
+	//     "client-requested thinking level" → "translated upstream thinking level"
+	//     即：上游会把客户端发的等级翻译成实际生效的等级再回报。计费**不受影响**
+	//     （proxy/billing_rules.go:requestIndicatesThinking 看请求体原值不看 usage 回报）；
+	//     审计意义反而更准（金融角度"实际发生了什么"比"客户想要什么"更有价值）。
+	// 本字段不做枚举校验，直接 trimForDB(32) 落库——上游再扩枚举不需要这边跟进。
+	// 同步锚点：CLIProxyAPI 上次对齐到 94c1b251 (2026-05-28)。
+	ReasoningEffort string         `json:"reasoning_effort"`
 	Timestamp       time.Time      `json:"timestamp"`
 	LatencyMs       int64          `json:"latency_ms"`
+	// TTFTMs Time-To-First-Token（毫秒）。CLIProxyAPI 2026-05-28 commit 94c1b251 新增。
+	// 上游不报时缺省 0。落库到 UpstreamUsageRecord.TTFTMs。
+	TTFTMs          int64          `json:"ttft_ms"`
 	Source          string         `json:"source"`
 	AuthIndex       string         `json:"auth_index"`
 	ResponseHeaders http.Header    `json:"response_headers"`
@@ -75,6 +90,9 @@ type CLIProxyUsageSyncResult struct {
 	Matched   int `json:"matched"`
 	Unmatched int `json:"unmatched"`
 	Ignored   int `json:"ignored"`
+	// Dropped 记录因自身数据问题（约束冲突 / 字段异常）无法落库、在逐条降级阶段被丢弃的条数。
+	// 正常恒为 0；> 0 表示有脏数据，需查 log 里的 request_id。pop 队列已 pop，这些条目无法重拉。
+	Dropped int `json:"dropped"`
 }
 
 // StartCLIProxyUsageSyncCron 定时拉取 CPA usage queue。
@@ -328,12 +346,27 @@ func storeAndMatchCLIProxyUsageRecords(records []cpaUsageQueueRecord) (CLIProxyU
 		usageRecords = append(usageRecords, convertCPAUsageRecord(raw))
 	}
 
-	if err := database.DB.Transaction(func(tx *gorm.DB) error {
+	// H3（2026-05-28 审查）：usage queue 是 pop 语义——读出即从上游删除。原实现把整批
+	// CreateInBatches 包在单事务里，任一行违约就整批回滚 → 这批用量永久丢失、无法重拉、
+	// 对账出现黑洞。改为：先试整批（快路径）；失败则整批回滚后降级逐条插入，把坏行单独
+	// 丢弃并 log request_id，其余照常落库。逐条阶段 DB 无半成品（批量已回滚），不会重复插入。
+	batchErr := database.DB.Transaction(func(tx *gorm.DB) error {
 		return tx.CreateInBatches(&usageRecords, 100).Error
-	}); err != nil {
-		return result, err
+	})
+	if batchErr == nil {
+		result.Stored = len(usageRecords)
+	} else {
+		log.Printf("[CLIPROXY-USAGE-SYNC] batch insert failed (%v); falling back to per-row to isolate bad records", batchErr)
+		for i := range usageRecords {
+			if err := database.DB.Create(&usageRecords[i]).Error; err != nil {
+				result.Dropped++
+				log.Printf("[CLIPROXY-USAGE-SYNC] dropped unstorable usage record request_id=%q: %v",
+					usageRecords[i].RequestID, err)
+				continue
+			}
+			result.Stored++
+		}
 	}
-	result.Stored = len(usageRecords)
 
 	platformKeyHashes, err := loadPlatformCLIProxyAPIKeyHashes()
 	if err != nil {
@@ -342,6 +375,10 @@ func storeAndMatchCLIProxyUsageRecords(records []cpaUsageQueueRecord) (CLIProxyU
 
 	for i := range usageRecords {
 		rec := usageRecords[i]
+		if rec.ID == 0 {
+			// H3 逐条降级阶段被丢弃的脏记录（未落库，ID 未回填），跳过匹配。
+			continue
+		}
 		err := database.DB.Transaction(func(tx *gorm.DB) error {
 			if ignored, reason := usageRecordIgnoredByAPIKey(rec.APIKeyHash, platformKeyHashes); ignored {
 				result.Ignored++
@@ -421,6 +458,7 @@ func convertCPAUsageRecord(raw cpaUsageQueueRecord) database.UpstreamUsageRecord
 		RequestID:           trimForDB(raw.RequestID, 64),
 		Timestamp:           raw.Timestamp,
 		Latency:             raw.LatencyMs,
+		TTFTMs:              raw.TTFTMs,
 		InputTokens:         safeInt(raw.Tokens.InputTokens),
 		OutputTokens:        safeInt(raw.Tokens.OutputTokens),
 		ReasoningTokens:     safeInt(raw.Tokens.ReasoningTokens),
@@ -430,6 +468,7 @@ func convertCPAUsageRecord(raw cpaUsageQueueRecord) database.UpstreamUsageRecord
 		TotalTokens:         safeInt(raw.Tokens.TotalTokens),
 		Failed:              raw.Failed,
 		Status:              status,
+		ReasoningEffort:     trimForDB(raw.ReasoningEffort, 32),
 		ResponseHeadersJSON: encodeUsageResponseHeaders(raw.ResponseHeaders),
 		// fix CRITICAL（多模型审计第二十五轮）：上游 4xx/5xx 响应体里常含 Bearer / api_key /
 		// JWT 等凭据（如 401 unauthorized 通常会回显 token 前缀）。原实现仅截断不脱敏，
