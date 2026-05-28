@@ -53,6 +53,9 @@ const UsersUsageOverviewPage = () => {
   const [chart, setChart] = useState(null);
   const [chartLoading, setChartLoading] = useState(true);
   const [chartMetric, setChartMetric] = useState('requests');
+  const [modelDist, setModelDist] = useState(null);
+  const [modelDistLoading, setModelDistLoading] = useState(false);
+  const [modelMetric, setModelMetric] = useState('requests');
 
   const fetchOverview = async () => {
     setLoading(true);
@@ -79,9 +82,22 @@ const UsersUsageOverviewPage = () => {
     setChartLoading(false);
   };
 
+  const fetchModelBreakdown = async () => {
+    setModelDistLoading(true);
+    try {
+      const res = await fetch(`/api/admin/users-usage/models?period=${period}&top_n=10`, { credentials: 'include' });
+      const json = await res.json();
+      if (json.success) setModelDist(json.data);
+    } catch {
+      // 静默
+    }
+    setModelDistLoading(false);
+  };
+
   useEffect(() => {
     fetchOverview();
     fetchChart();
+    fetchModelBreakdown();
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [period, sortKey]);
 
@@ -185,7 +201,7 @@ const UsersUsageOverviewPage = () => {
       <PeriodSwitch value={period} onChange={setPeriod} />
       <button
         type="button"
-        onClick={() => { fetchOverview(); fetchChart(); }}
+        onClick={() => { fetchOverview(); fetchChart(); fetchModelBreakdown(); }}
         className="p-2 rounded-control border border-outline-variant text-on-surface-variant hover:text-on-surface hover:border-outline transition"
         aria-label="刷新"
         title="刷新"
@@ -251,6 +267,19 @@ const UsersUsageOverviewPage = () => {
         emptyIcon={Users}
         onRowClick={u => navigate(`/admin/audit/events?user_id=${u.user_id}`)}
       />
+
+      {/* 模型用量分布 */}
+      {(modelDistLoading || (modelDist?.models?.length > 0)) && (
+        <ModelDistPanel
+          data={modelDist}
+          loading={modelDistLoading}
+          metric={modelMetric}
+          setMetric={setModelMetric}
+          colors={colors}
+          formatTokens={formatTokens}
+          formatMeterCost={formatMeterCost}
+        />
+      )}
 
       {/* 用户趋势 */}
       <ChartContainer
@@ -319,6 +348,122 @@ const UsersUsageOverviewPage = () => {
         )}
       </ChartContainer>
     </PageContainer>
+  );
+};
+
+// ─── ModelDistPanel ───────────────────────────────────────────────────────────
+// 横向进度条排行榜：参考 CPA USAGE KEEPER AnalysisPanel 的紧凑视觉风格。
+// 按请求数 / Token / 扣减 三种指标切换，条宽相对最大值归一化。
+const ModelDistPanel = ({ data, loading, metric, setMetric, colors, formatTokens, formatMeterCost }) => {
+  const models = data?.models || [];
+
+  const valOf = (m) => {
+    if (metric === 'tokens') return m.token_pct;
+    if (metric === 'cost') return m.charged_cost;
+    return m.req_pct; // requests
+  };
+  const maxVal = models.reduce((acc, m) => Math.max(acc, valOf(m)), 0);
+
+  const secondary = (m) => {
+    if (metric === 'tokens') return `${formatTokens(m.tokens)}`;
+    if (metric === 'cost') return formatMeterCost(m.charged_cost);
+    return `${m.requests.toLocaleString()} 次`;
+  };
+  const pctLabel = (m) => {
+    const v = valOf(m);
+    if (metric === 'cost') {
+      return maxVal > 0 ? `${((v / maxVal) * 100).toFixed(1)}%` : '0%';
+    }
+    return `${v.toFixed(1)}%`;
+  };
+  const barWidth = (m) => {
+    const v = valOf(m);
+    if (metric === 'cost') return maxVal > 0 ? (v / maxVal) * 100 : 0;
+    return Math.min(100, v);
+  };
+
+  return (
+    <div className="bg-surface border border-outline-variant rounded-overlay p-5">
+      <div className="flex items-start justify-between mb-4 gap-3">
+        <div className="min-w-0">
+          <h3 className="text-sm font-semibold text-on-surface">模型用量分布</h3>
+          <p className="text-[11px] text-on-surface-variant font-mono mt-0.5">
+            {loading && !data ? '加载中…'
+              : data ? `${data.period} · 共 ${(data.total_requests || 0).toLocaleString()} 请求`
+              : ''}
+          </p>
+        </div>
+        <div className="flex gap-1 shrink-0">
+          {[{ v: 'requests', l: '请求' }, { v: 'tokens', l: 'Token' }, { v: 'cost', l: '扣减' }].map(({ v, l }) => (
+            <button
+              key={v}
+              type="button"
+              onClick={() => setMetric(v)}
+              className={`px-2 py-1 text-xs rounded-control transition ${
+                metric === v ? 'bg-primary text-on-primary' : 'text-on-surface-variant hover:text-on-surface'
+              }`}
+            >{l}</button>
+          ))}
+        </div>
+      </div>
+
+      {loading && !models.length ? (
+        <div className="space-y-2">
+          {Array.from({ length: 5 }).map((_, i) => (
+            <div key={i} className="flex items-center gap-3">
+              <div className="w-3 h-3 rounded-sm bg-surface-container-high animate-pulse shrink-0" />
+              <div className="flex-1 space-y-1">
+                <div className="h-2.5 bg-surface-container-high rounded animate-pulse w-3/5" />
+                <div className="h-1.5 bg-surface-container-high rounded animate-pulse" style={{ width: `${60 - i * 10}%` }} />
+              </div>
+            </div>
+          ))}
+        </div>
+      ) : (
+        <div className="space-y-2.5">
+          {models.map((m, i) => {
+            const color = colors[i % colors.length];
+            const isOther = m.model_name === '其他';
+            return (
+              <div key={m.model_name} className="flex items-center gap-3 group">
+                {/* Color swatch */}
+                <div
+                  className="w-2.5 h-2.5 rounded-[2px] shrink-0 opacity-90"
+                  style={{ backgroundColor: isOther ? 'var(--color-outline)' : color }}
+                />
+                {/* Name + bar */}
+                <div className="flex-1 min-w-0">
+                  <div className="flex items-center justify-between gap-2 mb-1">
+                    <span
+                      className={`text-[11px] font-mono truncate ${isOther ? 'text-on-surface-variant' : 'text-on-surface'}`}
+                      title={m.model_name}
+                    >
+                      {m.model_name}
+                    </span>
+                    <span className="text-[11px] text-on-surface-variant font-mono shrink-0">
+                      {secondary(m)}
+                    </span>
+                  </div>
+                  <div className="h-1.5 bg-surface-container-high rounded-full overflow-hidden">
+                    <div
+                      className="h-full rounded-full transition-all duration-500"
+                      style={{
+                        width: `${barWidth(m)}%`,
+                        backgroundColor: isOther ? 'var(--color-outline)' : color,
+                      }}
+                    />
+                  </div>
+                </div>
+                {/* Pct label */}
+                <div className="text-[11px] text-on-surface-variant font-mono w-9 text-right shrink-0">
+                  {pctLabel(m)}
+                </div>
+              </div>
+            );
+          })}
+        </div>
+      )}
+    </div>
   );
 };
 
