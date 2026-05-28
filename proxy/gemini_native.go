@@ -287,14 +287,15 @@ func GeminiNativeProxyHandler(c *fiber.Ctx) error {
 
 	var apiLogID uint
 	if commitDecision.NeedsRetry {
-		apiLogID = recordGeminiPendingReconcile(user, token, canonical, geminiReq, actualPrice, billingResolution, selectedChannelType, statusCode, clientIP, path, startTime, "subscription commit failed")
+		// 提前 return 分支：只需落 pending reconcile 日志的副作用，不用其返回的 apiLogID。
+		recordGeminiPendingReconcile(user, token, canonical, geminiReq, actualPrice, billingResolution, selectedChannelType, statusCode, clientIP, path, startTime, "subscription commit failed")
 		copyImageResponseHeaders(c, upstream.resp.Header)
 		setModelAuditHeaders(c, canonical, canonical, fallbackUserOptIn, "")
 		return c.Status(statusCode).Send(bodyCopy)
 	}
 	commitOK := commitDecision.Allowed && !commitDecision.FallbackToBalance
 	if !commitOK && !user.BalanceConsumeEnabled {
-		apiLogID = recordGeminiPendingReconcile(user, token, canonical, geminiReq, actualPrice, billingResolution, selectedChannelType, statusCode, clientIP, path, startTime, "subscription commit fell back to disabled balance")
+		recordGeminiPendingReconcile(user, token, canonical, geminiReq, actualPrice, billingResolution, selectedChannelType, statusCode, clientIP, path, startTime, "subscription commit fell back to disabled balance")
 		copyImageResponseHeaders(c, upstream.resp.Header)
 		setModelAuditHeaders(c, canonical, canonical, fallbackUserOptIn, "")
 		return c.Status(statusCode).Send(bodyCopy)

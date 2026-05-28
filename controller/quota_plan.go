@@ -40,9 +40,15 @@ func validateQuotaPlanUnit(unit string) bool {
 
 // allowedOverflowStrategies 列出 admin 可配置的 overflow_strategy 枚举。
 // Sprint2-M4 删除了未实现的 "allow" / "degrade_model"（旧实现字段未被引擎读取，全部等价）。
+// 2026-05-26：补 overdraft——引擎早就支持（proxy/subscription_engine.go:201-219），UI
+// 下拉框也早就有，但这里枚举漏了导致 admin 提交 overdraft 被 400 拒绝。结果：现役
+// plan 全卡在 block，5h/7d 走"预估超额就拒"分支，剩余还有几刀就被拦——用户看着
+// "已用 < 100%" 还发不出请求。放出 overdraft 后 admin 可对齐 Claude/Codex 官方
+// 订阅语义：用户打满 100%（最后一笔放行写成负余额）才拦下一条。
 var allowedOverflowStrategies = map[string]bool{
-	"block":             true, // 用尽即停：拒绝请求，不尝试下一订阅 / 不 fallback 余额
-	"next_subscription": true, // 软跳过：让 Decide 继续尝试下一订阅 + 余额（默认）
+	"block":             true, // 用尽即停：consumed+delta > limit 即拒（保守预估）
+	"next_subscription": true, // 软跳过：让 Decide 继续尝试下一订阅 + 余额
+	"overdraft":         true, // 可超支：consumed >= limit 才拒，最后一笔允许写负
 }
 
 // isValidOverflowStrategy 校验 admin 输入的 overflow_strategy 是否为合法枚举。
@@ -154,7 +160,7 @@ func CreateQuotaPlan(c *fiber.Ctx) error {
 	if !isValidOverflowStrategy(p.OverflowStrategy) {
 		return c.Status(400).JSON(fiber.Map{
 			"success":      false,
-			"message":      "overflow_strategy 仅支持 block / next_subscription",
+			"message":      "overflow_strategy 仅支持 block / next_subscription / overdraft",
 			"message_code": "ERR_INVALID_OVERFLOW_STRATEGY",
 		})
 	}
@@ -218,7 +224,7 @@ func UpdateQuotaPlan(c *fiber.Ctx) error {
 			return c.Status(400).JSON(fiber.Map{
 				"success":      false,
 				"message_code": "ERR_INVALID_OVERFLOW_STRATEGY",
-				"message":      "overflow_strategy 仅支持 block / next_subscription",
+				"message":      "overflow_strategy 仅支持 block / next_subscription / overdraft",
 			})
 		}
 	}

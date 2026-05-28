@@ -27,7 +27,7 @@ const parseQuotaRow = (r) => ({
   window_seconds: parseInt(r.window_seconds) || 0,
   weight_factor: r.weight_factor || '{}',
   priority: parseInt(r.priority) || 100,
-  overflow_strategy: r.overflow_strategy || 'block',
+  overflow_strategy: r.overflow_strategy || 'overdraft',
   auto_sync_from_channel_models: r.auto_sync_from_channel_models === '1' || r.auto_sync_from_channel_models === 'true',
   enabled: r.enabled === '1' || r.enabled === 'true',
   extra_config: r.extra_config || '{}',
@@ -37,14 +37,14 @@ const parseQuotaRow = (r) => ({
 //   - limit_unit: api_cost_usd/request_count/input_tokens/output_tokens/total_tokens/weighted_tokens
 //   - model_match: JSON array glob matching
 //   - weight_factor: flexible JSON
-//   - overflow_strategy: block / next_subscription only
+//   - overflow_strategy: block / next_subscription / overdraft
 
 const EMPTY_PLAN = {
   name: '', display_name: '', description: '',
   model_match: '[]', limit_unit: 'request_count', limit_value: 0,
   window_seconds: 0, weight_factor: '{}',
   auto_sync_from_channel_models: false,
-  priority: 100, overflow_strategy: 'block',
+  priority: 100, overflow_strategy: 'overdraft',
   extra_config: '{}', enabled: true,
 };
 
@@ -149,7 +149,7 @@ const QuotaPlanManagement = () => {
       window_seconds: p.window_seconds || 0,
       weight_factor: p.weight_factor || '{}',
       priority: p.priority || 100,
-      overflow_strategy: p.overflow_strategy || 'block',
+      overflow_strategy: p.overflow_strategy || 'overdraft',
       auto_sync_from_channel_models: p.auto_sync_from_channel_models ? '1' : '0',
       enabled: p.enabled ? '1' : '0',
       extra_config: p.extra_config || '{}',
@@ -377,11 +377,12 @@ const QuotaPlanManagement = () => {
                 <input type="number" className={inputCls} value={editing.priority}
                   onChange={e => updateField('priority', parseInt(e.target.value) || 100)} />
               </Field>
-              <Field label={t('QUOTA_PLAN.FIELD_OVERFLOW', '溢出策略')} hint={t('QUOTA_PLAN.OVERFLOW_HINT', 'block=用尽即停 / next_subscription=软跳到下一订阅')}>
+              <Field label={t('QUOTA_PLAN.FIELD_OVERFLOW', '溢出策略')} hint={t('QUOTA_PLAN.OVERFLOW_HINT', 'overdraft=对齐 Claude/Codex 官方滚动额度语义，最后一笔放行让用户能打满 100% / block=用尽即停（预估超额就拒，UI 可能跑不满 100%）/ next_subscription=软跳到下一订阅')}>
                 <select className={inputCls} value={editing.overflow_strategy}
                   onChange={e => updateField('overflow_strategy', e.target.value)}>
-                  <option value="next_subscription">{t('QUOTA_PLAN.OVERFLOW_NEXT', 'next_subscription（软跳过）')}</option>
-                  <option value="block">{t('QUOTA_PLAN.OVERFLOW_BLOCK', 'block（用尽即停）')}</option>
+                  <option value="overdraft">{t('QUOTA_PLAN.OVERFLOW_OVERDRAFT', 'overdraft（推荐 · 可超支，最后一笔放行让用户打满 100%）')}</option>
+                  <option value="block">{t('QUOTA_PLAN.OVERFLOW_BLOCK', 'block（用尽即停 · 保守预估，可能不到 100% 就拒）')}</option>
+                  <option value="next_subscription">{t('QUOTA_PLAN.OVERFLOW_NEXT', 'next_subscription（软跳到下一订阅）')}</option>
                 </select>
               </Field>
               <Field label={t('QUOTA_PLAN.FIELD_ENABLED', '启用')}>

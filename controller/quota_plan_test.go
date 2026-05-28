@@ -41,3 +41,27 @@ func TestDeleteQuotaPlan_TransactionCountError(t *testing.T) {
 		t.Fatalf("plan count=%d, want 1", count)
 	}
 }
+
+// TestIsValidOverflowStrategy_AcceptsCanonicalThree 锁定 2026-05-26 修复：
+// overdraft 必须被 admin 接受（之前漏配导致 UI 选 overdraft 提交返回 400，
+// 现役 plan 全卡在 block，用户用不满 100% 体验问题）。
+func TestIsValidOverflowStrategy_AcceptsCanonicalThree(t *testing.T) {
+	cases := []struct {
+		in   string
+		want bool
+	}{
+		{"block", true},
+		{"next_subscription", true},
+		{"overdraft", true},          // ← 本次新增
+		{"", false},                  // 空串拒绝（避免歧义）
+		{"BLOCK", false},             // 大小写敏感
+		{"allow", false},             // Sprint2-M4 已删
+		{"degrade_model", false},     // Sprint2-M4 已删
+		{"random-garbage", false},
+	}
+	for _, c := range cases {
+		if got := isValidOverflowStrategy(c.in); got != c.want {
+			t.Errorf("isValidOverflowStrategy(%q) = %v, want %v", c.in, got, c.want)
+		}
+	}
+}

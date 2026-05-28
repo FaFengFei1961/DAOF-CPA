@@ -46,8 +46,13 @@ type QuotaPlan struct {
 
 	Priority int `gorm:"default:100" json:"priority"`
 
-	// OverflowStrategy 超额时行为：block | next_subscription | degrade_model | 自定义
-	OverflowStrategy string `gorm:"default:'block'" json:"overflow_strategy"`
+	// OverflowStrategy 超额时行为：block | next_subscription | overdraft
+	//   block             — 用尽即停（consumed+delta > limit 即拒，保守预估）
+	//   next_subscription — 软跳过到下一订阅
+	//   overdraft         — 可超支（consumed >= limit 才拒，最后一笔放行）
+	// 2026-05-26：默认改 overdraft，对齐 Claude/Codex 官方滚动额度语义；
+	// degrade_model 已在 Sprint2-M4 删除，引擎不再读取这类未实现的字段值。
+	OverflowStrategy string `gorm:"default:'overdraft'" json:"overflow_strategy"`
 
 	ExtraConfig string `gorm:"type:text;default:'{}'" json:"extra_config"`
 

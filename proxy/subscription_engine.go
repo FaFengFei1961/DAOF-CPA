@@ -198,10 +198,13 @@ func Decide(req EngineRequest) EngineDecision {
 	}
 }
 
-// normalizeOverflowStrategy 收敛订阅额度溢出策略到唯一两值：
+// normalizeOverflowStrategy 收敛订阅额度溢出策略到三值：
 //
 //	"block"             — 用尽即停，不尝试下一订阅，不 fallback 余额（用户配置"硬停"）
 //	"next_subscription" — 软跳过（默认）：让 Decide 继续尝试下一订阅 + 余额
+//	"overdraft"         — 可超支：预检只判断"当前余额已归零"，实际扣费允许余额变负；
+//	                      下一条请求看到余额 ≤ 0 才拦截。解决大上下文请求在窗口尾段
+//	                      因保守预估被卡死、剩余额度无法用出的体验问题。
 //
 // 历史数据/前端误传的任意值都收敛为 "next_subscription"。
 // fix CRITICAL Sprint2-M4：之前字段未被引擎读取，所有值等价。
@@ -209,6 +212,8 @@ func normalizeOverflowStrategy(s string) string {
 	switch strings.ToLower(strings.TrimSpace(s)) {
 	case "block":
 		return "block"
+	case "overdraft":
+		return "overdraft"
 	default:
 		return "next_subscription"
 	}
@@ -740,6 +745,29 @@ func consumePlanInTx(tx *gorm.DB, subID uint, spec consumeSpec, isPrecheck bool)
 		}
 		return spec.LimitValue > 0 && consumedValue+spec.Delta > spec.LimitValue
 	}
+	// exceedsLimitCheck 是实际使用的判断入口，根据 OverflowStrategy 和 isPrecheck 选择策略：
+	//
+	//   overdraft + isPrecheck：只拦"当前余额已归零"（consumed >= limit），
+	//     不拦"预估超额"（consumed + delta > limit）。用户窗口尾段剩余几刀仍可发出请求，
+	//     实际扣费后余额可能变负，下一条请求再被拦截。
+	//
+	//   overdraft + !isPrecheck：永不拦（返回 false），允许写入超额 delta；
+	//     SQL WHERE 限额约束也同步跳过（见下方 commit 路径）。
+	//
+	//   其余策略：复用原有 exceedsLimit（consumed + delta > limit）。
+	exceedsLimitCheck := func(consumedValue float64, consumedMicroUSD int64) bool {
+		if spec.OverflowStrategy == "overdraft" {
+			if !isPrecheck {
+				return false // commit 路径：永不因超限拦截，直接写入
+			}
+			// precheck 路径：余额已归零才拦
+			if isAPICost {
+				return spec.LimitValueMicroUSD > 0 && consumedMicroUSD >= spec.LimitValueMicroUSD
+			}
+			return spec.LimitValue > 0 && consumedValue >= spec.LimitValue
+		}
+		return exceedsLimit(consumedValue, consumedMicroUSD)
+	}
 	usageConsumedValue := func(u database.SubscriptionUsage) float64 {
 		if isAPICost {
 			return database.MicroToUSD(u.ConsumedValueMicroUSD)
@@ -782,7 +810,7 @@ func consumePlanInTx(tx *gorm.DB, subID uint, spec consumeSpec, isPrecheck bool)
 		subID, spec.PlanID, spec.Bucket).First(&usage).Error
 
 	if errors.Is(err, gorm.ErrRecordNotFound) {
-		if exceedsLimit(0, 0) {
+		if exceedsLimitCheck(0, 0) {
 			// 无 usage 行 → consumed=0；window 用预期开窗时间
 			windowEnd := time.Time{}
 			if spec.WindowSeconds > 0 {
@@ -793,7 +821,8 @@ func consumePlanInTx(tx *gorm.DB, subID uint, spec consumeSpec, isPrecheck bool)
 		if isPrecheck {
 			return nil, nil, nil
 		}
-		windowEnd := now
+		// var（非 := now）：下方 if/else 无条件覆盖，初始 now 值会被 staticcheck SA4006 标记为未使用。
+		var windowEnd time.Time
 		if spec.WindowSeconds > 0 {
 			windowEnd = now.Add(time.Duration(spec.WindowSeconds) * time.Second)
 		} else {
@@ -829,7 +858,7 @@ func consumePlanInTx(tx *gorm.DB, subID uint, spec consumeSpec, isPrecheck bool)
 	}
 
 	if spec.WindowSeconds > 0 && now.After(usage.WindowEndAt) {
-		if exceedsLimit(0, 0) {
+		if exceedsLimitCheck(0, 0) {
 			// window 已过期 → 视为新窗口起点，consumed=0
 			newEnd := now.Add(time.Duration(spec.WindowSeconds) * time.Second)
 			return nil, snapshotForPlanLimit(0, 0, newEnd), errPlanLimitExceeded
@@ -863,17 +892,21 @@ func consumePlanInTx(tx *gorm.DB, subID uint, spec consumeSpec, isPrecheck bool)
 		}
 	}
 
-	if exceedsLimit(usage.ConsumedValue, usage.ConsumedValueMicroUSD) {
+	if exceedsLimitCheck(usage.ConsumedValue, usage.ConsumedValueMicroUSD) {
 		return nil, snapshotForPlanLimit(usage.ConsumedValue, usage.ConsumedValueMicroUSD, usage.WindowEndAt), errPlanLimitExceeded
 	}
 	if isPrecheck {
 		return nil, nil, nil
 	}
 	q := tx.Model(&database.SubscriptionUsage{}).Where("id = ?", usage.ID)
-	if isAPICost && spec.LimitValueMicroUSD > 0 {
-		q = q.Where("consumed_value_micro_usd + ? <= ?", spec.DeltaMicroUSD, spec.LimitValueMicroUSD)
-	} else if spec.LimitValue > 0 {
-		q = q.Where("consumed_value + ? <= ?", spec.Delta, spec.LimitValue)
+	// overdraft 策略：commit 路径跳过 SQL WHERE 限额约束，允许 consumed 超过 limit 写入负余额。
+	// 下一条请求的预检会看到 consumed >= limit，届时再拦截。
+	if spec.OverflowStrategy != "overdraft" {
+		if isAPICost && spec.LimitValueMicroUSD > 0 {
+			q = q.Where("consumed_value_micro_usd + ? <= ?", spec.DeltaMicroUSD, spec.LimitValueMicroUSD)
+		} else if spec.LimitValue > 0 {
+			q = q.Where("consumed_value + ? <= ?", spec.Delta, spec.LimitValue)
+		}
 	}
 	updates := map[string]any{
 		"request_count": gorm.Expr("request_count + 1"),

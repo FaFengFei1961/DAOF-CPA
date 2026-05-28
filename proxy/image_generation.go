@@ -349,14 +349,15 @@ func processImageRequest(c *fiber.Ctx, endpoint string, parseFn imageRequestPars
 		IsPrecheck:   false,
 	})
 	if commitDecision.NeedsRetry {
-		apiLogID = recordImagePendingReconcile(user, token, req, actualPrice, billingResolution, selectedChannelType, statusCode, clientIP, path, startTime, "subscription commit failed")
+		// 提前 return 分支：只需落 pending reconcile 日志的副作用，不用其返回的 apiLogID。
+		recordImagePendingReconcile(user, token, req, actualPrice, billingResolution, selectedChannelType, statusCode, clientIP, path, startTime, "subscription commit failed")
 		copyImageResponseHeaders(c, upstream.resp.Header)
 		setModelAuditHeaders(c, req.Model, req.Model, fallbackUserOptIn, "")
 		return c.Status(statusCode).Send(bodyCopy)
 	}
 	commitOK := commitDecision.Allowed && !commitDecision.FallbackToBalance
 	if !commitOK && !user.BalanceConsumeEnabled {
-		apiLogID = recordImagePendingReconcile(user, token, req, actualPrice, billingResolution, selectedChannelType, statusCode, clientIP, path, startTime, "subscription commit fell back to disabled balance")
+		recordImagePendingReconcile(user, token, req, actualPrice, billingResolution, selectedChannelType, statusCode, clientIP, path, startTime, "subscription commit fell back to disabled balance")
 		copyImageResponseHeaders(c, upstream.resp.Header)
 		setModelAuditHeaders(c, req.Model, req.Model, fallbackUserOptIn, "")
 		return c.Status(statusCode).Send(bodyCopy)
