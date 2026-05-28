@@ -66,6 +66,18 @@ func TestSeedModelRuntimeDefaults_ReproducibleFactoryModelPool(t *testing.T) {
 		t.Fatalf("unexpected opus 4.1 legacy pricing: %#v", opus41)
 	}
 
+	var opus48 ChannelModel
+	if err := DB.Where("channel_id = ? AND model_id = ?", ch.ID, "claude-opus-4-8").First(&opus48).Error; err != nil {
+		t.Fatalf("load opus 4.8 seed: %v", err)
+	}
+	if opus48.InputPricePicoPerToken != 5*PicoPerTokenPerUSDPerMTok ||
+		opus48.OutputPricePicoPerToken != 25*PicoPerTokenPerUSDPerMTok ||
+		opus48.CachedInputPricePicoPerToken != PicoPerTokenPerUSDPerMTok/2 ||
+		opus48.CacheWriteInputPricePicoPerToken != 25*PicoPerTokenPerUSDPerMTok/4 ||
+		opus48.CacheWrite1hInputPricePicoPerToken != 10*PicoPerTokenPerUSDPerMTok {
+		t.Fatalf("unexpected opus 4.8 pricing: %#v", opus48)
+	}
+
 	var grok ChannelModel
 	if err := DB.Where("channel_id = ? AND model_id = ?", ch.ID, "grok-4.3").First(&grok).Error; err != nil {
 		t.Fatalf("load grok seed: %v", err)
@@ -154,6 +166,79 @@ func TestSeedModelRuntimeDefaults_ReproducibleFactoryModelPool(t *testing.T) {
 	}
 	if codexRule.OfficialStatus != "official_exact" || codexRule.InputPricePicoPerToken != 1750*PicoPerTokenPerUSDPerMTok/1000 {
 		t.Fatalf("unexpected codex pricing rule: %#v", codexRule)
+	}
+}
+
+func TestSeedModelRuntimeDefaults_BackfillsOpus48ZeroPrice(t *testing.T) {
+	db, err := gorm.Open(sqlite.Open("file::memory:?cache=private"), &gorm.Config{})
+	if err != nil {
+		t.Fatalf("open sqlite: %v", err)
+	}
+	oldDB := DB
+	DB = db
+	t.Cleanup(func() { DB = oldDB })
+
+	if err := DB.AutoMigrate(&Channel{}, &ChannelModel{}, &ModelCatalog{}, &ModelPricingRule{}); err != nil {
+		t.Fatalf("migrate: %v", err)
+	}
+	ch := Channel{
+		Type:    "cliproxy",
+		Name:    "CLIProxyAPI Local",
+		BaseURL: "http://127.0.0.1:8317",
+		Weight:  1,
+		Status:  1,
+	}
+	if err := DB.Create(&ch).Error; err != nil {
+		t.Fatalf("seed channel: %v", err)
+	}
+	if err := DB.Create(&ChannelModel{
+		ChannelID:        ch.ID,
+		ModelID:          "claude-opus-4-8",
+		DisplayName:      "claude-opus-4-8",
+		ModelCategory:    ModelCategoryText,
+		BillingMode:      BillingModeToken,
+		AllowedEndpoints: "",
+		Weight:           1,
+		Status:           2,
+	}).Error; err != nil {
+		t.Fatalf("seed zero-priced opus 4.8: %v", err)
+	}
+
+	SeedModelRuntimeDefaults()
+
+	var cm ChannelModel
+	if err := DB.Where("channel_id = ? AND model_id = ?", ch.ID, "claude-opus-4-8").First(&cm).Error; err != nil {
+		t.Fatalf("load opus 4.8 channel model: %v", err)
+	}
+	if cm.Status != 2 {
+		t.Fatalf("backfill should not auto-enable existing opus 4.8 row: %#v", cm)
+	}
+	if cm.InputPricePicoPerToken != 5*PicoPerTokenPerUSDPerMTok ||
+		cm.OutputPricePicoPerToken != 25*PicoPerTokenPerUSDPerMTok ||
+		cm.CachedInputPricePicoPerToken != PicoPerTokenPerUSDPerMTok/2 ||
+		cm.CacheWriteInputPricePicoPerToken != 25*PicoPerTokenPerUSDPerMTok/4 ||
+		cm.CacheWrite1hInputPricePicoPerToken != 10*PicoPerTokenPerUSDPerMTok {
+		t.Fatalf("opus 4.8 zero price was not backfilled: %#v", cm)
+	}
+
+	var cat ModelCatalog
+	if err := DB.Where("model_id = ?", "claude-opus-4-8").First(&cat).Error; err != nil {
+		t.Fatalf("load opus 4.8 catalog: %v", err)
+	}
+	if !cat.Supported || !cat.Public || !cat.DefaultEnabled || cat.OfficialStatus != "official_exact" {
+		t.Fatalf("unexpected opus 4.8 catalog: %#v", cat)
+	}
+
+	var rule ModelPricingRule
+	if err := DB.Where("model_id = ? AND unit = ?", "claude-opus-4-8", "token").First(&rule).Error; err != nil {
+		t.Fatalf("load opus 4.8 pricing rule: %v", err)
+	}
+	if rule.InputPricePicoPerToken != 5*PicoPerTokenPerUSDPerMTok ||
+		rule.OutputPricePicoPerToken != 25*PicoPerTokenPerUSDPerMTok ||
+		rule.CachedInputPricePicoPerToken != PicoPerTokenPerUSDPerMTok/2 ||
+		rule.CacheWriteInputPricePicoPerToken != 25*PicoPerTokenPerUSDPerMTok/4 ||
+		rule.CacheWrite1hInputPricePicoPerToken != 10*PicoPerTokenPerUSDPerMTok {
+		t.Fatalf("unexpected opus 4.8 pricing rule: %#v", rule)
 	}
 }
 
@@ -254,8 +339,8 @@ func TestSeedModelRuntimeDefaults_TotalCount(t *testing.T) {
 	}
 	SeedModelRuntimeDefaults()
 
-	// DAOF seed 总数 = 43（2026-05-19 对齐 CPA /v1/models 实际暴露列表）：
-	//   - Anthropic 11 / OpenAI 7 / Google 16 / xAI 9
+	// DAOF seed 总数 = 45（2026-05-28 对齐 CPA /v1/models 实际暴露列表）：
+	//   - Anthropic 12 / OpenAI 7 / Google 17 / xAI 9
 	//   - 含已确认 pricing 的内置 + 11 个 alias_or_unofficial（admin 启用前
 	//     必须手填 pricing 并切 Supported=true）
 	//
@@ -265,7 +350,7 @@ func TestSeedModelRuntimeDefaults_TotalCount(t *testing.T) {
 	// / claude-opus-4-6-thinking / gpt-5.3-codex-spark / gpt-oss-120b-medium
 	// 已从 seed 移除（CPA 当前不暴露），handler / pricing / calibration
 	// 代码仍保留——admin 后续如有需求可在 admin UI 手动配回。
-	const expectedSeedCount = int64(44)
+	const expectedSeedCount = int64(45)
 	var got int64
 	if err := DB.Model(&ModelCatalog{}).Count(&got).Error; err != nil {
 		t.Fatalf("count catalog: %v", err)
@@ -322,14 +407,14 @@ func TestSeedModelRuntimeDefaults_TotalCount(t *testing.T) {
 		}
 	}
 
-	// 锁定最终启用/停用分布：27 启用 + 16 停用（catalog Supported=true count = enabled）。
+	// 锁定最终启用/停用分布：29 启用 + 16 停用（catalog Supported=true count = enabled）。
 	// 任何一次 seed 调整都应让这条断言保持，否则就要解释为什么变。
 	var enabledChannelCount int64
 	if err := DB.Model(&ChannelModel{}).Where("status = ?", 1).Count(&enabledChannelCount).Error; err != nil {
 		t.Fatalf("count enabled channel_models: %v", err)
 	}
-	if enabledChannelCount != 28 {
-		t.Fatalf("enabled channel_models=%d want 28 (text+price 全启用，image/video+无价 alias 全停用)", enabledChannelCount)
+	if enabledChannelCount != 29 {
+		t.Fatalf("enabled channel_models=%d want 29 (text+price 全启用，image/video+无价 alias 全停用)", enabledChannelCount)
 	}
 	var disabledChannelCount int64
 	if err := DB.Model(&ChannelModel{}).Where("status = ?", 2).Count(&disabledChannelCount).Error; err != nil {

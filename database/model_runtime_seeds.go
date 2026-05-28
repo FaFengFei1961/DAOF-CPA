@@ -233,6 +233,19 @@ func backfillChannelModelRuntimeMetadata(tx *gorm.DB) error {
 		if strings.TrimSpace(row.AllowedEndpoints) == "" {
 			update["allowed_endpoints"] = DefaultAllowedEndpointsForCategory(spec.Category)
 		}
+		if shouldBackfillKnownOfficialTokenPrice(row, spec) {
+			priced := row
+			applyTokenPriceToChannelModel(&priced, spec.Token)
+			update["input_price_pico_per_token"] = priced.InputPricePicoPerToken
+			update["output_price_pico_per_token"] = priced.OutputPricePicoPerToken
+			update["cached_input_price_pico_per_token"] = priced.CachedInputPricePicoPerToken
+			update["cache_write_input_price_pico_per_token"] = priced.CacheWriteInputPricePicoPerToken
+			update["cache_write_1h_input_price_pico_per_token"] = priced.CacheWrite1hInputPricePicoPerToken
+			update["context_price_threshold"] = priced.ContextPriceThreshold
+			update["high_input_price_pico_per_token"] = priced.HighInputPricePicoPerToken
+			update["high_cached_input_price_pico_per_token"] = priced.HighCachedInputPricePicoPerToken
+			update["high_output_price_pico_per_token"] = priced.HighOutputPricePicoPerToken
+		}
 		if len(update) > 0 {
 			if err := tx.Model(&ChannelModel{}).Where("id = ?", row.ID).Updates(update).Error; err != nil {
 				return fmt.Errorf("backfill channel_model %d metadata: %w", row.ID, err)
@@ -240,6 +253,25 @@ func backfillChannelModelRuntimeMetadata(tx *gorm.DB) error {
 		}
 	}
 	return nil
+}
+
+func shouldBackfillKnownOfficialTokenPrice(row ChannelModel, spec defaultModelSeed) bool {
+	// Narrow migration for CPA-discovered rows that arrived before the official
+	// price was added to DAOF. Preserve all admin-edited/nonzero prices.
+	if row.ModelID != "claude-opus-4-8" || !hasTokenPrice(spec.Token) {
+		return false
+	}
+	if NormalizeBillingMode(firstNonEmpty(row.BillingMode, spec.BillingMode), spec.Category) != BillingModeToken {
+		return false
+	}
+	return row.InputPricePicoPerToken == 0 &&
+		row.OutputPricePicoPerToken == 0 &&
+		row.CachedInputPricePicoPerToken == 0 &&
+		row.CacheWriteInputPricePicoPerToken == 0 &&
+		row.CacheWrite1hInputPricePicoPerToken == 0 &&
+		row.HighInputPricePicoPerToken == 0 &&
+		row.HighCachedInputPricePicoPerToken == 0 &&
+		row.HighOutputPricePicoPerToken == 0
 }
 
 func pricingRulesForSpec(spec defaultModelSeed) []ModelPricingRule {
@@ -391,6 +423,7 @@ func defaultModelSeeds() []defaultModelSeed {
 		{ProviderKey: "anthropic", ProviderName: "Anthropic", ModelID: "claude-opus-4-5-20251101", DisplayName: "Claude Opus 4.5", OfficialStatus: "official_family", Category: ModelCategoryText, BillingMode: BillingModeToken, Supported: true, Public: true, DefaultEnabled: true, SourceURL: anthropicPricing, Token: defaultTokenPrice{Input: "5", Output: "25", Cached: "0.5", CacheWrite: "6.25", Cache1h: "10"}},
 		{ProviderKey: "anthropic", ProviderName: "Anthropic", ModelID: "claude-opus-4-6", DisplayName: "Claude Opus 4.6", OfficialStatus: "official_exact", Category: ModelCategoryText, BillingMode: BillingModeToken, Supported: true, Public: true, DefaultEnabled: true, SourceURL: anthropicPricing, Token: defaultTokenPrice{Input: "5", Output: "25", Cached: "0.5", CacheWrite: "6.25", Cache1h: "10"}},
 		{ProviderKey: "anthropic", ProviderName: "Anthropic", ModelID: "claude-opus-4-7", DisplayName: "Claude Opus 4.7", OfficialStatus: "official_exact", Category: ModelCategoryText, BillingMode: BillingModeToken, Supported: true, Public: true, DefaultEnabled: true, SourceURL: anthropicPricing, Token: defaultTokenPrice{Input: "5", Output: "25", Cached: "0.5", CacheWrite: "6.25", Cache1h: "10"}},
+		{ProviderKey: "anthropic", ProviderName: "Anthropic", ModelID: "claude-opus-4-8", DisplayName: "Claude Opus 4.8", OfficialStatus: "official_exact", Category: ModelCategoryText, BillingMode: BillingModeToken, Supported: true, Public: true, DefaultEnabled: true, SourceURL: anthropicPricing, Token: defaultTokenPrice{Input: "5", Output: "25", Cached: "0.5", CacheWrite: "6.25", Cache1h: "10"}, Notes: "Official 2026-05-28 Opus 4.8 base API price; same base tier as Opus 4.5+."},
 
 		{ProviderKey: "openai", ProviderName: "OpenAI", ModelID: "gpt-5.2", DisplayName: "GPT-5.2", OfficialStatus: "official_exact", Category: ModelCategoryText, BillingMode: BillingModeToken, Supported: true, Public: true, DefaultEnabled: true, SourceURL: openAIModelGPT52, Token: defaultTokenPrice{Input: "1.75", Output: "14", Cached: "0.175"}},
 		{ProviderKey: "openai", ProviderName: "OpenAI", ModelID: "gpt-5.3-codex", DisplayName: "GPT-5.3 Codex", OfficialStatus: "official_exact", Category: ModelCategoryText, BillingMode: BillingModeToken, Supported: true, Public: true, DefaultEnabled: true, SourceURL: openAIDeveloperPricing, Token: defaultTokenPrice{Input: "1.75", Output: "14", Cached: "0.175"}},
