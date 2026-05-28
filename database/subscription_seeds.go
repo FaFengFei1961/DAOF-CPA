@@ -123,11 +123,14 @@ func SeedDefaultSubscriptionProducts() {
 	}
 	enabled := true
 	stackable := false
-	// 仅保留 Combo 组合套餐（产品决策：不再单独售卖 Claude / Codex / Gemini / Grok 单品套餐）
+	// 仅保留 Combo 组合套餐（产品决策：不再单独售卖单品套餐）。
+	// 2026-05-28 产品决策：combo 套餐不纳入 Grok——ModelMatch 去掉 grok-*，
+	// 文案统一为「Claude + Codex + Gemini」。billing_rules 的 grok-* 计费系数保留
+	// （余额扣费等非订阅路径仍可能用到 Grok，不能丢系数）。
 	specs := []defaultSubscriptionTier{
-		{"combo", "Combo", "pro", "Pro", "轻量", "Combo Pro", "Claude + Codex + Gemini + Grok 全部模型共享 API 等值额度。", 49, 25, 125, `["claude-*","gpt-*","gemini-*","grok-*"]`, "combo:all", 310},
-		{"combo", "Combo", "max_5x", "Max 5x", "中等", "Combo Max 5x", "Claude + Codex + Gemini + Grok 全部模型共享更高额度。", 199, 125, 625, `["claude-*","gpt-*","gemini-*","grok-*"]`, "combo:all", 320},
-		{"combo", "Combo", "max_20x", "Max 20x", "重度", "Combo Max 20x", "Claude + Codex + Gemini + Grok 全部模型共享旗舰额度。", 499, 400, 2000, `["claude-*","gpt-*","gemini-*","grok-*"]`, "combo:all", 330},
+		{"combo", "Combo", "pro", "Pro", "轻量", "Combo Pro", "Claude + Codex + Gemini 全部模型共享 API 等值额度。", 49, 25, 125, `["claude-*","gpt-*","gemini-*"]`, "combo:all", 310},
+		{"combo", "Combo", "max_5x", "Max 5x", "中等", "Combo Max 5x", "Claude + Codex + Gemini 全部模型共享更高额度。", 199, 125, 625, `["claude-*","gpt-*","gemini-*"]`, "combo:all", 320},
+		{"combo", "Combo", "max_20x", "Max 20x", "重度", "Combo Max 20x", "Claude + Codex + Gemini 全部模型共享旗舰额度。", 499, 400, 2000, `["claude-*","gpt-*","gemini-*"]`, "combo:all", 330},
 	}
 
 	createdPlans := 0
@@ -226,7 +229,9 @@ func firstOrCreateDefaultQuotaPlan(tx *gorm.DB, spec defaultSubscriptionTier, wi
 		WindowSeconds:      windowSeconds,
 		WeightFactor:       "{}",
 		Priority:           100,
-		OverflowStrategy:   "block",
+		// 2026-05-26：seed 默认 overdraft，对齐 Claude/Codex 官方订阅语义——
+		// 用户打满 100% 才拦下一条，避免"预估超额前置拦截"导致 UI 跑不满 100%。
+		OverflowStrategy: "overdraft",
 		ExtraConfig: fmt.Sprintf(`{"seed":"subscription_v1","bucket":"%s","bucket_label":"%s","window":"%s"}`,
 			spec.Bucket, spec.ProviderLabel, windowKey),
 		Enabled: &enabled,

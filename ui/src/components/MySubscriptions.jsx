@@ -121,7 +121,20 @@ const MySubscriptions = ({ isAuthenticated = true, embedded = false }) => {
 
       <StoreSection
         title={t('MY_SUBS.GROUP_SUBSCRIPTION', '订阅')}
-        right={<span className="text-xs text-on-surface-variant">{t('MY_SUBS.ACTIVE_COUNT', '{{count}} 个活跃订阅', { count: activeSubscriptions.length })}</span>}
+        right={(
+          <>
+            <span className="text-xs text-on-surface-variant">
+              {t('MY_SUBS.ACTIVE_COUNT', '{{count}} 个活跃订阅', { count: activeSubscriptions.length })}
+            </span>
+            <button
+              type="button"
+              onClick={() => setBrowseOpen(true)}
+              className="ml-2 text-sm font-semibold text-primary hover:underline inline-flex items-center gap-1"
+            >
+              {t('MY_SUBS.BROWSE_PACKAGES', '浏览套餐')}
+            </button>
+          </>
+        )}
       >
         {activeSubscriptions.length === 0 ? (
           <EmptyUsageCard>
@@ -456,7 +469,7 @@ const formatModelBucket = (bucket, t) => {
   const b = String(bucket || '').trim().toLowerCase();
   if (!b || b === 'default') return t('MY_SUBS.BUCKET_DEFAULT', '适用模型：通用额度');
   if (b === 'combo:all') {
-    return t('MY_SUBS.BUCKET_COMBO_ALL', '适用模型：Claude + Codex + Gemini + Grok 全部模型共享');
+    return t('MY_SUBS.BUCKET_COMBO_ALL', '适用模型：Claude + Codex + Gemini 全部模型共享');
   }
   if (b.startsWith('claude')) return t('MY_SUBS.BUCKET_CLAUDE', '适用模型：Claude 系列');
   if (b.startsWith('gpt') || b.startsWith('codex')) {

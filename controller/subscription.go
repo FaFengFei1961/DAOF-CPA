@@ -37,13 +37,28 @@ func MySubscriptions(c *fiber.Ctx) error {
 		return c.Status(500).JSON(fiber.Map{"success": false, "message_code": "ERR_DB_QUERY"})
 	}
 
-	type userSubscriptionWire database.UserSubscription
+	// 精确白名单 DTO：只暴露前端 MySubscriptions 真正需要的字段。
+	// 2026-05-28 审查 H1：原内嵌 *userSubscriptionWire(=整个 database.UserSubscription)
+	// 把 package_snapshot（内含 model_match / weight_factor / limit_unit / api_cost_usd
+	// 等内部计费配置）整个 JSON 下发给普通用户，是攻击面泄漏。改白名单 DTO 彻底去掉
+	// package_snapshot / grant_reason / parent_subscription_id / raw usage 表结构。
+	// 后端仍读 PackageSnapshot 算 usage_summary（单数据源），但快照本身不再下发。
+	// 前端对 snapshot 的依赖均已有优雅降级（usage_summary 已含全部 plan；
+	// product_type 默认 subscription；package_name 有独立字段）。
 	type subItem struct {
-		*userSubscriptionWire
-		PurchasedUnitPriceUSD float64                      `json:"purchased_unit_price_usd"`
-		Usage                 []database.SubscriptionUsage `json:"usage"`
-		UsageSummary          []subscriptionUsageSummary   `json:"usage_summary"`
-		PackageName           string                       `json:"package_name"`
+		ID                    uint                       `json:"id"`
+		PackageID             uint                       `json:"package_id"`
+		PackageName           string                     `json:"package_name"`
+		Status                string                     `json:"status"`
+		StartAt               time.Time                  `json:"start_at"`
+		EndAt                 time.Time                  `json:"end_at"`
+		CanceledAt            *time.Time                 `json:"canceled_at"`
+		StackIndex            int                        `json:"stack_index"`
+		AutoRenew             bool                       `json:"auto_renew"`
+		IsGranted             bool                       `json:"is_granted"`
+		ConsumptionOrder      int64                      `json:"consumption_order"`
+		PurchasedUnitPriceUSD float64                    `json:"purchased_unit_price_usd"`
+		UsageSummary          []subscriptionUsageSummary `json:"usage_summary"`
 	}
 	if len(subs) == 0 {
 		return c.JSON(fiber.Map{"success": true, "data": []subItem{}})
@@ -90,13 +105,20 @@ func MySubscriptions(c *fiber.Ctx) error {
 		if packageName == "" {
 			packageName = readPackageNameFromSnapshot(s.PackageSnapshot)
 		}
-		wireSub := userSubscriptionWire(s)
 		out = append(out, subItem{
-			userSubscriptionWire:  &wireSub,
-			PurchasedUnitPriceUSD: database.MicroToUSD(s.PurchasedUnitPriceUSD),
-			Usage:                 usageBySubID[s.ID],
-			UsageSummary:          buildSubscriptionUsageSummary(s.PackageSnapshot, usageBySubID[s.ID]),
+			ID:                    s.ID,
+			PackageID:             s.PackageID,
 			PackageName:           packageName,
+			Status:                s.Status,
+			StartAt:               s.StartAt,
+			EndAt:                 s.EndAt,
+			CanceledAt:            s.CanceledAt,
+			StackIndex:            s.StackIndex,
+			AutoRenew:             s.AutoRenew,
+			IsGranted:             s.IsGranted,
+			ConsumptionOrder:      s.ConsumptionOrder,
+			PurchasedUnitPriceUSD: database.MicroToUSD(s.PurchasedUnitPriceUSD),
+			UsageSummary:          buildSubscriptionUsageSummary(s.PackageSnapshot, usageBySubID[s.ID]),
 		})
 	}
 	return c.JSON(fiber.Map{"success": true, "data": out})

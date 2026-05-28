@@ -61,6 +61,9 @@ const formatPlanLimit = (plan, t) => {
   if (value <= 0) return '';
   const unit = String(plan?.limit_label || plan?.limit_unit || '').trim();
   const displayValue = Number.isInteger(value) ? String(value) : value.toFixed(2).replace(/0+$/, '').replace(/\.$/, '');
+  // 美元等值额度：加 $ 前缀，避免用户把 "25" 当成调用次数或人民币。
+  // limit_is_currency 由后端按 limit_unit==api_cost_usd 计算（不直接回传内部 unit）。
+  if (plan?.limit_is_currency) return `$${displayValue} ${unit}`.trim();
   if (!unit) return displayValue;
   if (unit === PLAN_LIMIT_CALLS_UNIT) return t('UPGRADE.PLAN_LIMIT_CALLS', '{{value}} 次调用', { value: displayValue });
   if (unit === 'Tokens') return `${displayValue} Tokens`;

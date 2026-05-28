@@ -281,6 +281,58 @@ func TestIntegration_MySubscriptionsIncludesUsageSummary(t *testing.T) {
 	}
 }
 
+// TestIntegration_MySubscriptions_NoInternalFieldLeak 锁定 2026-05-28 审查 H1 修复：
+// /api/subscriptions/mine 改成精确白名单 DTO 后，绝不能再泄漏 package_snapshot
+// （内含 model_match / weight_factor / limit_unit 等内部计费配置）等内部字段。
+// 防止未来有人图省事改回内嵌整个 database.UserSubscription。
+func TestIntegration_MySubscriptions_NoInternalFieldLeak(t *testing.T) {
+	setupSubTestDB(t)
+	user := seedTestUser(t, 100)
+	pkg := seedPackage(t)
+	app := newTestApp(user)
+
+	if code, resp := doJSON(t, app, "POST", "/purchase", map[string]any{
+		"package_id": pkg.ID, "quantity": 1,
+	}); code != 200 {
+		t.Fatalf("purchase expected 200, got %d, body=%v", code, resp)
+	}
+
+	code, resp := doJSON(t, app, "GET", "/my", nil)
+	if code != 200 {
+		t.Fatalf("my subscriptions expected 200, got %d", code)
+	}
+	data, ok := resp["data"].([]any)
+	if !ok || len(data) != 1 {
+		t.Fatalf("expected one subscription row, got %#v", resp["data"])
+	}
+	row, ok := data[0].(map[string]any)
+	if !ok {
+		t.Fatalf("subscription row type=%T", data[0])
+	}
+	// 顶层不得出现这些内部 / 敏感字段（白名单 DTO 外的全部剔除）。
+	for _, leaked := range []string{"package_snapshot", "grant_reason", "parent_subscription_id", "usage"} {
+		if _, exists := row[leaked]; exists {
+			t.Fatalf("MySubscriptions row leaked internal field %q: %#v", leaked, row)
+		}
+	}
+	// 整体响应（含嵌套 usage_summary）不得出现内部计费配置 marker。
+	// 注意：usage_summary.unit 仍含 "api_cost_usd"（前端依赖判断展示单位），不在此断言内。
+	rawBytes, _ := json.Marshal(resp)
+	raw := string(rawBytes)
+	for _, marker := range []string{"package_snapshot", "model_match", "weight_factor"} {
+		if strings.Contains(raw, marker) {
+			t.Fatalf("MySubscriptions response leaked internal billing marker %q: %s", marker, raw)
+		}
+	}
+	// 用户可见的必需字段必须保留。
+	if row["package_name"] == nil {
+		t.Fatalf("package_name must be present: %#v", row)
+	}
+	if row["usage_summary"] == nil {
+		t.Fatalf("usage_summary must be present: %#v", row)
+	}
+}
+
 func TestIntegration_MySubscriptionsDisplaysExpiredWindowAsFresh(t *testing.T) {
 	setupSubTestDB(t)
 	user := seedTestUser(t, 100)

@@ -151,25 +151,31 @@ type publicPackageResponse struct {
 }
 
 type publicPlanBrief struct {
-	Name          string  `json:"name"`
-	DisplayName   string  `json:"display_name"`
-	Description   string  `json:"description"`
-	LimitValue    float64 `json:"limit_value"`
-	LimitUnit     string  `json:"limit_unit"`
-	LimitLabel    string  `json:"limit_label"`
-	WindowSeconds int     `json:"window_seconds"`
+	Name        string  `json:"name"`
+	DisplayName string  `json:"display_name"`
+	Description string  `json:"description"`
+	LimitValue  float64 `json:"limit_value"`
+	LimitUnit   string  `json:"limit_unit"`
+	LimitLabel  string  `json:"limit_label"`
+	// LimitIsCurrency 告诉前端这个额度是「美元等值额度」而非次数 / Tokens，
+	// 前端据此加 $ 前缀（"$25 API 等值额度"）避免用户误以为是调用次数 / 人民币。
+	// 用语义布尔而不是回传原始 limit_unit("api_cost_usd")——后者会触发
+	// json_wire_format_test 的「泄漏内部 quota 字段」红线（public 响应禁止出现 api_cost_usd）。
+	LimitIsCurrency bool `json:"limit_is_currency"`
+	WindowSeconds   int  `json:"window_seconds"`
 }
 
 func publicPlanBriefFrom(plan database.QuotaPlan) publicPlanBrief {
 	label := publicQuotaUnitLabel(plan.LimitUnit)
 	return publicPlanBrief{
-		Name:          plan.Name,
-		DisplayName:   plan.DisplayName,
-		Description:   plan.Description,
-		LimitValue:    plan.LimitValue,
-		LimitUnit:     label,
-		LimitLabel:    label,
-		WindowSeconds: plan.WindowSeconds,
+		Name:            plan.Name,
+		DisplayName:     plan.DisplayName,
+		Description:     plan.Description,
+		LimitValue:      plan.LimitValue,
+		LimitUnit:       label,
+		LimitLabel:      label,
+		LimitIsCurrency: strings.EqualFold(strings.TrimSpace(plan.LimitUnit), "api_cost_usd"),
+		WindowSeconds:   plan.WindowSeconds,
 	}
 }
 

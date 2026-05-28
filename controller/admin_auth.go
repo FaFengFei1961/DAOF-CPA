@@ -55,7 +55,7 @@ func AdminLogout(c *fiber.Ctx) error {
 	if token != "" && database.DB != nil {
 		if database.IsSessionID(token) {
 			if err := database.RevokeSessionByID(token); err != nil {
-				log.Printf("[ADMIN-LOGOUT] revoke session failed token=%s: %v", token, err)
+				log.Printf("[ADMIN-LOGOUT] revoke session failed token=%s: %v", proxy.HashTokenForLog(token), err)
 				return c.Status(500).JSON(fiber.Map{"success": false, "message_code": "ERR_DB_UPDATE"})
 			}
 		}
