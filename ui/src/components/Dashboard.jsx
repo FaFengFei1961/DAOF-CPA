@@ -96,7 +96,7 @@ const Dashboard = () => {
                 {t('DASH.GUEST_TITLE', '探索 DAOF-CPA 模型矩阵')}
               </h1>
               <p className="page-subtitle">
-                {t('DASH.GUEST_SUBTITLE', '一站式聚合 Claude / Codex / Gemini / xAI 等主流模型，按你的预算和容量挑选合适的套餐。')}
+                {t('DASH.GUEST_SUBTITLE', '一份订阅，畅用站内全部主流模型——按你的预算和容量挑选合适的套餐。')}
               </p>
             </div>
             <button

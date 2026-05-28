@@ -46,11 +46,15 @@ const DataTable = ({
   // Table behavior flags.
   stickyHeader = true,
   edgeGradient = true,
+  compact = false,
   className = '',
   rowClassName,
 }) => {
   const { t } = useTranslation();
   const headerCls = stickyHeader ? '' : 'fl-table-no-sticky';
+  // compact: tighter padding for high-density tables (audit log, billing history, etc.)
+  const thPad = compact ? 'px-2.5 py-1.5' : 'px-3 py-2.5';
+  const tdPad = compact ? 'px-2.5 py-1'   : 'px-3 py-2.5';
 
   const colCount = columns.length;
   const renderCell = (col, row) => {
@@ -69,7 +73,7 @@ const DataTable = ({
                   key={col.key}
                   scope="col"
                   style={col.width ? { width: typeof col.width === 'number' ? `${col.width}px` : col.width } : undefined}
-                  className={`px-3 py-2.5 font-semibold text-[11px] uppercase tracking-wider text-on-surface-variant whitespace-nowrap ${ALIGN_CLS[col.align] || 'text-left'}`}
+                  className={`${thPad} font-semibold text-[11px] uppercase tracking-wider text-on-surface-variant whitespace-nowrap ${ALIGN_CLS[col.align] || 'text-left'}`}
                 >
                   {col.header}
                 </th>
@@ -105,7 +109,7 @@ const DataTable = ({
                     {columns.map(col => (
                       <td
                         key={col.key}
-                        className={`px-3 py-2.5 text-on-surface ${ALIGN_CLS[col.align] || 'text-left'} ${col.truncate ? 'truncate' : ''} ${col.mono ? 'font-mono text-xs' : ''}`}
+                        className={`${tdPad} text-on-surface ${ALIGN_CLS[col.align] || 'text-left'} ${col.truncate ? 'truncate' : ''} ${col.mono ? 'font-mono text-xs' : ''}`}
                         style={col.truncate ? { maxWidth: typeof col.truncate === 'number' ? `${col.truncate}px` : col.truncate } : undefined}
                         title={col.truncate && typeof renderCell(col, row) === 'string' ? renderCell(col, row) : undefined}
                       >
