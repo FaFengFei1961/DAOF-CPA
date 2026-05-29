@@ -171,7 +171,7 @@ func TestSubscriptionConsume_StillUsesChargedCost(t *testing.T) {
 	}
 
 	var usage database.SubscriptionUsage
-	if err := database.DB.Where("subscription_id = ? AND quota_plan_id = ?", sub.ID, planID).First(&usage).Error; err != nil {
+	if err := database.DB.Where("user_id = ? AND quota_plan_id = ?", sub.UserID, planID).First(&usage).Error; err != nil {
 		t.Fatalf("subscription usage not found: %v", err)
 	}
 	if usage.ConsumedValueMicroUSD != chargedCost {

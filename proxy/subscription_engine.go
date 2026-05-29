@@ -659,7 +659,9 @@ func atomicConsumeMany(subID, userID uint, specs []consumeSpec, isPrecheck bool)
 		}
 
 		for _, spec := range specs {
-			warn, snap, err := consumePlanInTx(tx, subID, spec, isPrecheck)
+			// 账号级窗口：usage 计数器键用 userID（同档位重购延续窗口）；
+			// 上方 sub-active 校验仍按 subID 守住"消费权限需有活跃订阅"。
+			warn, snap, err := consumePlanInTx(tx, userID, spec, isPrecheck)
 			if err != nil {
 				if snap != nil {
 					failedSnap = snap
@@ -698,7 +700,11 @@ func atomicConsumeMany(subID, userID uint, specs []consumeSpec, isPrecheck bool)
 	return true, nil, nil
 }
 
-func consumePlanInTx(tx *gorm.DB, subID uint, spec consumeSpec, isPrecheck bool) (*planConsumeWarn, *precheckLimitDetail, error) {
+// consumePlanInTx 对单个 plan 的窗口计数器做"读-判-写"。
+//
+// 账号级窗口（2026-05-29）：计数器键 = (userID, plan, bucket)，绑定用户账号而非订阅实例。
+// 调用方仍按 subID 校验订阅活跃（消费权限），但 usage 行落到 userID → 同档位重购延续窗口、不重置。
+func consumePlanInTx(tx *gorm.DB, userID uint, spec consumeSpec, isPrecheck bool) (*planConsumeWarn, *precheckLimitDetail, error) {
 	now := time.Now()
 	isAPICost := spec.Unit == "api_cost_usd"
 	// fix CRITICAL（多模型审计第二十五轮）：snapshotForPlanLimit 在 tx 内捕获真实 usage 状态，
@@ -776,12 +782,12 @@ func consumePlanInTx(tx *gorm.DB, subID uint, spec consumeSpec, isPrecheck bool)
 	}
 	insertValues := func(windowEnd time.Time) database.SubscriptionUsage {
 		row := database.SubscriptionUsage{
-			SubscriptionID: subID,
-			QuotaPlanID:    spec.PlanID,
-			ModelBucket:    spec.Bucket,
-			WindowStartAt:  now,
-			WindowEndAt:    windowEnd,
-			RequestCount:   1,
+			UserID:        userID,
+			QuotaPlanID:   spec.PlanID,
+			ModelBucket:   spec.Bucket,
+			WindowStartAt: now,
+			WindowEndAt:   windowEnd,
+			RequestCount:  1,
 		}
 		if isAPICost {
 			row.ConsumedValueMicroUSD = spec.DeltaMicroUSD
@@ -806,8 +812,8 @@ func consumePlanInTx(tx *gorm.DB, subID uint, spec consumeSpec, isPrecheck bool)
 		return values
 	}
 	var usage database.SubscriptionUsage
-	err := tx.Where("subscription_id = ? AND quota_plan_id = ? AND model_bucket = ?",
-		subID, spec.PlanID, spec.Bucket).First(&usage).Error
+	err := tx.Where("user_id = ? AND quota_plan_id = ? AND model_bucket = ?",
+		userID, spec.PlanID, spec.Bucket).First(&usage).Error
 
 	if errors.Is(err, gorm.ErrRecordNotFound) {
 		if exceedsLimitCheck(0, 0) {
@@ -832,7 +838,7 @@ func consumePlanInTx(tx *gorm.DB, subID uint, spec consumeSpec, isPrecheck bool)
 		if cerr := tx.Create(&newRow).Error; cerr != nil {
 			// 并发首插撞唯一索引时，重读后走累加路径。
 			if existing := (database.SubscriptionUsage{}); tx.
-				Where("subscription_id = ? AND quota_plan_id = ? AND model_bucket = ?", subID, spec.PlanID, spec.Bucket).
+				Where("user_id = ? AND quota_plan_id = ? AND model_bucket = ?", userID, spec.PlanID, spec.Bucket).
 				First(&existing).Error == nil {
 				usage = existing
 				err = nil

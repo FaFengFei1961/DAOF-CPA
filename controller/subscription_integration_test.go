@@ -226,23 +226,20 @@ func TestIntegration_MySubscriptionsIncludesUsageSummary(t *testing.T) {
 		t.Fatalf("purchase expected 200, got %d, body=%v", code, resp)
 	}
 
-	var sub database.UserSubscription
-	if err := database.DB.Where("user_id = ?", user.ID).First(&sub).Error; err != nil {
-		t.Fatalf("load subscription: %v", err)
-	}
 	var plan database.QuotaPlan
 	if err := database.DB.First(&plan).Error; err != nil {
 		t.Fatalf("load quota plan: %v", err)
 	}
 	now := time.Now()
+	// 账号级窗口：计数器键 = user_id + plan_id + bucket（不再按订阅实例）。
 	if err := database.DB.Create(&database.SubscriptionUsage{
-		SubscriptionID: sub.ID,
-		QuotaPlanID:    plan.ID,
-		ModelBucket:    "*",
-		WindowStartAt:  now,
-		WindowEndAt:    now.Add(time.Hour),
-		ConsumedValue:  12.34,
-		RequestCount:   2,
+		UserID:        user.ID,
+		QuotaPlanID:   plan.ID,
+		ModelBucket:   "*",
+		WindowStartAt: now,
+		WindowEndAt:   now.Add(time.Hour),
+		ConsumedValue: 12.34,
+		RequestCount:  2,
 	}).Error; err != nil {
 		t.Fatalf("seed usage: %v", err)
 	}
@@ -349,23 +346,20 @@ func TestIntegration_MySubscriptionsDisplaysExpiredWindowAsFresh(t *testing.T) {
 		t.Fatalf("purchase expected 200, got %d, body=%v", code, resp)
 	}
 
-	var sub database.UserSubscription
-	if err := database.DB.Where("user_id = ?", user.ID).First(&sub).Error; err != nil {
-		t.Fatalf("load subscription: %v", err)
-	}
 	var plan database.QuotaPlan
 	if err := database.DB.First(&plan).Error; err != nil {
 		t.Fatalf("load quota plan: %v", err)
 	}
 	now := time.Now()
+	// 账号级窗口：计数器键 = user_id + plan_id + bucket（不再按订阅实例）。
 	if err := database.DB.Create(&database.SubscriptionUsage{
-		SubscriptionID: sub.ID,
-		QuotaPlanID:    plan.ID,
-		ModelBucket:    "*",
-		WindowStartAt:  now.Add(-2 * time.Hour),
-		WindowEndAt:    now.Add(-time.Hour),
-		ConsumedValue:  99,
-		RequestCount:   7,
+		UserID:        user.ID,
+		QuotaPlanID:   plan.ID,
+		ModelBucket:   "*",
+		WindowStartAt: now.Add(-2 * time.Hour),
+		WindowEndAt:   now.Add(-time.Hour),
+		ConsumedValue: 99,
+		RequestCount:  7,
 	}).Error; err != nil {
 		t.Fatalf("seed expired usage: %v", err)
 	}

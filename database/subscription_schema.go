@@ -209,11 +209,22 @@ type UserSubscription struct {
 // ============================================================================
 // SubscriptionUsage ─ 每窗口用量计数（最热表）
 // ============================================================================
+//
+// 账号级时间锚定窗口（2026-05-29，对齐 Claude / OpenAI 订阅模型）：
+// 计数器唯一键 = (user_id, quota_plan_id, model_bucket)，**绑定用户账号而非订阅实例**。
+//
+//   - 滚动窗口（5h / 7d）按墙上时钟从首次使用起算，与计费周期完全解耦。
+//   - 同档位**重新购买**落到同一个 quota_plan_id（plan 行按 name 复用），
+//     因此 (user, plan, bucket) 计数器**延续**，consumed 不归零 → 重购无法重置额度。
+//     这正是 Claude/Codex 的语义：续费/重买只延长访问权，不赠送新窗口。
+//   - 升级到不同档位 = 不同 quota_plan_id = 独立计数器（更高额度的新窗口，合理）。
+//   - 注意：同档位多份订阅（若开启 stackable）将**共享**同一计数器，
+//     不再 N× 叠加额度——这是账号级语义的正确表现（combo 当前 max 1 active，无影响）。
 type SubscriptionUsage struct {
-	ID             uint   `gorm:"primaryKey" json:"id"`
-	SubscriptionID uint   `gorm:"index;not null;uniqueIndex:idx_sub_plan_bucket" json:"subscription_id"`
-	QuotaPlanID    uint   `gorm:"index;not null;uniqueIndex:idx_sub_plan_bucket" json:"quota_plan_id"`
-	ModelBucket    string `gorm:"index;not null;uniqueIndex:idx_sub_plan_bucket" json:"model_bucket"`
+	ID          uint   `gorm:"primaryKey" json:"id"`
+	UserID      uint   `gorm:"index;not null;uniqueIndex:idx_user_plan_bucket" json:"user_id"`
+	QuotaPlanID uint   `gorm:"index;not null;uniqueIndex:idx_user_plan_bucket" json:"quota_plan_id"`
+	ModelBucket string `gorm:"index;not null;uniqueIndex:idx_user_plan_bucket" json:"model_bucket"`
 
 	WindowStartAt time.Time `gorm:"index" json:"window_start_at"`
 	WindowEndAt   time.Time `gorm:"index" json:"window_end_at"`

@@ -444,12 +444,12 @@ func TestDeleteUser_PreservesBillingChain(t *testing.T) {
 		t.Fatalf("create sub: %v", err)
 	}
 	usage := database.SubscriptionUsage{
-		SubscriptionID: sub.ID,
-		QuotaPlanID:    1,
-		ModelBucket:    "*",
-		WindowStartAt:  time.Now(),
-		WindowEndAt:    time.Now().Add(time.Hour),
-		RequestCount:   1,
+		UserID:        sub.UserID,
+		QuotaPlanID:   1,
+		ModelBucket:   "*",
+		WindowStartAt: time.Now(),
+		WindowEndAt:   time.Now().Add(time.Hour),
+		RequestCount:  1,
 	}
 	if err := database.DB.Create(&usage).Error; err != nil {
 		t.Fatalf("create usage: %v", err)
@@ -549,11 +549,11 @@ func TestAdminPurgeUser_RequiresConfirmAndPurgesDependents(t *testing.T) {
 		t.Fatalf("create sub: %v", err)
 	}
 	if err := database.DB.Create(&database.SubscriptionUsage{
-		SubscriptionID: sub.ID,
-		QuotaPlanID:    1,
-		ModelBucket:    "*",
-		WindowStartAt:  time.Now(),
-		WindowEndAt:    time.Now().Add(time.Hour),
+		UserID:        sub.UserID,
+		QuotaPlanID:   1,
+		ModelBucket:   "*",
+		WindowStartAt: time.Now(),
+		WindowEndAt:   time.Now().Add(time.Hour),
 	}).Error; err != nil {
 		t.Fatalf("create usage: %v", err)
 	}
@@ -664,7 +664,7 @@ func TestAdminPurgeUser_RequiresConfirmAndPurgesDependents(t *testing.T) {
 	assertZero("user", &database.User{}, "id = ?", user.ID)
 	assertZero("session", &database.UserSession{}, "session_id = ?", sessionID)
 	assertZero("subscription", &database.UserSubscription{}, "id = ?", sub.ID)
-	assertZero("usage", &database.SubscriptionUsage{}, "subscription_id = ?", sub.ID)
+	assertZero("usage", &database.SubscriptionUsage{}, "user_id = ?", sub.UserID)
 	assertZero("topup order", &database.TopupOrder{}, "id = ?", order.ID)
 	assertZero("topup refund", &database.TopupRefund{}, "topup_order_id = ?", order.ID)
 	assertZero("offline payment receipt", &database.PaymentWebhookReceipt{}, "provider = ? AND nonce = ?", manualPaidReceiptProvider, "offline-purge-ref")

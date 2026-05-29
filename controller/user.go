@@ -1241,8 +1241,10 @@ func purgeUserDependents(tx *gorm.DB, userID uint) error {
 		return err
 	}
 	if tx.Migrator().HasTable(&database.UserSubscription{}) {
+		// 账号级窗口（2026-05-29）：subscription_usages 直接按 user_id 存储，
+		// 不再经 user_subscriptions 子查询关联。
 		if err := purgeExecIfTableExists(tx, "subscription_usages",
-			"DELETE FROM subscription_usages WHERE subscription_id IN (SELECT id FROM user_subscriptions WHERE user_id = ?)", userID); err != nil {
+			"DELETE FROM subscription_usages WHERE user_id = ?", userID); err != nil {
 			return err
 		}
 		if err := purgeDeleteWhere(tx, &database.UserSubscription{}, "user_id = ?", userID); err != nil {

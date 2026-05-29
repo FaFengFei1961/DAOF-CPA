@@ -64,27 +64,25 @@ func MySubscriptions(c *fiber.Ctx) error {
 		return c.JSON(fiber.Map{"success": true, "data": []subItem{}})
 	}
 
-	subIDs := make([]uint, 0, len(subs))
 	pkgIDs := make([]uint, 0, len(subs))
 	pkgIDSet := make(map[uint]bool)
 	for _, s := range subs {
-		subIDs = append(subIDs, s.ID)
 		if !pkgIDSet[s.PackageID] {
 			pkgIDs = append(pkgIDs, s.PackageID)
 			pkgIDSet[s.PackageID] = true
 		}
 	}
 
+	// 账号级窗口（2026-05-29）：usage 计数器键 = (user_id, plan_id, bucket)，按用户一次性加载。
+	// buildSubscriptionUsageSummary 内部按 (plan_id, bucket) 映射快照 plan，每份订阅各取其对应计数器；
+	// 同档位多份订阅自然共享同一计数器（账号级语义）。
+	//
 	// fix Major（自审第十三轮）：原 usage 查询失败仅日志、继续返回空进度条，
 	// 用户误判"用量为 0"重复购买。fail-closed：失败立即 500，让前端重试或显示"加载中"。
 	var allUsages []database.SubscriptionUsage
-	if err := database.DB.Where("subscription_id IN ?", subIDs).Find(&allUsages).Error; err != nil {
+	if err := database.DB.Where("user_id = ?", user.ID).Find(&allUsages).Error; err != nil {
 		log.Printf("[SUB] usage query failed: %v", err)
 		return c.Status(500).JSON(fiber.Map{"success": false, "message_code": "ERR_DB_QUERY"})
-	}
-	usageBySubID := make(map[uint][]database.SubscriptionUsage, len(subs))
-	for _, u := range allUsages {
-		usageBySubID[u.SubscriptionID] = append(usageBySubID[u.SubscriptionID], u)
 	}
 
 	// fix Major（自审第十三轮）：package 查询失败也 fail-closed。
@@ -118,7 +116,7 @@ func MySubscriptions(c *fiber.Ctx) error {
 			IsGranted:             s.IsGranted,
 			ConsumptionOrder:      s.ConsumptionOrder,
 			PurchasedUnitPriceUSD: database.MicroToUSD(s.PurchasedUnitPriceUSD),
-			UsageSummary:          buildSubscriptionUsageSummary(s.PackageSnapshot, usageBySubID[s.ID]),
+			UsageSummary:          buildSubscriptionUsageSummary(s.PackageSnapshot, allUsages),
 		})
 	}
 	return c.JSON(fiber.Map{"success": true, "data": out})

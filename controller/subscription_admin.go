@@ -574,10 +574,8 @@ func AdminListSubscriptions(c *fiber.Ctx) error {
 
 	// 批量预加载 users + usages，避免 N+1
 	userIDSet := make(map[uint]struct{}, len(rows))
-	subIDs := make([]uint, 0, len(rows))
 	for _, r := range rows {
 		userIDSet[r.UserID] = struct{}{}
-		subIDs = append(subIDs, r.ID)
 	}
 	userIDs := make([]uint, 0, len(userIDSet))
 	for id := range userIDSet {
@@ -602,16 +600,18 @@ func AdminListSubscriptions(c *fiber.Ctx) error {
 	// loadFailed 用于把"DB 失败"和"无绑定"区分开（admin UI 可显示警告 banner）。
 	identitiesByUser, identitiesLoadFailed := loadActiveOAuthIdentitiesForUsers(users)
 
+	// 账号级窗口（2026-05-29）：usage 计数器键 = (user_id, plan_id, bucket)，按本页涉及用户批量加载。
+	// 每份订阅用其 snapshot plan 映射本人的计数器；同档位多份订阅共享同一行（账号级语义）。
 	var allUsages []database.SubscriptionUsage
-	if len(subIDs) > 0 {
-		if err := database.DB.Where("subscription_id IN ?", subIDs).Find(&allUsages).Error; err != nil {
+	if len(userIDs) > 0 {
+		if err := database.DB.Where("user_id IN ?", userIDs).Find(&allUsages).Error; err != nil {
 			log.Printf("[ADMIN-SUBS] usages batch load failed: %v", err)
 			return c.Status(500).JSON(fiber.Map{"success": false, "message_code": "ERR_DB_QUERY"})
 		}
 	}
-	usagesBySubID := make(map[uint][]database.SubscriptionUsage, len(rows))
+	usagesByUserID := make(map[uint][]database.SubscriptionUsage, len(userIDs))
 	for _, u := range allUsages {
-		usagesBySubID[u.SubscriptionID] = append(usagesBySubID[u.SubscriptionID], u)
+		usagesByUserID[u.UserID] = append(usagesByUserID[u.UserID], u)
 	}
 
 	now := time.Now()
@@ -685,7 +685,7 @@ func AdminListSubscriptions(c *fiber.Ctx) error {
 			log.Printf("[ADMIN-SUBS] sub %d snapshot unmarshal failed: %v (PackageName/Price 退化为零值)", sub.ID, err)
 		}
 		// 计算消费率：取所有限额 plan 中 consumed/limit 最大的那个
-		usages := usagesBySubID[sub.ID]
+		usages := usagesByUserID[sub.UserID]
 		usageRowsByPlan := make(map[uint][]database.SubscriptionUsage, len(usages))
 		for _, u := range usages {
 			usageRowsByPlan[u.QuotaPlanID] = append(usageRowsByPlan[u.QuotaPlanID], u)

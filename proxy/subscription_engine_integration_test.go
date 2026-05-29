@@ -129,6 +129,79 @@ func TestEngineIntegration_FIFOConsumption(t *testing.T) {
 	}
 }
 
+// TestEngineIntegration_RepurchaseDoesNotResetWindow 账号级时间窗口核心回归（2026-05-29）：
+// 同档位订阅到期后**重新购买**，滚动窗口已用量不归零 —— 对齐 Claude / Codex 语义，
+// 续费/重买只延长访问权，不赠送新窗口。窗口计数器键 = (user_id, plan_id, bucket)，
+// 同档位重购落到同一个 plan_id（plan 行按 name 复用）→ 同一行计数器延续。
+func TestEngineIntegration_RepurchaseDoesNotResetWindow(t *testing.T) {
+	setupEngineTestDB(t)
+	userID := uint(30)
+
+	// 7 天滚动窗口，limit 10 次请求。两次购买引用同一个 plan id=700（模拟同档位重购）。
+	planSnap := func() string {
+		return makeSnapshot([]map[string]any{{
+			"id": 700, "model_match": `["*"]`, "limit_unit": "request_count",
+			"limit_value": 10.0, "window_seconds": 7 * 86400, "priority": 1,
+		}})
+	}
+
+	assertCounter := func(wantConsumed float64, wantRows int) {
+		t.Helper()
+		var rows []database.SubscriptionUsage
+		if err := database.DB.Where("user_id = ? AND quota_plan_id = ?", userID, uint(700)).Find(&rows).Error; err != nil {
+			t.Fatalf("load usage: %v", err)
+		}
+		if len(rows) != wantRows {
+			t.Fatalf("usage rows=%d, want %d（账号级窗口应只有一行计数器，重购不新建）", len(rows), wantRows)
+		}
+		if wantRows > 0 && rows[0].ConsumedValue != wantConsumed {
+			t.Fatalf("consumed=%v, want %v", rows[0].ConsumedValue, wantConsumed)
+		}
+	}
+
+	// 1) 通过 sub1 消费 6 次 → 账号级窗口 consumed=6
+	sub1 := seedSub(t, userID, planSnap(), 1)
+	for i := 0; i < 6; i++ {
+		FlushAllSubscriptionCache()
+		d := Decide(EngineRequest{UserID: userID, ModelName: "gpt-4o"})
+		if !d.Allowed || d.FallbackToBalance || d.SubscriptionID != sub1.ID {
+			t.Fatalf("sub1 request %d should consume, got %+v", i+1, d)
+		}
+	}
+	assertCounter(6, 1)
+
+	// 2) sub1 到期
+	if err := database.DB.Model(&database.UserSubscription{}).
+		Where("id = ?", sub1.ID).Update("status", "expired").Error; err != nil {
+		t.Fatalf("expire sub1: %v", err)
+	}
+
+	// 3) 重新购买同档位（同 plan id=700）→ 新订阅实例 sub2
+	sub2 := seedSub(t, userID, planSnap(), 2)
+
+	// 4) 关键断言：sub2 发起请求 → 窗口**延续**，consumed 6 → 7（不归零），且仍只有一行计数器
+	FlushAllSubscriptionCache()
+	d := Decide(EngineRequest{UserID: userID, ModelName: "gpt-4o"})
+	if !d.Allowed || d.FallbackToBalance || d.SubscriptionID != sub2.ID {
+		t.Fatalf("repurchase request should consume via sub2 (not reset), got %+v", d)
+	}
+	assertCounter(7, 1)
+
+	// 5) 继续消费到窗口满（7 → 10），第 11 次应被账号级窗口拦截 → fallback 余额（非订阅扣费）
+	for i := 0; i < 3; i++ {
+		FlushAllSubscriptionCache()
+		Decide(EngineRequest{UserID: userID, ModelName: "gpt-4o"})
+	}
+	assertCounter(10, 1)
+
+	FlushAllSubscriptionCache()
+	d = Decide(EngineRequest{UserID: userID, ModelName: "gpt-4o"})
+	if !d.FallbackToBalance {
+		t.Fatalf("account-level window full → must fallback to balance, not consume via sub: %+v", d)
+	}
+	assertCounter(10, 1) // 满窗后未再增长
+}
+
 func TestEngineDecisionCarriesGrantedSubscriptionFlag(t *testing.T) {
 	setupEngineTestDB(t)
 	userID := uint(1)
@@ -215,7 +288,7 @@ func TestEngineIntegration_MultiWindowANDRollback(t *testing.T) {
 	}
 
 	var rows []database.SubscriptionUsage
-	if err := database.DB.Where("subscription_id = ?", sub.ID).Order("quota_plan_id asc").Find(&rows).Error; err != nil {
+	if err := database.DB.Where("user_id = ?", sub.UserID).Order("quota_plan_id asc").Find(&rows).Error; err != nil {
 		t.Fatalf("load usage: %v", err)
 	}
 	if len(rows) != 2 {
@@ -299,7 +372,7 @@ func TestEngineIntegration_MixedAPICostAndRequestCountANDRollback(t *testing.T) 
 	}
 
 	var rows []database.SubscriptionUsage
-	if err := database.DB.Where("subscription_id = ?", sub.ID).Order("quota_plan_id asc").Find(&rows).Error; err != nil {
+	if err := database.DB.Where("user_id = ?", sub.UserID).Order("quota_plan_id asc").Find(&rows).Error; err != nil {
 		t.Fatalf("load usage: %v", err)
 	}
 	if len(rows) != 2 {
@@ -316,11 +389,11 @@ func TestEngineIntegration_MixedAPICostAndRequestCountANDRollback(t *testing.T) 
 func TestEngineIntegration_APICostMicroUSDAggregatesExactly(t *testing.T) {
 	setupEngineTestDB(t)
 	usage := database.SubscriptionUsage{
-		SubscriptionID: 1,
-		QuotaPlanID:    122,
-		ModelBucket:    "gpt-*",
-		WindowStartAt:  time.Now(),
-		WindowEndAt:    time.Now().Add(time.Hour),
+		UserID:        1,
+		QuotaPlanID:   122,
+		ModelBucket:   "gpt-*",
+		WindowStartAt: time.Now(),
+		WindowEndAt:   time.Now().Add(time.Hour),
 	}
 	for i := int64(0); i < database.MicroPerUSD; i++ {
 		usage.ConsumedValueMicroUSD += 1
@@ -329,7 +402,7 @@ func TestEngineIntegration_APICostMicroUSDAggregatesExactly(t *testing.T) {
 		t.Fatalf("create usage: %v", err)
 	}
 	var row database.SubscriptionUsage
-	if err := database.DB.Where("subscription_id = ? AND quota_plan_id = ?", uint(1), uint(122)).First(&row).Error; err != nil {
+	if err := database.DB.Where("user_id = ? AND quota_plan_id = ?", uint(1), uint(122)).First(&row).Error; err != nil {
 		t.Fatalf("load usage: %v", err)
 	}
 	if row.ConsumedValueMicroUSD != database.MicroPerUSD {

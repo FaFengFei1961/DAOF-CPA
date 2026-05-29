@@ -19,13 +19,23 @@ func newAdminResetUsageTestApp(admin *database.User) *fiber.App {
 	return app
 }
 
-func seedResetUsageSubscription(t *testing.T, userID, packageID uint, status string, endAt time.Time) database.UserSubscription {
+// seedResetUsageSubscription 创建一条订阅；planIDs 写进 snapshot.plans，
+// 让账号级重置能从 snapshot 解析出该订阅命中的 (user, plan) 计数器。
+func seedResetUsageSubscription(t *testing.T, userID, packageID uint, status string, endAt time.Time, planIDs ...uint) database.UserSubscription {
 	t.Helper()
+	plans := make([]map[string]any, 0, len(planIDs))
+	for _, pid := range planIDs {
+		plans = append(plans, map[string]any{"id": pid})
+	}
+	snapBytes, err := json.Marshal(map[string]any{"package_name": "ResetTest", "plans": plans})
+	if err != nil {
+		t.Fatalf("marshal reset snapshot: %v", err)
+	}
 	sub := database.UserSubscription{
 		UserID:          userID,
 		PackageID:       packageID,
 		Status:          status,
-		PackageSnapshot: `{"package_name":"ResetTest"}`,
+		PackageSnapshot: string(snapBytes),
 		StartAt:         endAt.Add(-24 * time.Hour),
 		EndAt:           endAt,
 	}
@@ -35,10 +45,11 @@ func seedResetUsageSubscription(t *testing.T, userID, packageID uint, status str
 	return sub
 }
 
-func seedResetUsageRow(t *testing.T, subID, planID uint, bucket string, startAt, endAt time.Time, consumed float64, consumedMicro int64) database.SubscriptionUsage {
+// seedResetUsageRow 创建一条账号级用量计数器（键 = user_id + plan_id + bucket）。
+func seedResetUsageRow(t *testing.T, userID, planID uint, bucket string, startAt, endAt time.Time, consumed float64, consumedMicro int64) database.SubscriptionUsage {
 	t.Helper()
 	row := database.SubscriptionUsage{
-		SubscriptionID:        subID,
+		UserID:                userID,
 		QuotaPlanID:           planID,
 		ModelBucket:           bucket,
 		WindowStartAt:         startAt,
@@ -73,11 +84,11 @@ func TestAdminResetUsage_HappyPath(t *testing.T) {
 	}
 	windows := map[uint]window{}
 	for i := 0; i < 5; i++ {
-		sub := seedResetUsageSubscription(t, user.ID, 100, "active", now.Add(24*time.Hour))
+		seedResetUsageSubscription(t, user.ID, 100, "active", now.Add(24*time.Hour), uint(i*10+1), uint(i*10+2))
 		for j := 0; j < 2; j++ {
 			start := now.Add(time.Duration(i+j) * time.Hour)
 			end := start.Add(5 * time.Hour)
-			row := seedResetUsageRow(t, sub.ID, uint(i*10+j+1), fmt.Sprintf("bucket-%d-%d", i, j), start, end, 12.5, 3_000_000)
+			row := seedResetUsageRow(t, user.ID, uint(i*10+j+1), fmt.Sprintf("bucket-%d-%d", i, j), start, end, 12.5, 3_000_000)
 			windows[row.ID] = window{start: start, end: end}
 		}
 	}
@@ -163,10 +174,10 @@ func TestAdminResetUsage_FiltersByPackage(t *testing.T) {
 	app := newAdminResetUsageTestApp(admin)
 	now := time.Now().Truncate(time.Second)
 
-	subA := seedResetUsageSubscription(t, user.ID, 11, "active", now.Add(24*time.Hour))
-	subB := seedResetUsageSubscription(t, user.ID, 22, "active", now.Add(24*time.Hour))
-	rowA := seedResetUsageRow(t, subA.ID, 1, "a", now, now.Add(time.Hour), 7, 0)
-	rowB := seedResetUsageRow(t, subB.ID, 2, "b", now, now.Add(time.Hour), 9, 0)
+	seedResetUsageSubscription(t, user.ID, 11, "active", now.Add(24*time.Hour), 1)
+	seedResetUsageSubscription(t, user.ID, 22, "active", now.Add(24*time.Hour), 2)
+	rowA := seedResetUsageRow(t, user.ID, 1, "a", now, now.Add(time.Hour), 7, 0)
+	rowB := seedResetUsageRow(t, user.ID, 2, "b", now, now.Add(time.Hour), 9, 0)
 
 	body := resetUsageRequest("按套餐重置")
 	body["package_ids"] = []uint{11}
@@ -196,10 +207,10 @@ func TestAdminResetUsage_FiltersByUser(t *testing.T) {
 	app := newAdminResetUsageTestApp(admin)
 	now := time.Now().Truncate(time.Second)
 
-	subA := seedResetUsageSubscription(t, userA.ID, 33, "active", now.Add(24*time.Hour))
-	subB := seedResetUsageSubscription(t, userB.ID, 33, "active", now.Add(24*time.Hour))
-	rowA := seedResetUsageRow(t, subA.ID, 1, "a", now, now.Add(time.Hour), 4, 0)
-	rowB := seedResetUsageRow(t, subB.ID, 2, "b", now, now.Add(time.Hour), 8, 0)
+	seedResetUsageSubscription(t, userA.ID, 33, "active", now.Add(24*time.Hour), 1)
+	seedResetUsageSubscription(t, userB.ID, 33, "active", now.Add(24*time.Hour), 2)
+	rowA := seedResetUsageRow(t, userA.ID, 1, "a", now, now.Add(time.Hour), 4, 0)
+	rowB := seedResetUsageRow(t, userB.ID, 2, "b", now, now.Add(time.Hour), 8, 0)
 
 	body := resetUsageRequest("按用户重置")
 	body["user_ids"] = []uint{userA.ID}
@@ -225,12 +236,12 @@ func TestAdminResetUsage_FiltersByStatus(t *testing.T) {
 	app := newAdminResetUsageTestApp(admin)
 	now := time.Now().Truncate(time.Second)
 
-	activeSub := seedResetUsageSubscription(t, user.ID, 44, "active", now.Add(24*time.Hour))
-	canceledSub := seedResetUsageSubscription(t, user.ID, 44, "canceled", now.Add(24*time.Hour))
-	expiredSub := seedResetUsageSubscription(t, user.ID, 44, "expired", now.Add(-time.Hour))
-	activeRow := seedResetUsageRow(t, activeSub.ID, 1, "active", now, now.Add(time.Hour), 1, 0)
-	canceledRow := seedResetUsageRow(t, canceledSub.ID, 2, "canceled", now, now.Add(time.Hour), 2, 0)
-	expiredRow := seedResetUsageRow(t, expiredSub.ID, 3, "expired", now, now.Add(time.Hour), 3, 0)
+	seedResetUsageSubscription(t, user.ID, 44, "active", now.Add(24*time.Hour), 1)
+	seedResetUsageSubscription(t, user.ID, 44, "canceled", now.Add(24*time.Hour), 2)
+	seedResetUsageSubscription(t, user.ID, 44, "expired", now.Add(-time.Hour), 3)
+	activeRow := seedResetUsageRow(t, user.ID, 1, "active", now, now.Add(time.Hour), 1, 0)
+	canceledRow := seedResetUsageRow(t, user.ID, 2, "canceled", now, now.Add(time.Hour), 2, 0)
+	expiredRow := seedResetUsageRow(t, user.ID, 3, "expired", now, now.Add(time.Hour), 3, 0)
 
 	body := resetUsageRequest("按状态重置")
 	body["statuses"] = []string{"canceled", "expired"}
@@ -258,8 +269,8 @@ func TestAdminResetUsage_WritesBillingEntry(t *testing.T) {
 	now := time.Now().Truncate(time.Second)
 
 	for i := 0; i < 3; i++ {
-		sub := seedResetUsageSubscription(t, user.ID, 55, "active", now.Add(24*time.Hour))
-		seedResetUsageRow(t, sub.ID, uint(i+1), fmt.Sprintf("b-%d", i), now, now.Add(time.Hour), float64(i+1), 0)
+		seedResetUsageSubscription(t, user.ID, 55, "active", now.Add(24*time.Hour), uint(i+1))
+		seedResetUsageRow(t, user.ID, uint(i+1), fmt.Sprintf("b-%d", i), now, now.Add(time.Hour), float64(i+1), 0)
 	}
 
 	code, resp := doJSON(t, app, "POST", "/admin/sub/reset-usage", resetUsageRequest("财务审计重置"))
@@ -295,8 +306,8 @@ func TestAdminResetUsage_WritesOperationLog(t *testing.T) {
 	app := newAdminResetUsageTestApp(admin)
 	now := time.Now().Truncate(time.Second)
 
-	sub := seedResetUsageSubscription(t, user.ID, 66, "active", now.Add(24*time.Hour))
-	seedResetUsageRow(t, sub.ID, 1, "op", now, now.Add(time.Hour), 5, 0)
+	seedResetUsageSubscription(t, user.ID, 66, "active", now.Add(24*time.Hour), 1)
+	seedResetUsageRow(t, user.ID, 1, "op", now, now.Add(time.Hour), 5, 0)
 
 	body := resetUsageRequest("审计日志备注")
 	body["package_ids"] = []uint{66}

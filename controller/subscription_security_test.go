@@ -356,7 +356,7 @@ func TestSecurity_AdminList_SubscriptionRefund_UsesTimeRatio(t *testing.T) {
 
 	// 90% request_count 已耗
 	database.DB.Create(&database.SubscriptionUsage{
-		SubscriptionID: sub.ID, QuotaPlanID: plan.ID, ModelBucket: "*",
+		UserID: sub.UserID, QuotaPlanID: plan.ID, ModelBucket: "*",
 		WindowStartAt: startAt, WindowEndAt: endAt, ConsumedValue: 9000,
 	})
 

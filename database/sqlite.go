@@ -77,6 +77,7 @@ func InitDB() {
 	}
 
 	migrateChannelModelFixedPointPricing()
+	migrateSubscriptionUsageToAccountScoped()
 
 	// 初始化并迁移基础数据表
 	err = DB.AutoMigrate(
@@ -192,7 +193,9 @@ func InitDB() {
 	mustExecIndex("idx_notif_user_unread", `CREATE INDEX IF NOT EXISTS idx_notif_user_unread
 		ON notifications(user_id, created_at DESC)
 		WHERE read_at IS NULL AND revoked_at IS NULL`)
-	// 高频查询：SubscriptionUsage 已有 idx_sub_plan_bucket（GORM uniqueIndex），无需补
+	// SubscriptionUsage：账号级时间窗口（2026-05-29）唯一键 = idx_user_plan_bucket
+	// (user_id, quota_plan_id, model_bucket)，由 GORM uniqueIndex tag 自动建。
+	// 旧 idx_sub_plan_bucket 的清理在 migrateSubscriptionUsageToAccountScoped()（AutoMigrate 前）完成。
 	// 高频查询：admin broadcast 历史列表按状态 + 时间倒序
 	mustExecIndex("idx_bcast_status_created", `CREATE INDEX IF NOT EXISTS idx_bcast_status_created
 		ON notification_broadcasts(status, created_at DESC)`)
@@ -645,6 +648,50 @@ func migrateChannelModelFixedPointPricing() {
 		if err := DB.Exec(fmt.Sprintf(`ALTER TABLE channel_models DROP COLUMN %s`, m.oldColumn)).Error; err != nil {
 			log.Fatalf("[migrate] drop legacy channel_models.%s failed: %v", m.oldColumn, err)
 		}
+	}
+}
+
+// migrateSubscriptionUsageToAccountScoped 账号级时间窗口迁移（2026-05-29，对齐 Claude/Codex）：
+// subscription_usages 计数器键从订阅实例（subscription_id）改为用户账号（user_id），
+// 让同档位重购延续滚动窗口、不重置已用量。
+//
+// 必须彻底移除遗留的 subscription_id 列：它带 NOT NULL 约束且无默认值，
+// 账号级 insert 不再写该列 → 会全部撞 "NOT NULL constraint failed" → 消费事务失败、usage 永远 0。
+//
+// 关键顺序（SQLite 拒绝删除被索引引用的列）：先删所有引用 subscription_id 的索引，再 DROP COLUMN。
+// 迁移幂等：可修复"首次迁移漏删索引导致 DROP COLUMN 失败"的半损坏库。
+// 仅当从纯旧 schema（无 user_id）迁移时清空瞬时窗口计数器；其余情况保留已累计的账号级用量。
+// channels / models / packages 等配置完整保留。
+func migrateSubscriptionUsageToAccountScoped() {
+	if !sqliteTableExists("subscription_usages") {
+		return // 全新库：AutoMigrate 会按新 schema 直接建表
+	}
+	hasUserID := sqliteColumnExists("subscription_usages", "user_id")
+	hasSubID := sqliteColumnExists("subscription_usages", "subscription_id")
+	if hasUserID && !hasSubID {
+		return // 已是干净的账号级 schema
+	}
+
+	// 纯旧 schema（无 user_id）：旧行没有 user_id，AutoMigrate 后会成孤儿；清空（瞬时窗口数据，无损）。
+	if !hasUserID {
+		if err := DB.Exec(`DELETE FROM subscription_usages`).Error; err != nil {
+			log.Fatalf("[migrate] clear subscription_usages failed: %v", err)
+		}
+	}
+
+	// 先删所有引用 subscription_id 的索引（旧唯一索引 + GORM per-column 索引），否则 DROP COLUMN 被 SQLite 拒绝。
+	for _, idx := range []string{"idx_sub_plan_bucket", "idx_subscription_usages_subscription_id"} {
+		if err := DB.Exec(`DROP INDEX IF EXISTS ` + idx).Error; err != nil {
+			log.Fatalf("[migrate] drop index %s failed: %v", idx, err)
+		}
+	}
+	if hasSubID {
+		// SQLite 3.35+（与本仓库其它 DROP COLUMN 迁移一致）。失败必须 fatal：
+		// 残留 NOT NULL subscription_id 列会让全部订阅消费写入失败。
+		if err := DB.Exec(`ALTER TABLE subscription_usages DROP COLUMN subscription_id`).Error; err != nil {
+			log.Fatalf("[migrate] drop legacy subscription_usages.subscription_id failed: %v", err)
+		}
+		log.Printf("🔄 subscription_usages 迁移到账号级时间窗口：已移除遗留 subscription_id 列，保留全部配置")
 	}
 }
 

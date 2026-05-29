@@ -293,7 +293,7 @@ func TestBuildSubscriptionUsageSummary(t *testing.T) {
 				RequestCount:   5,
 				WindowStartAt:  now,
 				WindowEndAt:    windowEnd,
-				SubscriptionID: 1,
+				UserID:         1,
 			},
 		}
 		got := buildSubscriptionUsageSummary(string(snapJSON), usages)
@@ -331,7 +331,7 @@ func TestBuildSubscriptionUsageSummary(t *testing.T) {
 				RequestCount:   100,
 				WindowStartAt:  now,
 				WindowEndAt:    windowEnd,
-				SubscriptionID: 1,
+				UserID:         1,
 			},
 		}
 		got := buildSubscriptionUsageSummary(string(snapJSON), usages)
@@ -369,7 +369,7 @@ func TestBuildSubscriptionUsageSummary(t *testing.T) {
 				RequestCount:   3,
 				WindowStartAt:  now.Add(-2 * time.Hour),
 				WindowEndAt:    now.Add(-time.Hour), // expired
-				SubscriptionID: 1,
+				UserID:         1,
 			},
 		}
 		got := buildSubscriptionUsageSummary(string(snapJSON), usages)

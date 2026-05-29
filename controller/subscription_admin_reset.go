@@ -86,7 +86,7 @@ func AdminResetSubscriptionUsage(c *fiber.Ctx) error {
 
 		var subs []database.UserSubscription
 		if err := applyResetUsageScope(tx, packageIDs, userIDs, statuses, defaultActiveWindow, now).
-			Select("id, user_id, package_id, status").
+			Select("id, user_id, package_id, status, package_snapshot").
 			Order("id ASC").
 			Find(&subs).Error; err != nil {
 			return fmt.Errorf("load reset usage subscriptions: %w", err)
@@ -131,10 +131,42 @@ func AdminResetSubscriptionUsage(c *fiber.Ctx) error {
 			}
 		}
 
-		billingOccurredAt := now
+		// 账号级窗口（2026-05-29）：usage 计数器键 = (user_id, plan_id, bucket)。
+		// 不再有"按单个订阅重置"的概念——从每份命中订阅的 snapshot 解析其 plan_id 集合，
+		// 精确清零这些 (user_id, plan_id) 计数器。这样仍尊重 admin 的 package/user/status
+		// 过滤精度：未命中的订阅所属 plan 不受影响（即便同属一个用户）。
+		// 每份命中订阅仍逐条写 0 金额 admin_adjust 账单作审计回溯。
+		plansByUser := make(map[uint]map[uint]struct{}, len(uniqueUserIDs))
 		for _, sub := range subs {
+			var snap struct {
+				Plans []struct {
+					ID uint `json:"id"`
+				} `json:"plans"`
+			}
+			if sub.PackageSnapshot != "" {
+				_ = json.Unmarshal([]byte(sub.PackageSnapshot), &snap)
+			}
+			for _, p := range snap.Plans {
+				if p.ID == 0 {
+					continue
+				}
+				if plansByUser[sub.UserID] == nil {
+					plansByUser[sub.UserID] = make(map[uint]struct{}, len(snap.Plans))
+				}
+				plansByUser[sub.UserID][p.ID] = struct{}{}
+			}
+		}
+		for _, uid := range uniqueUserIDs {
+			planSet := plansByUser[uid]
+			if len(planSet) == 0 {
+				continue
+			}
+			planIDs := make([]uint, 0, len(planSet))
+			for pid := range planSet {
+				planIDs = append(planIDs, pid)
+			}
 			res := tx.Model(&database.SubscriptionUsage{}).
-				Where("subscription_id = ?", sub.ID).
+				Where("user_id = ? AND quota_plan_id IN ?", uid, planIDs).
 				Updates(map[string]any{
 					"consumed_value":           0,
 					"consumed_value_micro_usd": 0,
@@ -142,10 +174,13 @@ func AdminResetSubscriptionUsage(c *fiber.Ctx) error {
 					"updated_at":               now,
 				})
 			if res.Error != nil {
-				return fmt.Errorf("reset usage sub=%d: %w", sub.ID, res.Error)
+				return fmt.Errorf("reset usage user=%d plans=%v: %w", uid, planIDs, res.Error)
 			}
 			updatedUsageRows += res.RowsAffected
+		}
 
+		billingOccurredAt := now
+		for _, sub := range subs {
 			relatedID := sub.ID
 			if _, exists := existingResetBillingBySubID[sub.ID]; exists {
 				relatedID = 0
