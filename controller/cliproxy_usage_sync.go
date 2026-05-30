@@ -54,7 +54,11 @@ type cpaUsageQueueRecord struct {
 	//     （proxy/billing_rules.go:requestIndicatesThinking 看请求体原值不看 usage 回报）；
 	//     审计意义反而更准（金融角度"实际发生了什么"比"客户想要什么"更有价值）。
 	// 本字段不做枚举校验，直接 trimForDB(32) 落库——上游再扩枚举不需要这边跟进。
-	// 同步锚点：CLIProxyAPI 上次对齐到 94c1b251 (2026-05-28)。
+	// 同步锚点：CLIProxyAPI 已审查至 55901f0b / v7.1.31 (2026-05-29)。
+	//   该轮 13 个提交全是 CLIProxyAPI 内部改动（签名重放拦截 aee7a5fb/86cb9c15、
+	//   HomeAppLogForwarder 应用日志转发、responses-ws 输入项去重、Amp 工具名大小写），
+	//   均未触及本 usage 队列 / 管理 API 契约 → DAOF-CPA 零跟进。
+	//   附带收益：签名重放拦截修复了 "thinking blocks cannot be modified" 报错（需把运行二进制升到 v7.1.30+）。
 	ReasoningEffort string         `json:"reasoning_effort"`
 	Timestamp       time.Time      `json:"timestamp"`
 	LatencyMs       int64          `json:"latency_ms"`
